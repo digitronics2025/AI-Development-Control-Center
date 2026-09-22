@@ -1,0 +1,17 @@
+{
+  "name": "@acc/agent-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Codex CLI adapter (codex exec --json).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/agent-sdk": "workspace:*",
+    "@acc/shared": "workspace:*"
+  }
+}

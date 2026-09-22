@@ -1,0 +1,16 @@
+{
+  "name": "@acc/security",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Secret redaction, subscription-only environment guard and command risk classification.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/shared": "workspace:*"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "ai-development-control-center",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first AI development orchestrator: one control center for Codex, Claude Code, tests and Git.",
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @acc/orchestrator --filter @acc/dashboard dev",
+    "build": "pnpm --filter @acc/dashboard build && pnpm --filter @acc/orchestrator build && pnpm --filter acc-vscode build",
+    "start": "node apps/orchestrator/dist/main.js",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "pnpm --filter @acc/dashboard e2e",
+    "verify:agents": "tsx scripts/verify-agents.ts",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.4",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "tsx": "^4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.1"
+  }
+}

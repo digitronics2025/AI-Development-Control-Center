@@ -1,0 +1,17 @@
+{
+  "name": "@acc/agent-claude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code CLI adapter (claude -p --output-format stream-json).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/agent-sdk": "workspace:*",
+    "@acc/shared": "workspace:*"
+  }
+}

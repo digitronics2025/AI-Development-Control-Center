@@ -1,0 +1,16 @@
+{
+  "name": "@acc/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Domain types, constants and Zod schemas shared by the orchestrator, dashboard and VS Code extension.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

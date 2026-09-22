@@ -1,0 +1,59 @@
+# Significant structural changes (PLAN §13.4).
+id: architecture
+name: Architecture
+description: Structural change
+maxFixCycles: 3
+stages:
+  - key: assess
+    name: Architecture assessment
+    role: investigator
+    agentId: codex
+    effort: high
+    permissionLevel: 1
+    timeoutSec: 2700
+    retry: { maxAttempts: 2 }
+    next: second-assessment
+  - key: second-assessment
+    name: Independent assessment
+    role: investigator
+    agentId: claude
+    effort: high
+    permissionLevel: 1
+    timeoutSec: 2700
+    retry: { maxAttempts: 2 }
+    next: plan
+  - key: plan
+    name: Consolidated plan
+    role: planner
+    effort: high
+    permissionLevel: 1
+    retry: { maxAttempts: 2 }
+    next: implement
+  - key: implement
+    name: Implement
+    role: implementer
+    permissionLevel: 2
+    timeoutSec: 5400
+    next: test
+  - key: test
+    name: Test
+    role: tester
+    kind: tests
+    permissionLevel: 2
+    next: review
+    onFail: fix
+  - key: review
+    name: Review
+    role: reviewer
+    effort: high
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: complete
+    onFail: fix
+  - key: fix
+    name: Fix
+    role: fixer
+    permissionLevel: 2
+    timeoutSec: 3600
+    next: test

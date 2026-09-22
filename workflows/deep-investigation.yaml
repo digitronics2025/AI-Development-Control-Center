@@ -1,0 +1,59 @@
+# Difficult bugs (PLAN §13.3): two independent investigations by different agents,
+# one consolidated plan, then the normal build/test/review loop.
+id: deep-investigation
+name: Deep Investigation
+description: Difficult bug or uncertain cause
+maxFixCycles: 3
+stages:
+  - key: investigate
+    name: Investigate
+    role: investigator
+    agentId: codex
+    effort: high
+    permissionLevel: 1
+    timeoutSec: 2700
+    retry: { maxAttempts: 2 }
+    next: second-opinion
+  - key: second-opinion
+    name: Second investigation
+    role: investigator
+    agentId: claude
+    effort: high
+    permissionLevel: 1
+    timeoutSec: 2700
+    retry: { maxAttempts: 2 }
+    description: Independent investigation by a different agent
+    next: plan
+  - key: plan
+    name: Consolidated plan
+    role: planner
+    permissionLevel: 1
+    retry: { maxAttempts: 2 }
+    next: implement
+  - key: implement
+    name: Implement
+    role: implementer
+    permissionLevel: 2
+    timeoutSec: 3600
+    next: test
+  - key: test
+    name: Test
+    role: tester
+    kind: tests
+    permissionLevel: 2
+    next: review
+    onFail: fix
+  - key: review
+    name: Independent review
+    role: reviewer
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: complete
+    onFail: fix
+  - key: fix
+    name: Fix
+    role: fixer
+    permissionLevel: 2
+    timeoutSec: 3600
+    next: test

@@ -1,0 +1,79 @@
+# Full implementation/review/verification loop (PLAN §13.5). Commits on the task
+# branch; staging deploy is optional and always approval-gated; production
+# actions are never part of a workflow.
+id: full-autopilot
+name: Full Autopilot
+description: Full implementation, review and verification loop
+maxFixCycles: 3
+stages:
+  - key: investigate
+    name: Investigate
+    role: investigator
+    permissionLevel: 1
+    retry: { maxAttempts: 2 }
+    next: plan
+  - key: plan
+    name: Plan
+    role: planner
+    permissionLevel: 1
+    retry: { maxAttempts: 2 }
+    next: implement
+  - key: implement
+    name: Implement
+    role: implementer
+    permissionLevel: 2
+    timeoutSec: 3600
+    next: test
+  - key: test
+    name: Test
+    role: tester
+    kind: tests
+    permissionLevel: 2
+    next: review
+    onFail: fix
+  - key: review
+    name: Review
+    role: reviewer
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: verify
+    onFail: fix
+  - key: fix
+    name: Fix
+    role: fixer
+    permissionLevel: 2
+    timeoutSec: 3600
+    next: test
+  - key: verify
+    name: Verify
+    role: verifier
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: git
+    onFail: fix
+  - key: git
+    name: Git checkpoint
+    role: reporter
+    kind: git
+    permissionLevel: 3
+    description: Commit the task's own changes on the task branch (never pushes)
+    next: staging
+  - key: staging
+    name: Staging deploy
+    role: deployer
+    kind: command
+    commandKinds: [deploy-staging]
+    permissionLevel: 4
+    requiresApproval: true
+    optional: true
+    next: smoke
+  - key: smoke
+    name: Smoke test
+    role: tester
+    kind: command
+    commandKinds: [smoke]
+    permissionLevel: 2
+    optional: true
+    next: complete

@@ -1,0 +1,34 @@
+{
+  "name": "@acc/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local orchestrator: workflow engine, SQLite persistence, HTTP API and WebSocket realtime sync.",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "node build.mjs",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/agent-claude": "workspace:*",
+    "@acc/agent-codex": "workspace:*",
+    "@acc/agent-sdk": "workspace:*",
+    "@acc/executor": "workspace:*",
+    "@acc/git": "workspace:*",
+    "@acc/security": "workspace:*",
+    "@acc/shared": "workspace:*",
+    "@fastify/static": "^10.1.4",
+    "@fastify/websocket": "^11.3.1",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.5",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "ws": "^8.21.3"
+  }
+}

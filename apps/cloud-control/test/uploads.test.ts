@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resetSharedRedactor } from '@acc/security';
 import { addRepo, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from '../../orchestrator/test/helpers.js';
-import { startCloud, type Cloud } from './harness.js';
+import { httpJson, startCloud, type Cloud } from './harness.js';
 
 /**
  * Artifacts and historical logs (CLOUD_CONTROL_PLAN Phase 8): the sync policy,
@@ -91,8 +91,9 @@ describe('artifact and log uploads', () => {
     await cloud.d1(`UPDATE log_chunks SET created_at = '2000-01-01T00:00:00.000Z'`);
     const [before] = await cloud.d1(`SELECT r2_key FROM artifact_manifests WHERE artifact_id = '${report.id}'`);
     expect(before.r2_key).toBeTruthy();
-    const scheduled = await fetch(`${cloud.url}/cdn-cgi/local/scheduled`);
-    expect(scheduled.ok).toBe(true);
+    // No keep-alive: the local dev proxy sometimes resets a reused socket (harness.ts httpJson).
+    const scheduled = await httpJson(cloud.url, 'GET', '/cdn-cgi/local/scheduled');
+    expect(scheduled.status).toBe(200);
     await waitFor(async () => (await cloud.d1(`SELECT COUNT(*) AS n FROM artifact_manifests WHERE artifact_id = '${report.id}'`))[0].n, (n) => n === 0, 20_000, 'manifest pruned');
     expect((await cloud.d1('SELECT COUNT(*) AS n FROM log_chunks'))[0].n).toBe(0);
     const gone = await fetch(`${cloud.url}/api/cloud/artifacts/${nodeId}/${report.id}`, { headers: { 'cf-access-jwt-assertion': await cloud.signer.token() } });

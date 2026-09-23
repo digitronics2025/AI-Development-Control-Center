@@ -72,7 +72,7 @@ before any row is written.
 | Repositories | `GET/POST repositories`, `GET/PATCH/DELETE repositories/:id`, `POST repositories/:id/redetect` |
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
 | Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
-| Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
+| Settings | `GET/PATCH settings` (a PATCH changes only the keys sent; a section sent in part keeps its other fields — `mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)), `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
 | Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile; see [usage.md](usage.md#api-apiusage-bearer-token) |
 | Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…`, `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
 | Tool sessions | `tool-session/{tools,find,call}` — session token only, never the local API token ([mcp.md](mcp.md)) |

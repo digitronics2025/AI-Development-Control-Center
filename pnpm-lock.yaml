@@ -253,6 +253,37 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/tools:
+    dependencies:
+      '@acc/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@acc/git':
+        specifier: workspace:*
+        version: link:../git
+      '@acc/security':
+        specifier: workspace:*
+        version: link:../security
+      '@acc/shared':
+        specifier: workspace:*
+        version: link:../shared
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
+      playwright-core:
+        specifier: ^1.63.0
+        version: 1.63.0
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+
   packages/ui:
     dependencies:
       '@acc/shared':

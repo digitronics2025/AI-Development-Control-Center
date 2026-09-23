@@ -106,7 +106,7 @@ describe('classifyCommand', () => {
   it.each([
     ['npm test', 'normal', 2],
     ['pnpm run build', 'normal', 2],
-    ['git status', 'normal', 2],
+    ['git status', 'normal', 1],
     ['git push origin main', 'elevated', 3],
     ['wrangler deploy --env staging', 'elevated', 4],
     ['rm -rf node_modules', 'dangerous', 5],

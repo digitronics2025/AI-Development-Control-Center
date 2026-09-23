@@ -43,7 +43,23 @@ export const API_BILLING_ENV_VARS: readonly string[] = [
 ];
 
 /** Credentials that no agent or repository command needs, in any billing mode. */
-const ALWAYS_STRIPPED: readonly string[] = ['ACC_TOKEN', 'ACC_AUTH_TOKEN'];
+const ALWAYS_STRIPPED: readonly string[] = ['ACC_TOKEN', 'ACC_AUTH_TOKEN', 'ACC_TOOL_SESSION', 'ACC_TOKEN_OVERRIDE'];
+
+/**
+ * Variables whose values the credential broker now holds. Children receive
+ * them only through a brokered tool call, so they are stripped from every
+ * inherited environment (agents and repository commands alike).
+ */
+const brokerManaged = new Set<string>();
+
+export function setBrokerManagedEnvVars(names: Iterable<string>): void {
+  brokerManaged.clear();
+  for (const name of names) if (name.trim()) brokerManaged.add(name.trim().toUpperCase());
+}
+
+export function brokerManagedEnvVars(): string[] {
+  return [...brokerManaged];
+}
 
 export interface SanitizedEnv {
   env: NodeJS.ProcessEnv;
@@ -62,7 +78,7 @@ export function sanitizeEnv(source: NodeJS.ProcessEnv, billingMode: BillingMode)
   const env: NodeJS.ProcessEnv = { ...source };
   const keys = upperKeyMap(env);
   const removed: string[] = [];
-  const strip = billingMode === 'subscription' ? [...API_BILLING_ENV_VARS, ...ALWAYS_STRIPPED] : ALWAYS_STRIPPED;
+  const strip = [...(billingMode === 'subscription' ? [...API_BILLING_ENV_VARS, ...ALWAYS_STRIPPED] : ALWAYS_STRIPPED), ...brokerManaged];
   for (const name of strip) {
     const actual = keys.get(name.toUpperCase());
     if (actual !== undefined && env[actual] !== undefined) {

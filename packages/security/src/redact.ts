@@ -140,19 +140,58 @@ export function detectSecrets(text: string): string[] {
 }
 
 let shared: Redactor | null = null;
+let sharedEnv: NodeJS.ProcessEnv | undefined;
+/** Secret values the credential broker handed to a child process (never persisted). */
+const registered = new Set<string>();
+
+function sharedRedactor(): Redactor {
+  shared ??= new Redactor([...envSecretValues(sharedEnv), ...registered]);
+  return shared;
+}
+
+function envSecretValues(env: NodeJS.ProcessEnv = process.env): string[] {
+  const values: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (value && !NON_SECRET_ENV.has(name.toUpperCase()) && SENSITIVE_ENV_NAME.test(name)) values.push(value);
+  }
+  return values;
+}
 
 /** Process-wide redactor seeded from the orchestrator's own environment. */
 export function redact(text: string): string {
-  shared ??= Redactor.fromEnv();
-  return shared.redact(text);
+  return sharedRedactor().redact(text);
 }
 
 export function resetSharedRedactor(env?: NodeJS.ProcessEnv): void {
-  shared = Redactor.fromEnv(env);
+  sharedEnv = env;
+  shared = null;
+}
+
+/**
+ * Teach the shared redactor literal secret values that do not live in the
+ * orchestrator's environment — credentials the broker injects into one child
+ * process. Values shorter than 8 characters are ignored (too many false hits).
+ */
+export function registerSecretValues(values: Iterable<string>): void {
+  let changed = false;
+  for (const value of values) {
+    if (value.length >= 8 && !registered.has(value)) {
+      registered.add(value);
+      changed = true;
+    }
+  }
+  if (changed) shared = null;
+}
+
+/** Forget a value (a rotated or deleted credential). */
+export function unregisterSecretValues(values: Iterable<string>): void {
+  let changed = false;
+  for (const value of values) changed = registered.delete(value) || changed;
+  if (changed) shared = null;
 }
 
 /** Deeply redact string values of a JSON-like object. */
-export function redactDeep<T>(value: T, redactor: Redactor = (shared ??= Redactor.fromEnv())): T {
+export function redactDeep<T>(value: T, redactor: Redactor = sharedRedactor()): T {
   if (typeof value === 'string') return redactor.redact(value) as T;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v, redactor)) as T;
   if (value && typeof value === 'object') {

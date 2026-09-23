@@ -1,0 +1,26 @@
+{
+  "name": "@acc/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Universal tool layer: tool SDK, registry, capability router, profiles, policy, recovery classification and the built-in tool packs.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/executor": "workspace:*",
+    "@acc/git": "workspace:*",
+    "@acc/security": "workspace:*",
+    "@acc/shared": "workspace:*",
+    "axe-core": "^4.13.0",
+    "better-sqlite3": "^13.0.3",
+    "playwright-core": "^1.63.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
+}

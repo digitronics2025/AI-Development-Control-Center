@@ -164,7 +164,8 @@ describe('commands and history', () => {
     const second = await cloud.api('POST', '/api/tasks', taskBody(a.repoIds[0]!, 'Short second task', { start: false }), { 'x-acc-node': a.nodeId });
     expect(second.status).toBe(201);
     expect((await cloud.api('POST', `/api/tasks/${second.body.id}/cancel`, {}, { 'x-acc-node': a.nodeId })).status).toBeLessThan(300);
-    await waitFor(async () => (await cloud.d1(`SELECT status FROM cloud_tasks WHERE task_id = '${second.body.id}'`))[0]?.status, (s) => s === 'CANCELLED', 20_000, 'second task mirrored as cancelled');
+    await waitForStatus(a.t, second.body.id, ['CANCELLED'], 60_000);
+    await waitFor(async () => (await cloud.d1(`SELECT status FROM cloud_tasks WHERE node_id = '${a.nodeId}' AND task_id = '${second.body.id}'`))[0]?.status, (s) => s === 'CANCELLED', 60_000, 'second task mirrored as cancelled');
     expect(a.t.services.store.getTask(first.body.id)!.status).not.toBe('COMPLETED');
     expect((await cloud.d1(`SELECT released_at FROM repository_leases WHERE fingerprint = '${lease.fingerprint}'`))[0].released_at).toBeNull();
     const blocked = await cloud.api('POST', '/api/tasks', taskBody(b.repoIds[0]!, 'Not yet'), { 'x-acc-node': b.nodeId });

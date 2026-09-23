@@ -46,9 +46,8 @@ jobs:
       # Built first: the Worker tests serve the dashboard build as the Worker's assets.
       - name: Build
         run: pnpm build
-      # The hosted runner is slower than a workstation; git-heavy tests (bisect in a worktree) need more than 10 s there.
       - name: Unit, integration and Worker tests
-        run: pnpm test --testTimeout=30000
+        run: pnpm test
       - name: Install the browser
         run: pnpm --filter @acc/dashboard exec playwright install chromium
       - name: Local end-to-end suite

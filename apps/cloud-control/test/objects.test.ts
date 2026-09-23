@@ -120,7 +120,7 @@ describe('objects in R2', () => {
     const manifests = await cloud.d1(`SELECT artifact_id, status, sha256 FROM artifact_manifests WHERE node_id = '${node.nodeId}' ORDER BY artifact_id`);
     expect(manifests).toEqual([
       { artifact_id: 'art-1', status: 'uploaded', sha256: sha },
-      { artifact_id: 'art-2', status: 'failed', sha256: 'a'.repeat(64) },
+      { artifact_id: 'art-2', status: 'failed', sha256: null }, // a rejected upload never records the hash it claimed
     ]);
     // Download: authenticated, byte-identical, hash in the header.
     const token = await cloud.signer.token();

@@ -26,7 +26,7 @@ const relay = hostsOf('RELAY_HOSTS')[0];
 let failures = 0;
 async function check(label, url, init, expect) {
   let status = 0;
-  let detail = '';
+  let detail;
   try {
     const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15_000), ...init });
     status = r.status;

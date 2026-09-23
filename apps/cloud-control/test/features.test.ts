@@ -77,7 +77,7 @@ describe('features through the cloud', () => {
     const created = await cloud.api('POST', '/api/tasks', { description: 'Dangerous build from the cloud', repositoryId: repoId, workflowId: 'normal-development', mode: 'autopilot' }, h());
     const taskId = created.body.id as string;
     await waitForStatus(node, taskId, ['WAITING_FOR_USER'], 90_000);
-    const approval = await waitFor(async () => (await cloud.api('GET', '/api/approvals', undefined, h())).body.find((a: { taskId: string }) => a.taskId === taskId), Boolean, 20_000, 'approval');
+    const approval = (await waitFor(async () => (await cloud.api('GET', '/api/approvals', undefined, h())).body.find((a: { taskId: string }) => a.taskId === taskId), Boolean, 20_000, 'approval')) as { id: string };
     await waitFor(async () => (await cloud.d1(`SELECT COUNT(*) AS n FROM cloud_entities WHERE kind = 'approval' AND entity_id = '${approval.id}'`))[0].n, (n) => n === 1, 20_000, 'approval mirrored');
     const noPhrase = await cloud.api('POST', `/api/approvals/${approval.id}/approve`, { confirmation: 'yes' }, h());
     expect(noPhrase.status).toBe(422);

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { NodeFrame } from '@acc/shared';
 import { TerminalGrants } from '../src/remote/terminal-grants.js';
 import { FakeRelay } from './fake-relay.js';
-import { addRepo, createTestApp, makeRepo, waitFor, type TestApp } from './helpers.js';
+import { addRepo, createTestApp, makeRepo, waitFor } from './helpers.js';
 
 /**
  * Remote terminals (CLOUD_CONTROL_PLAN §7 "Remote terminal tests";

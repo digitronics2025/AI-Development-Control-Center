@@ -104,7 +104,8 @@ export class TerminalGrants {
       if (out) this.terminals.write(terminalId, out);
       out = '';
     };
-    // Drop escape sequences (arrows, history, function keys) as a whole.
+    // Drop escape sequences (arrows, history, function keys) as a whole; matching ESC is the point here.
+    // eslint-disable-next-line no-control-regex
     const clean = data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|\x1b/g, '').replace(/\t/g, '');
     for (const ch of clean) {
       if (ch === '\r' || ch === '\n') {

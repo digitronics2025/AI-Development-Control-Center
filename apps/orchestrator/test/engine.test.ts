@@ -54,6 +54,9 @@ describe('normal development workflow', () => {
     expect(report).toContain('TASK COMPLETED');
     expect(report).toContain('3 passed · 0 failed · 0 not run');
     expect(report).toContain('READY');
+    // Every prompt tells the agent it is a subagent whose reply is a task record, not a chat answer.
+    const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');
+    expect(prompt).toContain('You are running as a subagent of the AI Development Control Center');
   });
 
   it('reports operator decisions named by the verifier instead of calling the task ready', async () => {

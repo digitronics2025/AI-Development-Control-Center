@@ -76,7 +76,9 @@ Role templates ([prompts/](../../prompts)) are versioned in the database; each
 edit is a new version and tasks record which version each role used. The
 context builder ([context.ts](../../apps/orchestrator/src/engine/context.ts))
 gives each role only what it needs (e.g. the reviewer gets the diff and test
-results, bounded to 150 KB).
+results, bounded to 150 KB). Every prompt, including user-edited ones, is
+prefixed with `RUN_CONTEXT`: the agent is a subagent whose reply is a task
+record, so it writes no chat-style recap or to-do block.
 
 Stage summaries in timelines and reports come from the agent's **Summary**
 section (or Goal/Findings), else its first prose line — never a heading,

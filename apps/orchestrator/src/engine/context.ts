@@ -19,6 +19,19 @@ const MAX_DIFF_CHARS = 150_000;
 const MAX_SECTION_CHARS = 60_000;
 const MAX_TEXT_ATTACHMENT = 50_000;
 
+/**
+ * Prepended to every role prompt, including user-edited ones. Agents that load
+ * the operator's own CLI instructions otherwise end with chat-style to-do
+ * blocks ("nothing has been saved yet") that contradict what the orchestrator
+ * does next — it commits, runs tests and asks for approvals itself.
+ */
+export const RUN_CONTEXT = [
+  'You are running as a subagent of the AI Development Control Center, not in a chat with the operator.',
+  'Your reply is saved as this stage\'s artifact and read by the next stage and in the operator\'s dashboard.',
+  'Report facts in the requested sections only: no closing recap, summary for a non-technical reader or "what you need to do" block.',
+  'The orchestrator handles commits, tests and approvals after you; do not tell the operator how to commit or what has not been saved.',
+].join('\n');
+
 function clip(text: string, max = MAX_SECTION_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}\n\n[truncated ${text.length - max} characters]` : text;
 }
@@ -188,7 +201,7 @@ export class ContextBuilder {
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
     };
-    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(repo.path)}\n\n`;
+    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(repo.path)}\n\n${RUN_CONTEXT}\n\n`;
     return { prompt: header + renderTemplate(template.body, vars), templateVersion: template.version };
   }
 }

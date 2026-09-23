@@ -58,22 +58,56 @@ test.beforeAll(async ({ browser }) => {
 
 test.describe('Chairman (plan §7.7)', () => {
   test('recovers automatically: exhausted fixes start a recovery cycle and the task still completes', async ({ page }) => {
+    test.setTimeout(180_000);
     const errors = trackConsoleErrors(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');
     const id = await newTask(page, "const f = 6 - n; if (f > 0) { console.log('FAIL test/a.test.js > adds'); console.log(f + ' failed, 3 passed'); process.exit(1); } console.log('9 passed');", 'Fix the adder until the suite passes.');
     await page.goto(`/tasks/${id}`);
-    const drawer = await openChairman(page);
+    // Keyboard: the header button opens the drawer.
+    await page.getByRole('button', { name: /^Chairman — / }).focus();
+    await page.keyboard.press('Enter');
+    const drawer = page.getByRole('dialog', { name: 'Chairman' });
+    await expect(drawer).toBeVisible();
     const log = drawer.getByRole('log', { name: 'Chairman conversation' });
     // The decision appears in the chat by itself, with its trigger and who chose it.
     await expect(log.getByText('Fix attempts exhausted').first()).toBeVisible({ timeout: 60_000 });
     await expect(log.getByText(/Root-cause analysis|Simulated Chairman chose rca/).first()).toBeVisible();
+    // The same card shows the diagnosis and prediction, then what actually happened once the next tests ran.
+    const card = log.locator('[data-decision-id]').filter({ hasText: 'Fix attempts exhausted' });
+    await expect(card).toHaveCount(1);
+    await expect(card.getByText('Model', { exact: true })).toBeVisible();
+    await expect(card.getByText(/^Diagnosis: Code or test · medium confidence — Simulated diagnosis/)).toBeVisible();
+    await expect(card.getByText('Expected: The failure no longer occurs.')).toBeVisible();
+    await expect(card.getByText('Improved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(card.getByText('Result: Failing tests went from 2 to 1.')).toBeVisible();
+    // Republishing the decision with its outcome updated the card; it did not add a second one.
+    const cardIds = await log.locator('[data-decision-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-decision-id')));
+    expect(new Set(cardIds).size).toBe(cardIds.length);
     await page.keyboard.press('Escape');
     await expect(page.getByText('Recovery cycle 1').first()).toBeVisible();
     await expect(page.getByText('Completed', { exact: true }).first()).toBeVisible({ timeout: 90_000 });
     await expect(page.getByText('Ready', { exact: true }).first()).toBeVisible();
     await page.getByRole('tab', { name: 'Activity' }).click();
     await expect(page.getByText(/Recovery cycle 1: Root-cause analysis in Investigate/)).toBeVisible();
+    await expect(page.getByText('Chairman: Root-cause analysis in Investigate — Improved. Failing tests went from 2 to 1.')).toBeVisible();
+
+    // A reload rebuilds the card from the orchestrator alone; at phone width, in both themes, it stays readable.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    const phone = await openChairman(page);
+    const phoneCard = phone.getByRole('log', { name: 'Chairman conversation' }).locator('[data-decision-id]').filter({ hasText: 'Fix attempts exhausted' });
+    await expect(phoneCard.getByText('Improved', { exact: true })).toBeVisible();
+    await phoneCard.scrollIntoViewIfNeeded();
+    await expectNoHorizontalOverflow(page);
+    await expectNoAxeViolations(page, test.info());
+    await setTheme(page, 'light');
+    try {
+      await expect(phoneCard.getByText(/^Diagnosis: /)).toBeVisible();
+      await expectNoAxeViolations(page, test.info());
+    } finally {
+      await setTheme(page, 'dark');
+    }
     expect(errors).toEqual([]);
   });
 

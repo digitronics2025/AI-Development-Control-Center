@@ -103,7 +103,7 @@ describe('credential bridge migration (v6 → v7)', () => {
        VALUES ('cred-legacy', 'legacy', 'cloudflare', NULL, 'before the bridge', '["r1"]', ?, ?, ?, ?, ?, ?, NULL)`,
     ).run(sealed.ciphertext, sealed.iv, sealed.tag, secretFingerprint(value), ts, ts);
     const before = db.prepare('SELECT * FROM credential_references').all();
-    expect(migrate(db)).toEqual([7]);
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 7))).toEqual([7]);
     expect(schemaVersion(db)).toBe(7);
     expect(db.prepare('SELECT * FROM credential_references').all()).toEqual(before);
     const row = db.prepare('SELECT ciphertext, iv, tag FROM credential_references WHERE id = ?').get('cred-legacy') as { ciphertext: string; iv: string; tag: string };
@@ -116,6 +116,63 @@ describe('credential bridge migration (v6 → v7)', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM credential_vault_links').get()).toEqual({ n: 0 });
     // The previous binary applies nothing and does not fail.
     expect(migrate(db, previous)).toEqual([]);
+    db.close();
+  });
+});
+
+/**
+ * Chairman strategy outcomes (docs/systems/chairman.md): migration 8 adds
+ * chairman_strategy_runs next to the decision audit, leaving every existing
+ * Chairman row untouched.
+ */
+describe('chairman strategy outcomes migration (v7 → v8)', () => {
+  it('adds strategy runs additively, keyed one-to-one on decisions', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-strategy-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 7);
+    migrate(db, previous);
+    const ts = '2026-09-23T10:00:00.000Z';
+    db.prepare("INSERT INTO repositories (id, name, path, created_at, updated_at) VALUES ('r1', 'kept', ?, ?, ?)").run(dataDir, ts, ts);
+    db.prepare(
+      `INSERT INTO tasks (id, seq, title, description, repository_id, workflow_id, workflow_snapshot, mode, status, current_stage_key, auto_approve_level, max_fix_cycles, fix_cycles, created_at, updated_at)
+       VALUES ('TASK-0001', 1, 'Supervised', 'Before outcomes', 'r1', 'quick-change', '{}', 'autopilot', 'RUNNING', 'test', 3, 3, 0, ?, ?)`,
+    ).run(ts, ts);
+    db.prepare("INSERT INTO task_events (task_id, type, message, at) VALUES ('TASK-0001', 'TASK_CREATED', 'Task created', ?)").run(ts);
+    db.prepare("INSERT INTO task_directives (id, task_id, text, status, created_at) VALUES ('d1', 'TASK-0001', 'Keep the API stable', 'applied', ?)").run(ts);
+    db.prepare(
+      `INSERT INTO chairman_decisions (id, task_id, source, trigger, task_version, summary, reasoning_summary, decision, expected_result, hard_blocker, health, reasoner, strategy_fingerprint, created_at)
+       VALUES ('dec-1', 'TASK-0001', 'supervisor', 'repeated_failure', 3, 'Same failure', '', 'Root-cause analysis', 'Tests pass', 0, 'STALLED', 'policy', 'fp1', ?)`,
+    ).run(ts);
+    const tables = ['tasks', 'task_events', 'task_directives', 'chairman_decisions'];
+    const before = Object.fromEntries(tables.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
+
+    expect(migrate(db)).toEqual([8]);
+    expect(schemaVersion(db)).toBe(8);
+    for (const t of tables) expect(db.prepare(`SELECT * FROM ${t}`).all()).toEqual(before[t]);
+    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chairman_strategy_runs' AND name LIKE 'idx_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+    expect(indexes).toEqual(['idx_chairman_strategy_runs_open', 'idx_chairman_strategy_runs_task']);
+
+    const insert = (decisionId: string) =>
+      db
+        .prepare(
+          `INSERT INTO chairman_strategy_runs (decision_id, task_id, contract_version, recovery_cycle, trigger, strategy_fingerprint, strategy_kind, target_stage_key, target_agent_id,
+             failure_source, failure_stage_key, failure_category, failure_hash, failure_count, diagnosis_category, diagnosis_confidence, diagnosis_summary, diagnosis_source,
+             evidence_digest, expected_result, status, outcome_summary, health_before, health_after, started_at, evaluated_at)
+           VALUES (?, 'TASK-0001', 1, 1, 'repeated_failure', 'fp1', 'rca', 'investigate', NULL, 'tests', 'test', 'CODE_OR_TEST', 'h1', 2, 'CODE_OR_TEST', 'HIGH', 'Two tests fail', 'policy',
+             'digest', 'Tests pass', 'RUNNING', NULL, 'STALLED', NULL, ?, NULL)`,
+        )
+        .run(decisionId, ts);
+    insert('dec-1');
+    // One strategy per decision, and only for a decision that exists.
+    expect(() => insert('dec-1')).toThrow();
+    expect(() => insert('no-such-decision')).toThrow();
+    // A run follows its decision: deleting the task (or the decision) removes it.
+    db.prepare("DELETE FROM chairman_decisions WHERE id = 'dec-1'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM chairman_strategy_runs').get()).toEqual({ n: 0 });
+    expect(db.pragma('integrity_check', { simple: true })).toBe('ok');
+    // The previous binary applies nothing and does not fail; re-running is a no-op.
+    expect(migrate(db, previous)).toEqual([]);
+    expect(migrate(db)).toEqual([]);
     db.close();
   });
 });

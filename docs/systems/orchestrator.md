@@ -46,7 +46,8 @@ hub, SQLite persistence and the workflow engine. Entry:
 Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)),
 and the Chairman's `task_contracts`, `chairman_sessions`, `chairman_messages`,
 `chairman_decisions`, `chairman_actions`, `failure_signatures`,
-`task_checkpoints` (migration 2, [chairman.md](chairman.md)), the usage ledger's
+`task_checkpoints` (migration 2) and `chairman_strategy_runs` (migration 8,
+[chairman.md](chairman.md)), the usage ledger's
 `usage_events`, `usage_event_lines`, `usage_cost_revisions`, `usage_pending`,
 `pricing_versions`, `capacity_snapshots`, `budgets` (migration 4, append-only by
 trigger, [usage.md](usage.md)), and the tool

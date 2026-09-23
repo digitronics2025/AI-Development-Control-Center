@@ -171,6 +171,59 @@ export interface ChairmanMessage {
   createdAt: string;
 }
 
+/** Families of recovery strategy the deterministic policy can offer. */
+export const CHAIRMAN_STRATEGY_KINDS = ['rca', 'replan', 'change_agent', 'rollback', 'retry_stage'] as const;
+export type ChairmanStrategyKind = (typeof CHAIRMAN_STRATEGY_KINDS)[number];
+
+export const DIAGNOSIS_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type ChairmanDiagnosisConfidence = (typeof DIAGNOSIS_CONFIDENCES)[number];
+
+/**
+ * A short operational hypothesis about a failure. `category` always comes
+ * from the deterministic failure signature; the model may only word the
+ * summary and state its confidence.
+ */
+export interface ChairmanDiagnosis {
+  category: FailureCategory;
+  confidence: ChairmanDiagnosisConfidence;
+  summary: string;
+  source: 'policy' | 'model';
+}
+
+export const STRATEGY_OUTCOME_STATUSES = ['RUNNING', 'SUCCEEDED', 'IMPROVED', 'FAILED', 'REGRESSED', 'INCONCLUSIVE', 'SUPERSEDED'] as const;
+export type ChairmanStrategyOutcomeStatus = (typeof STRATEGY_OUTCOME_STATUSES)[number];
+
+/**
+ * One recovery strategy and what objectively happened after it
+ * (docs/systems/chairman.md §Strategy outcomes). Structured metadata only:
+ * no logs, prompts, model replies or file contents.
+ */
+export interface ChairmanStrategyRun {
+  decisionId: string;
+  taskId: string;
+  contractVersion: number;
+  recoveryCycle: number;
+  trigger: string;
+  strategyFingerprint: string;
+  strategyKind: ChairmanStrategyKind;
+  targetStageKey: string | null;
+  targetAgentId: string | null;
+  failureSource: string;
+  failureStageKey: string;
+  failureCategory: FailureCategory;
+  failureHash: string;
+  failureCount: number | null;
+  diagnosis: ChairmanDiagnosis;
+  evidenceDigest: string;
+  expectedResult: string;
+  status: ChairmanStrategyOutcomeStatus;
+  outcomeSummary: string | null;
+  healthBefore: ChairmanHealth;
+  healthAfter: ChairmanHealth | null;
+  startedAt: string;
+  evaluatedAt: string | null;
+}
+
 export interface ChairmanDecision {
   id: string;
   taskId: string;
@@ -186,6 +239,8 @@ export interface ChairmanDecision {
   reasoner: 'model' | 'policy';
   strategyFingerprint: string | null;
   createdAt: string;
+  /** Recovery decisions only: the strategy's diagnosis and observed outcome. Older clients ignore it. */
+  strategy?: ChairmanStrategyRun | null;
 }
 
 export type ChairmanActionStatus = 'running' | 'completed' | 'failed' | 'rejected';
@@ -245,6 +300,35 @@ export const CHAIRMAN_HEALTH_LABEL: Record<ChairmanHealth, string> = {
   STABLE: 'Stable',
   STALLED: 'Stalled',
   REGRESSING: 'Regressing',
+  UNKNOWN: 'Unknown',
+};
+
+export const STRATEGY_KIND_LABEL: Record<ChairmanStrategyKind, string> = {
+  rca: 'Root-cause analysis',
+  replan: 'Re-plan',
+  change_agent: 'Change agent',
+  rollback: 'Roll back',
+  retry_stage: 'Retry',
+};
+
+/** How a strategy's result reads to the operator. */
+export const STRATEGY_OUTCOME_LABEL: Record<ChairmanStrategyOutcomeStatus, string> = {
+  RUNNING: 'Waiting for result',
+  SUCCEEDED: 'Resolved',
+  IMPROVED: 'Improved',
+  FAILED: 'No improvement',
+  REGRESSED: 'Regressed',
+  INCONCLUSIVE: 'Inconclusive',
+  SUPERSEDED: 'Superseded',
+};
+
+export const FAILURE_CATEGORY_LABEL: Record<FailureCategory, string> = {
+  CODE_OR_TEST: 'Code or test',
+  REQUIREMENT_OR_PLAN: 'Requirement or plan',
+  WORKER_OR_TOOL: 'Agent or tool',
+  ENVIRONMENT: 'Environment',
+  AUTH_OR_EXTERNAL: 'Provider or access',
+  WORKFLOW_STATE: 'Workflow state',
   UNKNOWN: 'Unknown',
 };
 

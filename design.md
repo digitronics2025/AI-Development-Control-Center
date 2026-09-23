@@ -917,7 +917,11 @@ from a **Chairman** button in the task header, beside the primary action:
   conversation (`role="log"`, polite live region) → composer in the footer.
 - Conversation items: user messages (right-aligned, muted background),
   Chairman replies (Markdown, no raw HTML), **decision cards** (accent left
-  border, trigger, "Rules"/"Model" badge, why and expected result) and
+  border, trigger, "Rules"/"Model" badge, why and expected result; a recovery
+  decision adds its outcome chip — Waiting for result, Resolved, Improved, No
+  improvement, Regressed, Inconclusive, Superseded — the diagnosis line
+  "category · confidence — summary" and a "Result:" line, never raw evidence;
+  the card updates in place when the outcome arrives) and
   **action cards** (action label + status chip: Running, Completed, Failed,
   Rejected — with the result or the reason).
 - The composer has a visible label, Enter sends, Shift+Enter adds a line, and

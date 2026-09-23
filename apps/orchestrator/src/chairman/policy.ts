@@ -1,4 +1,4 @@
-import type { ChairmanActionInput, ChairmanHealth, StageDefinition, TaskLimits, WorkflowProfile } from '@acc/shared';
+import type { ChairmanActionInput, ChairmanDiagnosis, ChairmanDiagnosisConfidence, ChairmanHealth, ChairmanStrategyKind, FailureCategory, StageDefinition, TaskLimits, WorkflowProfile } from '@acc/shared';
 import { hashOf, type FailureSource } from './signatures.js';
 
 /**
@@ -55,7 +55,7 @@ export function decideOnFailure(f: FailureFacts): FailureDecision {
   return { kind: 'local_fix' };
 }
 
-export type StrategyKind = 'rca' | 'replan' | 'change_agent' | 'rollback' | 'retry_stage';
+export type StrategyKind = ChairmanStrategyKind;
 
 export interface StrategyCandidate {
   id: string;
@@ -66,6 +66,9 @@ export interface StrategyCandidate {
   description: string;
   actions: ChairmanActionInput[];
   fingerprint: string;
+  /** Stage the strategy acts on, and the agent it hands that stage to (change_agent only). */
+  targetStageKey: string | null;
+  targetAgentId: string | null;
 }
 
 export interface CandidateContext {
@@ -120,7 +123,7 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
   const add = (kind: StrategyKind, level: number, target: string, agent: string, label: string, description: string, actions: ChairmanActionInput[]) => {
     const fingerprint = hashOf(`${ctx.signatureHash}|${kind}|${target}|${agent}`);
     if (ctx.triedFingerprints.has(fingerprint)) return;
-    out.push({ id: `${kind}:${target}${agent ? `:${agent}` : ''}`, kind, level, label, description, actions, fingerprint });
+    out.push({ id: `${kind}:${target}${agent ? `:${agent}` : ''}`, kind, level, label, description, actions, fingerprint, targetStageKey: target, targetAgentId: kind === 'change_agent' ? agent : null });
   };
   const failure = ctx.failureMessage.length > 300 ? `${ctx.failureMessage.slice(0, 299)}…` : ctx.failureMessage;
 
@@ -172,6 +175,79 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
     }
   }
   return out.sort((a, b) => ORDER[ctx.trigger].indexOf(a.kind) - ORDER[ctx.trigger].indexOf(b.kind));
+}
+
+const CATEGORY_TEXT: Record<FailureCategory, string> = {
+  CODE_OR_TEST: 'The code or its tests are wrong',
+  REQUIREMENT_OR_PLAN: 'The work does not match the request',
+  WORKER_OR_TOOL: 'The agent process failed, not the code',
+  ENVIRONMENT: 'A command or permission in the environment failed',
+  AUTH_OR_EXTERNAL: "The agent's provider is unavailable",
+  WORKFLOW_STATE: "The task does not yet meet the workflow's checks",
+  UNKNOWN: 'The cause is not clear from the evidence',
+};
+
+export interface DiagnosisFacts {
+  category: FailureCategory;
+  source: FailureSource;
+  trigger: RecoveryTrigger;
+  message: string;
+  failureCount: number | null;
+}
+
+/**
+ * The rules' diagnosis (plan §3.5): the category is the failure signature's;
+ * confidence reflects how objective the evidence is. The model may reword the
+ * summary and state its own confidence, never change the category.
+ */
+export function policyDiagnosis(f: DiagnosisFacts): ChairmanDiagnosis {
+  let confidence: ChairmanDiagnosisConfidence;
+  if (f.category === 'UNKNOWN') confidence = 'LOW';
+  else if (f.source === 'gate' || f.category === 'AUTH_OR_EXTERNAL' || (f.source === 'tests' && f.failureCount !== null)) confidence = 'HIGH';
+  else confidence = 'MEDIUM';
+  const first = f.message.split('\n')[0]!.trim();
+  const detail = first.length > 160 ? `${first.slice(0, 159)}…` : first;
+  const what = f.source === 'tests' && f.failureCount !== null ? `${f.failureCount} failing test${f.failureCount === 1 ? '' : 's'}` : detail;
+  return { category: f.category, confidence, summary: `${CATEGORY_TEXT[f.category]}: ${what || 'no detail recorded'} — ${TRIGGER_LABEL[f.trigger]}.`, source: 'policy' };
+}
+
+export interface RankingFacts {
+  trigger: RecoveryTrigger;
+  /**
+   * Strategy families (kind + target stage) that ended FAILED or REGRESSED
+   * against this failure category under the current contract version.
+   * INCONCLUSIVE and SUPERSEDED outcomes are never listed: they say nothing
+   * about the strategy.
+   */
+  failedFamilies: Array<{ kind: string; targetStageKey: string | null }>;
+  /** Confidence of the rules' diagnosis. */
+  confidence: ChairmanDiagnosisConfidence;
+}
+
+/** The safety preference that outcome history never overrides (§3.11). */
+const PREFERRED_FIRST: Partial<Record<RecoveryTrigger, StrategyKind>> = {
+  regression: 'rollback',
+  plan_mismatch: 'replan',
+  provider_blocked: 'change_agent',
+};
+
+/**
+ * Outcome-aware ordering (plan §3.11), applied after `recoveryCandidates`:
+ * a family that already made no progress (or made things worse) moves
+ * behind every other safe candidate — never out of the list, so ranking can
+ * reorder but never hard-block. A low-confidence diagnosis puts
+ * investigation before heavier interventions. Rollback on regression,
+ * re-plan on a plan mismatch and rerouting a blocked provider stay first.
+ */
+export function rankCandidates(candidates: StrategyCandidate[], facts: RankingFacts): StrategyCandidate[] {
+  const preferred = PREFERRED_FIRST[facts.trigger];
+  const failed = (c: StrategyCandidate) => c.kind !== preferred && facts.failedFamilies.some((f) => f.kind === c.kind && f.targetStageKey === c.targetStageKey);
+  const ordered = [...candidates.filter((c) => !failed(c)), ...candidates.filter(failed)];
+  if (facts.confidence === 'LOW' && !preferred) {
+    const investigate = ordered.find((c) => c.kind === 'rca' && !failed(c));
+    if (investigate) return [investigate, ...ordered.filter((c) => c !== investigate)];
+  }
+  return ordered;
 }
 
 export interface UsageFacts {

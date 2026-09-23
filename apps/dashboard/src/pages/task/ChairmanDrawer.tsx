@@ -9,6 +9,7 @@ import {
   CHAIRMAN_HEALTH_VISUAL,
   CHAIRMAN_STATUS_VISUAL,
   Drawer,
+  STRATEGY_OUTCOME_VISUAL,
   Field,
   IconButton,
   Skeleton,
@@ -20,6 +21,7 @@ import {
 } from '@acc/ui';
 import {
   CHAIRMAN_ACTION_LABEL,
+  FAILURE_CATEGORY_LABEL,
   TERMINAL_TASK_STATUSES,
   type ChairmanAction,
   type ChairmanDecision,
@@ -80,17 +82,32 @@ export function ChairmanButton({ overview, onOpen, compact }: { overview: Chairm
 }
 
 function DecisionCard({ message, decision }: { message: ChairmanMessage; decision: ChairmanDecision | undefined }) {
+  // Recovery decisions carry their strategy: the diagnosis it acted on and, once observed, what it achieved.
+  const strategy = decision?.strategy ?? null;
+  const diagnosis = strategy?.diagnosis ?? null;
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-border-subtle border-l-2 border-l-accent bg-surface px-3 py-2">
+    <div className="flex flex-col gap-1 rounded-md border border-border-subtle border-l-2 border-l-accent bg-surface px-3 py-2" data-decision-id={decision?.id}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-small font-semibold text-fg">Decision</span>
         {decision ? <span className="text-small text-fg-secondary">{TRIGGER_TITLE[decision.trigger] ?? decision.trigger}</span> : null}
         {decision ? <Badge title={decision.reasoner === 'model' ? 'Chosen by the reasoning model among safe options' : 'Chosen by the deterministic rules'}>{decision.reasoner === 'model' ? 'Model' : 'Rules'}</Badge> : null}
         {decision?.hardBlocker ? <Badge>Needs you</Badge> : null}
+        {strategy ? (
+          <span className="inline-flex items-center">
+            <span className="sr-only">Outcome: </span>
+            <StatusChip size="compact" visual={STRATEGY_OUTCOME_VISUAL[strategy.status]} />
+          </span>
+        ) : null}
       </div>
       <p className="text-body text-fg wrap-anywhere">{message.body}</p>
+      {diagnosis ? (
+        <p className="text-small text-fg-secondary wrap-anywhere">
+          Diagnosis: <span className="text-fg">{FAILURE_CATEGORY_LABEL[diagnosis.category]}</span> · {diagnosis.confidence.toLowerCase()} confidence — {diagnosis.summary}
+        </p>
+      ) : null}
       {decision?.reasoningSummary ? <p className="text-small text-fg-secondary wrap-anywhere">Why: {decision.reasoningSummary}</p> : null}
       {decision?.expectedResult ? <p className="text-small text-fg-secondary wrap-anywhere">Expected: {decision.expectedResult}</p> : null}
+      {strategy && strategy.status !== 'RUNNING' && strategy.outcomeSummary ? <p className="text-small text-fg-secondary wrap-anywhere">Result: {strategy.outcomeSummary}</p> : null}
     </div>
   );
 }

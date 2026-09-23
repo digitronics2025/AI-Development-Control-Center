@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter, type AgentAdapter, type AgentExecutionInput, type AgentExecutionResult } from '@acc/agent-sdk';
-import type { AgentCapabilities, ChairmanMessage, Execution, ModelDescriptor } from '@acc/shared';
+import type { AgentCapabilities, ChairmanDecision, ChairmanMessage, Execution, ModelDescriptor } from '@acc/shared';
 import { addRepo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 let t: TestApp;
@@ -45,6 +45,31 @@ async function say(taskId: string, text: string): Promise<ChairmanMessage[]> {
   expect(res.status).toBe(202);
   await t.services.chat.idle(taskId);
   return t.services.chairman.store.listMessages(taskId).filter((m) => m.seq > res.body.seq);
+}
+
+/**
+ * A recovery decision with an open strategy, recorded through the Chairman's
+ * own `decide` — for cases a simulated run cannot stage deterministically.
+ */
+function openStrategy(taskId: string, over: Record<string, unknown> = {}, meta: { trigger?: string; decision?: string; fingerprint?: string } = {}): { id: string } {
+  const chairman = t.services.chairman as unknown as { decide(task: unknown, trigger: string, summary: string, decision: string, extra: Record<string, unknown>): { id: string } };
+  return chairman.decide(t.services.store.getTask(taskId)!, meta.trigger ?? 'repeated_failure', 'Same failure', meta.decision ?? 'Root-cause analysis in Investigate', {
+    fingerprint: meta.fingerprint ?? `fp-${Math.random().toString(36).slice(2)}`,
+    strategy: {
+      recoveryCycle: 1,
+      strategyKind: 'rca',
+      targetStageKey: 'investigate',
+      targetAgentId: null,
+      failureSource: 'tests',
+      failureStageKey: 'test',
+      failureCategory: 'CODE_OR_TEST',
+      failureHash: 'h1',
+      failureCount: 2,
+      diagnosis: { category: 'CODE_OR_TEST', confidence: 'HIGH', summary: 'Two tests fail', source: 'policy' },
+      evidenceDigest: 'e'.repeat(32),
+      ...over,
+    },
+  });
 }
 
 /** No two executions of one task may overlap in time (one mutating worker at a time). */
@@ -98,6 +123,9 @@ describe('supervised recovery (plan §7.2)', () => {
     const recoveries = decisions(id).filter((x) => x.strategyFingerprint);
     expect(recoveries.map((x) => x.trigger)).toEqual(['repeated_failure', 'repeated_failure']);
     expect(recoveries.map((x) => x.decision)).toEqual(['Root-cause analysis in Investigate', 'Re-plan in Plan']);
+    // The same failure after root-cause analysis: no improvement, and the next strategy is a different family.
+    expect(recoveries[0]!.strategy).toMatchObject({ status: 'FAILED', outcomeSummary: 'The same failure remains after this strategy.', healthAfter: 'STALLED' });
+    expect(recoveries[1]!.strategy!.strategyKind).toBe('replan');
     expect(new Set(recoveries.map((x) => x.strategyFingerprint)).size).toBe(2);
     // Stalled after three identical failures, before the local budget ran out.
     expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'fix' && s.cycle <= 2).length).toBeGreaterThanOrEqual(2);
@@ -140,6 +168,14 @@ describe('supervised recovery (plan §7.2)', () => {
     const implement = t.services.store.listStages(id).filter((s) => s.stageKey === 'implement');
     expect(implement.map((s) => `${s.agentId}:${s.status}`)).toEqual(['claude:PAUSED', 'codex:SUCCESS']);
     expect(decisions(id)[0]).toMatchObject({ trigger: 'provider_blocked', decision: 'Hand Implement to codex' });
+    expect(decisions(id)[0]!.strategy).toMatchObject({
+      strategyKind: 'change_agent',
+      targetAgentId: 'codex',
+      failureSource: 'worker',
+      diagnosis: { category: 'AUTH_OR_EXTERNAL', source: 'policy' },
+      status: 'SUCCEEDED',
+      outcomeSummary: 'The stage ran successfully after this strategy.',
+    });
   });
 
   it('turns a stage that keeps crashing into a hard blocker once every safe option is used', async () => {
@@ -148,6 +184,7 @@ describe('supervised recovery (plan §7.2)', () => {
     expect(task.status).toBe('WAITING_FOR_USER');
     expect(task.blocker).toMatchObject({ kind: 'hard_blocker' });
     expect(decisions(id).map((x) => x.decision)).toEqual(['Hand Investigate to claude', 'Retry Investigate', 'Hard blocker']);
+    expect(decisions(id).slice(0, 2).map((x) => x.strategy?.status)).toEqual(['FAILED', 'FAILED']);
     expect(eventTypes(id)).not.toContain('TASK_FAILED');
     // Your intervention is new evidence: after resuming, earlier strategies may run again.
     expect((await t.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
@@ -168,6 +205,125 @@ describe('supervised recovery (plan §7.2)', () => {
   });
 });
 
+describe('strategy runs', () => {
+  it('records a strategy with its diagnosis and evidence digest for every recovery decision', async () => {
+    const repo = await repoWith("const f = 6 - n; if (f > 0) { console.log('FAIL test/a.test.js > adds'); console.log(f + ' failed, 3 passed'); process.exit(1); } console.log('9 passed');");
+    const id = await createTask(t, await addRepo(t, repo), 'Fix the adder with a recorded strategy');
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const recoveries = decisions(id).filter((d) => d.strategyFingerprint);
+    expect(recoveries.length).toBeGreaterThan(0);
+    for (const d of recoveries) {
+      expect(d.strategy).toMatchObject({ decisionId: d.id, taskId: id, contractVersion: 1, strategyFingerprint: d.strategyFingerprint, expectedResult: d.expectedResult });
+      expect(d.strategy!.evidenceDigest).toMatch(/^[0-9a-f]{32}$/);
+    }
+    expect(recoveries[0]!.strategy).toMatchObject({
+      trigger: 'strategy_exhausted',
+      strategyKind: 'rca',
+      targetStageKey: 'investigate',
+      recoveryCycle: 1,
+      failureSource: 'tests',
+      failureStageKey: 'test',
+      failureCategory: 'CODE_OR_TEST',
+      diagnosis: { category: 'CODE_OR_TEST', confidence: 'MEDIUM', source: 'model', summary: expect.stringContaining('Simulated diagnosis') },
+    });
+    // Decisions that are not strategies carry none.
+    expect(decisions(id).filter((d) => !d.strategyFingerprint).every((d) => d.strategy === null)).toBe(true);
+    // Partial progress: fewer failing tests after the strategy is an improvement, and the local fix loop carries on.
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]!.strategy).toMatchObject({ status: 'IMPROVED', outcomeSummary: 'Failing tests went from 2 to 1.', healthBefore: 'PROGRESSING', healthAfter: 'PROGRESSING' });
+    expect(t.services.store.getTask(id)!.status).toBe('COMPLETED');
+  });
+
+  it('marks a strategy resolved when the next comparable check passes, and says so once', async () => {
+    const repo = await repoWith("if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('1 failed, 3 passed'); process.exit(1); } console.log('4 passed');");
+    const id = await createTask(t, await addRepo(t, repo), 'Stalls, then the root cause is found');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(task).toMatchObject({ status: 'COMPLETED', finalStatus: 'READY', recoveryCycle: 1 });
+    const [recovery] = decisions(id).filter((d) => d.strategyFingerprint);
+    expect(recovery).toMatchObject({ trigger: 'repeated_failure', health: 'STALLED' });
+    expect(recovery!.strategy).toMatchObject({ status: 'SUCCEEDED', outcomeSummary: 'The checks pass after this strategy.', healthBefore: 'STALLED', healthAfter: 'PROGRESSING' });
+    expect(recovery!.strategy!.evaluatedAt).not.toBeNull();
+    // The observed result is the task's health now, even though the new cycle had no failure to classify.
+    expect(t.services.chairman.store.session(id).health).toBe('PROGRESSING');
+    const outcomes = events(id).filter((e) => e.type === 'CHAIRMAN_DECISION' && (e.data as { outcome?: string }).outcome);
+    expect(outcomes.map((e) => e.message)).toEqual(['Chairman: Root-cause analysis in Investigate — Resolved. The checks pass after this strategy.']);
+    // The snapshot, and so /status and every later prompt, knows what the last intervention achieved.
+    expect(t.services.chairman.snapshots.build(id).lastStrategy).toMatchObject({ kind: 'rca', targetStageKey: 'investigate', outcome: 'SUCCEEDED', confidence: 'MEDIUM' });
+    const status = await say(id, '/status');
+    expect(status.at(-1)!.body).toContain('Last strategy: Root-cause analysis at investigate — Resolved: The checks pass after this strategy.');
+    expect(actions(id).some((a) => a.source === 'chat')).toBe(false);
+  });
+
+  it('reconciles a strategy left open by a restart once, from what was recorded, without re-running anything', async () => {
+    const dataDir = t.dataDir;
+    const repo = await repoWith("if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('1 failed, 3 passed'); process.exit(1); } console.log('4 passed');");
+    const id = await createTask(t, await addRepo(t, repo), 'Crash between the result and its evaluation');
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const decision = decisions(id).find((d) => d.strategyFingerprint)!;
+    // As if the orchestrator died after the tests passed but before the outcome was written.
+    t.services.db.prepare("UPDATE chairman_strategy_runs SET status = 'RUNNING', outcome_summary = NULL, health_after = NULL, evaluated_at = NULL WHERE decision_id = ?").run(decision.id);
+    const outcomeEvents = () => events(id).filter((e) => e.type === 'CHAIRMAN_DECISION' && (e.data as { outcome?: string }).outcome).length;
+    const before = { actions: actions(id).length, executions: t.services.store.listExecutions(id).length, outcomes: outcomeEvents() };
+    await t.close();
+
+    t = await createTestApp({ dataDir, adapters: simAdapters() });
+    expect(t.services.chairman.store.strategyRun(decision.id)).toMatchObject({ status: 'SUCCEEDED', outcomeSummary: 'The checks pass after this strategy.' });
+    expect(actions(id)).toHaveLength(before.actions);
+    expect(t.services.store.listExecutions(id)).toHaveLength(before.executions);
+    expect(outcomeEvents()).toBe(before.outcomes + 1);
+    await t.close();
+
+    // A second restart finds nothing open and records nothing new.
+    t = await createTestApp({ dataDir, adapters: simAdapters() });
+    expect(outcomeEvents()).toBe(before.outcomes + 1);
+    expect(t.services.chairman.store.tasksWithOpenStrategies()).toEqual([]);
+  });
+
+  it('a strategy that made things worse is deprioritised: the next cycle picks a different family', async () => {
+    await patchChairman({ maxRecoveryCycles: 2 });
+    // Stalls on one failure; after the first strategy a different, larger failure appears and then stalls too.
+    const repo = await repoWith(
+      "if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('2 failed, 3 passed'); process.exit(1); } console.log('FAIL test/b.test.js > subtracts'); console.log('5 failed, 3 passed'); process.exit(1);",
+    );
+    const id = await createTask(t, await addRepo(t, repo), 'Gets worse after the first strategy');
+    await waitFor(() => decisions(id).filter((d) => d.strategyFingerprint), (d) => d.length >= 2, 90_000, 'second strategy');
+    const [first, second] = decisions(id).filter((d) => d.strategyFingerprint);
+    expect(first!.strategy).toMatchObject({ strategyKind: 'rca', status: 'REGRESSED', outcomeSummary: 'Failing tests went from 2 to 5.', healthAfter: 'REGRESSING' });
+    // The new failure has a new signature, so root-cause analysis would be offered again (first by the fixed order);
+    // its family made things worse under this contract, so re-planning goes first instead.
+    expect(second).toMatchObject({ trigger: 'repeated_failure', decision: 'Re-plan in Plan' });
+    expect(second!.strategy!.failureHash).not.toBe(first!.strategy!.failureHash);
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000);
+    expect(t.services.store.getTask(id)!.status).toBe('WAITING_FOR_USER');
+  });
+
+  it('a changed goal supersedes the strategy chosen for the old one', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Draft', { start: false });
+    const decision = openStrategy(id);
+    await say(id, 'Change the goal to add a farewell message instead.');
+    expect(t.services.chairman.overview(id).contract.version).toBe(2);
+    expect(t.services.chairman.store.strategyRun(decision.id)).toMatchObject({ status: 'SUPERSEDED', outcomeSummary: 'The goal changed (contract v2) before this strategy produced a result.' });
+    // The overview carries the outcome on the decision itself.
+    const overview = (await t.api('GET', `/api/tasks/${id}/chairman`)).body;
+    expect(overview.decisions.find((d: { id: string }) => d.id === decision.id).strategy.status).toBe('SUPERSEDED');
+  });
+
+  it('a strategy the gateway refuses as stale is superseded, never reported as an engineering failure', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Draft', { start: false });
+    const chairman = t.services.chairman as unknown as { strategyNotStarted(decisionId: string, results: unknown[]): void };
+    const task = t.services.store.getTask(id)!;
+    const decision = openStrategy(id, { strategyKind: 'replan', targetStageKey: 'plan' }, { decision: 'Re-plan in Plan' });
+    await t.api('POST', `/api/tasks/${id}/assignments`, { stageKey: 'implement', agentId: 'codex' });
+    const results = await t.services.chairman.gateway.executeDecision(id, [{ type: 'REPLAN', params: {} }], { initiator: 'chairman', source: 'supervisor', decisionId: decision.id, expectedVersion: task.version });
+    expect(results[0]).toMatchObject({ status: 'rejected' });
+    chairman.strategyNotStarted(decision.id, results);
+    expect(t.services.chairman.store.strategyRun(decision.id)).toMatchObject({ status: 'SUPERSEDED', outcomeSummary: expect.stringContaining('changed before this strategy could start') });
+    // Finishing twice changes nothing.
+    chairman.strategyNotStarted(decision.id, [{ status: 'failed', reason: 'boom' }]);
+    expect(t.services.chairman.store.strategyRun(decision.id)!.status).toBe('SUPERSEDED');
+  });
+});
+
 describe('chairman API', () => {
   it('requires the local token, scopes to real tasks and returns one overview', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Draft', { start: false });
@@ -179,6 +335,29 @@ describe('chairman API', () => {
     const overview = (await t.api('GET', `/api/tasks/${id}/chairman`)).body;
     expect(Object.keys(overview).sort()).toEqual(['actions', 'checkpoints', 'contract', 'decisions', 'messages', 'state']);
     expect(overview.state).toMatchObject({ taskId: id, supervised: true, recoveryCycle: 0, reasoner: { agentId: 'claude', available: true } });
+  });
+
+  it('returns decisions with their strategy, and republishes the same decision when its outcome is known', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Draft', { start: false });
+    const seen: ChairmanDecision[] = [];
+    const off = t.services.bus.subscribe((m) => {
+      if (m.type === 'chairman.decision') seen.push(m.decision);
+    });
+    const decision = openStrategy(id);
+    t.services.chairman.finishStrategy(decision.id, 'IMPROVED', 'Failing tests went from 2 to 1.', 'PROGRESSING');
+    // A duplicate finish publishes nothing.
+    t.services.chairman.finishStrategy(decision.id, 'FAILED', 'late', 'STALLED');
+    off();
+    expect(seen.map((d) => [d.id, d.strategy?.status])).toEqual([
+      [decision.id, 'RUNNING'],
+      [decision.id, 'IMPROVED'],
+    ]);
+    // A client that missed every message rebuilds the same card from one request; the top-level shape is unchanged.
+    const overview = (await t.api('GET', `/api/tasks/${id}/chairman`)).body;
+    expect(Object.keys(overview).sort()).toEqual(['actions', 'checkpoints', 'contract', 'decisions', 'messages', 'state']);
+    expect(overview.decisions).toHaveLength(1);
+    expect(overview.decisions[0].strategy).toMatchObject({ status: 'IMPROVED', outcomeSummary: 'Failing tests went from 2 to 1.', diagnosis: { category: 'CODE_OR_TEST', confidence: 'HIGH' }, evidenceDigest: 'e'.repeat(32) });
+    expect(overview.decisions[0].strategy).toEqual(seen[1]!.strategy);
   });
 });
 
@@ -344,6 +523,20 @@ describe('completion gate', () => {
     expect(t.services.store.listTestRuns(id).map((r) => `${r.kind}:${r.status}`)).toContain('e2e:passed');
   });
 
+  it('passing the completion gate resolves a strategy still waiting for its result', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Finishes cleanly', { start: false });
+    // A strategy whose own comparable check never runs again: only the gate can judge it.
+    const decision = openStrategy(
+      id,
+      { recoveryCycle: 0, strategyKind: 'change_agent', targetStageKey: 'deploy', targetAgentId: 'codex', failureSource: 'worker', failureStageKey: 'deploy', failureCategory: 'WORKER_OR_TOOL', failureHash: 'h-deploy', failureCount: null },
+      { trigger: 'worker_failure', decision: 'Hand Deploy to codex' },
+    );
+    await t.api('POST', `/api/tasks/${id}/start`);
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(done.finalStatus).toBe('READY');
+    expect(t.services.chairman.store.strategyRun(decision.id)).toMatchObject({ status: 'SUCCEEDED', outcomeSummary: 'The task passed its completion checks.' });
+  });
+
   it('never calls a task ready when it changed files the user protected', async () => {
     await patchChairman({ maxRecoveryCycles: 1 });
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Change a file', { start: false });
@@ -355,6 +548,8 @@ describe('completion gate', () => {
     expect(decisions(id).some((x) => x.trigger === 'completion_gate')).toBe(true);
     const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
     expect(report).toContain('Completion check not met: Changed files your directive protects');
+    // A finished task leaves no strategy waiting for a result.
+    expect(t.services.chairman.store.tasksWithOpenStrategies()).not.toContain(id);
   });
 });
 

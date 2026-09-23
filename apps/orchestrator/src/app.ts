@@ -128,7 +128,7 @@ export function createServices(
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
-  const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context });
+  const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   tools.registerProvider(environmentProvider({ store, repositories, tooling }));

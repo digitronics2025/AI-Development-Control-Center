@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { AgentAdapter, AgentExecutionInput, AgentExecutionResult } from '@acc/agent-sdk';
 import { resetSharedRedactor } from '@acc/security';
 import { EgressSanitizer, stripLocalFields } from '../src/remote/egress.js';
 import { FakeRelay } from './fake-relay.js';
-import { addRepo, createTask, createTestApp, makeRepo, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, simAdapters, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 // Assembled at runtime: no credential-shaped literal in the repository.
 const ENV_SECRET = ['envsecret', randomBytes(8).toString('hex')].join('-');
@@ -24,10 +25,10 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
-async function paired(): Promise<{ r: FakeRelay; t: TestApp; nodeId: string }> {
+async function paired(adapters?: AgentAdapter[]): Promise<{ r: FakeRelay; t: TestApp; nodeId: string }> {
   const r = await new FakeRelay().start();
   cleanups.push(() => r.stop());
-  const t = await createTestApp();
+  const t = await createTestApp(adapters ? { adapters } : {});
   cleanups.push(() => t.close());
   const { nodeId } = await t.services.remote.pair({ relayUrl: r.url, code: r.newPairingToken(), label: 'PC' });
   await waitFor(() => t.services.remote.status().state, (s) => s === 'connected', 15_000, 'connected');
@@ -110,6 +111,77 @@ describe('cloud egress', () => {
     const resentKeys = new Set(r.events.slice(firstCount).map(key));
     for (const k of firstKeys) expect(resentKeys.has(k), `resent ${k}`).toBe(true);
     expect(t.services.remote.store.syncState().ackedSeq).toBe(r.ackedSeq);
+  });
+});
+
+/** A Chairman model that repeats whatever it is given — the worst case for what its answers may carry. */
+class EchoingChairman implements AgentAdapter {
+  readonly id = 'echo';
+  readonly displayName = 'Echoing Chairman';
+  readonly usageCapabilities = { provider: 'simulated', tokenUsage: false, providerCost: false, credit: false, quota: false, rateLimits: false, cacheTokens: false, reasoningTokens: false, resetTime: false };
+  constructor(private readonly leak: string) {}
+  async detect() {
+    return { found: true, executablePath: 'x', version: '1', error: null };
+  }
+  async healthCheck() {
+    return { state: 'connected' as const, message: 'ok', authMethod: 'test', billing: 'subscription' as const, checkedAt: new Date().toISOString() };
+  }
+  async getCapabilities() {
+    return { repositoryRead: true, repositoryWrite: false, commandExecution: false, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false };
+  }
+  async listModels() {
+    return [];
+  }
+  async execute(input: AgentExecutionInput) {
+    const choice = /^Candidate ids: ([^,\n]+)/m.exec(input.prompt)?.[1]?.trim() ?? 'none';
+    const leak = this.leak;
+    const output = `\`\`\`json\n${JSON.stringify({ choice, summary: `Chose ${choice}; saw ${leak}`, reasoningSummary: `Evidence: ${leak}`, guidance: 'Take a different approach.', expectedResult: `No failure at ${leak}`, diagnosis: { summary: `Cause found near ${leak}`, confidence: 'HIGH' } })}\n\`\`\``;
+    const now = new Date().toISOString();
+    const result: AgentExecutionResult = { executionId: input.executionId, status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null, durationMs: 1, startedAt: now, finishedAt: now, sessionId: null, filesChanged: [], usage: null, capacity: [] };
+    return { executionId: input.executionId, pid: null, commandLine: 'echo', done: Promise.resolve(result) };
+  }
+  async cancel() {}
+  async parseResult(): Promise<AgentExecutionResult> {
+    throw new Error('unused');
+  }
+}
+
+describe('Chairman strategy data on the wire', () => {
+  it('keeps diagnosis, outcomes and evidence metadata free of secrets and local paths', async () => {
+    const repoPath = await makeRepo({
+      scripts: { test: 'node check.js' },
+      files: {
+        'check.js': [
+          "const fs = require('fs');",
+          "const n = fs.existsSync('sim-output.md') ? fs.readFileSync('sim-output.md', 'utf8').split('\\n').filter(Boolean).length : 0;",
+          `if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('token ${ENV_SECRET} in ' + process.cwd() + '\\\\src\\\\add.js'); console.log('1 failed, 3 passed'); process.exit(1); }`,
+          "console.log('4 passed');",
+        ].join('\n'),
+      },
+    });
+    const { r, t, nodeId } = await paired([...simAdapters(), new EchoingChairman(`${ENV_SECRET} in ${repoPath}\\src\\add.js`)]);
+    const current = (await t.api('GET', '/api/settings')).body.chairman;
+    expect((await t.api('PATCH', '/api/settings', { chairman: { ...current, agentId: 'echo' } })).status).toBe(200);
+    const taskId = await createTask(t, await addRepo(t, repoPath), 'Stalls, then recovers');
+    await waitForStatus(t, taskId, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+
+    const decision = t.services.chairman.store.listDecisions(taskId).find((d) => d.strategyFingerprint)!;
+    expect(decision.strategy).toMatchObject({ status: 'SUCCEEDED', diagnosis: { source: 'model', confidence: 'HIGH' } });
+    // Redacted before it was stored: the database never held the secret.
+    const stored = JSON.stringify(decision);
+    expect(stored).not.toContain(ENV_SECRET);
+    expect(decision.strategy!.diagnosis.summary).toContain('[REDACTED]');
+
+    // Everything the cloud saw: live decisions (first open, then with the outcome), mirrored events, and an overview read.
+    await r.rpc('chairman.overview', { id: taskId });
+    await waitFor(() => r.events.some((e) => e.kind === 'taskDetail' && e.payload.taskId === taskId), Boolean, 15_000, 'detail snapshot');
+    const wire = JSON.stringify(r.frames);
+    const liveDecisions = r.frames.filter((f) => f.type === 'event.live' && (f.payload as { message: { type: string } }).message.type === 'chairman.decision');
+    const statuses = liveDecisions.map((f) => (f.payload as { message: { decision: { id: string; strategy?: { status: string } | null } } }).message.decision).filter((d) => d.id === decision.id).map((d) => d.strategy?.status);
+    expect(statuses).toEqual(['RUNNING', 'SUCCEEDED']);
+    expect(wire).toContain('Cause found near');
+    for (const needle of [ENV_SECRET, ...spellings(repoPath)]) expect(wire, `leaked: ${needle}`).not.toContain(needle);
+    expect(nodeId).toBeTruthy();
   });
 });
 

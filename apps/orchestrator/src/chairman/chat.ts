@@ -15,7 +15,6 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { Store, TaskRecord } from '../store/store.js';
 import type { Chairman } from './chairman.js';
 import { classifyMessage, INTERPRETABLE_ACTIONS, type IntentContext, type ParsedMessage } from './intent.js';
-import { fenceEvidence } from './reasoner.js';
 import { activeDirectives } from './snapshot.js';
 
 export interface ChatDeps {
@@ -116,15 +115,13 @@ export class ChairmanChat {
     };
   }
 
+  /** The shared evidence service, chat-sized. A failure to gather it only means a thinner answer. */
   private async evidence(task: TaskRecord): Promise<string> {
-    const parts: string[] = [];
-    const review = await this.d.artifacts.latestText(task.id, 'review', 12_000);
-    const verification = await this.d.artifacts.latestText(task.id, 'verification', 12_000);
-    if (verification) parts.push(fenceEvidence('latest verification', verification));
-    if (review) parts.push(fenceEvidence('latest review', review));
-    const failure = this.d.chairman.store.listFailures(task.id).at(-1);
-    if (failure) parts.push(fenceEvidence('latest failure', `${failure.source} at ${failure.stageKey}: ${failure.message}`));
-    return parts.join('\n\n');
+    try {
+      return this.d.chairman.evidence.render(await this.d.chairman.evidence.forChat(task));
+    } catch {
+      return '';
+    }
   }
 
   private async process(message: ChairmanMessage): Promise<void> {

@@ -1,8 +1,12 @@
 import {
   CHAIRMAN_HEALTH_LABEL,
   COMPLETE,
+  STRATEGY_KIND_LABEL,
+  STRATEGY_OUTCOME_LABEL,
   TASK_STATUS_LABEL,
   type ChairmanHealth,
+  type ChairmanStrategyKind,
+  type ChairmanStrategyOutcomeStatus,
   type Directive,
   type EventType,
   type TaskBlocker,
@@ -43,6 +47,15 @@ export interface ChairmanTaskSnapshot {
   usage: { agentRuns: number; workMinutes: number };
   limits: TaskLimits | null;
   strategySummary: string | null;
+  /** The latest recovery strategy and what objectively came of it (plan §3.16). */
+  lastStrategy: {
+    kind: ChairmanStrategyKind;
+    targetStageKey: string | null;
+    diagnosis: string;
+    confidence: string;
+    outcome: ChairmanStrategyOutcomeStatus;
+    outcomeSummary: string | null;
+  } | null;
   stages: Array<{ key: string; name: string; role: string; kind: string; agentId: string | null }>;
 }
 
@@ -81,6 +94,7 @@ export class SnapshotService {
     const usage = this.chairman.usage(task.id);
     const failures = this.chairman.listFailures(task.id, { recoveryCycle: task.recoveryCycle });
     const events = this.store.listEvents(task.id, { limit: 2000 }).filter((e) => !NOISE.has(e.type)).slice(-25);
+    const last = this.chairman.listStrategyRuns(task.id, 1)[0] ?? null;
     return {
       taskId: task.id,
       version: task.version,
@@ -108,6 +122,9 @@ export class SnapshotService {
       usage: { agentRuns: usage.agentRuns, workMinutes: Math.round(usage.workMs / 60_000) },
       limits: task.limits,
       strategySummary: session.strategySummary,
+      lastStrategy: last
+        ? { kind: last.strategyKind, targetStageKey: last.targetStageKey, diagnosis: last.diagnosis.summary, confidence: last.diagnosis.confidence, outcome: last.status, outcomeSummary: last.outcomeSummary }
+        : null,
       stages: task.workflow.stages.map((s) => ({
         key: s.key,
         name: s.name,
@@ -153,6 +170,11 @@ export class SnapshotService {
     if (s.latestVerify) lines.push(`Last verification: ${s.latestVerify.verdict === 'PASS' ? 'passed' : 'rejected'}${s.latestVerify.summary ? ` — ${sentence(s.latestVerify.summary)}` : ''}.`);
     else if (s.latestReview) lines.push(`Last review: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
     if (s.strategySummary && !finished) lines.push(`Current strategy: ${s.strategySummary}`);
+    if (s.lastStrategy) {
+      const l = s.lastStrategy;
+      const what = `${STRATEGY_KIND_LABEL[l.kind]}${l.targetStageKey ? ` at ${l.targetStageKey}` : ''}`;
+      lines.push(`Last strategy: ${what} — ${STRATEGY_OUTCOME_LABEL[l.outcome]}${l.outcomeSummary ? `: ${sentence(l.outcomeSummary)}` : ''}.`);
+    }
     if (s.activeDirectives.length) lines.push(`${s.activeDirectives.length} active directive${s.activeDirectives.length === 1 ? '' : 's'}.`);
     return lines.join(PARA);
   }

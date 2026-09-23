@@ -5,6 +5,8 @@ import type {
   ChairmanHealth,
   ChairmanMessage,
   ChairmanStatus,
+  ChairmanStrategyOutcomeStatus,
+  ChairmanStrategyRun,
   FailureCategory,
   TaskCheckpoint,
   TaskContract,
@@ -99,6 +101,32 @@ const toDecision = (r: Row): ChairmanDecision => ({
   reasoner: r.reasoner,
   strategyFingerprint: r.strategy_fingerprint,
   createdAt: r.created_at,
+});
+
+const toStrategyRun = (r: Row): ChairmanStrategyRun => ({
+  decisionId: r.decision_id,
+  taskId: r.task_id,
+  contractVersion: r.contract_version,
+  recoveryCycle: r.recovery_cycle,
+  trigger: r.trigger,
+  strategyFingerprint: r.strategy_fingerprint,
+  strategyKind: r.strategy_kind,
+  targetStageKey: r.target_stage_key,
+  targetAgentId: r.target_agent_id,
+  failureSource: r.failure_source,
+  failureStageKey: r.failure_stage_key,
+  failureCategory: r.failure_category,
+  failureHash: r.failure_hash,
+  failureCount: r.failure_count,
+  diagnosis: { category: r.diagnosis_category, confidence: r.diagnosis_confidence, summary: r.diagnosis_summary, source: r.diagnosis_source },
+  evidenceDigest: r.evidence_digest,
+  expectedResult: r.expected_result,
+  status: r.status,
+  outcomeSummary: r.outcome_summary,
+  healthBefore: r.health_before,
+  healthAfter: r.health_after,
+  startedAt: r.started_at,
+  evaluatedAt: r.evaluated_at,
 });
 
 const toAction = (r: Row): ChairmanAction => ({
@@ -285,8 +313,107 @@ export class ChairmanStore {
     return rec;
   }
 
+  /** Decisions, oldest first, each with its strategy run (recovery decisions) or `strategy: null`. */
   listDecisions(taskId: string, limit = 50): ChairmanDecision[] {
-    return (this.db.prepare('SELECT * FROM (SELECT *, rowid AS rid FROM chairman_decisions WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, rid').all(taskId, limit) as Row[]).map(toDecision);
+    const decisions = (this.db.prepare('SELECT * FROM (SELECT *, rowid AS rid FROM chairman_decisions WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, rid').all(taskId, limit) as Row[]).map(toDecision);
+    if (!decisions.length) return decisions;
+    const runs = new Map(this.listStrategyRuns(taskId, Math.max(limit, 200)).map((r) => [r.decisionId, r]));
+    return decisions.map((d) => ({ ...d, strategy: runs.get(d.id) ?? null }));
+  }
+
+  decision(id: string): ChairmanDecision | null {
+    const row = this.db.prepare('SELECT * FROM chairman_decisions WHERE id = ?').get(id) as Row | undefined;
+    return row ? { ...toDecision(row), strategy: this.strategyRun(id) } : null;
+  }
+
+  // ----- strategy runs ------------------------------------------------------------
+
+  insertStrategyRun(run: ChairmanStrategyRun): ChairmanStrategyRun {
+    this.db
+      .prepare(
+        `INSERT INTO chairman_strategy_runs (decision_id, task_id, contract_version, recovery_cycle, trigger, strategy_fingerprint, strategy_kind, target_stage_key, target_agent_id,
+           failure_source, failure_stage_key, failure_category, failure_hash, failure_count, diagnosis_category, diagnosis_confidence, diagnosis_summary, diagnosis_source,
+           evidence_digest, expected_result, status, outcome_summary, health_before, health_after, started_at, evaluated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.decisionId,
+        run.taskId,
+        run.contractVersion,
+        run.recoveryCycle,
+        run.trigger,
+        run.strategyFingerprint,
+        run.strategyKind,
+        run.targetStageKey,
+        run.targetAgentId,
+        run.failureSource,
+        run.failureStageKey,
+        run.failureCategory,
+        run.failureHash,
+        run.failureCount,
+        run.diagnosis.category,
+        run.diagnosis.confidence,
+        run.diagnosis.summary,
+        run.diagnosis.source,
+        run.evidenceDigest,
+        run.expectedResult,
+        run.status,
+        run.outcomeSummary,
+        run.healthBefore,
+        run.healthAfter,
+        run.startedAt,
+        run.evaluatedAt,
+      );
+    return run;
+  }
+
+  strategyRun(decisionId: string): ChairmanStrategyRun | null {
+    const row = this.db.prepare('SELECT * FROM chairman_strategy_runs WHERE decision_id = ?').get(decisionId) as Row | undefined;
+    return row ? toStrategyRun(row) : null;
+  }
+
+  /** Strategies still waiting for a comparable observation, oldest first (normally at most one). */
+  openStrategyRuns(taskId: string): ChairmanStrategyRun[] {
+    return (this.db.prepare("SELECT * FROM chairman_strategy_runs WHERE task_id = ? AND status = 'RUNNING' ORDER BY started_at, rowid").all(taskId) as Row[]).map(toStrategyRun);
+  }
+
+  latestOpenStrategy(taskId: string): ChairmanStrategyRun | null {
+    return this.openStrategyRuns(taskId).at(-1) ?? null;
+  }
+
+  /** Tasks with a strategy still open (restart reconciliation). */
+  tasksWithOpenStrategies(): string[] {
+    return (this.db.prepare("SELECT DISTINCT task_id FROM chairman_strategy_runs WHERE status = 'RUNNING'").all() as Row[]).map((r) => r.task_id);
+  }
+
+  /**
+   * Record a strategy's outcome once. Returns the finished run, or null when
+   * it was already finished (a duplicate hook call or a second restart).
+   */
+  finishStrategyRun(decisionId: string, outcome: { status: Exclude<ChairmanStrategyOutcomeStatus, 'RUNNING'>; summary: string; healthAfter: ChairmanHealth | null }): ChairmanStrategyRun | null {
+    const changed = this.db
+      .prepare("UPDATE chairman_strategy_runs SET status = ?, outcome_summary = ?, health_after = ?, evaluated_at = ? WHERE decision_id = ? AND status = 'RUNNING'")
+      .run(outcome.status, outcome.summary.slice(0, 600), outcome.healthAfter, now(), decisionId).changes;
+    return changed ? this.strategyRun(decisionId) : null;
+  }
+
+  /** Newest first, bounded. */
+  listStrategyRuns(taskId: string, limit = 50): ChairmanStrategyRun[] {
+    return (this.db.prepare('SELECT * FROM chairman_strategy_runs WHERE task_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?').all(taskId, Math.min(limit, 500)) as Row[]).map(toStrategyRun);
+  }
+
+  /**
+   * Strategy families (kind + target stage) that made no progress or made
+   * things worse against this failure category under this contract version.
+   */
+  failedStrategyFamilies(taskId: string, contractVersion: number, category: FailureCategory): Array<{ kind: string; targetStageKey: string | null; status: ChairmanStrategyOutcomeStatus }> {
+    return (
+      this.db
+        .prepare(
+          "SELECT strategy_kind, target_stage_key, status FROM chairman_strategy_runs WHERE task_id = ? AND contract_version = ? AND failure_category = ? AND status IN ('FAILED', 'REGRESSED') ORDER BY started_at LIMIT 100",
+        )
+        .all(taskId, contractVersion, category) as Row[]
+    ).map((r) => ({ kind: r.strategy_kind, targetStageKey: r.target_stage_key, status: r.status }));
   }
 
   // ----- actions ------------------------------------------------------------------------

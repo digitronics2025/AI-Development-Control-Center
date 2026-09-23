@@ -2,10 +2,15 @@ import { taskWorkdir } from '../engine/workdir.js';
 import { changesSince } from '@acc/git';
 import { redact } from '@acc/security';
 import {
+  STRATEGY_OUTCOME_LABEL,
+  type ChairmanAction,
   type ChairmanActionInput,
+  type ChairmanDiagnosis,
   type ChairmanOverview,
   type ChairmanState,
   type ChairmanStatus,
+  type ChairmanStrategyOutcomeStatus,
+  type ChairmanStrategyRun,
   type StageDefinition,
   type StageInstance,
   type TaskContract,
@@ -23,11 +28,13 @@ import type { RepositoryService } from '../services/repositories.js';
 import type { SettingsService } from '../services/settings.js';
 import { now, type Store, type TaskRecord } from '../store/store.js';
 import { CheckpointService } from './checkpoints.js';
+import { ChairmanEvidenceService, describeFailure, digestOf, type ChairmanEvidencePacket, type EvidenceDeps, type EvidenceFailure } from './evidence.js';
 import { completionGate, type GateResult } from './gate.js';
 import { ActionGateway } from './gateway.js';
-import { decideOnFailure, extendLimits, limitReached, recoveryCandidates, TRIGGER_LABEL, type RecoveryTrigger, type StrategyCandidate } from './policy.js';
+import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, TRIGGER_LABEL, type RecoveryTrigger, type StrategyCandidate } from './policy.js';
+import { OutcomeEvaluator } from './outcomes.js';
 import { classifyProgress } from './progress.js';
-import { fenceEvidence, Reasoner } from './reasoner.js';
+import { Reasoner } from './reasoner.js';
 import { pointsAtPlan, signatureOf, type FailureSignature, type FailureSource } from './signatures.js';
 import { activeDirectives, SnapshotService } from './snapshot.js';
 import { ChairmanStore } from './store.js';
@@ -42,6 +49,8 @@ export interface ChairmanDeps {
   artifacts: ArtifactService;
   repositories: RepositoryService;
   context: ContextBuilder;
+  /** The tool layer's store (tool calls and recovery attempts as evidence); null without the tool layer. */
+  toolStore: EvidenceDeps['tools'];
 }
 
 const BLOCKING_PROVIDER = new Set(['USAGE_LIMIT', 'MODEL_UNAVAILABLE', 'AUTH_FAILURE']);
@@ -59,9 +68,13 @@ export class Chairman implements SupervisorHooks {
   readonly snapshots: SnapshotService;
   readonly checkpoints: CheckpointService;
   readonly reasoner: Reasoner;
+  readonly evidence: ChairmanEvidenceService;
+  readonly outcomes: OutcomeEvaluator;
 
   constructor(private readonly d: ChairmanDeps) {
     this.store = new ChairmanStore(d.store.db);
+    this.outcomes = new OutcomeEvaluator(d.store, this.store, (id, status, summary, health) => this.finishStrategy(id, status, summary, health));
+    this.evidence = new ChairmanEvidenceService({ store: d.store, chairman: this.store, artifacts: d.artifacts, agents: d.agents, tools: d.toolStore });
     this.snapshots = new SnapshotService(d.store, this.store, d.views, d.agents);
     this.checkpoints = new CheckpointService(d.store, this.store, d.repositories, d.engine.publisher, d.bus);
     this.reasoner = new Reasoner(d.agents, d.settings, d.artifacts, d.store);
@@ -120,7 +133,7 @@ export class Chairman implements SupervisorHooks {
   /** A new contract version: the goal changed or a hard constraint was added (§3.4). */
   reviseContract(taskId: string, change: { goal?: string; constraint?: string; reason: string }): TaskContract {
     const current = this.contract(this.task(taskId));
-    return this.store.insertContract({
+    const next = this.store.insertContract({
       ...current,
       version: current.version + 1,
       goal: change.goal ? redact(change.goal) : current.goal,
@@ -128,6 +141,9 @@ export class Chairman implements SupervisorHooks {
       reason: change.reason,
       createdAt: now(),
     });
+    // A strategy chosen for the old contract is judged by it no longer (§3.8).
+    this.outcomes.close(taskId, 'SUPERSEDED', `The ${change.goal ? 'goal' : 'constraints'} changed (contract v${next.version}) before this strategy produced a result.`, (run) => run.contractVersion < next.version);
+    return next;
   }
 
   state(taskId: string): ChairmanState {
@@ -210,6 +226,7 @@ export class Chairman implements SupervisorHooks {
   }
 
   afterSuccess(taskId: string, def: StageDefinition, stage: StageInstance): void {
+    this.outcomes.reconcile(taskId);
     const source: FailureSource | null = def.kind === 'tests' ? 'tests' : stage.verdict === 'PASS' ? (def.role === 'verifier' ? 'verify' : 'review') : null;
     if (!source) return;
     const task = this.task(taskId);
@@ -235,14 +252,10 @@ export class Chairman implements SupervisorHooks {
     const history = this.store.listFailures(task.id, { recoveryCycle: task.recoveryCycle }).filter((f) => f.source === sig.source);
     const health = classifyProgress(history);
     this.store.updateSession(task.id, { health });
+    // The failure is recorded first, then the previous strategy is judged on it, then the next decision is made.
+    this.outcomes.reconcile(task.id);
     this.publishState(task.id);
     return { health, repeats: history.filter((f) => f.hash === sig.hash).length };
-  }
-
-  private async testEvidence(taskId: string, stageId: string): Promise<{ detail: string; commandName: string | null }> {
-    const failed = this.d.store.listTestRuns(taskId, stageId).find((r) => r.status === 'failed');
-    if (!failed?.executionId) return { detail: '', commandName: failed?.name ?? null };
-    return { detail: this.d.store.tailLogLines(failed.executionId, 80).map((l) => l.text).join('\n'), commandName: failed.name };
   }
 
   async onFailure(taskId: string, def: StageDefinition, stage: StageInstance, outcome: Extract<StageOutcome, { kind: 'verdict_fail' | 'tests_failed' }>, control: RunControl): Promise<'local_fix' | 'continue' | 'stop'> {
@@ -250,7 +263,7 @@ export class Chairman implements SupervisorHooks {
     let sig: FailureSignature;
     let detail: string;
     if (outcome.kind === 'tests_failed') {
-      const evidence = await this.testEvidence(taskId, stage.id);
+      const evidence = this.evidence.testFailure(taskId, stage.id);
       detail = evidence.detail;
       sig = signatureOf({ source: 'tests', stageKey: def.key, message: outcome.message, detail, commandName: evidence.commandName });
     } else {
@@ -270,7 +283,7 @@ export class Chairman implements SupervisorHooks {
       repeats,
     });
     if (decision.kind === 'local_fix') return 'local_fix';
-    return this.recover(this.task(taskId), { trigger: decision.trigger, failingStageKey: def.key, sig, evidence: detail }, control);
+    return this.recover(this.task(taskId), { trigger: decision.trigger, failingStageKey: def.key, stageId: stage.id, sig }, control);
   }
 
   async onError(taskId: string, def: StageDefinition, stage: StageInstance, outcome: Extract<StageOutcome, { kind: 'error' }>, control: RunControl, mode: 'exhausted' | 'blocked'): Promise<'continue' | 'stop' | 'legacy'> {
@@ -283,12 +296,19 @@ export class Chairman implements SupervisorHooks {
       const candidates = recoveryCandidates(this.candidateContext(task, 'provider_blocked', def.key, sig));
       const choice = candidates[0];
       if (!choice) return 'legacy';
-      const decision = this.decide(task, 'provider_blocked', `${def.name} is blocked (${outcome.message.slice(0, 160)}). ${choice.label}.`, choice.label, { fingerprint: choice.fingerprint });
+      const input: RecoveryInput = { trigger: 'provider_blocked', failingStageKey: def.key, stageId: stage.id, sig };
+      const packet = await this.evidencePacket(task, input);
+      const decision = this.decide(task, 'provider_blocked', `${def.name} is blocked (${outcome.message.slice(0, 160)}). ${choice.label}.`, choice.label, {
+        fingerprint: choice.fingerprint,
+        strategy: this.strategyStart(choice, input, this.diagnose(input), packet.digest, task.recoveryCycle),
+      });
       this.rememberStrategy(taskId, choice, `${def.name} moved to another agent after: ${outcome.message.slice(0, 200)}`);
       const results = await this.gateway.executeDecision(taskId, choice.actions, { initiator: 'chairman', source: 'supervisor', decisionId: decision.id, control });
-      return results.every((r) => r.status === 'completed') ? 'continue' : 'legacy';
+      if (results.every((r) => r.status === 'completed')) return 'continue';
+      this.strategyNotStarted(decision.id, results);
+      return 'legacy';
     }
-    return this.recover(task, { trigger: 'worker_failure', failingStageKey: def.key, sig, evidence: outcome.message }, control);
+    return this.recover(task, { trigger: 'worker_failure', failingStageKey: def.key, stageId: stage.id, sig }, control);
   }
 
   private candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature) {
@@ -321,7 +341,7 @@ export class Chairman implements SupervisorHooks {
     trigger: string,
     summary: string,
     decision: string,
-    extra: { reasoningSummary?: string; expectedResult?: string; hardBlocker?: boolean; reasoner?: 'model' | 'policy'; fingerprint?: string | null } = {},
+    extra: { reasoningSummary?: string; expectedResult?: string; hardBlocker?: boolean; reasoner?: 'model' | 'policy'; fingerprint?: string | null; strategy?: StrategyStart } = {},
   ) {
     const session = this.store.session(task.id);
     const rec = this.store.insertDecision({
@@ -339,7 +359,27 @@ export class Chairman implements SupervisorHooks {
       strategyFingerprint: extra.fingerprint ?? null,
     });
     this.store.updateSession(task.id, { lastDecisionId: rec.id });
-    this.d.bus.publish({ type: 'chairman.decision', decision: rec });
+    let strategy: ChairmanStrategyRun | null = null;
+    if (extra.strategy && rec.strategyFingerprint) {
+      // A reroute around a blocked provider runs alongside the current strategy; a new recovery strategy replaces it.
+      if (trigger !== 'provider_blocked') this.outcomes.close(task.id, 'INCONCLUSIVE', 'A new recovery strategy started before this one produced a comparable result.');
+      strategy = this.store.insertStrategyRun({
+        ...extra.strategy,
+        decisionId: rec.id,
+        taskId: task.id,
+        contractVersion: this.contract(task).version,
+        trigger,
+        strategyFingerprint: rec.strategyFingerprint,
+        expectedResult: rec.expectedResult,
+        status: 'RUNNING',
+        outcomeSummary: null,
+        healthBefore: session.health,
+        healthAfter: null,
+        startedAt: rec.createdAt,
+        evaluatedAt: null,
+      });
+    }
+    this.d.bus.publish({ type: 'chairman.decision', decision: { ...rec, strategy } });
     this.d.engine.publisher.event(task.id, 'CHAIRMAN_DECISION', `Chairman: ${rec.summary}`, { decisionId: rec.id, trigger });
     this.note(task.id, rec.summary, { kind: 'decision', decisionId: rec.id });
     return rec;
@@ -361,7 +401,7 @@ export class Chairman implements SupervisorHooks {
    */
   private async recover(
     task: TaskRecord,
-    input: { trigger: RecoveryTrigger; failingStageKey: string; sig: FailureSignature; evidence: string },
+    input: RecoveryInput,
     control: RunControl,
     attempt = 0,
   ): Promise<'continue' | 'stop'> {
@@ -372,12 +412,21 @@ export class Chairman implements SupervisorHooks {
       await this.d.engine.block(task.id, 'limit', limit, { inLoop: true, stageKey: input.failingStageKey });
       return 'stop';
     }
-    const candidates = recoveryCandidates(this.candidateContext(task, input.trigger, input.failingStageKey, input.sig));
+    const rules = this.diagnose(input);
+    // Safe candidates first, then ordered by what earlier strategies achieved under this contract.
+    const candidates = rankCandidates(recoveryCandidates(this.candidateContext(task, input.trigger, input.failingStageKey, input.sig)), {
+      trigger: input.trigger,
+      failedFamilies: this.store.failedStrategyFamilies(task.id, this.contract(task).version, input.sig.category),
+      confidence: rules.confidence,
+    });
     if (!candidates.length) return this.hardBlock(task, input);
 
     this.store.updateSession(task.id, { status: 'evaluating' });
     this.publishState(task.id);
     const decidedOn = this.task(task.id).version;
+    // Gathered even without a model: its digest is the decision's audit trail.
+    const packet = await this.evidencePacket(task, input);
+    let diagnosis: ChairmanDiagnosis = rules;
     let ordered = candidates;
     let choice: { summary: string; reasoningSummary: string; guidance: string; expectedResult: string; reasoner: 'model' | 'policy' } = {
       summary: `${TRIGGER_LABEL[input.trigger]}. Next: ${candidates[0]!.label}.`,
@@ -387,11 +436,12 @@ export class Chairman implements SupervisorHooks {
       reasoner: 'policy',
     };
     if (!this.reasoner.unavailableReason()) {
-      const result = await this.reasoner.chooseRecovery(this.snapshots.build(task.id), TRIGGER_LABEL[input.trigger], candidates, this.evidence(task.id, input.evidence), {
-        onCancel: (cancel) => {
+      const cancellable = {
+        onCancel: (cancel: () => Promise<void>) => {
           control.cancelCurrent = cancel;
         },
-      });
+      };
+      const result = await this.reasoner.chooseRecovery(this.snapshots.build(task.id), TRIGGER_LABEL[input.trigger], candidates, this.evidence.render(packet), cancellable, { category: rules.category, summary: rules.summary });
       control.cancelCurrent = null;
       if (!result.ok && result.cancelled) {
         this.store.updateSession(task.id, { status: 'supervising' });
@@ -401,6 +451,8 @@ export class Chairman implements SupervisorHooks {
         const picked = candidates.find((c) => c.id === result.value.choice)!;
         ordered = [picked, ...candidates.filter((c) => c !== picked)];
         choice = { ...result.value, reasoner: 'model', summary: `${TRIGGER_LABEL[input.trigger]}. ${result.value.summary}` };
+        // The model words the hypothesis; the category stays the failure signature's.
+        if (result.value.diagnosis) diagnosis = { category: rules.category, confidence: result.value.diagnosis.confidence, summary: result.value.diagnosis.summary.slice(0, 400), source: 'model' };
         this.store.updateSession(task.id, { degradedReason: null });
       } else {
         this.store.updateSession(task.id, { degradedReason: `Model unavailable for the last decision (${result.reason.slice(0, 200)}); used the rules.` });
@@ -413,13 +465,14 @@ export class Chairman implements SupervisorHooks {
 
     for (const candidate of ordered) {
       const current = this.task(task.id);
+      const cycle = current.recoveryCycle + 1;
       const decision = this.decide(current, input.trigger, candidate === ordered[0] ? choice.summary : `${TRIGGER_LABEL[input.trigger]}. Previous option failed; next: ${candidate.label}.`, candidate.label, {
         reasoningSummary: choice.reasoningSummary,
         expectedResult: choice.expectedResult,
         reasoner: candidate === ordered[0] ? choice.reasoner : 'policy',
         fingerprint: candidate.fingerprint,
+        strategy: this.strategyStart(candidate, input, diagnosis, packet.digest, cycle),
       });
-      const cycle = current.recoveryCycle + 1;
       const started = this.d.engine.applyInLoop(task.id, { recoveryCycle: cycle, fixCycles: 0 });
       this.d.engine.publisher.event(task.id, 'RECOVERY_CYCLE', `Recovery cycle ${cycle}: ${candidate.label}`, { cycle, decisionId: decision.id });
       const guidance = candidate === ordered[0] && choice.guidance ? choice.guidance : guidanceOf(candidate);
@@ -437,12 +490,66 @@ export class Chairman implements SupervisorHooks {
       });
       this.publishState(task.id);
       if (results.every((r) => r.status === 'completed')) return 'continue';
+      this.strategyNotStarted(decision.id, results);
       if (control.stopReason) return 'stop';
     }
     return this.hardBlock(this.task(task.id), input);
   }
 
-  private async hardBlock(task: TaskRecord, input: { trigger: RecoveryTrigger; failingStageKey: string; sig: FailureSignature }): Promise<'stop'> {
+  private diagnose(input: RecoveryInput): ChairmanDiagnosis {
+    return policyDiagnosis({ category: input.sig.category, source: input.sig.source, trigger: input.trigger, message: input.sig.message, failureCount: input.sig.failureCount });
+  }
+
+  private strategyStart(candidate: StrategyCandidate, input: RecoveryInput, diagnosis: ChairmanDiagnosis, evidenceDigest: string, recoveryCycle: number): StrategyStart {
+    return {
+      recoveryCycle,
+      strategyKind: candidate.kind,
+      targetStageKey: candidate.targetStageKey,
+      targetAgentId: candidate.targetAgentId,
+      failureSource: input.sig.source,
+      failureStageKey: input.failingStageKey,
+      failureCategory: input.sig.category,
+      failureHash: input.sig.hash,
+      failureCount: input.sig.failureCount,
+      diagnosis: { ...diagnosis, summary: redact(diagnosis.summary).slice(0, 400) },
+      evidenceDigest,
+    };
+  }
+
+  /**
+   * The gateway refused the strategy's actions: that says nothing about the
+   * engineering, so it is never FAILED. A stale task version means the
+   * situation moved on (superseded); anything else is inconclusive.
+   */
+  private strategyNotStarted(decisionId: string, results: ChairmanAction[]): void {
+    const refused = results.find((r) => r.status !== 'completed');
+    const stale = results.some((r) => r.reason?.startsWith('STALE'));
+    this.finishStrategy(
+      decisionId,
+      stale ? 'SUPERSEDED' : 'INCONCLUSIVE',
+      stale ? 'The task changed before this strategy could start; the Chairman re-evaluated.' : `The strategy could not be started: ${(refused?.reason ?? 'refused').slice(0, 300)}`,
+      null,
+    );
+  }
+
+  /** Record a strategy's outcome once, and show it on the same decision card everywhere. */
+  finishStrategy(decisionId: string, status: Exclude<ChairmanStrategyOutcomeStatus, 'RUNNING'>, summary: string, healthAfter: ChairmanStrategyRun['healthAfter']): ChairmanStrategyRun | null {
+    const run = this.store.finishStrategyRun(decisionId, { status, summary: redact(summary), healthAfter });
+    if (!run) return null;
+    // The observed result is the task's health now (a strategy can resolve a failure without a new one to classify).
+    if (healthAfter) {
+      this.store.updateSession(run.taskId, { health: healthAfter });
+      this.publishState(run.taskId);
+    }
+    const decision = this.store.decision(decisionId);
+    if (decision) {
+      this.d.bus.publish({ type: 'chairman.decision', decision });
+      this.d.engine.publisher.event(run.taskId, 'CHAIRMAN_DECISION', `Chairman: ${decision.decision} — ${STRATEGY_OUTCOME_LABEL[status]}. ${run.outcomeSummary ?? ''}`.trim(), { decisionId, outcome: status });
+    }
+    return run;
+  }
+
+  private async hardBlock(task: TaskRecord, input: RecoveryInput): Promise<'stop'> {
     const tried = this.store.session(task.id).lastRecoveryReason;
     const message = `No safe new strategy remains for "${input.sig.message.slice(0, 200)}" (${TRIGGER_LABEL[input.trigger]}).${tried ? ` Last strategy tried: ${tried}.` : ''} Add a directive with what to do differently, then resume.`;
     this.decide(task, input.trigger, message, 'Hard blocker', { hardBlocker: true });
@@ -450,9 +557,20 @@ export class Chairman implements SupervisorHooks {
     return 'stop';
   }
 
-  private evidence(taskId: string, primary: string): string {
-    const failures = this.store.listFailures(taskId).slice(-6).map((f) => `- [${f.source} ${f.stageKey}] ${f.message}${f.failureCount !== null ? ` (${f.failureCount})` : ''}`);
-    return [fenceEvidence('latest failure', primary || '(no detail)'), fenceEvidence('failure history', failures.join('\n') || '(none)')].join('\n\n');
+  /**
+   * Evidence for a recovery decision. Enrichment never stops supervision: if
+   * the evidence service itself fails, the decision falls back to the
+   * failure it already knows, and that is noted on the task.
+   */
+  private async evidencePacket(task: TaskRecord, input: RecoveryInput): Promise<ChairmanEvidencePacket> {
+    const failure: EvidenceFailure = { source: input.sig.source, stageKey: input.failingStageKey, stageId: input.stageId, category: input.sig.category, hash: input.sig.hash, message: input.sig.message, failureCount: input.sig.failureCount };
+    try {
+      return await this.evidence.forRecovery(task, failure);
+    } catch (error) {
+      this.d.engine.publisher.event(task.id, 'WATCHDOG', `Chairman evidence could not be gathered (${redact((error as Error).message).slice(0, 160)}); deciding from the failure alone.`);
+      const section = { kind: 'failure' as const, reliability: 'OBSERVED' as const, label: 'current failure', sourceId: input.stageId, text: redact(describeFailure(failure)).slice(0, 1_500), truncated: false };
+      return { purpose: 'recovery', taskId: task.id, generatedAt: now(), digest: digestOf([section]), sections: [section], availableKinds: ['failure'], unavailableKinds: [], unavailable: [] };
+    }
   }
 
   // ===========================================================================
@@ -483,6 +601,8 @@ export class Chairman implements SupervisorHooks {
   async beforeComplete(taskId: string, control: RunControl): Promise<{ kind: 'complete'; limitations: string[] } | { kind: 'continue' } | { kind: 'stop' }> {
     const task = this.task(taskId);
     const gate = await this.gate(task);
+    this.outcomes.reconcile(taskId);
+    this.outcomes.completionGate(taskId, { pass: gate.pass, failureHashes: gate.failures.map((f) => signatureOf({ source: 'gate', stageKey: 'complete', message: f.message }).hash) });
     if (gate.pass) return { kind: 'complete', limitations: [] };
     const tried = new Set(this.store.session(taskId).strategyFingerprints);
     const usage = { recoveryCycle: task.recoveryCycle, ...this.store.usage(taskId) };
@@ -497,16 +617,24 @@ export class Chairman implements SupervisorHooks {
         description: failure.message,
         actions: failure.remedy,
         fingerprint: sig.hash,
+        targetStageKey: null,
+        targetAgentId: null,
       };
       if (tried.has(candidate.fingerprint)) continue;
       if (limitReached(task.limits, usage, { startingRecovery: true })) break;
-      const decision = this.decide(task, 'completion_gate', `Not complete yet: ${failure.message} Fixing that before finishing.`, candidate.label, { fingerprint: candidate.fingerprint });
       const cycle = task.recoveryCycle + 1;
+      const input: RecoveryInput = { trigger: 'completion_gate', failingStageKey: 'complete', stageId: null, sig };
+      const digest = digestOf([{ kind: 'failure', sourceId: null, text: redact(describeFailure({ ...sig, stageKey: 'complete', hash: sig.hash })) }]);
+      const decision = this.decide(task, 'completion_gate', `Not complete yet: ${failure.message} Fixing that before finishing.`, candidate.label, {
+        fingerprint: candidate.fingerprint,
+        strategy: this.strategyStart(candidate, input, this.diagnose(input), digest, cycle),
+      });
       this.d.engine.applyInLoop(taskId, { recoveryCycle: cycle, fixCycles: 0 });
       this.d.engine.publisher.event(taskId, 'RECOVERY_CYCLE', `Recovery cycle ${cycle}: ${candidate.label}`, { cycle, decisionId: decision.id });
       this.rememberStrategy(taskId, candidate, guidanceOf(candidate) || failure.message);
       const results = await this.gateway.executeDecision(taskId, candidate.actions, { initiator: 'chairman', source: 'supervisor', decisionId: decision.id, control });
       if (results.every((r) => r.status === 'completed')) return { kind: 'continue' };
+      this.strategyNotStarted(decision.id, results);
       if (control.stopReason) return { kind: 'stop' };
     }
     // Nothing safe left to try: finish honestly, with every unmet check in the report.
@@ -532,9 +660,17 @@ export class Chairman implements SupervisorHooks {
   onTerminal(taskId: string): void {
     const task = this.d.store.getTask(taskId);
     if (!task) return;
+    this.closeTerminalStrategies(task);
     this.store.updateSession(taskId, { status: 'idle' });
     void this.checkpoints.prune(task);
     this.publishState(taskId);
+  }
+
+  /** A finished task leaves no strategy open: judged on what was recorded, else closed without blame. */
+  private closeTerminalStrategies(task: TaskRecord): void {
+    this.outcomes.reconcile(task.id);
+    if (task.status === 'CANCELLED') this.outcomes.close(task.id, 'SUPERSEDED', 'The task was cancelled before this strategy produced a result.');
+    else if (task.status === 'COMPLETED') this.outcomes.close(task.id, 'INCONCLUSIVE', 'The task finished before a comparable result was recorded.');
   }
 
   // ===========================================================================
@@ -547,6 +683,13 @@ export class Chairman implements SupervisorHooks {
    * run twice). Called once, after `engine.recover()` and before scheduling.
    */
   async onStartup(): Promise<void> {
+    // Strategies left open by the restart are judged from what was already recorded — nothing is re-run to find out.
+    for (const taskId of this.store.tasksWithOpenStrategies()) {
+      const task = this.d.store.getTask(taskId);
+      if (!task) continue;
+      if (task.status === 'COMPLETED' || task.status === 'CANCELLED') this.closeTerminalStrategies(task);
+      else this.outcomes.reconcile(taskId);
+    }
     if (!this.d.settings.get().chairman.resumeAfterRestart) return;
     // Interrupted by the crash just reconciled, or by a graceful shutdown before it.
     for (const task of this.d.store.listTasks({ statuses: ['INTERRUPTED'], limit: 1000 })) {
@@ -564,6 +707,20 @@ export class Chairman implements SupervisorHooks {
     const decision = this.decide(task, 'watchdog', `${reason}. Resuming the task.`, 'Resume after watchdog');
     await this.gateway.execute(taskId, { type: 'RESUME_TASK', params: {} }, { initiator: 'system', source: 'supervisor', decisionId: decision.id });
   }
+}
+
+/** What a strategy run knows when it starts; the rest is filled in by `decide`. */
+type StrategyStart = Pick<
+  ChairmanStrategyRun,
+  'recoveryCycle' | 'strategyKind' | 'targetStageKey' | 'targetAgentId' | 'failureSource' | 'failureStageKey' | 'failureCategory' | 'failureHash' | 'failureCount' | 'diagnosis' | 'evidenceDigest'
+>;
+
+interface RecoveryInput {
+  trigger: RecoveryTrigger;
+  failingStageKey: string;
+  /** The stage instance whose failure is being recovered from. */
+  stageId: string | null;
+  sig: FailureSignature;
 }
 
 /** Trigger labels are lower-case phrases; a decision summary starts a sentence. */

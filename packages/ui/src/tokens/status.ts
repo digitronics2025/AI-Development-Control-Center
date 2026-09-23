@@ -34,10 +34,12 @@ import {
   CHAIRMAN_HEALTH_LABEL,
   CHAIRMAN_STATUS_LABEL,
   STAGE_STATUS_LABEL,
+  STRATEGY_OUTCOME_LABEL,
   TASK_STATUS_LABEL,
   type ChairmanActionStatus,
   type ChairmanHealth,
   type ChairmanStatus,
+  type ChairmanStrategyOutcomeStatus,
   type BudgetState,
   type CapacityStatus,
   type HealthState,
@@ -122,6 +124,17 @@ export const CHAIRMAN_ACTION_STATUS_VISUAL: Record<ChairmanActionStatus, StatusV
   completed: { label: 'Completed', tone: 'success', icon: CheckCircle2 },
   failed: { label: 'Failed', tone: 'danger', icon: XCircle },
   rejected: { label: 'Rejected', tone: 'warning', icon: AlertOctagon },
+};
+
+/** What a Chairman recovery strategy achieved (design.md §7.3.1 decision cards). */
+export const STRATEGY_OUTCOME_VISUAL: Record<ChairmanStrategyOutcomeStatus, StatusVisual> = {
+  RUNNING: { label: STRATEGY_OUTCOME_LABEL.RUNNING, tone: 'neutral', icon: Hourglass },
+  SUCCEEDED: { label: STRATEGY_OUTCOME_LABEL.SUCCEEDED, tone: 'success', icon: CheckCircle2 },
+  IMPROVED: { label: STRATEGY_OUTCOME_LABEL.IMPROVED, tone: 'success', icon: TrendingUp },
+  FAILED: { label: STRATEGY_OUTCOME_LABEL.FAILED, tone: 'warning', icon: Minus },
+  REGRESSED: { label: STRATEGY_OUTCOME_LABEL.REGRESSED, tone: 'danger', icon: TrendingDown },
+  INCONCLUSIVE: { label: STRATEGY_OUTCOME_LABEL.INCONCLUSIVE, tone: 'neutral', icon: HelpCircle },
+  SUPERSEDED: { label: STRATEGY_OUTCOME_LABEL.SUPERSEDED, tone: 'neutral', icon: SkipForward },
 };
 
 /** Usage & Costs (design.md §7.10): budget state, capacity, health, attempt outcome, anomaly severity. */

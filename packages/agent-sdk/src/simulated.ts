@@ -275,6 +275,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
               reasoningSummary: 'The same failure repeated, so the previous approach is abandoned.',
               guidance: 'Simulated Chairman guidance: take a different approach from the previous attempts.',
               expectedResult: 'The failure no longer occurs.',
+              diagnosis: { summary: 'Simulated diagnosis: the previous repair treated a symptom, not the cause.', confidence: 'MEDIUM' },
             })}\n\`\`\``;
           } else {
             const status = /^Status line: (.+)$/m.exec(input.prompt)?.[1] ?? 'unknown';

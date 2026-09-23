@@ -904,4 +904,43 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_credential_events_credential ON credential_events(credential_id, created_at);
     `,
   },
+  {
+    // Chairman strategy outcomes (docs/systems/chairman.md §Strategy outcomes):
+    // one row per recovery decision with its diagnosis and the objectively
+    // observed result. Structured metadata only — no logs, prompts or replies.
+    version: 8,
+    name: 'chairman strategy outcomes',
+    sql: `
+      CREATE TABLE chairman_strategy_runs (
+        decision_id TEXT PRIMARY KEY REFERENCES chairman_decisions(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        contract_version INTEGER NOT NULL,
+        recovery_cycle INTEGER NOT NULL,
+        trigger TEXT NOT NULL,
+        strategy_fingerprint TEXT NOT NULL,
+        strategy_kind TEXT NOT NULL,
+        target_stage_key TEXT,
+        target_agent_id TEXT,
+        failure_source TEXT NOT NULL,
+        failure_stage_key TEXT NOT NULL,
+        failure_category TEXT NOT NULL,
+        failure_hash TEXT NOT NULL,
+        failure_count INTEGER,
+        diagnosis_category TEXT NOT NULL,
+        diagnosis_confidence TEXT NOT NULL,
+        diagnosis_summary TEXT NOT NULL,
+        diagnosis_source TEXT NOT NULL,
+        evidence_digest TEXT NOT NULL,
+        expected_result TEXT NOT NULL,
+        status TEXT NOT NULL,
+        outcome_summary TEXT,
+        health_before TEXT NOT NULL,
+        health_after TEXT,
+        started_at TEXT NOT NULL,
+        evaluated_at TEXT
+      );
+      CREATE INDEX idx_chairman_strategy_runs_task ON chairman_strategy_runs(task_id, started_at);
+      CREATE INDEX idx_chairman_strategy_runs_open ON chairman_strategy_runs(task_id, status);
+    `,
+  },
 ];

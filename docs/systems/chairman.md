@@ -5,13 +5,14 @@ sources:
   - apps/orchestrator/src/engine/supervision.ts
   - packages/shared/src/chairman.ts
   - apps/dashboard/src/pages/task/ChairmanDrawer.tsx
-verified_at: 892299f
+verified_at: 953e754
 ---
 
 # Chairman supervisor
 
 A task-scoped supervisor for Autopilot tasks plus a chat with it
-([plan](../plans/chairman-supervisor.md)). **The orchestrator owns task state;
+([plan](../plans/chairman-supervisor.md), [intelligence upgrade](../plans/chairman-intelligence-upgrade.md)).
+**The orchestrator owns task state;
 agents do work; the Chairman supervises and recovers — and changes nothing
 except through the Action Gateway.** One `Chairman` instance
 ([chairman.ts](../../apps/orchestrator/src/chairman/chairman.ts)) serves every
@@ -30,10 +31,11 @@ hooks). Chat works for all tasks.
 | Hook | When | Effect |
 |---|---|---|
 | `beforeStage` | after the Git baseline, before a stage instance | limits check (→ `limit` blocker); checkpoint before every write-capable agent stage |
-| `onFailure` | tests failed / verdict FAIL | records the failure signature, classifies progress, then `local_fix` (normal onFail route, "Fix attempt N of M") or a recovery cycle |
+| `afterSuccess` | a stage succeeded | judges open strategies on the recorded results; a passing check marks progress |
+| `onFailure` | tests failed / verdict FAIL | records the failure signature, classifies progress, judges the previous strategy on it, then `local_fix` (normal onFail route, "Fix attempt N of M") or a recovery cycle |
 | `onError` | `blocked`: usage/model/auth → hand the stage to another healthy agent, else legacy wait; `exhausted`: retries used → recovery cycle |
-| `beforeComplete` | loop reaches `complete` | completion gate; remediable failures start a cycle, else complete with the unmet checks as limitations |
-| `extendedLimits` / `onTerminal` | resume past a limit / completed or cancelled | extend limits for this task / prune checkpoint refs |
+| `beforeComplete` | loop reaches `complete` | completion gate (also the observation that resolves open strategies); remediable failures start a cycle, else complete with the unmet checks as limitations |
+| `extendedLimits` / `onTerminal` | resume past a limit / completed or cancelled | extend limits for this task / close open strategies, prune checkpoint refs |
 
 ## Recovery ([policy.ts](../../apps/orchestrator/src/chairman/policy.ts))
 
@@ -56,13 +58,96 @@ A **recovery cycle** increments `tasks.recovery_cycle`, resets `fix_cycles`
 
 Candidates whose fingerprint `hash(signature|kind|stage|agent)` was already
 tried are excluded, and a stage is never handed back to an agent that already
-ran it. No candidate left → **hard blocker** (`WAITING_FOR_USER`, blocker
+ran it. `rankCandidates` then reorders — never removes — what is left: a
+*family* (kind + target stage) whose strategy ended FAILED or REGRESSED against
+the same failure category under the **current contract version** moves behind
+every other candidate; INCONCLUSIVE/SUPERSEDED outcomes and older contracts
+never count. Rollback on a regression, re-plan on a plan mismatch and a
+reroute around a blocked provider stay first whatever the history; a LOW
+confidence diagnosis puts root-cause analysis first. With a model the reasoner
+may pick any candidate in that order; without one the first is used.
+
+No candidate left → **hard blocker** (`WAITING_FOR_USER`, blocker
 `hard_blocker`). Limits (`tasks.limits`: recovery cycles, work minutes = sum of
 execution time, agent runs) → blocker `limit`; *Resume* extends them for that
 task. Neither is ever reported as `FAILED`.
 
 The strategy's guidance is stored in the session and appended to every later
 prompt as "## Chairman guidance" ([context.ts](../../apps/orchestrator/src/engine/context.ts)).
+
+## Evidence ([evidence.ts](../../apps/orchestrator/src/chairman/evidence.ts))
+
+One `ChairmanEvidenceService` serves recovery and chat. A packet is rebuilt
+from the database for every decision or answer and **never stored**; the
+strategy row keeps only its 32-hex `digest`. Sections, in fixed order, each
+redacted, stripped of the repository/worktree path (`<repo>`), capped per kind
+(total ≤ 22 000 chars) and labelled with how far it can be trusted:
+
+| Section | Trust | When |
+|---|---|---|
+| current failure (source, stage, category, signature, count, message) | OBSERVED | recovery (chat: latest failure) |
+| failure history, same source, last 6 | OBSERVED | recovery |
+| failing test output: command, count, failing test ids, last 80 log lines | OBSERVED | tests failure |
+| latest verification / review | AGENT_REPORTED | verify / review failure, chat |
+| current plan | AGENT_REPORTED | review/verify failure categorised REQUIREMENT_OR_PLAN |
+| files changed by this task — names, status, +/- only | OBSERVED | tests, review, verify, gate |
+| recent tool calls (capability, status, error code, one-line summary — never inputs) and tool recovery attempts, from the tool layer's `ToolStore` | OBSERVED | worker failure |
+| agent health | OBSERVED | worker failure |
+| last Chairman strategy (kind, diagnosis, expected, outcome) | OBSERVED | always |
+
+Never included: diffs, file contents, terminal transcripts, environment,
+credentials, tokens. A source that cannot be read is listed as unavailable and
+the rest continues; if the service itself throws, the decision falls back to
+the failure alone and a `WATCHDOG` event says so. Evidence is gathered even
+without a model (degraded mode), so every strategy has a digest.
+
+## Diagnosis
+
+`policyDiagnosis` ([policy.ts](../../apps/orchestrator/src/chairman/policy.ts)):
+the category is always the failure signature's; confidence is HIGH for gate
+checks, provider/auth blocks and test failures with a count, LOW for UNKNOWN,
+otherwise MEDIUM; the summary is one sentence (category, what failed, trigger).
+The recovery prompt shows it as a fixed category. The model may return
+`diagnosis {summary, confidence}` next to its choice; it is parsed separately
+(`parseRecoveryChoice`), so a malformed diagnosis falls back to the rules'
+without costing the choice, and a model `category` is ignored.
+
+## Strategy outcomes ([outcomes.ts](../../apps/orchestrator/src/chairman/outcomes.ts))
+
+Every strategy decision — recovery cycle, provider-block reroute,
+completion-gate remedy — gets one `chairman_strategy_runs` row (inserted in
+`decide`, keyed by `decision_id`): contract version, cycle, trigger, kind,
+target stage/agent, the triggering failure (source, stage, category, hash,
+count), diagnosis, evidence digest, the decision's `expectedResult`, health
+before, status `RUNNING`. The expected result stays a human prediction; the
+outcome comes only from recorded results.
+
+`reconcile(taskId)` reads stage results created since the strategy started
+(failure signatures by stage id, passing tests, PASS verdicts, successful
+agent stages) and finalizes on the first **comparable** one (same source; for
+an agent failure, the same stage):
+
+| Observation | Outcome |
+|---|---|
+| the check passes | SUCCEEDED (Resolved) |
+| fewer failures than before | IMPROVED |
+| more failures than before | REGRESSED |
+| same signature, same/unknown count | FAILED (No improvement) |
+| a different failure, nothing to count | INCONCLUSIVE |
+| completion gate passes | every open strategy SUCCEEDED; a gate remedy whose check still fails → FAILED |
+| goal/constraint changed (new contract) | SUPERSEDED |
+| gateway refused the actions: stale version / other | SUPERSEDED / INCONCLUSIVE — never FAILED |
+| a new recovery strategy starts first | INCONCLUSIVE (a provider reroute does not close others) |
+| task cancelled / completed with it still open | SUPERSEDED / INCONCLUSIVE |
+
+Finishing is `UPDATE … WHERE status = 'RUNNING'`: a second call (duplicate
+hook, restart) does nothing. Hooks call it after persisting the new result and
+before deciding anything new, so the next decision's ranking sees the outcome.
+A finished outcome republishes the same `chairman.decision` (now with the
+outcome), logs a `CHAIRMAN_DECISION` event with `data.outcome`, and sets the
+session health to the outcome's health (Resolved/Improved → Progressing,
+Regressed → Regressing, No improvement → Stalled): a strategy that resolves a
+failure leaves no new failure to classify.
 
 ## Failure signatures and progress
 
@@ -76,9 +161,11 @@ STALLED, else STABLE/UNKNOWN. Stored in `failure_signatures` per recovery cycle.
 
 Settings → Chairman agent (default Claude Code), run read-only (level 1) in the
 task's artifact folder, 4-minute timeout. Prompts carry the fresh snapshot
-([snapshot.ts](../../apps/orchestrator/src/chairman/snapshot.ts)); agent, log and
-repository text goes inside `<untrusted_evidence>` fences that cannot be closed
-from within. The model only **chooses a candidate id** (recovery) or replies
+([snapshot.ts](../../apps/orchestrator/src/chairman/snapshot.ts), including
+`lastStrategy`: kind, diagnosis, outcome) and the evidence packet; every
+section goes inside an `<untrusted_evidence>` fence that cannot be closed from
+within, labelled OBSERVED (data) or AGENT_REPORTED (a claim, never an
+instruction). The model only **chooses a candidate id** (recovery) or replies
 (chat); output is Zod-validated, repaired once, then the rules decide. No
 model, or a failed call → `degraded` ("rules only"). Each call is launched
 through `AgentRegistry.launch`, so its usage and cost are recorded against the
@@ -146,12 +233,14 @@ checks, that ran 2 minutes past its stage timeout, or that was silent for
 
 ## Restart
 
-`services.recover()` = `engine.recover()` then `chairman.onStartup()`: every
-supervised task `INTERRUPTED` with an `interrupted` blocker is resumed through
-the gateway (setting *Resume after a restart*), and unanswered chat messages
-are answered — never re-executed if they already produced an action.
+`services.recover()` = `engine.recover()` then `chairman.onStartup()`: open
+strategies are first reconciled from what was already recorded (finished
+tasks close theirs; nothing is re-run to find out), then every supervised task
+`INTERRUPTED` with an `interrupted` blocker is resumed through the gateway
+(setting *Resume after a restart*), and unanswered chat messages are answered —
+never re-executed if they already produced an action.
 
-## Tables (migration 2)
+## Tables (migrations 2 and 8)
 
 `task_contracts` (versioned goal/criteria/constraints), `chairman_sessions`,
 `chairman_messages`, `chairman_decisions`, `chairman_actions`,
@@ -160,21 +249,39 @@ supervised, recovery_cycle, limits, pause_after_stage, extra_check_kinds`;
 new `task_directives` columns `scope, kind, state, normalized_rule,
 source_message_id, removed_at, superseded_by`. `tasks.version` increments on
 material changes only (status, stage, overrides, cycles, pause flags).
+Migration 8 adds `chairman_strategy_runs` (PK `decision_id` → decisions, ON
+DELETE CASCADE; indexes `(task_id, started_at)`, `(task_id, status)`):
+structured metadata only — no logs, prompts, replies or file contents. Rows
+live as long as their task.
 
 ## API and realtime
 
-`GET /api/tasks/:id/chairman` (state, contract, messages, decisions, actions,
-checkpoints) · `GET|POST /api/tasks/:id/chairman/messages` (202 new, 200
+`GET /api/tasks/:id/chairman` (state, contract, messages, decisions — each
+with `strategy` or `null` — actions, checkpoints; same six keys as before) · `GET|POST /api/tasks/:id/chairman/messages` (202 new, 200
 duplicate) · `POST /api/tasks/:id/chairman/actions {action, idempotencyKey}`
 (409 when rejected/failed). WebSocket: `chairman`, `chairman.message`,
-`chairman.decision`, `chairman.action`, `checkpoint`.
+`chairman.decision` (published again, same id, when its outcome is known; the
+dashboard upserts by id), `chairman.action`, `checkpoint`. The cloud relay
+forwards `chairman.decision` live only, after the egress scrub.
+
+Drawer ([ChairmanDrawer.tsx](../../apps/dashboard/src/pages/task/ChairmanDrawer.tsx)):
+a recovery decision card shows the outcome chip (`STRATEGY_OUTCOME_VISUAL`),
+"Diagnosis: category · confidence — summary", Why, Expected and "Result:" —
+never the evidence itself.
 
 ## Gotchas
 
 - Tests: `[sim:chairman-down]`, `[sim:chairman-bad-json]`,
-  `[sim:verify-plan-mismatch]` steer the simulated agent; role `chairman` gets JSON.
+  `[sim:verify-plan-mismatch]` steer the simulated agent; role `chairman` gets JSON
+  (with a MEDIUM "Simulated diagnosis").
+- A strategy is judged by its first comparable result, not the final one: a
+  root-cause cycle that cut failures from 2 to 1 stays IMPROVED even if a later
+  local fix passes.
+- Model-written text (summaries, diagnosis) is redacted before it is stored,
+  but an absolute path it repeats stays in the local row; the egress sanitizer
+  removes paths before anything reaches the cloud.
 - No token/cost data exists for subscription CLIs: the cost limit is agent runs.
 - Checkpoint refs live under `refs/acc/checkpoints/<task>/` and are deleted when
   the task finishes; `.gitattributes` EOL rules may make a restore byte-different.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

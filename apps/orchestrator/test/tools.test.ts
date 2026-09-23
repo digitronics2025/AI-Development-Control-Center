@@ -241,6 +241,67 @@ describe('engine integration', () => {
   }, 200_000);
 });
 
+describe('hardening', () => {
+  it('after a restart, stops a leftover process only while it is still the same process', async () => {
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
+    const alive = () => {
+      try {
+        process.kill(child.pid!, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const row = (id: string, processStartedAt: string) => ({
+      id, taskId: 'TASK-R', stageId: null, name: 'leftover', command: 'node', cwd: repoPath, pid: child.pid!, port: null, url: null,
+      status: 'running' as const, startedAt: processStartedAt, stoppedAt: null, exitCode: null, stopReason: null, processStartedAt,
+    });
+    try {
+      // Same pid, but recorded an hour earlier: a reused pid, not ours. Left alone.
+      t.services.toolStore.insertProcess(row('proc-reused', new Date(Date.now() - 3_600_000).toISOString()));
+      expect(await t.services.processes.reconcileAfterRestart()).toEqual({ stopped: 0, gone: 1 });
+      expect(alive()).toBe(true);
+      expect(t.services.toolStore.process('proc-reused')).toMatchObject({ status: 'exited', stopReason: 'Gone after a restart' });
+      // Same pid and creation time: the previous orchestrator's process. Stopped.
+      t.services.toolStore.insertProcess(row('proc-ours', new Date().toISOString()));
+      expect(await t.services.processes.reconcileAfterRestart()).toEqual({ stopped: 1, gone: 0 });
+      await waitFor(async () => alive(), (v) => v === false, 15_000, 'leftover process to stop');
+    } finally {
+      if (alive()) child.kill();
+    }
+  }, 90_000);
+
+  it('cancelling an isolated task stops its processes and removes its worktree, leaving your tree alone', async () => {
+    const dir = await makeRepo({ dirty: { 'README.md': '# still mine\n' } });
+    const id = await addRepo(t, dir);
+    await t.api('PATCH', `/api/repositories/${id}`, { gitMode: 'worktree' });
+    const taskId = await createTask(t, id, 'Slow isolated change [sim:slow]', { workflowId: 'quick-change', supervised: false });
+    const running = await waitFor(
+      async () => (await t.api('GET', `/api/tasks/${taskId}`)).body,
+      (d) => d.status === 'RUNNING' && Boolean(d.git?.worktreePath),
+      60_000,
+      'task running in its worktree',
+    );
+    const worktree = running.git.worktreePath as string;
+    expect(existsSync(worktree)).toBe(true);
+    const script = path.join(worktree, 'idle.cjs');
+    writeFileSync(script, 'setInterval(() => {}, 1000);\n');
+    const proc = await t.services.processes.start({ taskId, stageId: null, name: 'idle', command: `node "${script}"`, cwd: worktree });
+    expect(proc.status).toBe('running');
+
+    expect((await t.api('POST', `/api/tasks/${taskId}/cancel`)).status).toBe(200);
+    const cancelled = await waitForStatus(t, taskId, ['CANCELLED'], 60_000);
+    expect(cancelled.git.worktreePath).toBeNull();
+    await waitFor(async () => t.services.processes.list(taskId).map((p) => p.status), (s) => s.every((x) => !['running', 'healthy', 'starting'].includes(x)), 30_000, 'task processes to stop');
+    await waitFor(async () => existsSync(worktree), (v) => v === false, 30_000, 'worktree folder to go');
+    expect((await git(dir, ['worktree', 'list'])).stdout.trim().split('\n')).toHaveLength(1);
+    expect(readFileSync(path.join(dir, 'README.md'), 'utf8')).toBe('# still mine\n');
+    const events = t.services.store.listEvents(taskId, { limit: 200 }).map((e) => e.type);
+    expect(events).toContain('WORKTREE_REMOVED');
+  }, 180_000);
+});
+
 describe('terminals', () => {
   it('opens a real terminal in a repository, streams output and closes it', async () => {
     const opened = await t.api('POST', '/api/terminals', { repositoryId: repoId, cols: 100, rows: 30 });

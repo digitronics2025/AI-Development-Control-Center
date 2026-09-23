@@ -33,6 +33,7 @@ import { ProcessManager } from './tools/processes.js';
 import { ToolService } from './tools/service.js';
 import { ToolStore } from './tools/store.js';
 import { TerminalService } from './tools/terminals.js';
+import { UsageService } from './usage/service.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -64,6 +65,7 @@ export interface AppServices {
   mcp: McpService;
   tooling: EngineTooling;
   privileged: PrivilegedHelper;
+  usage: UsageService;
   startedAt: string;
   /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
   recover(): Promise<{ interruptedTasks: string[] }>;
@@ -87,7 +89,9 @@ export function createServices(
   const store = new Store(db);
   const bus = new Bus();
   const settings = new SettingsService(store, bus);
-  const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env);
+  const usage = new UsageService({ db, store, bus, dataDir: config.dataDir, simulated: config.simulatedAgents });
+  const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env, usage.recorder);
+  usage.attachAdapters(() => agents.ids().map((id) => agents.adapter(id)));
   const repositories = new RepositoryService(store, bus, settings);
   const workflows = new WorkflowService(store, bus);
   const prompts = new PromptService(store, path.join(config.resourcesDir, 'prompts'));
@@ -170,8 +174,11 @@ export function createServices(
     mcp,
     tooling,
     privileged,
+    usage,
     startedAt: new Date().toISOString(),
     async recover() {
+      // Before anything runs: replay spooled usage and close attempts a stop interrupted.
+      usage.recover();
       toolStore.interruptRunningExecutions();
       terminals.reconcileAfterRestart();
       await processes.reconcileAfterRestart().catch(() => undefined);
@@ -188,6 +195,7 @@ export function createServices(
       await processes.stopAll('orchestrator shutdown').catch(() => undefined);
       await terminals.shutdown().catch(() => undefined);
       await mcp.close().catch(() => undefined);
+      usage.close();
       db.close();
     },
   };

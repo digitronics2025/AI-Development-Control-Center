@@ -1,6 +1,7 @@
 import {
   Bot,
   ChevronsLeft,
+  Coins,
   ChevronsRight,
   FolderGit2,
   GitBranch,
@@ -54,6 +55,7 @@ const NAV: NavItem[] = [
   { to: '/repositories', label: 'Repositories', icon: FolderGit2 },
   { to: '/source-control', label: 'Source Control', icon: GitBranch },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
+  { to: '/usage', label: 'Usage & Costs', icon: Coins },
 ];
 
 function ProductMark({ collapsed }: { collapsed: boolean }) {
@@ -279,6 +281,7 @@ function GlobalCommands() {
       { id: 'go-agents', label: 'Go to Agents', group: 'Go to', icon: Bot, onSelect: () => navigate('/agents') },
       { id: 'go-workflows', label: 'Go to Workflows', group: 'Go to', icon: Workflow, onSelect: () => navigate('/workflows') },
       { id: 'go-approvals', label: 'Go to Approvals', group: 'Go to', icon: ShieldCheck, onSelect: () => navigate('/approvals') },
+      { id: 'go-usage', label: 'Go to Usage & Costs', group: 'Go to', icon: Coins, onSelect: () => navigate('/usage') },
       { id: 'go-home', label: 'Go to Home', group: 'Go to', icon: House, onSelect: () => navigate('/') },
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },
     ],

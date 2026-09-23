@@ -46,7 +46,10 @@ hub, SQLite persistence and the workflow engine. Entry:
 Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)),
 and the Chairman's `task_contracts`, `chairman_sessions`, `chairman_messages`,
 `chairman_decisions`, `chairman_actions`, `failure_signatures`,
-`task_checkpoints` (migration 2, [chairman.md](chairman.md)), and the tool
+`task_checkpoints` (migration 2, [chairman.md](chairman.md)), the usage ledger's
+`usage_events`, `usage_event_lines`, `usage_cost_revisions`, `usage_pending`,
+`pricing_versions`, `capacity_snapshots`, `budgets` (migration 4, append-only by
+trigger, [usage.md](usage.md)), and the tool
 layer's `tools`, `tool_capabilities`, `tool_health`, `tool_executions`,
 `task_processes`, `pty_sessions`, `recovery_attempts`, `mcp_servers`,
 `capability_escalations`, `credential_references` (migration 5,
@@ -70,6 +73,7 @@ before any row is written.
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
 | Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
 | Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
+| Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile; see [usage.md](usage.md#api-apiusage-bearer-token) |
 | Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…`, `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
 | Tool sessions | `tool-session/{tools,find,call}` — session token only, never the local API token ([mcp.md](mcp.md)) |
 
@@ -86,7 +90,8 @@ the build folder is empty the page answers 503 with `Retry-After`.
 `repository`, `workflow`, `repositoryAutomation`) plus `sourceControl` (`{repositoryId}` only: refetch that
 repository's Git state; sent by `RepositoryService.invalidate` and every Source
 Control mutation) and the Chairman's `chairman`, `chairman.message`,
-`chairman.decision`, `chairman.action`, `checkpoint`, and the tool layer's
+`chairman.decision`, `chairman.action`, `checkpoint`, `usage` (a recorded or
+re-costed attempt; clients refetch usage views), and the tool layer's
 `tool`, `toolExecution`, `taskProcess`, `terminal`, `mcpServer(.deleted)`,
 `credential(.deleted)`, `recovery`, `escalation`. `terminal.output` goes only
 to clients that sent `subscribeTerminal`, which may then send `terminal.input`

@@ -8,6 +8,7 @@ import { registerErrorHandler, registerRoutes } from './routes.js';
 import { registerSecurity } from './security.js';
 import { registerSourceControlRoutes } from './source-control-routes.js';
 import { registerToolRoutes } from './tool-routes.js';
+import { registerUsageRoutes } from './usage-routes.js';
 import { registerWebSocket } from './ws.js';
 
 const DASHBOARD_CSP = [
@@ -53,6 +54,7 @@ export async function buildServer(
   registerRoutes(app, s);
   registerSourceControlRoutes(app, s);
   registerToolRoutes(app, s);
+  registerUsageRoutes(app, s);
 
   // Liveness probe for launchers; reveals nothing about state.
   app.get('/healthz', async () => ({ ok: true }));

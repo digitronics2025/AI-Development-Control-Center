@@ -64,7 +64,7 @@ export class Chairman implements SupervisorHooks {
     this.store = new ChairmanStore(d.store.db);
     this.snapshots = new SnapshotService(d.store, this.store, d.views, d.agents);
     this.checkpoints = new CheckpointService(d.store, this.store, d.repositories, d.engine.publisher, d.bus);
-    this.reasoner = new Reasoner(d.agents, d.settings, d.artifacts);
+    this.reasoner = new Reasoner(d.agents, d.settings, d.artifacts, d.store);
     this.gateway = new ActionGateway({
       store: d.store,
       chairman: this.store,

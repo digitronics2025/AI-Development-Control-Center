@@ -14,6 +14,7 @@ import {
   type AgentHealth,
   type AgentLogStream,
   type AgentRuntimeOptions,
+  type ProviderUsageCapabilities,
   type RawAgentResult,
 } from './contract.js';
 
@@ -74,6 +75,7 @@ export async function capture(
 export abstract class CliAgentAdapter implements AgentAdapter {
   abstract readonly id: string;
   abstract readonly displayName: string;
+  abstract readonly usageCapabilities: ProviderUsageCapabilities;
   protected abstract readonly binaryName: string;
 
   protected abstract readVersion(executable: string, env: NodeJS.ProcessEnv): Promise<string | null>;
@@ -262,6 +264,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
       finishedAt: process.finishedAt.toISOString(),
       sessionId: raw.sessionId,
       filesChanged: raw.filesChanged,
+      usage: raw.usage,
+      capacity: raw.capacity,
     };
 
     if (raw.guardViolation) {

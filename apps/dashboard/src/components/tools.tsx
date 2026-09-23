@@ -15,7 +15,7 @@ import {
 import type { StatusVisual } from '@acc/ui';
 import type { TaskProcessStatus, ToolExecutionStatus, ToolHealthState } from '@acc/shared';
 
-/** Status visuals for the tool layer (design.md §7.3 Execution, §7.10 Tools). Icon + text, never color alone. */
+/** Status visuals for the tool layer (design.md §7.3 Execution, §7.11 Tools). Icon + text, never color alone. */
 export const TOOL_HEALTH_VISUAL: Record<ToolHealthState, StatusVisual> = {
   ready: { label: 'Ready', tone: 'success', icon: CheckCircle2 },
   // A missing optional tool is information, not a fault.

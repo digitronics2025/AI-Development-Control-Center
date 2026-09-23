@@ -536,7 +536,7 @@ function PolicyTab() {
   );
 }
 
-/** design.md §7.10 — what this machine can do, and what the Control Center may do on its own. */
+/** design.md §7.11 — what this machine can do, and what the Control Center may do on its own. */
 export function ToolsPage() {
   const { tab: raw } = useParams();
   const navigate = useNavigate();

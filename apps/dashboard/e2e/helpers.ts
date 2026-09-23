@@ -25,6 +25,12 @@ export const PAGES = [
   { name: 'tools-policy', path: '/tools/policy', ready: 'Give agents the Control Center tools' },
   { name: 'tools-credentials', path: '/tools/credentials', ready: 'Values are write-only' },
   { name: 'task-execution', path: '/tasks/TASK-0001?tab=execution', ready: 'Tool calls' },
+  { name: 'usage-overview', path: '/usage', ready: 'Spend in range' },
+  { name: 'usage-models', path: '/usage?tab=models', ready: 'Price list' },
+  { name: 'usage-providers', path: '/usage?tab=providers', ready: 'Re-check readings' },
+  { name: 'usage-budgets', path: '/usage?tab=budgets', ready: 'Add budget' },
+  { name: 'usage-events', path: '/usage?tab=events', ready: 'match' },
+  { name: 'usage-task', path: '/usage/tasks/TASK-0001', ready: 'Cost flow' },
 ] as const;
 
 /** Console errors fail the test; collected from page load onwards. */

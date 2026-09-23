@@ -19,3 +19,4 @@ export * from './components/data-table.js';
 export * from './components/feedback.js';
 export * from './components/command-palette.js';
 export * from './components/commit-graph.js';
+export * from './components/charts.js';

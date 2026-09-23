@@ -73,6 +73,18 @@ if (args[0] === '-p') {
       out({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 9pm" });
       process.exit(1);
     }
+    // Shapes observed from Claude Code 2.1.280 (tests/fixtures/claude-2.1.280-usage.jsonl).
+    out({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        resetsAt: 1790184000,
+        rateLimitType: 'five_hour',
+        overageStatus: 'rejected',
+        overageDisabledReason: 'out_of_credits',
+        unifiedWindows: { five_hour: { utilization: 0.08, resetsAt: 1790184000 }, seven_day: { utilization: 0.46, resetsAt: 1790596800 } },
+      },
+    });
     out({
       type: 'assistant',
       message: {
@@ -91,6 +103,22 @@ if (args[0] === '-p') {
       type: 'result',
       subtype: 'success',
       is_error: false,
+      session_id: 'sess-1',
+      num_turns: 1,
+      duration_api_ms: 2021,
+      total_cost_usd: 0.0331379,
+      usage: { input_tokens: 9, cache_creation_input_tokens: 14666, cache_read_input_tokens: 26009, output_tokens: 47, cache_creation: { ephemeral_1h_input_tokens: 14666, ephemeral_5m_input_tokens: 0 } },
+      modelUsage: {
+        'claude-haiku-4-5-20251001': {
+          inputTokens: 910,
+          outputTokens: 59,
+          cacheReadInputTokens: 26009,
+          cacheCreationInputTokens: 14666,
+          costUSD: 0.0331379,
+          thinkingTokens: 38,
+          canonicalModel: 'claude-haiku-4-5',
+        },
+      },
       result: `PONG cwd=${process.cwd()} ENV_HAS_ANTHROPIC_KEY=${key} prompt=${prompt.trim().length}`,
     });
     process.exit(0);

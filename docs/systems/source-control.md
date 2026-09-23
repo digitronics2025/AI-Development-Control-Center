@@ -164,7 +164,9 @@ attribution are skipped. No universal timing target is enforced.
 
 - **Suggest message**: the reviewer role's resolved agent gets the redacted,
   bounded (60 KB) staged diff at permission level 1, 180 s timeout; one run
-  per repository at a time; output parsed to a subject (≤ 100) and body.
+  per repository at a time; output parsed to a subject (≤ 100) and body. The
+  run's usage is recorded against the repository with step `commit-message`
+  and no task ([usage.md](usage.md)).
 - **Review staged**: creates a task on the built-in `staged-review` workflow
   (one Level 1 reviewer stage) with the diff saved as its `staged-diff`
   artifact; the context builder feeds that artifact to `{{diff}}` when a task

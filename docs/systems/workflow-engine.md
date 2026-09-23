@@ -74,7 +74,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | success / skipped | go to `next`; in Discuss First mode a successful planner stage creates a `plan_review` approval first |
 | verdict FAIL / tests failed / commit rejected by a hook (git stage with `onFail`) | go to `onFail` and count a fix cycle; at `maxFixCycles` → `WAITING_FOR_USER` (fix_limit). Resume grants one more cycle |
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
-| `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason |
+| `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
 
 **Supervised tasks** (Autopilot with the Chairman on) differ: a test or

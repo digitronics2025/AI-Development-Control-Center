@@ -80,7 +80,9 @@ task's artifact folder, 4-minute timeout. Prompts carry the fresh snapshot
 repository text goes inside `<untrusted_evidence>` fences that cannot be closed
 from within. The model only **chooses a candidate id** (recovery) or replies
 (chat); output is Zod-validated, repaired once, then the rules decide. No
-model, or a failed call → `degraded` ("rules only").
+model, or a failed call → `degraded` ("rules only"). Each call is launched
+through `AgentRegistry.launch`, so its usage and cost are recorded against the
+task with step `chairman` ([usage.md](usage.md)).
 
 ## Action Gateway ([gateway.ts](../../apps/orchestrator/src/chairman/gateway.ts))
 

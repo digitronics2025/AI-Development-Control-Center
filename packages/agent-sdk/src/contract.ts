@@ -36,6 +36,70 @@ export interface AgentRuntimeOptions {
 
 export type AgentLogStream = 'stdout' | 'stderr' | 'system';
 
+/**
+ * What a provider can tell us about usage and capacity (usage accounting,
+ * docs/systems/usage.md). The dashboard shows `Unavailable` for anything a
+ * provider does not support instead of assuming a value.
+ */
+export interface ProviderUsageCapabilities {
+  /** Billing provider: `anthropic`, `openai`, `simulated`. */
+  provider: string;
+  tokenUsage: boolean;
+  providerCost: boolean;
+  credit: boolean;
+  quota: boolean;
+  rateLimits: boolean;
+  cacheTokens: boolean;
+  reasoningTokens: boolean;
+  resetTime: boolean;
+}
+
+/**
+ * Token usage of one model inside one agent run, normalised across
+ * providers. `null` means the provider did not report the value — never 0.
+ */
+export interface AgentUsageLine {
+  /** Model identifier as the provider reported it (or as requested when it reports none). */
+  model: string;
+  /** Uncached input tokens (cache reads and writes are separate). */
+  inputTokens: number | null;
+  /** Output tokens, reasoning included. */
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  /** Cache writes of every duration. */
+  cacheWriteTokens: number | null;
+  /** The part of `cacheWriteTokens` written with a one-hour lifetime, when the provider says. */
+  cacheWrite1hTokens: number | null;
+  /** Reasoning tokens — a subset of `outputTokens`, informational. */
+  reasoningTokens: number | null;
+  /** Cost the provider itself reported for this model, in US dollars. */
+  reportedCostUsd: number | null;
+}
+
+export interface AgentUsageReport {
+  /** Provider-side identity of the run (session or thread id). */
+  providerRequestId: string | null;
+  /** Model the provider says it ran, when it says. */
+  resolvedModel: string | null;
+  lines: AgentUsageLine[];
+  /** Model turns inside the run (a CLI run makes several API calls). */
+  turns: number | null;
+  apiDurationMs: number | null;
+}
+
+/** A capacity signal observed during a run: a rate-limit window, credit state, a usage limit. */
+export interface CapacityObservation {
+  /** Stable metric key, e.g. `window:five_hour`, `overage`, `credit`, `usage_limit`. */
+  metric: string;
+  label: string;
+  /** Share of the window already used, 0–100, when the provider reports it. */
+  usedPercent: number | null;
+  status: 'ok' | 'warning' | 'exhausted' | 'unknown';
+  resetsAt: string | null;
+  detail: string | null;
+  observedAt: string;
+}
+
 export interface AgentExecutionInput extends AgentRuntimeOptions {
   executionId: string;
   cwd: string;
@@ -76,6 +140,8 @@ export interface RawAgentResult {
   usageLimited: boolean;
   guardViolation: string | null;
   filesChanged: string[];
+  usage: AgentUsageReport | null;
+  capacity: CapacityObservation[];
 }
 
 export interface AgentExecutionResult {
@@ -90,12 +156,17 @@ export interface AgentExecutionResult {
   finishedAt: string;
   sessionId: string | null;
   filesChanged: string[];
+  /** Usage the provider reported for this run; null when it reported none (e.g. killed before its summary). */
+  usage: AgentUsageReport | null;
+  /** Capacity signals seen during the run. */
+  capacity: CapacityObservation[];
 }
 
 /** PLAN §9 — one contract for every provider. */
 export interface AgentAdapter {
   readonly id: string;
   readonly displayName: string;
+  readonly usageCapabilities: ProviderUsageCapabilities;
 
   detect(options: AgentRuntimeOptions): Promise<AgentDetectionResult>;
   healthCheck(options: AgentRuntimeOptions): Promise<AgentHealth>;

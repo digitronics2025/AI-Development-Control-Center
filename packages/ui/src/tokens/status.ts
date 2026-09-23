@@ -1,6 +1,10 @@
 import {
   Activity,
   AlertOctagon,
+  AlertTriangle,
+  Ban,
+  HelpCircle,
+  Info,
   Brain,
   CheckCircle2,
   CircleDashed,
@@ -30,8 +34,13 @@ import {
   type ChairmanActionStatus,
   type ChairmanHealth,
   type ChairmanStatus,
+  type BudgetState,
+  type CapacityStatus,
+  type HealthState,
   type StageStatus,
   type TaskStatus,
+  type UsageAnomaly,
+  type UsageEventStatus,
 } from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
@@ -107,4 +116,40 @@ export const CHAIRMAN_ACTION_STATUS_VISUAL: Record<ChairmanActionStatus, StatusV
   completed: { label: 'Completed', tone: 'success', icon: CheckCircle2 },
   failed: { label: 'Failed', tone: 'danger', icon: XCircle },
   rejected: { label: 'Rejected', tone: 'warning', icon: AlertOctagon },
+};
+
+/** Usage & Costs (design.md §7.10): budget state, capacity, health, attempt outcome, anomaly severity. */
+export const BUDGET_STATE_VISUAL: Record<BudgetState, StatusVisual> = {
+  ok: { label: 'Within budget', tone: 'success', icon: CheckCircle2 },
+  warning: { label: 'Warning', tone: 'warning', icon: AlertTriangle },
+  critical: { label: 'Critical', tone: 'danger', icon: AlertOctagon },
+  exceeded: { label: 'Exceeded', tone: 'danger', icon: XCircle },
+};
+
+export const CAPACITY_STATUS_VISUAL: Record<CapacityStatus, StatusVisual> = {
+  ok: { label: 'Available', tone: 'success', icon: CheckCircle2 },
+  warning: { label: 'Running low', tone: 'warning', icon: AlertTriangle },
+  exhausted: { label: 'Exhausted', tone: 'danger', icon: Ban },
+  unknown: { label: 'Unknown', tone: 'neutral', icon: HelpCircle },
+};
+
+export const HEALTH_STATE_VISUAL: Record<HealthState, StatusVisual> = {
+  healthy: { label: 'Healthy', tone: 'success', icon: CheckCircle2 },
+  partial: { label: 'Partial', tone: 'warning', icon: AlertTriangle },
+  degraded: { label: 'Degraded', tone: 'danger', icon: AlertOctagon },
+  unavailable: { label: 'Unavailable', tone: 'neutral', icon: Minus },
+};
+
+export const USAGE_EVENT_STATUS_VISUAL: Record<UsageEventStatus, StatusVisual> = {
+  succeeded: { label: 'Succeeded', tone: 'success', icon: CheckCircle2 },
+  failed: { label: 'Failed', tone: 'danger', icon: XCircle },
+  cancelled: { label: 'Cancelled', tone: 'neutral', icon: Square },
+  timed_out: { label: 'Timed out', tone: 'warning', icon: Clock },
+  interrupted: { label: 'Interrupted', tone: 'warning', icon: PlugZap },
+};
+
+export const ANOMALY_SEVERITY_VISUAL: Record<UsageAnomaly['severity'], StatusVisual> = {
+  info: { label: 'Info', tone: 'info', icon: Info },
+  warning: { label: 'Warning', tone: 'warning', icon: AlertTriangle },
+  critical: { label: 'Critical', tone: 'danger', icon: AlertOctagon },
 };

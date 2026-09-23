@@ -10,6 +10,7 @@
 | Git integration | [git.md](git.md) | `packages/git` |
 | Source Control (repository Git state, sync, journal) | [source-control.md](source-control.md) | `packages/git/src/source-control.ts`, `apps/orchestrator/src/source-control` |
 | Repository automation (discovery, background sync) | [repository-automation.md](repository-automation.md) | `apps/orchestrator/src/services/repository-automation.ts` |
+| Usage, cost and capacity (ledger, pricing, budgets, limits) | [usage.md](usage.md) | `apps/orchestrator/src/usage`, `packages/shared/src/usage.ts`, `apps/dashboard/src/pages/usage` |
 | Dashboard and design system | [dashboard.md](dashboard.md) | `apps/dashboard`, `packages/ui` |
 | VS Code extension | [vscode-extension.md](vscode-extension.md) | `apps/vscode-extension` |
 | Windows packaging and operations | [operations.md](operations.md) | `scripts/` |

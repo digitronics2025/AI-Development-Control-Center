@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
-import { newId } from '../store/store.js';
+import { newId, type Store } from '../store/store.js';
 import type { ChairmanTaskSnapshot } from './snapshot.js';
 import type { StrategyCandidate } from './policy.js';
 
@@ -157,6 +157,7 @@ export class Reasoner {
     private readonly agents: AgentRegistry,
     private readonly settings: SettingsService,
     private readonly artifacts: ArtifactService,
+    private readonly store: Store,
   ) {}
 
   /** Why the model cannot be used right now, or null when it can. */
@@ -180,9 +181,20 @@ export class Reasoner {
     if (unavailable) return { ok: false, reason: unavailable };
     const adapter = this.agents.adapter(cfg.agentId);
     const executionId = newId();
+    const task = this.store.getTask(taskId);
     let cancelled = false;
     try {
-      const handle = await adapter.execute({
+      const attribution = {
+        origin: 'chairman' as const,
+        projectId: task?.repositoryId ?? null,
+        taskId,
+        runId: null,
+        workflowId: task?.workflowId ?? null,
+        workflowStep: 'chairman',
+        agentRole: 'chairman',
+        mode: task?.mode ?? null,
+      };
+      const handle = await this.agents.launch(cfg.agentId, {
         ...this.agents.runtimeOptions(cfg.agentId),
         executionId,
         // The task's artifact folder, not the repository: the Chairman reads records, it does not explore code.
@@ -192,7 +204,7 @@ export class Reasoner {
         effort: cfg.effort,
         permissionLevel: 1,
         timeoutMs: TIMEOUT_MS,
-      });
+      }, attribution);
       cancellable?.onCancel(async () => {
         cancelled = true;
         await adapter.cancel(executionId);

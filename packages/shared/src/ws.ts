@@ -15,6 +15,7 @@ import type {
 import type { Settings, WorkflowProfile } from './schemas.js';
 import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
 import type { CapabilityEscalation, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
+import type { UsageEvent } from './usage.js';
 
 /**
  * Messages the orchestrator pushes to every connected client. Each carries a
@@ -48,6 +49,8 @@ export type ServerMessage =
   | { type: 'chairman.decision'; decision: ChairmanDecision }
   | { type: 'chairman.action'; action: ChairmanAction }
   | { type: 'checkpoint'; checkpoint: TaskCheckpoint }
+  /** A provider attempt was recorded (or re-costed): usage views refetch. */
+  | { type: 'usage'; event: UsageEvent }
   // Universal tool layer (docs/plans/tool-layer-v2)
   | { type: 'tool'; tool: ToolView }
   | { type: 'toolExecution'; execution: ToolExecution }

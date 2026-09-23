@@ -42,4 +42,7 @@ export const keys = {
   sourceControlCommitDiff: (repositoryId: string, sha: string, path: string | null) => ['source-control', repositoryId, 'commit', sha, 'diff', path ?? ''] as const,
   sourceControlOperations: (repositoryId: string) => ['source-control', repositoryId, 'operations'] as const,
   sourceControlReview: (repositoryId: string) => ['source-control', repositoryId, 'review'] as const,
+  /** Everything Usage & Costs shows; one prefix so a recorded attempt refreshes it all. */
+  usageRoot: ['usage'] as const,
+  usage: (view: string, params: Record<string, string | number | undefined> = {}) => ['usage', view, params] as const,
 };

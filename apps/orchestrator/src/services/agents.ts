@@ -1,7 +1,9 @@
-import type { AgentAdapter, AgentRuntimeOptions } from '@acc/agent-sdk';
-import type { AgentCapabilities, AgentInfo, AgentSettings, ModelDescriptor } from '@acc/shared';
+import { AgentGuardError, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRuntimeOptions } from '@acc/agent-sdk';
+import type { AgentCapabilities, AgentInfo, AgentSettings, ModelDescriptor, UsageBilling } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { Store } from '../store/store.js';
+import type { UsageAttribution } from '../usage/ledger.js';
+import type { UsageMeter } from '../usage/recorder.js';
 import type { SettingsService } from './settings.js';
 
 const NO_CAPABILITIES: AgentCapabilities = {
@@ -32,6 +34,7 @@ export class AgentRegistry {
     private readonly settings: SettingsService,
     adapters: AgentAdapter[],
     private readonly baseEnv: NodeJS.ProcessEnv = process.env,
+    private readonly meter: UsageMeter | null = null,
   ) {
     for (const adapter of adapters) {
       this.adapters.set(adapter.id, adapter);
@@ -51,6 +54,39 @@ export class AgentRegistry {
 
   has(id: string): boolean {
     return this.adapters.has(id);
+  }
+
+  /** Who pays for a run of this agent, as far as its last health check knows. */
+  private billing(id: string, adapter: AgentAdapter): UsageBilling {
+    if (adapter.usageCapabilities.provider === 'simulated') return 'simulated';
+    return this.store.getAgent(id)?.health?.billing ?? 'unknown';
+  }
+
+  /**
+   * Start an agent run through the usage meter — the one capture boundary
+   * every provider attempt passes (docs/systems/usage.md#capture). A budget
+   * whose policy stops new runs refuses the launch; once the process starts,
+   * exactly one usage event is recorded when it finishes. Telemetry never
+   * changes the run's result.
+   */
+  async launch(agentId: string, input: AgentExecutionInput, attribution: UsageAttribution): Promise<AgentExecutionHandle> {
+    const adapter = this.adapter(agentId);
+    const info = { agentId, capabilities: adapter.usageCapabilities, model: input.model, attribution };
+    const blocked = this.meter?.blockReason(info) ?? null;
+    if (blocked) throw new AgentGuardError(blocked, 'PERMISSION_DENIED');
+    const handle = await adapter.execute(input);
+    const dispatch = this.meter?.dispatched({ ...info, executionId: input.executionId, billing: this.billing(agentId, adapter), effort: input.effort, prompt: input.prompt }) ?? null;
+    const done = handle.done.then(
+      (result) => {
+        this.meter?.finished(dispatch, result);
+        return result;
+      },
+      (error: unknown) => {
+        this.meter?.aborted(dispatch, error);
+        throw error;
+      },
+    );
+    return { ...handle, done };
   }
 
   runtimeOptions(id: string): AgentRuntimeOptions {

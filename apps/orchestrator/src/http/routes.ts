@@ -37,6 +37,7 @@ import { SOURCE_CONTROL_HTTP_STATUS, SourceControlError } from '../source-contro
 import { CredentialError } from '../tools/credentials.js';
 import { McpError } from '../tools/mcp.js';
 import { TerminalError } from '../tools/terminals.js';
+import { usageErrorStatus } from './usage-routes.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
 
@@ -63,6 +64,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message, error.issues.length ? error.issues : undefined);
     }
     if (error instanceof AgentNotFoundError) return sendError(reply, 404, 'NOT_FOUND', error.message);
+    const usage = usageErrorStatus(error);
+    if (usage) return sendError(reply, usage.status, usage.code, (error as Error).message);
     if (error instanceof SourceControlError) {
       // Messages are already redacted; details carry paths, operation ids and findings, never secrets.
       return sendError(reply, SOURCE_CONTROL_HTTP_STATUS[error.code], error.code, error.message, error.details);

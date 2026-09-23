@@ -248,7 +248,7 @@ export class StageRunners {
     if (bridge) sink.push('system', 'Control Center tools available to this run (MCP server "acc")');
     let handle;
     try {
-      handle = await adapter.execute({
+      handle = await agents.launch(agentId, {
         ...agents.runtimeOptions(agentId),
         executionId,
         cwd: workdir,
@@ -259,6 +259,15 @@ export class StageRunners {
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
+      }, {
+        origin: 'stage',
+        projectId: task.repositoryId,
+        taskId: task.id,
+        runId: stage.id,
+        workflowId: task.workflowId,
+        workflowStep: def.key,
+        agentRole: def.role,
+        mode: task.mode,
       });
     } catch (error) {
       bridge?.close();

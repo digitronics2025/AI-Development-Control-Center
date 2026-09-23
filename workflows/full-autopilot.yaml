@@ -28,6 +28,9 @@ stages:
     name: Test
     role: tester
     kind: tests
+    # The thorough profile also runs end-to-end suites, so a claimed e2e pass
+    # is observed by the orchestrator rather than taken from the agent's report.
+    commandKinds: [lint, typecheck, test, build, e2e]
     permissionLevel: 2
     next: review
     onFail: fix

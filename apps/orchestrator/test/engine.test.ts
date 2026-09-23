@@ -293,10 +293,12 @@ describe('permissions and approvals', () => {
   });
 
   it('skips an optional deploy stage with no command without asking for approval', async () => {
-    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"' } }));
+    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"', 'test:e2e': 'node -e "console.log(\'4 passed\')"' } }));
     const id = await createTask(t, repoId, 'Document it', { workflowId: 'full-autopilot' });
     const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
     expect(done.status).toBe('COMPLETED');
+    // Full Autopilot observes the end-to-end suite itself.
+    expect(t.services.store.listTestRuns(id).map((r) => `${r.kind}:${r.status}:${r.summary}`)).toEqual(['test:passed:null', 'e2e:passed:4 passed']);
     expect(t.services.store.listApprovals({ limit: 10 })).toHaveLength(0);
     expect(t.services.store.latestStage(id, 'staging')!.status).toBe('SKIPPED');
     expect(t.services.store.latestStage(id, 'smoke')!.status).toBe('SKIPPED');

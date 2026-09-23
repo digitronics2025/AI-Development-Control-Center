@@ -16,6 +16,7 @@ import type { Settings, WorkflowProfile } from './schemas.js';
 import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
 import type { CapabilityEscalation, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
 import type { UsageEvent } from './usage.js';
+import type { RemoteNodeStatus } from './remote.js';
 
 /**
  * Messages the orchestrator pushes to every connected client. Each carries a
@@ -63,7 +64,9 @@ export type ServerMessage =
   | { type: 'credential'; credential: CredentialView }
   | { type: 'credential.deleted'; credentialId: string }
   | { type: 'recovery'; attempt: RecoveryAttempt }
-  | { type: 'escalation'; escalation: CapabilityEscalation };
+  | { type: 'escalation'; escalation: CapabilityEscalation }
+  /** This machine's link to the cloud control plane changed (local clients only; never relayed). */
+  | { type: 'remote.status'; status: RemoteNodeStatus };
 
 export type ServerMessageType = ServerMessage['type'];
 

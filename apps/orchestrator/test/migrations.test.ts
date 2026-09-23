@@ -54,3 +54,30 @@ describe('chairman migration (v1 → v2)', () => {
     }
   });
 });
+
+/**
+ * Cloud control plane (docs/systems/remote-node.md): migration 6 adds the
+ * remote-node tables to a v5 database without touching existing rows, and a
+ * v5 binary opening the upgraded file finds nothing to apply.
+ */
+describe('remote node migration (v5 → v6)', () => {
+  it('adds the remote tables additively and stays readable by the previous binary', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-remote-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 5);
+    migrate(db, previous);
+    const ts = '2026-09-23T10:00:00.000Z';
+    db.prepare("INSERT INTO repositories (id, name, path, created_at, updated_at) VALUES ('r1', 'kept', ?, ?, ?)").run(dataDir, ts, ts);
+    expect(migrate(db)).toEqual([6]);
+    expect(schemaVersion(db)).toBe(6);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'remote_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+    expect(tables).toEqual(['remote_artifact_sync', 'remote_commands_received', 'remote_config', 'remote_outbox', 'remote_sync_state']);
+    expect(db.prepare('SELECT name FROM repositories').all()).toEqual([{ name: 'kept' }]);
+    // The previous binary knows migrations 1–5 only: it applies nothing and does not fail.
+    expect(migrate(db, previous)).toEqual([]);
+    // A second config row is impossible: the node has exactly one identity.
+    db.prepare("INSERT INTO remote_config (id, relay_url, node_id, label, public_key, private_key_ciphertext, private_key_iv, private_key_tag, paired_at, updated_at) VALUES (1, 'u', 'n', 'l', '{}', 'c', 'i', 't', ?, ?)").run(ts, ts);
+    expect(() => db.prepare("INSERT INTO remote_config (id, relay_url, node_id, label, public_key, private_key_ciphertext, private_key_iv, private_key_tag, paired_at, updated_at) VALUES (2, 'u', 'n', 'l', '{}', 'c', 'i', 't', ?, ?)").run(ts, ts)).toThrow();
+    db.close();
+  });
+});

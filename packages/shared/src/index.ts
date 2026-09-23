@@ -9,3 +9,5 @@ export * from './git-graph.js';
 export * from './chairman.js';
 export * from './tools.js';
 export * from './usage.js';
+export * from './remote.js';
+export * from './remote-operations.js';

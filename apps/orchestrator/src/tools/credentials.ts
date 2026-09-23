@@ -113,6 +113,19 @@ export class CredentialBroker {
     return this.store.listCredentials().map(view);
   }
 
+  /**
+   * Seal a non-credential secret of the orchestrator's own (the remote node's
+   * private key) with the same protected key. `boundTo` names its purpose, so
+   * a sealed value cannot be opened as anything else.
+   */
+  async sealValue(plaintext: string, boundTo: string): Promise<{ ciphertext: string; iv: string; tag: string }> {
+    return sealSecret(await this.loadKey(), plaintext, boundTo);
+  }
+
+  async openValue(sealed: { ciphertext: string; iv: string; tag: string }, boundTo: string): Promise<string> {
+    return openSecret(await this.loadKey(), sealed, boundTo);
+  }
+
   async create(raw: z.input<typeof credentialInputSchema>): Promise<CredentialView> {
     const input = credentialInputSchema.parse(raw);
     if (this.store.credential(input.name)) throw new CredentialError(`A credential named "${input.name}" already exists`, 'DUPLICATE');

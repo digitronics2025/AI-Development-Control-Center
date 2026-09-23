@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppServices } from '../app.js';
 import { registerErrorHandler, registerRoutes } from './routes.js';
 import { registerSecurity } from './security.js';
+import { registerRemoteRoutes } from './remote-routes.js';
 import { registerSourceControlRoutes } from './source-control-routes.js';
 import { registerToolRoutes } from './tool-routes.js';
 import { registerUsageRoutes } from './usage-routes.js';
@@ -55,6 +56,9 @@ export async function buildServer(
   registerSourceControlRoutes(app, s);
   registerToolRoutes(app, s);
   registerUsageRoutes(app, s);
+  registerRemoteRoutes(app, s);
+  // Remote commands run through these same routes, in process (docs/systems/remote-node.md).
+  s.remote.attachHttp({ inject: (request) => app.inject({ ...request, method: request.method as 'GET' }) });
 
   // Liveness probe for launchers; reveals nothing about state.
   app.get('/healthz', async () => ({ ok: true }));

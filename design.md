@@ -1077,8 +1077,18 @@ Workflows
 Permissions
 Billing
 Notifications
+Remote access
 Advanced
 ```
+
+Remote access exists only on the machine itself (local dashboard and VS Code),
+never in the cloud dashboard: it pairs the machine with the cloud control plane
+(relay address, one-time pairing code, machine name) and holds the permissions
+only the machine may grant — remote control on/off, remote terminals, remote
+tool calls. Turning on terminals or tool calls needs a typed confirmation
+(`REMOTE TERMINALS`, `REMOTE TOOLS`); turning anything off never asks. Its
+changes apply immediately and are not part of the Settings draft. Unpair is a
+danger action with a confirmation.
 
 Repositories holds repository automation: finding new repositories (search
 folders, depth, repositories never added automatically) and background sync

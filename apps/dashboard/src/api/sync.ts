@@ -97,6 +97,9 @@ export class CacheSync {
     switch (message.type) {
       case 'hello':
         return;
+      case 'remote.status':
+        qc.setQueryData(keys.remoteStatus, message.status);
+        return;
       case 'task': {
         const summary = message.task;
         const before = qc.getQueryData<TaskDetail>(keys.task(summary.id));

@@ -44,5 +44,7 @@ export const keys = {
   sourceControlReview: (repositoryId: string) => ['source-control', repositoryId, 'review'] as const,
   /** Everything Usage & Costs shows; one prefix so a recorded attempt refreshes it all. */
   usageRoot: ['usage'] as const,
+  /** This machine's link to the cloud control plane (local mode only). */
+  remoteStatus: ['remote', 'status'] as const,
   usage: (view: string, params: Record<string, string | number | undefined> = {}) => ['usage', view, params] as const,
 };

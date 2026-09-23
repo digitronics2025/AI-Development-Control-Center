@@ -791,4 +791,70 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE repositories ADD COLUMN runtime TEXT NOT NULL DEFAULT '{}';
     `,
   },
+  {
+    // Cloud control plane: this machine as a remote execution node
+    // (docs/systems/remote-node.md). Additive only; an older binary ignores these tables.
+    version: 6,
+    name: 'remote execution node',
+    sql: `
+      CREATE TABLE remote_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        relay_url TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        public_key TEXT NOT NULL,
+        private_key_ciphertext TEXT NOT NULL,
+        private_key_iv TEXT NOT NULL,
+        private_key_tag TEXT NOT NULL,
+        key_version INTEGER NOT NULL DEFAULT 1,
+        remote_terminals INTEGER NOT NULL DEFAULT 0,
+        remote_tools INTEGER NOT NULL DEFAULT 0,
+        paired_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE remote_sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        acked_seq INTEGER NOT NULL DEFAULT 0,
+        usage_cursor TEXT,
+        resync_required INTEGER NOT NULL DEFAULT 1,
+        last_connected_at TEXT,
+        last_error TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE remote_outbox (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_key TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE remote_commands_received (
+        command_id TEXT PRIMARY KEY,
+        op TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        http_status INTEGER,
+        result TEXT,
+        error_code TEXT,
+        received_at TEXT NOT NULL,
+        finished_at TEXT,
+        reported_at TEXT
+      );
+      CREATE INDEX idx_remote_commands_unreported ON remote_commands_received(reported_at, received_at);
+      CREATE TABLE remote_artifact_sync (
+        object_key TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        sensitivity TEXT NOT NULL,
+        status TEXT NOT NULL,
+        sha256 TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_remote_artifact_sync_due ON remote_artifact_sync(status, next_attempt_at);
+    `,
+  },
 ];

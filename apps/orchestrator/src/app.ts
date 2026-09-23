@@ -34,6 +34,7 @@ import { ToolService } from './tools/service.js';
 import { ToolStore } from './tools/store.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
+import { RemoteNodeService } from './remote/service.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -66,6 +67,8 @@ export interface AppServices {
   tooling: EngineTooling;
   privileged: PrivilegedHelper;
   usage: UsageService;
+  /** This machine as a cloud execution node (docs/systems/remote-node.md); idle until paired. */
+  remote: RemoteNodeService;
   startedAt: string;
   /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
   recover(): Promise<{ interruptedTasks: string[] }>;
@@ -144,6 +147,7 @@ export function createServices(
     }),
   });
   mcp.restore();
+  const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, tools, credentials, usage });
 
   return {
     config,
@@ -175,6 +179,7 @@ export function createServices(
     tooling,
     privileged,
     usage,
+    remote,
     startedAt: new Date().toISOString(),
     async recover() {
       // Before anything runs: replay spooled usage and close attempts a stop interrupted.
@@ -185,9 +190,12 @@ export function createServices(
       const result = engine.recover();
       await chairman.onStartup();
       chat.recoverPending();
+      // Only once local state is settled: the cloud then receives the corrected picture.
+      remote.start();
       return result;
     },
     async close() {
+      await remote.stop();
       watchdog.stop();
       await repositoryAutomation.stop();
       await engine.shutdown();

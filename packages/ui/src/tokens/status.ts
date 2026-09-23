@@ -10,6 +10,10 @@ import {
   CircleDashed,
   CircleDot,
   Clock,
+  CloudOff,
+  Cloud,
+  Link2Off,
+  ArrowUpCircle,
   Eye,
   FilePen,
   Hourglass,
@@ -41,6 +45,8 @@ import {
   type TaskStatus,
   type UsageAnomaly,
   type UsageEventStatus,
+  type NodeStatus,
+  type RemoteLinkState,
 } from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
@@ -152,4 +158,23 @@ export const ANOMALY_SEVERITY_VISUAL: Record<UsageAnomaly['severity'], StatusVis
   info: { label: 'Info', tone: 'info', icon: Info },
   warning: { label: 'Warning', tone: 'warning', icon: AlertTriangle },
   critical: { label: 'Critical', tone: 'danger', icon: AlertOctagon },
+};
+
+/** An execution node as the cloud sees it (docs/systems/cloud-control.md). */
+export const NODE_STATUS_VISUAL: Record<NodeStatus, StatusVisual> = {
+  online: { label: 'Online', tone: 'success', icon: Cloud },
+  degraded: { label: 'Degraded', tone: 'warning', icon: AlertTriangle },
+  offline: { label: 'Offline', tone: 'neutral', icon: CloudOff },
+  revoked: { label: 'Revoked', tone: 'danger', icon: Ban },
+};
+
+/** This machine's own link to the cloud (Settings → Remote access). */
+export const REMOTE_LINK_VISUAL: Record<RemoteLinkState, StatusVisual> = {
+  unpaired: { label: 'Not paired', tone: 'neutral', icon: Link2Off },
+  disabled: { label: 'Turned off', tone: 'neutral', icon: Minus },
+  connecting: { label: 'Connecting', tone: 'info', icon: Hourglass },
+  connected: { label: 'Connected', tone: 'success', icon: Cloud },
+  offline: { label: 'Cloud unreachable', tone: 'warning', icon: CloudOff },
+  revoked: { label: 'Revoked', tone: 'danger', icon: Ban },
+  'update-required': { label: 'Update required', tone: 'warning', icon: ArrowUpCircle },
 };

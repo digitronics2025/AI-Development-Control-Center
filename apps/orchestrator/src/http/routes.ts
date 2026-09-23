@@ -36,6 +36,7 @@ import { WorkflowError } from '../services/workflows.js';
 import { SOURCE_CONTROL_HTTP_STATUS, SourceControlError } from '../source-control/errors.js';
 import { CredentialError } from '../tools/credentials.js';
 import { McpError } from '../tools/mcp.js';
+import { RemoteError } from '../remote/service.js';
 import { TerminalError } from '../tools/terminals.js';
 import { usageErrorStatus } from './usage-routes.js';
 
@@ -81,6 +82,10 @@ export function registerErrorHandler(app: FastifyInstance): void {
     if (error instanceof McpError) {
       const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400 }[error.code];
       return sendError(reply, status, error.code, error.message);
+    }
+    if (error instanceof RemoteError) {
+      const status = { NOT_PAIRED: 409, ALREADY_PAIRED: 409, INVALID: 400, CLOUD_UNAVAILABLE: 503, REFUSED: 400, LOCAL_ONLY: 403 }[error.code];
+      return sendError(reply, status, error.code === 'LOCAL_ONLY' ? 'REMOTE_FORBIDDEN' : error.code === 'REFUSED' ? 'REMOTE_REFUSED' : error.code, error.message);
     }
     const statusCode = (error as { statusCode?: number }).statusCode;
     if (statusCode && statusCode < 500) return sendError(reply, statusCode, 'BAD_REQUEST', (error as Error).message);

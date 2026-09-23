@@ -38,6 +38,7 @@ import { useHealth, usePromptMutations, usePrompts, useSettings, useUpdateSettin
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
+import { RemoteAccessPanel } from '../components/remote-access';
 
 const SECTIONS = [
   { id: 'general', label: 'General' },
@@ -49,6 +50,7 @@ const SECTIONS = [
   { id: 'permissions', label: 'Permissions' },
   { id: 'billing', label: 'Billing' },
   { id: 'notifications', label: 'Notifications' },
+  { id: 'remote', label: 'Remote access' },
   { id: 'advanced', label: 'Advanced' },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -447,6 +449,7 @@ export function SettingsPage() {
         </div>
       </Panel>
     ),
+    remote: <RemoteAccessPanel />,
     advanced: (
       <div className="flex flex-col gap-4">
         <Panel title="Advanced" headingLevel={2}>

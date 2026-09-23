@@ -1,0 +1,57 @@
+# Dashboard and design system
+
+Implements [design.md](../../design.md). React 19 + Vite 8 + Tailwind 4,
+React Router 7, TanStack Query. Shared primitives and tokens:
+[packages/ui](../../packages/ui/src).
+
+## Builds
+
+| Mode | Output | Entry |
+|---|---|---|
+| web | `apps/dashboard/dist/web` (served by the orchestrator at `/`) | [main.tsx](../../apps/dashboard/src/main.tsx), `BrowserRouter` |
+| webview | `apps/dashboard/dist/webview/webview.{js,css}` (copied into the extension) | [webview-main.tsx](../../apps/dashboard/src/webview-main.tsx), `MemoryRouter`, `data-theme="vscode"` |
+
+`pnpm --filter @acc/dashboard dev` runs Vite on 5173 with `/api` and `/ws`
+proxied to the orchestrator and the token read from the data folder.
+
+## State
+
+The orchestrator is the only source of truth. Queries load snapshots;
+[sync.ts](../../apps/dashboard/src/api/sync.ts) patches entities in place from
+WebSocket messages and refreshes list membership in one debounced batch; a
+reconnect invalidates everything. Mutations are never optimistic for
+orchestrator-owned state. Tab choice lives in the URL (`?tab=`); only per-viewer
+conveniences (sidebar collapsed, log mode) use `localStorage`.
+
+## Tokens
+
+[tokens.css](../../packages/ui/src/styles/tokens.css) holds the exact design.md
+values for Dark and Light and a VS Code mapping. Tailwind's default palette is
+removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
+`bg-danger-muted`…). Contrast rules are in design.md §4.2.
+
+## Pages
+
+Home, Tasks, New Task, Task Detail (Overview/Activity/Changes/Tests/Artifacts/
+Logs + inspector), Approvals, Workflows (stage-sequence editor with inline
+validation), Agents, Repositories (+ detail), Settings (8 sections). Routes are
+lazy-loaded; logs are virtualised; diffs load per file.
+
+## Quality gates
+
+`pnpm e2e` ([e2e/](../../apps/dashboard/e2e)) runs the design.md §19 matrix:
+every page at 1440/1280/1024/768/390 px in Dark and Light, asserting no
+page-level horizontal scroll, no console errors and zero axe WCAG 2.2 AA
+violations; plus keyboard/dialog/realtime/disconnection flows and the VS Code
+WebView harness.
+
+## Gotchas
+
+- Context values consumed in effects must have stable identities: an unstable
+  `register` in the command registry once caused an infinite render loop that
+  silently froze in-page navigation.
+- Controlled Radix dialogs/drawers return focus to the element that opened them
+  via `useReturnFocus` in [overlays.tsx](../../packages/ui/src/primitives/overlays.tsx).
+- Scrollable regions without focusable content need `tabIndex={0}`.
+
+Last verified: 2026-09-23

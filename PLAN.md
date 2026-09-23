@@ -3,7 +3,7 @@
 **Repository:** `digitronics2025/AI-Development-Control-Center`  
 **Primary platform:** Windows 11 + VS Code  
 **Project type:** Local-first AI development orchestrator  
-**Status:** Phase 0 complete — repository created; implementation has not started yet.
+**Status:** V1 implemented (Phases 1–15) — see [Implementation status](#implementation-status). Codex live runs are blocked by the account's credit balance, not by the product.
 
 ---
 
@@ -1953,3 +1953,31 @@ Use this prompt for the first coding session:
 For later full-project implementation phases:
 
 > **/goal Run the selected phase end-to-end on full autopilot. First inspect the current repository and environment and verify every assumption before changing code. Treat this plan as the intended architecture and outcome, not as proof that the current repository already matches it. Decide normal implementation details yourself using the most secure, maintainable, scalable, and simple long-term approach. Stay strictly within the selected phase and target. Fix only issues that directly block or materially affect that target. Implement, test, fix, retest, and verify actual behavior. Protect existing user work, secrets, authentication, subscription billing, data integrity, and production systems. Never silently fall back to paid API usage. Stop only for a genuine external blocker, missing authorization, or an action explicitly requiring user approval. Record unrelated discoveries under Found for Later instead of expanding scope. Finish only when all applicable acceptance criteria have been verified and provide the required simple completion report.**
+
+---
+
+# Implementation status
+
+Updated 2026-09-23. Subsystem details: [docs/systems/](docs/systems/README.md).
+
+| Phase | State | Evidence |
+|---|---|---|
+| 1 Foundation and CLI proof | Done | Adapter tests with fake CLIs (auth, billing guard, cancel, timeout, usage limits); `pnpm verify:agents --run`: Claude Code PONG on the Max subscription; Codex detected and signed in (ChatGPT) but the account is out of credits → `USAGE_LIMIT` |
+| 2 End-to-end workflow | Done | Live quick-change task through real Claude Code: implement → real `npm test` → review PASS → report READY |
+| 3 Persistence and task state | Done | SQLite migrations; restart and crash recovery tests |
+| 4–5 Generic engine and profiles | Done | 5 YAML profiles; validation forbids unbounded loops; custom profiles via the Workflows editor |
+| 6 Context and artifacts | Done | Role-specific context, versioned prompt templates, artifacts per task |
+| 7 Git | Done | Baseline, task branch, task / pre-existing / mixed attribution, bounded diffs, safe commits |
+| 8 Test/build engine | Done | Repository commands detected and run; a task never completes on an agent's claim |
+| 9 Reviewer/fixer loop | Done | Bounded by `maxFixCycles`; resume grants one more cycle |
+| 10 Dashboard | Done | design.md implemented; Playwright matrix (5 viewports × Dark/Light, axe WCAG 2.2 AA) green |
+| 11 VS Code extension | Done | Status bar, notifications, commands, WebView verified in a real Extension Development Host |
+| 12 Live intervention | Done | Pause, resume, retry, reroute, directives, future-stage reassignment |
+| 13 Permissions and approvals | Done | Levels 1–5, command classification incl. package scripts, typed confirmation for level 5 |
+| 14 Reliability hardening | Done | Tests for restart, crash, usage limit, auth/billing refusal, missing model, command failure, dirty tree, cancel |
+| 15 Windows packaging | Done | Background launcher, graceful stop endpoint, Start-menu and sign-in shortcuts |
+
+Known external blockers: Codex CLI 0.150.0 rejects the configured default model
+`gpt-6-astra` (needs a newer CLI) and the Codex workspace has no credits.
+Update Codex / restore credits, or assign Codex roles to Claude Code in
+Settings → Agents & Models.

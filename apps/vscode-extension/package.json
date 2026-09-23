@@ -1,0 +1,156 @@
+{
+  "name": "acc-vscode",
+  "displayName": "AI Development Control Center",
+  "description": "Thin VS Code client for the local AI Development Control Center orchestrator: status bar, notifications, task controls and the Control Center view.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "digitronics2025",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "acc.openControlCenter",
+        "title": "Open Control Center",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.newTask",
+        "title": "New Task",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.openCurrentTask",
+        "title": "Open Current Task",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.pauseTask",
+        "title": "Pause Task",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.resumeTask",
+        "title": "Resume Task",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.cancelTask",
+        "title": "Cancel Task…",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.addDirective",
+        "title": "Add Directive…",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.retryStage",
+        "title": "Retry Stage",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.rerouteStage",
+        "title": "Reroute Stage…",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.openLogs",
+        "title": "Open Logs",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.openArtifacts",
+        "title": "Open Artifacts",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.openDiff",
+        "title": "Open Diff",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.openApprovals",
+        "title": "Review Approvals",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.startOrchestrator",
+        "title": "Start Orchestrator",
+        "category": "AI Control Center"
+      },
+      {
+        "command": "acc.reconnect",
+        "title": "Reconnect to Orchestrator",
+        "category": "AI Control Center"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "acc",
+          "title": "AI Control Center",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "acc": [
+        {
+          "type": "webview",
+          "id": "acc.controlCenterView",
+          "name": "Control Center"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Development Control Center",
+      "properties": {
+        "acc.dataDirectory": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Orchestrator data folder holding `runtime.json` and `auth-token`. Empty uses the default (`%LOCALAPPDATA%\\AIDevControlCenter` on Windows)."
+        },
+        "acc.orchestratorPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the orchestrator's `dist/main.js`, used by **Start Orchestrator**. Empty looks next to this extension in the repository checkout."
+        },
+        "acc.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the orchestrator automatically when VS Code opens and it is not running."
+        },
+        "acc.notifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications for approvals, failures and completions."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "package": "node build.mjs && vsce package --no-dependencies --allow-missing-repository --out acc-vscode.vsix"
+  },
+  "dependencies": {
+    "@acc/shared": "workspace:*",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.95.0",
+    "@types/ws": "^8.18.1",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2"
+  }
+}

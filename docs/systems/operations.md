@@ -22,7 +22,7 @@ All scripts honour `ACC_DATA_DIR` and `ACC_PORT`.
 
 ## Other scripts
 
-- `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
+- `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); sets `ACC_REPOSITORY_AUTOMATION=0` so it never scans or fetches your real repositories; writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
 - `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …]` ([verify-agents.ts](../../scripts/verify-agents.ts)).
 
 ## Backups

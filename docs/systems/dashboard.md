@@ -38,7 +38,9 @@ Chairman edits `settings.chairman`.
 The orchestrator is the only source of truth. Queries load snapshots;
 [sync.ts](../../apps/dashboard/src/api/sync.ts) patches entities in place from
 WebSocket messages and refreshes list membership in one debounced batch; a
-reconnect invalidates everything. Mutations are never optimistic for
+reconnect invalidates everything. `useRepositoryAutomation` also polls every
+5 s while a run is in progress, so a missed end-of-run message cannot leave
+"Checking now…" on screen. Mutations are never optimistic for
 orchestrator-owned state. Tab choice lives in the URL (`?tab=`); only per-viewer
 conveniences (sidebar collapsed, log mode) use `localStorage`.
 
@@ -54,7 +56,9 @@ removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 Home, Tasks, New Task, Task Detail (Overview/Activity/Changes/Tests/Artifacts/
 Logs + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
-validation), Agents, Repositories (+ detail), Settings (8 sections). Routes are
+validation), Agents, Repositories (+ detail; a Remote column, the automation summary
+line and **Check now**, see [repository-automation.md](repository-automation.md)),
+Settings (10 sections, including Repositories). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed.

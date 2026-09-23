@@ -64,6 +64,8 @@ pathspec staging, commit, history, fetch, fast-forward-only, push without
 force) live in [source-control.ts](../../packages/git/src/source-control.ts)
 and are documented in [source-control.md](source-control.md). `git()` takes
 `maxOutputBytes` (stops Git at the bound, sets `truncated`) and keeps at most
-64 KB of stderr.
+64 KB of stderr. `fetchRemote(…, { unattended: true })` adds
+`UNATTENDED_REMOTE_ENV` (`GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`)
+so background fetches fail instead of opening a credential window.
 
 Last verified: 2026-09-23

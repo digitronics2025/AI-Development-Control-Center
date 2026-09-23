@@ -60,7 +60,7 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.kind === 'agent' && stage.commandKinds?.length) {
       issues.push({ stageIndex: index, field: 'commandKinds', message: 'Agent stages do not run repository commands' });
     }
-    if ((stage.kind === 'tests' || stage.kind === 'command' || stage.kind === 'git') && stage.agentId) {
+    if ((stage.kind === 'tests' || stage.kind === 'command' || stage.kind === 'git' || stage.kind === 'verify') && stage.agentId) {
       issues.push({ stageIndex: index, field: 'agentId', message: 'System stages are not assigned to an agent' });
     }
     if (stage.kind === 'command' && !stage.commandKinds?.length) {
@@ -72,11 +72,14 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.verdict && stage.kind !== 'agent') {
       issues.push({ stageIndex: index, field: 'verdict', message: 'Only agent stages can return a verdict' });
     }
-    if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git') {
+    if (stage.kind === 'verify' && stage.commandKinds?.length) {
+      issues.push({ stageIndex: index, field: 'commandKinds', message: 'App verification uses the repository runtime, not commands' });
+    }
+    if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git' && stage.kind !== 'verify') {
       issues.push({
         stageIndex: index,
         field: 'onFail',
-        message: 'A failure transition needs a verdict, tests or Git stage',
+        message: 'A failure transition needs a verdict, tests, verify or Git stage',
       });
     }
   });

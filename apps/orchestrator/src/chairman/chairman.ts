@@ -1,3 +1,4 @@
+import { taskWorkdir } from '../engine/workdir.js';
 import { changesSince } from '@acc/git';
 import { redact } from '@acc/security';
 import {
@@ -464,7 +465,7 @@ export class Chairman implements SupervisorHooks {
     let taskFiles: string[] | null = null;
     if (repo && baseline) {
       try {
-        taskFiles = (await changesSince(repo.path, baseline)).filter((f) => f.origin !== 'preexisting').map((f) => f.path);
+        taskFiles = (await changesSince(taskWorkdir(task, repo), baseline)).filter((f) => f.origin !== 'preexisting').map((f) => f.path);
       } catch {
         taskFiles = null;
       }

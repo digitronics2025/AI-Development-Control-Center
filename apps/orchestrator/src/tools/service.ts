@@ -337,7 +337,15 @@ export class ToolService {
 
     // 1. Route the capability to a provider available here.
     const prefer = req.preferProvider ?? (typeof (req.input as { shell?: unknown })?.shell === 'string' ? ((req.input as { shell: string }).shell as string) : null);
-    const route = this.router.route({ capability: req.capability, detection: (id) => this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
+    let route = this.router.route({ capability: req.capability, detection: (id) => this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
+    if (!route.ok && route.code === 'NOT_INSTALLED') {
+      // Detection is lazy: providers never checked yet are checked now, once, then routing is retried.
+      const unchecked = this.registry.offering(req.capability).filter((r) => !r.provider.builtin && !this.health.get(r.provider.id));
+      if (unchecked.length) {
+        await Promise.all(unchecked.map((r) => this.health.check(r.provider.id).catch(() => undefined)));
+        route = this.router.route({ capability: req.capability, detection: (id) => this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
+      }
+    }
     if (!route.ok) return refuse('failed', route.code === 'UNKNOWN_CAPABILITY' ? 'UNKNOWN_CAPABILITY' : 'NOT_INSTALLED', route.reason, 'deny');
     const { provider, operation } = route.route;
     base.providerId = provider.id;
@@ -489,8 +497,12 @@ export class ToolService {
       if (!listed || cap.level > Math.min(scope.stageLevel, ceiling)) continue;
       if (session.kind === 'agent' && NATIVE_OVERLAP.test(cap.id)) continue;
       const route = this.router.route({ capability: cap.id, detection: (id) => this.health.get(id) });
-      if (!route.ok) continue;
-      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: jsonSchemaOf(route.route.operation.input), level: cap.level });
+      // Providers never checked yet count as available: the first call detects them.
+      const offering = this.registry.offering(cap.id).filter((r) => !r.provider.platforms || r.provider.platforms.includes(process.platform));
+      const unchecked = !route.ok && route.code === 'NOT_INSTALLED' && offering.some((r) => !this.health.get(r.provider.id));
+      if (!route.ok && !unchecked) continue;
+      const operation = route.ok ? route.route.operation : offering[0]!.operation;
+      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: jsonSchemaOf(operation.input), level: cap.level });
       if (out.length >= MAX_LISTED) break;
     }
     return out;

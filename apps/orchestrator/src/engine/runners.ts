@@ -420,14 +420,20 @@ export class StageRunners {
       let exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
       while (exec && !exec.passed && !exec.result.cancelled && !control.stopReason) {
         const classified = this.d.tooling.classify(exec.tail, exec.result.timedOut);
-        const plan = this.d.tooling.plan(classified, workdir, attempted);
-        if (!plan) break;
-        attempted.push(plan.strategy);
-        const row = this.d.tooling.recordRepair(task, stage.id, command.command, classified, plan, attempted.length);
-        const repaired = await this.applyRepair(task, stage, repo, workdir, plan, env, control);
-        this.d.tooling.finishRepair(row.id, repaired.ok, repaired.detail);
-        if (!repaired.ok) break;
-        repairs.push(plan.description.replace(/, then run it again$/, ''));
+        // A repair that fails hands over to the next strategy (a locked install, then a normal one).
+        let repaired = false;
+        for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !control.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
+          attempted.push(plan.strategy);
+          const row = this.d.tooling.recordRepair(task, stage.id, command.command, classified, plan, attempted.length);
+          const result = await this.applyRepair(task, stage, repo, workdir, plan, env, control);
+          this.d.tooling.finishRepair(row.id, result.ok, result.detail);
+          if (result.ok) {
+            repairs.push(plan.description.replace(/, then run it again$/, ''));
+            repaired = true;
+            break;
+          }
+        }
+        if (!repaired) break;
         exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
       }
       if (!exec || exec.result.cancelled) {

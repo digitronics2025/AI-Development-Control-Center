@@ -32,6 +32,17 @@ stages:
     # is observed by the orchestrator rather than taken from the agent's report.
     commandKinds: [lint, typecheck, test, build, e2e]
     permissionLevel: 2
+    next: app-check
+    onFail: fix
+  - key: app-check
+    name: App check
+    role: tester
+    kind: verify
+    # Starts the app (Repositories → Runtime), opens it in Chromium at desktop
+    # and phone widths, and fails on console errors or failed requests.
+    # Skipped when the repository has no runtime configured.
+    permissionLevel: 2
+    timeoutSec: 900
     next: review
     onFail: fix
   - key: review

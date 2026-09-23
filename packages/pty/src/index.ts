@@ -162,17 +162,20 @@ export class PtySession {
   async kill(reason = 'closed'): Promise<void> {
     if (this.exitedValue) return;
     const pid = this.pid;
+    // ConPTY's own kill ends every process attached to the console; a tree kill
+    // afterwards catches anything that detached (and must come second, or the
+    // console is already gone when ConPTY looks for its processes).
+    try {
+      this.pty.kill();
+    } catch {
+      /* already gone */
+    }
     if (pid && process.platform === 'win32') {
       await new Promise<void>((resolve) => {
         const k = spawnProcess('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
         k.on('exit', () => resolve());
         k.on('error', () => resolve());
       });
-    }
-    try {
-      this.pty.kill();
-    } catch {
-      /* already gone */
     }
     this.push(`\r\n[terminal ${reason}]\r\n`);
     // ConPTY reports exit asynchronously: wait briefly for it, then consider the session gone.
@@ -222,7 +225,8 @@ export class PtyManager {
       rows: options.rows ?? 30,
       cwd: options.cwd,
       env,
-      ...(process.platform === 'win32' ? { useConpty: true } : {}),
+      // The bundled ConPTY (OpenConsole) ends its session cleanly on kill; the tree kill in PtySession.kill catches the rest.
+      ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}),
     });
     const session = new PtySession(proc, options);
     this.sessions.set(session.id, session);

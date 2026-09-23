@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z, ZodError } from 'zod';
-import { changesSince, diffSince, git, isGitRepository } from '@acc/git';
+import { changesInRange, changesSince, diffInRange, diffSince, git, isGitRepository } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   ATTENTION_TASK_STATUSES,
@@ -28,6 +28,7 @@ import {
 } from '@acc/shared';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
+import { taskWorkdir } from '../engine/workdir.js';
 import { AgentNotFoundError } from '../services/agents.js';
 import { toArtifactView } from '../services/artifacts.js';
 import { RepositoryError } from '../services/repositories.js';
@@ -245,7 +246,11 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
       preexistingWarning: task.git.preexistingChanges.length > 0,
     };
     if (!baseline || !(await isGitRepository(repo.path))) return { ...base, files: [], totals: { files: 0, additions: 0, deletions: 0 } };
-    const files = await changesSince(repo.path, baseline);
+    // An isolated task whose worktree is gone: its changes are the commits on its branch.
+    const files =
+      task.git.isolated && !task.git.worktreePath && task.git.taskBranch
+        ? await changesInRange(repo.path, task.git.baselineCommit, task.git.taskBranch)
+        : await changesSince(taskWorkdir(task, repo), baseline);
     return {
       ...base,
       files,
@@ -266,7 +271,10 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     if (file !== undefined && (file.includes('..') || /^[/\\]|^[A-Za-z]:/.test(file))) {
       throw new EngineError('Invalid path', 'INVALID_INPUT');
     }
-    const { diff, truncated } = await diffSince(repo.path, baseline, { path: file, maxBytes: 1_000_000 });
+    const { diff, truncated } =
+      task.git.isolated && !task.git.worktreePath && task.git.taskBranch
+        ? await diffInRange(repo.path, task.git.baselineCommit, task.git.taskBranch, { path: file, maxBytes: 1_000_000 })
+        : await diffSince(taskWorkdir(task, repo), baseline, { path: file, maxBytes: 1_000_000 });
     return { diff: redact(diff), truncated };
   });
 

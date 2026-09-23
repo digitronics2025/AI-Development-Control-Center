@@ -29,7 +29,8 @@ function repoWithCheck(check: string): string {
 }
 
 async function newTask(page: Page, check: string, description: string): Promise<string> {
-  const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: repoWithCheck(check) });
+  // Named to sort after the seeded repositories: other specs select the first one.
+  const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: repoWithCheck(check), name: `zz-chairman-${Date.now()}` });
   const task = await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'normal-development', mode: 'autopilot', description });
   return task.id;
 }
@@ -65,7 +66,7 @@ test.describe('Chairman (plan §7.7)', () => {
     const drawer = await openChairman(page);
     const log = drawer.getByRole('log', { name: 'Chairman conversation' });
     // The decision appears in the chat by itself, with its trigger and who chose it.
-    await expect(log.getByText('Fix attempts exhausted')).toBeVisible({ timeout: 60_000 });
+    await expect(log.getByText('Fix attempts exhausted').first()).toBeVisible({ timeout: 60_000 });
     await expect(log.getByText(/Root-cause analysis|Simulated Chairman chose rca/).first()).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByText('Recovery cycle 1').first()).toBeVisible();
@@ -87,10 +88,10 @@ test.describe('Chairman (plan §7.7)', () => {
     await expectNoAxeViolations(page, test.info());
 
     await say(page, '/status');
-    await expect(log.getByText(new RegExp(`${id} is (running|queued)`))).toBeVisible();
+    await expect(log.getByText(new RegExp(`${id} is (running|queued)`)).first()).toBeVisible();
 
     await say(page, 'Would rollback help?');
-    await expect(log.getByText(/Simulated Chairman: the task is/)).toBeVisible({ timeout: 20_000 });
+    await expect(log.getByText(/Simulated Chairman: the task is/).first()).toBeVisible({ timeout: 20_000 });
     await expect(log.getByText('Roll back to checkpoint')).toHaveCount(0);
 
     await say(page, 'Do not modify the database schema.');
@@ -100,7 +101,7 @@ test.describe('Chairman (plan §7.7)', () => {
     await expect(log.getByText('Add directive').first()).toBeVisible();
 
     await say(page, 'Pause after the current stage.');
-    await expect(log.getByText('Pause task')).toBeVisible();
+    await expect(log.getByText('Pause task').first()).toBeVisible();
     await expect(page.getByText('Paused', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
 
     await say(page, 'Continue and decide the rest yourself.');
@@ -110,7 +111,7 @@ test.describe('Chairman (plan §7.7)', () => {
     // Immediate redirect while an agent is working.
     await expect.poll(async () => (await api<{ currentStageKey: string; status: string }>(page, 'GET', `/api/tasks/${id}`)).currentStageKey, { timeout: 60_000 }).toBe('implement');
     await say(page, 'Stop this fix and go back to Investigate.');
-    await expect(log.getByText(/Returning to Investigate|Set to Investigate/)).toBeVisible({ timeout: 20_000 });
+    await expect(log.getByText(/Returning to Investigate|Set to Investigate/).first()).toBeVisible({ timeout: 20_000 });
 
     await directives.getByRole('button', { name: /^Remove directive: Do not modify the database schema/ }).click();
     await expect(drawer.getByRole('region', { name: /Active directives/ })).toHaveCount(0);

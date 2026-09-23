@@ -82,9 +82,11 @@ test.describe('VS Code WebView (design.md §13)', () => {
     await page.setViewportSize({ width: 480, height: 900 });
     await openWebview(page, baseURL!, '/tasks/TASK-0001?tab=changes');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    await page.getByRole('button', { name: 'Open file' }).click();
     await page.getByRole('button', { name: 'Open diff in editor' }).click();
     const posted = await page.evaluate(() => (window as unknown as { __posted: Array<{ type: string }> }).__posted);
     expect(posted).toContainEqual(expect.objectContaining({ type: 'openDiff', taskId: 'TASK-0001' }));
+    expect(posted).toContainEqual(expect.objectContaining({ type: 'openFile', path: 'sim-output.md' }));
     // Details drawer carries the inspector controls in narrow panels.
     await page.getByRole('button', { name: 'Details' }).click();
     await expect(page.getByRole('dialog', { name: 'Task details' })).toBeVisible();

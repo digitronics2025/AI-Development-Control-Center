@@ -1,8 +1,8 @@
-import { ExternalLink, FileDiff, GitBranch } from 'lucide-react';
+import { ExternalLink, FileCode, FileDiff, GitBranch } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Banner, Button, DiffViewer, EmptyState, Skeleton, cn, shortSha } from '@acc/ui';
 import type { ChangedFile, TaskDetail } from '@acc/shared';
-import { useTaskChanges, useTaskDiff } from '../../api/hooks';
+import { useRepositories, useTaskChanges, useTaskDiff } from '../../api/hooks';
 import { useRuntime } from '../../app/runtime';
 
 const ORIGIN_LABEL: Record<ChangedFile['origin'], string> = {
@@ -23,6 +23,8 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
   const [selected, setSelected] = useState<string | null>(null);
   const diff = useTaskDiff(task.id, selected);
   const { host, postToHost } = useRuntime();
+  const repositories = useRepositories();
+  const repo = repositories.data?.find((r) => r.id === task.repositoryId);
   const files = useMemo(() => changes.data?.files ?? [], [changes.data]);
 
   useEffect(() => {
@@ -101,9 +103,16 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="min-w-0 truncate font-mono text-code text-fg">{selected}</h3>
                 {host === 'vscode' && postToHost ? (
-                  <Button size="compact" icon={ExternalLink} onClick={() => postToHost({ type: 'openDiff', taskId: task.id, path: selected })}>
-                    Open diff in editor
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    {repo && files.find((f) => f.path === selected)?.status !== 'deleted' ? (
+                      <Button size="compact" icon={FileCode} onClick={() => postToHost({ type: 'openFile', repositoryPath: repo.path, path: selected })}>
+                        Open file
+                      </Button>
+                    ) : null}
+                    <Button size="compact" icon={ExternalLink} onClick={() => postToHost({ type: 'openDiff', taskId: task.id, path: selected })}>
+                      Open diff in editor
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

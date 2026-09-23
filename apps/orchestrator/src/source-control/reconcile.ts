@@ -83,7 +83,7 @@ async function reconcileOne(
         const remote = op.remote ?? (op.ref?.split('/')[0] || null);
         const target = op.kind === 'sync' ? '@{upstream}' : op.ref ? `${op.remote}/${op.ref.replace(/^refs\/heads\//, '')}` : null;
         if (!remote || !target) return settle('uncertain', 'The push was interrupted and its target is unknown. Fetch and check the remote branch.');
-        const fetched = await fetchRemote(root, remote);
+        const fetched = await fetchRemote(root, remote, { unattended: true });
         if (fetched.code !== 0) return settle('uncertain', 'The push was interrupted and the remote could not be reached to confirm it. Fetch later to check.');
         const remoteSha = await revParse(root, target);
         if (remoteSha && (remoteSha === pushed || (await isAncestor(root, pushed, remoteSha)))) {
@@ -99,8 +99,12 @@ async function reconcileOne(
       }
       return settle('failed', 'Interrupted by an orchestrator restart before anything was sent; only a fetch may have run.', { postHead: head });
     }
-    case 'fast_forward':
-      return settle(head === op.preHead ? 'failed' : 'uncertain', 'Interrupted by an orchestrator restart. The branch is shown as Git reports it.', { postHead: head });
+    case 'fast_forward': {
+      const target = op.metadata.fastForwardTo;
+      if (target && head === target) return settle('succeeded', `Fast-forwarded to ${target.slice(0, 10)} (confirmed after restart)`, { postHead: head });
+      if (head === op.preHead) return settle('failed', 'The fast-forward did not happen before the orchestrator stopped.', { postHead: head });
+      return settle('uncertain', 'Interrupted by an orchestrator restart. The branch is shown as Git reports it.', { postHead: head });
+    }
     case 'fetch':
       return settle('failed', 'Interrupted by an orchestrator restart. Fetching again is safe.', { postHead: head });
     default:

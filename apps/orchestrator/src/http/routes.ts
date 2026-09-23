@@ -383,6 +383,15 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return reply.code(204).send();
   });
 
+  // ----- repository automation (discovery + background sync) --------------------------
+
+  app.get('/api/repository-automation', async () => s.repositoryAutomation.status());
+  /** Starts a run as enabled in settings and answers at once; progress arrives over the WebSocket. */
+  app.post('/api/repository-automation/run', async (request, reply) => {
+    void s.repositoryAutomation.run('manual').catch((error: unknown) => request.log.error(`Repository automation run failed: ${(error as Error).message}`));
+    return reply.code(202).send(s.repositoryAutomation.status());
+  });
+
   // ----- settings & prompts ---------------------------------------------------------
 
   app.get('/api/settings', async () => s.settings.get());

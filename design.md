@@ -998,7 +998,15 @@ Repository list shows:
 - detected tooling,
 - default workflow,
 - last task,
-- availability.
+- availability,
+- remote position: up to date, commits to download, commits to upload,
+  diverged, or no upstream — always as text with an icon.
+
+Above the list, one quiet line states repository automation: whether new
+repositories are found and downloads run automatically, when it last checked,
+and what the last check changed. **Check now** is a secondary action beside
+**Add repository** (which stays primary). Automatic sync only ever downloads;
+the page never implies uploads happen on their own.
 
 Repository detail:
 - defaults,
@@ -1019,12 +1027,18 @@ Use a stable left sub-navigation within Settings:
 General
 Appearance
 Agents & Models
+Chairman
+Repositories
 Workflows
 Permissions
 Billing
 Notifications
 Advanced
 ```
+
+Repositories holds repository automation: finding new repositories (search
+folders, depth, repositories never added automatically) and background sync
+(on/off, interval). The sync switch states plainly that it downloads only.
 
 Billing must clearly show:
 

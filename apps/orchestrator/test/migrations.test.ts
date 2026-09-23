@@ -33,7 +33,7 @@ describe('chairman migration (v1 → v2)', () => {
     old.prepare("INSERT INTO task_events (task_id, type, message, at) VALUES ('TASK-0001', 'TASK_CREATED', 'Task created', ?)").run(ts);
     old.close();
 
-    const config: OrchestratorConfig = { host: '127.0.0.1', port: 0, dataDir, resourcesDir: ROOT, dashboardDir: null, token: TOKEN, simulatedAgents: true, allowedOrigins: [], version: 'test' };
+    const config: OrchestratorConfig = { host: '127.0.0.1', port: 0, dataDir, resourcesDir: ROOT, dashboardDir: null, token: TOKEN, simulatedAgents: true, repositoryAutomation: false, allowedOrigins: [], version: 'test' };
     const services = createServices(config, { adapters: simAdapters() });
     try {
       expect(schemaVersion(services.db)).toBe(MIGRATIONS.at(-1)!.version);

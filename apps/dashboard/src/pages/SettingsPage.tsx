@@ -27,6 +27,7 @@ import {
   ROLE_LABEL,
   type ChairmanSettings,
   type PermissionLevel,
+  type RepositoryAutomationSettings,
   type Role,
   type Settings,
   type TaskMode,
@@ -43,6 +44,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'agents', label: 'Agents & Models' },
   { id: 'chairman', label: 'Chairman' },
+  { id: 'repositories', label: 'Repositories' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'billing', label: 'Billing' },
@@ -82,6 +84,40 @@ function LimitField({ label, helper, value, min, max, onChange }: { label: strin
           setText(e.target.value);
           const next = Number(e.target.value);
           if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+        }}
+      />
+    </Field>
+  );
+}
+
+const ABSOLUTE_PATH = /^([A-Za-z]:[\\/]|[\\/])/;
+const MAX_FOLDERS = 20;
+const folderLines = (text: string) => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+/** One full folder path per line; invalid text keeps the last valid list. */
+function FolderListField({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) {
+  const joined = value.join('\n');
+  const [text, setText] = useState(joined);
+  // Follow outside changes (Discard, a save from elsewhere) without fighting the user's own blank lines.
+  useEffect(() => setText((current) => (folderLines(current).join('\n') === joined ? current : joined)), [joined]);
+  const lines = folderLines(text);
+  const invalid = lines.find((l) => !ABSOLUTE_PATH.test(l));
+  return (
+    <Field
+      label="Search folders"
+      helper="One full folder path per line. Leave empty to search your user folder."
+      error={invalid ? `"${invalid}" is not a full folder path, for example C:\\Users\\you\\code.` : lines.length > MAX_FOLDERS ? `Use at most ${MAX_FOLDERS} folders.` : null}
+    >
+      <Textarea
+        value={text}
+        rows={3}
+        className="font-mono text-code"
+        spellCheck={false}
+        placeholder="Your user folder"
+        onChange={(e) => {
+          setText(e.target.value);
+          const next = folderLines(e.target.value);
+          if (next.length <= MAX_FOLDERS && next.every((l) => ABSOLUTE_PATH.test(l))) onChange(next);
         }}
       />
     </Field>
@@ -154,6 +190,8 @@ export function SettingsPage() {
 
   if (settings.isLoading || !draft) return <div className="p-6"><Skeleton className="h-96" /></div>;
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft({ ...draft, [key]: value });
+  const setAutomation = <K extends keyof RepositoryAutomationSettings>(key: K, value: RepositoryAutomationSettings[K]) =>
+    setDraft({ ...draft, repositoryAutomation: { ...draft.repositoryAutomation, [key]: value } });
   const setChairman = <K extends keyof ChairmanSettings>(key: K, value: ChairmanSettings[K]) => setDraft({ ...draft, chairman: { ...draft.chairman, [key]: value } });
 
   const save = (patch: Partial<Settings> = draft) =>
@@ -257,6 +295,48 @@ export function SettingsPage() {
           <Row title="Resume after a restart" description="Supervised tasks interrupted by a restart continue automatically; nothing runs twice.">
             <Switch aria-label="Resume supervised tasks after a restart" checked={draft.chairman.resumeAfterRestart} onCheckedChange={(v) => setChairman('resumeAfterRestart', v)} />
           </Row>
+        </div>
+      </Panel>
+    ),
+    repositories: (
+      <Panel title="Repositories" headingLevel={2} description="Keep the repository list complete and up to date without doing it by hand.">
+        <div className="flex flex-col divide-y divide-border-subtle">
+          <Row
+            title="Add new repositories automatically"
+            description="Looks for Git repositories in the search folders. Extra working copies of a repository (linked worktrees) and repositories you removed are skipped."
+          >
+            <Switch aria-label="Add new repositories automatically" checked={draft.repositoryAutomation.discover} onCheckedChange={(v) => setAutomation('discover', v)} />
+          </Row>
+          <div className="flex flex-col gap-3 py-3">
+            <FolderListField value={draft.repositoryAutomation.roots} onChange={(v) => setAutomation('roots', v)} />
+            <LimitField label="Folder depth" helper="How many folder levels below each search folder are looked at." min={1} max={4} value={draft.repositoryAutomation.maxDepth} onChange={(v) => setAutomation('maxDepth', v)} />
+          </div>
+          <Row
+            title="Download new commits automatically"
+            description="Fetches every repository and fast-forwards a branch that is only behind, has no uncommitted changes and no unfinished task. It never uploads, merges or rebases: use Sync in Source Control to upload."
+          >
+            <Switch aria-label="Download new commits automatically" checked={draft.repositoryAutomation.sync} onCheckedChange={(v) => setAutomation('sync', v)} />
+          </Row>
+          <div className="py-3">
+            <LimitField label="Check every (minutes)" helper="Also runs when the Control Center starts." min={5} max={1440} value={draft.repositoryAutomation.intervalMinutes} onChange={(v) => setAutomation('intervalMinutes', v)} />
+          </div>
+          <div className="flex flex-col gap-2 py-3">
+            <span className="text-body font-semibold text-fg">Never added automatically</span>
+            {draft.repositoryAutomation.ignoredPaths.length ? (
+              <ul className="flex flex-col gap-1">
+                {draft.repositoryAutomation.ignoredPaths.map((p) => (
+                  <li key={p} className="flex items-center justify-between gap-3">
+                    <code className="min-w-0 font-mono text-code text-fg wrap-anywhere">{p}</code>
+                    <Button size="compact" variant="ghost" onClick={() => setAutomation('ignoredPaths', draft.repositoryAutomation.ignoredPaths.filter((x) => x !== p))}>
+                      Allow again
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-small text-fg-secondary">None. Removing a repository adds it here, so it is not found again.</p>
+            )}
+          </div>
         </div>
       </Panel>
     ),

@@ -28,13 +28,19 @@ async function main(): Promise<void> {
   services.engine.schedule();
   // Settle Source Control operations a crash left open, from what Git and the
   // remote show. Runs in the background with its own time budget.
-  void reconcileGitOperations({ operations: services.gitOperations, repositories: services.repositories }).then(
-    (report) => {
-      if (report.resolved.length) app.log.warn(`Source Control recovery: ${report.resolved.map((r) => `${r.kind} ${r.id} → ${r.status}`).join(', ')}`);
-      for (const repo of services.store.listRepositories()) services.sourceControl.invalidate(repo.id);
-    },
-    (error: unknown) => app.log.error(`Source Control recovery failed: ${(error as Error).message}`),
-  );
+  // Repository automation (discovery + background sync) starts once recovery has settled the journal.
+  void reconcileGitOperations({ operations: services.gitOperations, repositories: services.repositories })
+    .then(
+      (report) => {
+        if (report.resolved.length) app.log.warn(`Source Control recovery: ${report.resolved.map((r) => `${r.kind} ${r.id} → ${r.status}`).join(', ')}`);
+        for (const repo of services.store.listRepositories()) services.sourceControl.invalidate(repo.id);
+      },
+      (error: unknown) => app.log.error(`Source Control recovery failed: ${(error as Error).message}`),
+    )
+    .finally(() => {
+      if (config.repositoryAutomation) services.repositoryAutomation.start();
+      else app.log.info('Repository automation is off (ACC_REPOSITORY_AUTOMATION=0)');
+    });
   services.watchdog.start();
   void services.agents.refresh().then(
     (agents) => app.log.info(`Agents: ${agents.map((a) => `${a.name}=${a.health.state}`).join(', ')}`),

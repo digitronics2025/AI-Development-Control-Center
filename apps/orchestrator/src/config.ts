@@ -16,6 +16,8 @@ export interface OrchestratorConfig {
   token: string;
   /** Register simulated agents instead of the real CLIs (tests and demos only). */
   simulatedAgents: boolean;
+  /** Start repository discovery and background sync (off for demos and e2e, which must not touch real repositories). */
+  repositoryAutomation: boolean;
   /** Extra origins allowed to call the API (e.g. the Vite dev server). */
   allowedOrigins: string[];
   version: string;
@@ -76,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     dashboardDir: existsSync(path.join(dashboardCandidate, 'index.html')) ? dashboardCandidate : null,
     token: env.ACC_TOKEN_OVERRIDE ?? loadOrCreateToken(dataDir),
     simulatedAgents: env.ACC_SIMULATED_AGENTS === '1',
+    repositoryAutomation: env.ACC_REPOSITORY_AUTOMATION !== '0',
     allowedOrigins: (env.ACC_ALLOWED_ORIGINS ?? '')
       .split(',')
       .map((o) => o.trim())

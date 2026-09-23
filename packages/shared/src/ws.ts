@@ -6,6 +6,7 @@ import type {
   Execution,
   LogLine,
   Repository,
+  RepositoryAutomationStatus,
   StageInstance,
   TaskEvent,
   TaskSummary,
@@ -40,6 +41,7 @@ export type ServerMessage =
   | { type: 'workflow.deleted'; workflowId: string }
   /** A repository's Git state may have changed: clients refetch its Source Control snapshot. */
   | { type: 'sourceControl'; repositoryId: string }
+  | { type: 'repositoryAutomation'; status: RepositoryAutomationStatus }
   | { type: 'chairman'; state: ChairmanState }
   | { type: 'chairman.message'; message: ChairmanMessage }
   | { type: 'chairman.decision'; decision: ChairmanDecision }

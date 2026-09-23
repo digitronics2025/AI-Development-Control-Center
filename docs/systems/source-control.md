@@ -104,6 +104,10 @@ Fetch the upstream remote, recompute ahead/behind against `@{upstream}`, then:
 | diverged | stop (`diverged`) — never merge or rebase |
 | no upstream / gone | `NO_UPSTREAM` / `UPSTREAM_GONE`; Publish is separate |
 
+Background sync ([repository-automation.md](repository-automation.md)) is
+the download half only: fetch, then fast-forward a clean, behind-only branch
+as a journalled `fast_forward` (metadata `automatic: true`). It never pushes.
+
 Detached HEAD blocks commit, sync and publish. A merge, rebase, cherry-pick,
 revert or bisect in progress blocks every mutation; conflicts block staging
 of the conflicted path, commit and sync.
@@ -137,7 +141,8 @@ After listen, in the background (60 s budget): `started` entries — and
 moved to a child of `preHead` whose message hash matches → succeeded; HEAD
 unmoved → failed; otherwise uncertain. Push/publish/sync: fetch, then the
 remote ref contains `pushedSha` → succeeded, else failed; unreachable →
-uncertain. Stage/unstage → uncertain ("current status shows the result").
+uncertain. Fast-forward: HEAD at `fastForwardTo` → succeeded, at `preHead` →
+failed, else uncertain. Stage/unstage → uncertain ("current status shows the result").
 Nothing is ever re-run.
 
 ## Refresh

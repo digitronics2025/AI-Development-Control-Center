@@ -20,6 +20,8 @@ export interface GitOperationMetadata {
   pushedSha?: string;
   /** Commit a fast-forward is about to move HEAD to; written before moving. */
   fastForwardTo?: string;
+  /** Started by background sync, not by a person. */
+  automatic?: boolean;
 }
 
 export interface GitOperationRecord extends GitOperation {

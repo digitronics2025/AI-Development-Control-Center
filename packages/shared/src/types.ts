@@ -274,8 +274,50 @@ export interface RepositoryStatus {
   head: string | null;
   dirty: boolean;
   dirtyCount: number;
+  /** The branch's upstream, e.g. `origin/main`; null without one. */
+  upstream: string | null;
+  /** Commits not on the upstream / on the upstream but not here, as of the last fetch. Null without an upstream. */
+  ahead: number | null;
+  behind: number | null;
   error: string | null;
   checkedAt: Iso;
+}
+
+/** What background sync did with one repository (docs/systems/repository-automation.md). */
+export type RepositorySyncOutcome = 'up-to-date' | 'fast-forwarded' | 'behind-dirty' | 'ahead' | 'diverged' | 'skipped' | 'failed';
+
+export interface RepositorySyncResult {
+  repositoryId: string;
+  outcome: RepositorySyncOutcome;
+  message: string;
+  ahead: number | null;
+  behind: number | null;
+  at: Iso;
+}
+
+export interface RepositoryDiscoveryReport {
+  /** Folders looked at. */
+  scanned: number;
+  added: Array<{ id: string; name: string; path: string }>;
+  errors: Array<{ path: string; message: string }>;
+}
+
+export interface RepositoryAutomationRun {
+  trigger: 'startup' | 'schedule' | 'manual';
+  startedAt: Iso;
+  finishedAt: Iso | null;
+  discovery: RepositoryDiscoveryReport | null;
+  /** Count of repositories per outcome; null when sync did not run. */
+  sync: Partial<Record<RepositorySyncOutcome, number>> | null;
+}
+
+export interface RepositoryAutomationStatus {
+  running: boolean;
+  /** Null when both discovery and sync are off, or the scheduler is not started. */
+  nextRunAt: Iso | null;
+  lastRun: RepositoryAutomationRun | null;
+  /** Latest background-sync result per repository. */
+  results: RepositorySyncResult[];
 }
 
 export interface Repository {

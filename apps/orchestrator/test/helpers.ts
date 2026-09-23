@@ -36,6 +36,7 @@ export async function createTestApp(
     dashboardDir: options.dashboardDir ?? null,
     token: TOKEN,
     simulatedAgents: true,
+    repositoryAutomation: false,
     allowedOrigins: [],
     version: 'test',
   };

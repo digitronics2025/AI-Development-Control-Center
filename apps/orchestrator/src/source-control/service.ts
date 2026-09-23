@@ -41,6 +41,8 @@ import {
   type HistoryCommit,
   type HistoryPage,
   type RepositoryChangedPath,
+  type RepositorySyncOutcome,
+  type RepositorySyncResult,
   type SourceControlActiveTask,
   type SourceControlDiff,
   type SourceControlDiffMode,
@@ -780,6 +782,100 @@ export class SourceControlService {
       const push = await pushRef(state.root, { remote: upstream.remote, localBranch: branch, remoteRef: upstream.mergeRef, setUpstream: false });
       if (push.code !== 0) throw new SourceControlError(mapFailure(push), gitOutput(push) || 'Push failed');
       return result('pushed', `Pushed ${ahead} commit${ahead === 1 ? '' : 's'} to ${state.branch.upstream}`, { remote: upstream.remote, ref: upstream.mergeRef });
+    }, (e) => ({ remote: null, ref: e.state.branch.upstream }));
+  }
+
+  /**
+   * Background sync (docs/systems/repository-automation.md): fetch, then
+   * fast-forward only when the branch is purely behind its upstream, its
+   * tracked files are clean, no task is writing and no unfinished task works
+   * on this branch. Never pushes, merges or rebases. The fetch only moves
+   * remote-tracking refs and is not journalled; a fast-forward is, as
+   * `fast_forward`, so restart recovery can settle it.
+   */
+  async backgroundSync(repositoryId: string): Promise<RepositorySyncResult> {
+    const repo = this.d.repositories.record(repositoryId);
+    const at = now();
+    const result = (outcome: RepositorySyncOutcome, message: string, counts?: { ahead: number; behind: number }): RepositorySyncResult => ({
+      repositoryId,
+      outcome,
+      message,
+      ahead: counts?.ahead ?? null,
+      behind: counts?.behind ?? null,
+      at,
+    });
+    if (!existsSync(repo.path)) return result('skipped', 'The folder no longer exists.');
+    let state: RepoState;
+    try {
+      state = await this.readState(repo);
+    } catch {
+      return result('skipped', 'Not a Git repository.');
+    }
+    const branch = state.branch.head;
+    if (!branch) return result('skipped', 'HEAD is detached; there is no branch to update.');
+    if (!state.hasHead) return result('skipped', `${branch} has no commits yet.`);
+    const upstream = await branchUpstream(state.root, branch);
+    if (!upstream || !state.branch.upstream) return result('skipped', `${branch} has no upstream to download from.`);
+
+    try {
+      // Serialized with Source Control actions; safe while a task edits files.
+      const fetched = await this.d.coordinator.runMutation(repositoryId, 'fetch', () => fetchRemote(state.root, upstream.remote, { unattended: true }));
+      if (fetched.code !== 0) return result('failed', `Could not fetch ${upstream.remote}: ${gitOutput(fetched).split('\n')[0] || 'git fetch failed'}`);
+      if (!(await revParse(state.root, '@{upstream}'))) return result('failed', `${state.branch.upstream} no longer exists on ${upstream.remote}.`);
+      const counts = await aheadBehind(state.root, 'HEAD', '@{upstream}');
+      if (!counts) return result('failed', `Could not compare ${branch} with ${state.branch.upstream}.`);
+      const { ahead, behind } = counts;
+      if (ahead === 0 && behind === 0) return result('up-to-date', `${branch} matches ${state.branch.upstream}.`, counts);
+      if (ahead > 0 && behind > 0) return result('diverged', `${branch} and ${state.branch.upstream} have diverged; background sync never merges or rebases.`, counts);
+      if (ahead > 0) return result('ahead', `${ahead} local commit${ahead === 1 ? '' : 's'} not uploaded. Uploading is never automatic: use Sync in Source Control.`, counts);
+
+      if (state.operation) return result('skipped', `A ${state.operation} is in progress.`, counts);
+      if (state.entries.some((e) => e.staged || e.unstaged || e.conflicted)) {
+        return result('behind-dirty', `${behind} new commit${behind === 1 ? '' : 's'} on ${state.branch.upstream}; left alone because of uncommitted changes.`, counts);
+      }
+      const blocker = this.branchBlocker(repositoryId, branch);
+      if (blocker) return result('skipped', blocker, counts);
+      const done = await this.fastForwardUpstream(repositoryId);
+      return result('fast-forwarded', done.operation.message ?? `Fast-forwarded ${branch} by ${behind}.`, counts);
+    } catch (error) {
+      if (error instanceof SourceControlError && (error.code === 'BLOCKED_BY_TASK' || error.code === 'GIT_STATE_CHANGED' || error.code === 'WORKTREE_DIRTY')) {
+        return result('skipped', error.message);
+      }
+      return result('failed', redact((error as Error).message).slice(0, 500));
+    } finally {
+      this.invalidate(repositoryId);
+    }
+  }
+
+  /** Why an unfinished task makes moving `branch` unsafe: its diff is measured against that branch. */
+  private branchBlocker(repositoryId: string, branch: string): string | null {
+    const task = this.d.store
+      .listTasks({ repositoryId, statuses: ['QUEUED', 'RUNNING', 'PAUSED', 'WAITING_FOR_USER', 'WAITING_FOR_USAGE_RESET', 'INTERRUPTED', 'FAILED'], limit: 50 })
+      .find((t) => (t.git.taskBranch ?? t.git.baselineBranch) === branch);
+    return task ? `${task.id} is unfinished on ${branch}; finish or cancel it before its branch moves.` : null;
+  }
+
+  /** The journalled half of background sync. Re-checks everything inside the repository's exclusive section. */
+  private fastForwardUpstream(repositoryId: string): Promise<SourceControlOperationResult> {
+    return this.mutate(repositoryId, 'fast_forward', { idempotencyKey: `auto-ff-${newId()}` }, { scope: scopes.branch }, async ({ state }, op) => {
+      this.assertNoOperation(state);
+      this.assertNoConflicts(state);
+      const branch = this.assertBranch(state, 'fast-forward');
+      const upstreamSha = await revParse(state.root, '@{upstream}');
+      if (!upstreamSha) throw new SourceControlError('UPSTREAM_GONE', `${state.branch.upstream ?? 'The upstream'} no longer exists.`);
+      const counts = await aheadBehind(state.root, 'HEAD', '@{upstream}');
+      if (!counts || counts.ahead > 0 || counts.behind === 0) throw new SourceControlError('GIT_STATE_CHANGED', `${branch} changed before it could be fast-forwarded.`);
+      if (state.entries.some((e) => e.staged || e.unstaged)) throw new SourceControlError('WORKTREE_DIRTY', `${branch} has uncommitted changes; it was left alone.`);
+      this.d.operations.note(op.id, { fastForwardTo: upstreamSha });
+      const ff = await fastForward(state.root, upstreamSha);
+      if (ff.code !== 0) throw new SourceControlError(mapFailure(ff), gitOutput(ff) || 'Fast-forward failed');
+      const { behind } = counts;
+      return {
+        status: 'succeeded',
+        message: `Downloaded ${behind} commit${behind === 1 ? '' : 's'} from ${state.branch.upstream} (automatic fast-forward)`,
+        metadata: { syncOutcome: 'fast-forwarded', ahead: 0, behind, automatic: true },
+        sync: { outcome: 'fast-forwarded', ahead: 0, behind },
+      };
     }, (e) => ({ remote: null, ref: e.state.branch.upstream }));
   }
 

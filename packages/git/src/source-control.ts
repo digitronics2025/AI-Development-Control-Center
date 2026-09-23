@@ -314,8 +314,18 @@ export async function hooksInstalled(cwd: string, names: string[]): Promise<bool
 
 const REMOTE_TIMEOUT_MS = 120_000;
 
-export async function fetchRemote(cwd: string, remote: string): Promise<GitResult> {
-  return git(cwd, ['fetch', '--no-write-fetch-head', remote], { timeoutMs: REMOTE_TIMEOUT_MS });
+/**
+ * Environment for remote calls nobody is watching: a credential prompt (Git
+ * Credential Manager's sign-in window, an SSH passphrase dialog) must fail the
+ * call instead of appearing on screen. The terminal prompt is already off.
+ */
+export const UNATTENDED_REMOTE_ENV: NodeJS.ProcessEnv = {
+  GCM_INTERACTIVE: 'never',
+  SSH_ASKPASS_REQUIRE: 'never',
+};
+
+export async function fetchRemote(cwd: string, remote: string, options: { unattended?: boolean } = {}): Promise<GitResult> {
+  return git(cwd, ['fetch', '--no-write-fetch-head', remote], { timeoutMs: REMOTE_TIMEOUT_MS, ...(options.unattended ? { env: UNATTENDED_REMOTE_ENV } : {}) });
 }
 
 /** Move the current branch to `ref` only if that is a fast-forward. Never merges. */

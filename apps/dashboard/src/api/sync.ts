@@ -161,6 +161,9 @@ export class CacheSync {
         qc.setQueryData(keys.repository(repo.id), repo);
         return;
       }
+      case 'repositoryAutomation':
+        qc.setQueryData(keys.repositoryAutomation, message.status);
+        return;
       case 'repository.deleted':
         qc.setQueryData<Repository[]>(keys.repositories, (old) => old?.filter((r) => r.id !== message.repositoryId));
         return;

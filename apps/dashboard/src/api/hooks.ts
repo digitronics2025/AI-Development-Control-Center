@@ -16,6 +16,7 @@ import type {
   Page,
   PromptTemplate,
   Repository,
+  RepositoryAutomationStatus,
   ServiceHealth,
   Settings,
   TaskChanges,
@@ -182,6 +183,26 @@ export function useAgents() {
 export function useRepositories() {
   const api = useApi();
   return useQuery({ queryKey: keys.repositories, queryFn: ({ signal }) => api.get<Repository[]>('/api/repositories', signal) });
+}
+
+/** Discovery and background sync state; kept current by `repositoryAutomation` WebSocket messages. */
+export function useRepositoryAutomation() {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.repositoryAutomation,
+    queryFn: ({ signal }) => api.get<RepositoryAutomationStatus>('/api/repository-automation', signal),
+    // While a run is in progress, also poll: a missed end-of-run message must not leave "Checking now…" on screen.
+    refetchInterval: (query) => (query.state.data?.running ? 5_000 : false),
+  });
+}
+
+export function useRunRepositoryAutomation() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<RepositoryAutomationStatus>('/api/repository-automation/run'),
+    onSuccess: (status) => qc.setQueryData(keys.repositoryAutomation, status),
+  });
 }
 
 export function useRepository(id: string | undefined) {

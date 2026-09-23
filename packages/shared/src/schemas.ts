@@ -225,6 +225,30 @@ export const chairmanSettingsSchema = z.object({
 });
 export type ChairmanSettings = z.infer<typeof chairmanSettingsSchema>;
 
+/** An absolute local folder path (Windows drive or UNC, or POSIX). */
+const absolutePathSchema = z
+  .string()
+  .min(1)
+  .max(1000)
+  .refine((p) => !p.includes('\0'), 'Invalid path')
+  .refine((p) => /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]/.test(p), 'Use a full folder path, for example C:\\Users\\you');
+
+/** Repository automation (docs/systems/repository-automation.md). */
+export const repositoryAutomationSettingsSchema = z.object({
+  /** Register new Git repositories found under `roots`. */
+  discover: z.boolean().default(true),
+  /** Folders searched for repositories. Empty means the user's home folder. */
+  roots: z.array(absolutePathSchema).max(20).default([]),
+  /** How many folder levels below each root are searched. */
+  maxDepth: z.number().int().min(1).max(4).default(2),
+  /** Never registered automatically: repositories you removed, or listed here by hand. */
+  ignoredPaths: z.array(absolutePathSchema).max(1000).default([]),
+  /** Download new commits in the background: fetch, then fast-forward a clean branch that is only behind. Never pushes. */
+  sync: z.boolean().default(true),
+  intervalMinutes: z.number().int().min(5).max(24 * 60).default(15),
+});
+export type RepositoryAutomationSettings = z.infer<typeof repositoryAutomationSettingsSchema>;
+
 export const settingsSchema = z.object({
   billingMode: z.enum(BILLING_MODES).default('subscription'),
   theme: z.enum(THEMES).default('dark'),
@@ -241,6 +265,7 @@ export const settingsSchema = z.object({
     .default({ approvals: true, failures: true, completions: true }),
   developerMode: z.boolean().default(false),
   chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
+  repositoryAutomation: repositoryAutomationSettingsSchema.default(repositoryAutomationSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

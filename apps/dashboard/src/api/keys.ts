@@ -20,6 +20,7 @@ export const keys = {
   agents: ['agents'] as const,
   repositories: ['repositories'] as const,
   repository: (id: string) => ['repository', id] as const,
+  repositoryAutomation: ['repository-automation'] as const,
   workflows: ['workflows'] as const,
   workflow: (id: string) => ['workflow', id] as const,
   settings: ['settings'] as const,

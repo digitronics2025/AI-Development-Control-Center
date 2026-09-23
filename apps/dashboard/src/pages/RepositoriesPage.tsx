@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, FolderGit2, FolderOpen, Plus, TriangleAlert } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -10,14 +10,15 @@ import {
   Field,
   Input,
   PageHeader,
+  RelativeTime,
   Skeleton,
   StatusChip,
   useFeedback,
   type Column,
 } from '@acc/ui';
-import type { Repository } from '@acc/shared';
+import type { Repository, RepositoryAutomationStatus, Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
-import { useRepositories, useRepositoryMutations, useWorkflows } from '../api/hooks';
+import { useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
 
@@ -26,6 +27,51 @@ export function GitState({ repo }: { repo: Repository }) {
   if (!repo.status.isGitRepo) return <StatusChip size="compact" visual={{ label: 'Not a Git repository', tone: 'warning', icon: TriangleAlert }} />;
   if (repo.status.dirty) return <StatusChip size="compact" visual={{ label: `${repo.status.dirtyCount} uncommitted`, tone: 'warning', icon: TriangleAlert }} />;
   return <StatusChip size="compact" visual={{ label: 'Clean', tone: 'success', icon: CheckCircle2 }} />;
+}
+
+const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+
+/** Where the branch stands against its upstream, as of the last fetch. */
+export function RemoteState({ repo }: { repo: Repository }) {
+  const { upstream, ahead, behind } = repo.status;
+  if (!repo.status.isGitRepo) return <span className="text-fg-secondary">—</span>;
+  if (!upstream || ahead === null || behind === null) return <StatusChip size="compact" visual={{ label: 'No upstream', tone: 'neutral', icon: CloudOff }} />;
+  if (ahead > 0 && behind > 0) return <StatusChip size="compact" visual={{ label: `Diverged (${ahead} up, ${behind} down)`, tone: 'warning', icon: GitFork }} />;
+  if (behind > 0) return <StatusChip size="compact" visual={{ label: `${plural(behind, 'commit')} to download`, tone: 'info', icon: ArrowDownToLine }} />;
+  if (ahead > 0) return <StatusChip size="compact" visual={{ label: `${plural(ahead, 'commit')} to upload`, tone: 'info', icon: ArrowUpFromLine }} />;
+  return <StatusChip size="compact" visual={{ label: 'Up to date', tone: 'success', icon: CheckCircle2 }} />;
+}
+
+/** The one quiet line above the list: what automation does and what its last run changed. */
+function AutomationSummary({ status, settings }: { status: RepositoryAutomationStatus | undefined; settings: Settings | undefined }) {
+  if (!settings || !status) return null;
+  const { discover, sync, intervalMinutes } = settings.repositoryAutomation;
+  const settingsLink = (
+    <Link to="/settings/repositories" className="text-fg underline">
+      Settings → Repositories
+    </Link>
+  );
+  if (!discover && !sync) return <p className="text-small text-fg-secondary">Automatic updates are off. Turn them on in {settingsLink}.</p>;
+  const what = [discover ? 'new repositories are added' : null, sync ? 'new commits are downloaded' : null].filter(Boolean).join(' and ');
+  const run = status.lastRun;
+  const changes: string[] = [];
+  if (run?.discovery?.added.length) changes.push(plural(run.discovery.added.length, 'new repository', 'new repositories'));
+  if (run?.sync?.['fast-forwarded']) changes.push(`${plural(run.sync['fast-forwarded'], 'repository', 'repositories')} updated`);
+  if (run?.sync?.failed) changes.push(`${plural(run.sync.failed, 'repository', 'repositories')} could not be reached`);
+  return (
+    <p className="text-small text-fg-secondary" aria-live="polite">
+      Every {plural(intervalMinutes, 'minute')}, {what} automatically; uploads are never automatic.{' '}
+      {status.running ? (
+        'Checking now…'
+      ) : run?.finishedAt ? (
+        <>
+          Last checked <RelativeTime iso={run.finishedAt} />
+          {changes.length ? `: ${changes.join(', ')}.` : ', nothing new.'}
+        </>
+      ) : null}{' '}
+      Change this in {settingsLink}.
+    </p>
+  );
 }
 
 export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -106,6 +152,10 @@ export function RepositoriesPage() {
   useBreadcrumb([{ label: 'Repositories' }]);
   const repositories = useRepositories();
   const workflows = useWorkflows();
+  const automation = useRepositoryAutomation();
+  const runAutomation = useRunRepositoryAutomation();
+  const settings = useSettings();
+  const automationOff = settings.data ? !settings.data.repositoryAutomation.discover && !settings.data.repositoryAutomation.sync : false;
   const navigate = useNavigate();
   const connection = useConnection();
   const [params, setParams] = useSearchParams();
@@ -135,10 +185,20 @@ export function RepositoriesPage() {
           </span>
         </div>
       ),
-      className: 'max-w-[380px]',
+      className: 'max-w-[320px]',
     },
-    { key: 'branch', header: 'Branch', cell: (r) => <code className="font-mono text-code text-fg">{r.status.branch ?? '—'}</code> },
+    {
+      key: 'branch',
+      header: 'Branch',
+      // Task branches are long; keep the row one line tall and show the full name on hover.
+      cell: (r) => (
+        <code className="block max-w-[180px] truncate font-mono text-code text-fg" title={r.status.branch ?? undefined}>
+          {r.status.branch ?? '—'}
+        </code>
+      ),
+    },
     { key: 'git', header: 'Working tree', sortValue: (r) => (r.status.dirty ? 1 : 0), cell: (r) => <GitState repo={r} /> },
+    { key: 'remote', header: 'Remote', sortValue: (r) => (r.status.behind ?? -1) * 1000 + (r.status.ahead ?? 0), cell: (r) => <RemoteState repo={r} /> },
     {
       key: 'tooling',
       header: 'Tooling',
@@ -171,11 +231,23 @@ export function RepositoriesPage() {
         title="Repositories"
         description="Local repositories tasks can work in. Uncommitted work is always protected."
         actions={
-          <Button variant="primary" icon={Plus} onClick={() => setAddOpen(true)} disabled={!connection.online} disabledReason="Reconnect to the orchestrator first">
-            Add repository
-          </Button>
+          <>
+            <Button
+              icon={RefreshCw}
+              onClick={() => runAutomation.mutate()}
+              loading={runAutomation.isPending || automation.data?.running}
+              disabled={!connection.online || automationOff}
+              disabledReason={automationOff ? 'Automatic updates are off in Settings → Repositories' : 'Reconnect to the orchestrator first'}
+            >
+              Check now
+            </Button>
+            <Button variant="primary" icon={Plus} onClick={() => setAddOpen(true)} disabled={!connection.online} disabledReason="Reconnect to the orchestrator first">
+              Add repository
+            </Button>
+          </>
         }
       />
+      <AutomationSummary status={automation.data} settings={settings.data} />
       {repositories.isLoading ? (
         <Skeleton className="h-48" />
       ) : (

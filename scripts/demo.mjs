@@ -102,6 +102,8 @@ const env = {
   ACC_DATA_DIR: dataDir,
   ACC_PORT: String(port),
   ACC_SIMULATED_AGENTS: '1',
+  // The demo works on its own fixture repositories; never scan or fetch the user's real ones.
+  ACC_REPOSITORY_AUTOMATION: '0',
   ACC_SIM_DELAY_MS: process.env.ACC_SIM_DELAY_MS ?? '600',
   ACC_TOKEN_OVERRIDE: process.env.ACC_TOKEN_OVERRIDE ?? '',
 };

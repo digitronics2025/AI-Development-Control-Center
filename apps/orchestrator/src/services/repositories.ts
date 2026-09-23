@@ -4,6 +4,7 @@ import path from 'node:path';
 import { isGitRepository, repositoryStatus, topLevel } from '@acc/git';
 import type { Repository, RepositoryCommand, RepositoryStatus, UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
+import type { SettingsService } from './settings.js';
 import { newId, now, type RepositoryRecord, type Store } from '../store/store.js';
 
 export class RepositoryError extends Error {
@@ -36,6 +37,12 @@ class Slots {
       this.waiting.shift()?.();
     }
   }
+}
+
+/** Comparable form of a folder path: resolved, without a trailing separator, case-folded on Windows. */
+export function pathKey(folder: string): string {
+  const resolved = path.resolve(folder).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 interface Detected {
@@ -107,28 +114,47 @@ export class RepositoryService {
   constructor(
     private readonly store: Store,
     private readonly bus: Bus,
+    private readonly settings: SettingsService,
   ) {}
 
   async status(rec: RepositoryRecord, fresh = false): Promise<RepositoryStatus> {
     const cached = this.statusCache.get(rec.id);
     if (!fresh && cached && Date.now() - cached.at < STATUS_TTL_MS) return cached.status;
-    const checkedAt = now();
+    const base = { checkedAt: now(), branch: null, head: null, dirty: false, dirtyCount: 0, upstream: null, ahead: null, behind: null, error: null };
     let result: RepositoryStatus;
     if (!existsSync(rec.path)) {
-      result = { available: false, isGitRepo: false, branch: null, head: null, dirty: false, dirtyCount: 0, error: 'Folder not found', checkedAt };
+      result = { ...base, available: false, isGitRepo: false, error: 'Folder not found' };
     } else {
       try {
-        // One Git process per repository: branch, head and changes all come from a single status call.
+        // One Git process per repository: branch, head, upstream and changes all come from a single status call.
         const { branch, entries } = await this.statusSlots.run(() => repositoryStatus(rec.path));
-        result = { available: true, isGitRepo: true, branch: branch.head, head: branch.oid, dirty: entries.length > 0, dirtyCount: entries.length, error: null, checkedAt };
+        result = {
+          ...base,
+          available: true,
+          isGitRepo: true,
+          branch: branch.head,
+          head: branch.oid,
+          dirty: entries.length > 0,
+          dirtyCount: entries.length,
+          upstream: branch.upstream,
+          ahead: branch.ahead,
+          behind: branch.behind,
+        };
       } catch (error) {
         result = (await isGitRepository(rec.path))
-          ? { available: true, isGitRepo: true, branch: null, head: null, dirty: false, dirtyCount: 0, error: (error as Error).message, checkedAt }
-          : { available: true, isGitRepo: false, branch: null, head: null, dirty: false, dirtyCount: 0, error: null, checkedAt };
+          ? { ...base, available: true, isGitRepo: true, error: (error as Error).message }
+          : { ...base, available: true, isGitRepo: false };
       }
     }
     this.statusCache.set(rec.id, { at: Date.now(), status: result });
     return result;
+  }
+
+  /** Re-read one repository's status and push it to clients (after a background change). */
+  async refresh(id: string): Promise<Repository> {
+    const view = await this.get(id, true);
+    this.bus.publish({ type: 'repository', repository: view });
+    return view;
   }
 
   async toView(rec: RepositoryRecord, fresh = false): Promise<Repository> {
@@ -155,7 +181,7 @@ export class RepositoryService {
       throw new RepositoryError(`"${inputPath}" is not an existing folder`, 'INVALID_PATH');
     }
     if (await isGitRepository(root)) root = path.resolve(await topLevel(root));
-    if (this.store.findRepositoryByPath(root)) throw new RepositoryError(`${root} is already registered`, 'DUPLICATE');
+    if (this.isRegistered(root)) throw new RepositoryError(`${root} is already registered`, 'DUPLICATE');
     const detected = await detectTooling(root);
     const ts = now();
     const rec: RepositoryRecord = {
@@ -173,6 +199,7 @@ export class RepositoryService {
       updatedAt: ts,
     };
     this.store.insertRepository(rec);
+    this.setIgnored(root, false);
     const view = await this.toView(rec, true);
     this.bus.publish({ type: 'repository', repository: view });
     return view;
@@ -204,13 +231,34 @@ export class RepositoryService {
   }
 
   remove(id: string): void {
-    this.record(id);
+    const rec = this.record(id);
     if (this.store.countTasksForRepository(id) > 0) {
       throw new RepositoryError('This repository has task history. Tasks keep a reference to it, so it cannot be removed.', 'IN_USE');
     }
     this.store.deleteRepository(id);
     this.statusCache.delete(id);
+    // Removing is a decision: automatic discovery must not bring the repository back.
+    this.setIgnored(rec.path, true);
     this.bus.publish({ type: 'repository.deleted', repositoryId: id });
+  }
+
+  /** Whether automatic discovery skips `folder`. Paths compare case-insensitively on Windows. */
+  isIgnored(folder: string): boolean {
+    const key = pathKey(folder);
+    return this.settings.get().repositoryAutomation.ignoredPaths.some((p) => pathKey(p) === key);
+  }
+
+  isRegistered(folder: string): boolean {
+    const key = pathKey(folder);
+    return this.store.listRepositories().some((r) => pathKey(r.path) === key);
+  }
+
+  private setIgnored(folder: string, ignored: boolean): void {
+    if (this.isIgnored(folder) === ignored) return;
+    const automation = this.settings.get().repositoryAutomation;
+    const key = pathKey(folder);
+    const ignoredPaths = ignored ? [...automation.ignoredPaths, folder].slice(-1000) : automation.ignoredPaths.filter((p) => pathKey(p) !== key);
+    this.settings.update({ repositoryAutomation: { ...automation, ignoredPaths } });
   }
 
   /** Called after every orchestrator-controlled change; Source Control views refetch too. */

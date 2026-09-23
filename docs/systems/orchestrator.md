@@ -24,6 +24,7 @@ hub, SQLite persistence and the workflow engine. Entry:
 | `ACC_PORT` | `4317` | Listen port |
 | `ACC_HOST` | `127.0.0.1` | Refuses non-loopback hosts unless `ACC_ALLOW_REMOTE=1` |
 | `ACC_SIMULATED_AGENTS` | unset | `1` registers simulated agents (tests, demos) |
+| `ACC_REPOSITORY_AUTOMATION` | on | `0` never starts repository discovery or background sync (the demo and e2e set it) |
 | `ACC_ALLOWED_ORIGINS` | empty | Extra browser origins allowed to call the API |
 | `ACC_LOG_LEVEL` | `info` | Fastify/pino level |
 
@@ -63,6 +64,7 @@ before any row is written.
 | Workflows | `GET workflows[/:id]`, `POST workflows/validate`, `PUT workflows/:id`, `POST workflows/:id/duplicate`, `DELETE workflows/:id` |
 | Repositories | `GET/POST repositories`, `GET/PATCH/DELETE repositories/:id`, `POST repositories/:id/redetect` |
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
+| Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
 | Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
@@ -75,7 +77,7 @@ the build folder is empty the page answers 503 with `Retry-After`.
 
 `/ws?token=` pushes complete entities (`task`, `stage`, `event`, `execution`,
 `approval`, `directive`, `artifact`, `testRun`, `agents`, `settings`,
-`repository`, `workflow`) plus `sourceControl` (`{repositoryId}` only: refetch that
+`repository`, `workflow`, `repositoryAutomation`) plus `sourceControl` (`{repositoryId}` only: refetch that
 repository's Git state; sent by `RepositoryService.invalidate` and every Source
 Control mutation) and the Chairman's `chairman`, `chairman.message`,
 `chairman.decision`, `chairman.action`, `checkpoint`. Log lines (`logs`) go only to clients that sent
@@ -94,8 +96,8 @@ Control reconciliation in the background after `listen`.
 
 `main.ts` runs `services.recover()` (engine reconciliation, then the
 Chairman resumes interrupted supervised tasks and answers pending chat),
-schedules queued tasks, starts Source Control reconciliation and the
-Chairman's watchdog (15 s).
+schedules queued tasks, starts Source Control reconciliation (then
+repository automation, once it settles) and the Chairman's watchdog (15 s).
 
 ## Gotchas
 

@@ -15,6 +15,7 @@ import { AgentRegistry } from './services/agents.js';
 import { ArtifactService } from './services/artifacts.js';
 import { PromptService } from './services/prompts.js';
 import { RepositoryService } from './services/repositories.js';
+import { RepositoryAutomation } from './services/repository-automation.js';
 import { RepositoryCoordinator } from './services/repository-coordinator.js';
 import { SettingsService } from './services/settings.js';
 import { WorkflowService } from './services/workflows.js';
@@ -40,6 +41,7 @@ export interface AppServices {
   gitOperations: GitOperationStore;
   sourceControl: SourceControlService;
   sourceControlAssist: SourceControlAssist;
+  repositoryAutomation: RepositoryAutomation;
   chairman: Chairman;
   chat: ChairmanChat;
   watchdog: Watchdog;
@@ -67,7 +69,7 @@ export function createServices(
   const bus = new Bus();
   const settings = new SettingsService(store, bus);
   const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env);
-  const repositories = new RepositoryService(store, bus);
+  const repositories = new RepositoryService(store, bus, settings);
   const workflows = new WorkflowService(store, bus);
   const prompts = new PromptService(store, path.join(config.resourcesDir, 'prompts'));
   const artifacts = new ArtifactService(store, bus, config.dataDir);
@@ -82,6 +84,7 @@ export function createServices(
   const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, baseEnv: options.baseEnv });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
+  const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
@@ -104,6 +107,7 @@ export function createServices(
     gitOperations,
     sourceControl,
     sourceControlAssist,
+    repositoryAutomation,
     chairman,
     chat,
     watchdog,
@@ -116,6 +120,7 @@ export function createServices(
     },
     async close() {
       watchdog.stop();
+      await repositoryAutomation.stop();
       await engine.shutdown();
       await chat.idle();
       db.close();

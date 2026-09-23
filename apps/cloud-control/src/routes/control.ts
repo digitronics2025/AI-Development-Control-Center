@@ -102,7 +102,7 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
   const m = (re: RegExp) => re.exec(path);
 
   if (request.method === 'GET' && path === '/api/cloud/session') {
-    const session: CloudSession = { user: { email: identity.email }, protocolVersion: REMOTE_PROTOCOL_VERSION, minProtocolVersion: REMOTE_MIN_PROTOCOL_VERSION, environment: env.ENVIRONMENT, nodes: await store.listNodes() };
+    const session: CloudSession = { user: { email: identity.email }, relayUrl: relayOrigin(env, url), protocolVersion: REMOTE_PROTOCOL_VERSION, minProtocolVersion: REMOTE_MIN_PROTOCOL_VERSION, environment: env.ENVIRONMENT, nodes: await store.listNodes() };
     return json(session);
   }
   if (request.method === 'GET' && path === '/api/cloud/nodes') return json(await store.listNodes());
@@ -206,6 +206,12 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
     return new Response(object.body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'x-acc-sha256': chunk!.sha256 } });
   }
   throw new HttpError(404, 'NOT_FOUND', 'Not found');
+}
+
+/** The relay address nodes pair with: the first relay hostname (same scheme and port when it is this host, as in development). */
+function relayOrigin(env: Env, url: URL): string {
+  const host = env.RELAY_HOSTS.split(',').map((h) => h.trim()).find(Boolean) ?? url.hostname;
+  return host === url.hostname ? url.origin : `https://${host}`;
 }
 
 async function health(env: Env): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; message: string }> }> {

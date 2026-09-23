@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
   Banner,
   Button,
+  Checkbox,
   Combobox,
   Disclosure,
   EmptyState,
@@ -35,10 +36,10 @@ import {
   type Role,
   type TaskMode,
 } from '@acc/shared';
-import { errorMessage } from '../api/client';
+import { ApiError, errorMessage } from '../api/client';
 import { useCreateTask, useRepositories, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
-import { useConnection } from '../app/runtime';
+import { useConnection, useRuntime, useSelectedNode } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
 
@@ -67,6 +68,13 @@ export function NewTaskPage() {
   const settings = useSettings();
   const createTask = useCreateTask();
   const connection = useConnection();
+  const { mode: runtimeMode } = useRuntime();
+  const cloud = runtimeMode === 'cloud';
+  const { node, nodeId } = useSelectedNode();
+  const [runOn, setRunOn] = useState<'shown' | 'auto'>('shown');
+  const [queue, setQueue] = useState(false);
+  // Cloud: a task may be queued for an offline node, but only when asked to.
+  const canSend = connection.online || (cloud && connection.linkOpen && queue && node !== null);
   const { toast } = useFeedback();
   const agentName = useAgentNames();
 
@@ -127,13 +135,21 @@ export function NewTaskPage() {
         worktree,
         attachments: attachments.map(({ name, contentBase64 }) => ({ name, contentBase64 })),
         start,
+        routing: cloud ? { ...(runOn === 'auto' && nodeId ? { 'x-acc-node': 'auto', 'x-acc-source-node': nodeId } : {}), ...(queue && !connection.online ? { 'x-acc-queue': '1' } : {}) } : undefined,
       },
       {
         onSuccess: (task) => {
           toast(start ? `${task.id} started` : `${task.id} saved as a draft`);
           navigate(`/tasks/${task.id}`);
         },
-        onError: (error) => setServerError(errorMessage(error)),
+        onError: (error) => {
+          if (error instanceof ApiError && error.code === 'REMOTE_PENDING') {
+            toast(`Queued: it starts when ${node?.label ?? 'the node'} is back`);
+            navigate('/tasks');
+            return;
+          }
+          setServerError(errorMessage(error));
+        },
       },
     );
   };
@@ -141,7 +157,7 @@ export function NewTaskPage() {
   useHotkey('Enter', (e) => {
     e.preventDefault();
     submit(true);
-  }, { mod: true, allowInInputs: true, enabled: connection.online && !createTask.isPending });
+  }, { mod: true, allowInInputs: true, enabled: canSend && !createTask.isPending });
 
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -261,10 +277,10 @@ export function NewTaskPage() {
           />
         </FieldGroup>
 
-        <FieldGroup label="Attachments" helper="Screenshots, logs or specs the investigator should read. Up to 10 files, 10 MB each.">
+        <FieldGroup label="Attachments" helper={cloud ? 'Files are attached on the machine itself; tasks started from the cloud carry text only.' : 'Screenshots, logs or specs the investigator should read. Up to 10 files, 10 MB each.'}>
           <div className="flex flex-col gap-2">
             <div>
-              <Button icon={Paperclip} onClick={() => fileInput.current?.click()}>
+              <Button icon={Paperclip} onClick={() => fileInput.current?.click()} disabled={cloud} disabledReason="Attach files on the machine itself">
                 Add files
               </Button>
               <input ref={fileInput} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files).then(() => (e.target.value = ''))} />
@@ -291,6 +307,25 @@ export function NewTaskPage() {
             {errors.attachments ? <p className="text-small text-danger">{errors.attachments}</p> : null}
           </div>
         </FieldGroup>
+
+        {cloud ? (
+          <FieldGroup label="Run on" helper={runOn === 'auto' ? 'Any online node that has this repository and is not busy with it.' : 'The node shown in the top bar.'}>
+            <div className="flex flex-col gap-3">
+              <Select
+                aria-label="Run on"
+                value={runOn}
+                onValueChange={(v) => setRunOn(v as 'shown' | 'auto')}
+                options={[
+                  { value: 'shown', label: node ? `${node.label} (shown)` : 'The node shown' },
+                  { value: 'auto', label: 'Automatic', description: 'Pick an online node that has this repository' },
+                ]}
+              />
+              {!connection.online && connection.linkOpen && node ? (
+                <Checkbox checked={queue} onCheckedChange={setQueue} label="Run when the node is back" description={`${node.label} is offline. The task waits in the cloud for up to 24 hours and starts once the machine reconnects.`} />
+              ) : null}
+            </div>
+          </FieldGroup>
+        ) : null}
 
         <Disclosure title="Advanced options" description="Role overrides, agent, model, effort, permissions and retry limits">
           <div className="flex flex-col gap-5">
@@ -346,10 +381,10 @@ export function NewTaskPage() {
           <span className="mr-auto hidden text-small text-fg-secondary sm:inline">
             <Kbd>Ctrl</Kbd> + <Kbd>Enter</Kbd> to start
           </span>
-          <Button icon={Save} onClick={() => submit(false)} disabled={!connection.online || createTask.isPending} disabledReason="Reconnect to the orchestrator first">
+          <Button icon={Save} onClick={() => submit(false)} disabled={!canSend || createTask.isPending} disabledReason={cloud ? 'The node must be online, or tick Run when the node is back' : 'Reconnect to the orchestrator first'}>
             Save Draft
           </Button>
-          <Button type="submit" variant="primary" icon={Play} loading={createTask.isPending} disabled={!connection.online} disabledReason="Reconnect to the orchestrator first">
+          <Button type="submit" variant="primary" icon={Play} loading={createTask.isPending} disabled={!canSend} disabledReason={cloud ? 'The node must be online, or tick Run when the node is back' : 'Reconnect to the orchestrator first'}>
             Start Task
           </Button>
         </div>

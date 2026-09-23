@@ -171,8 +171,9 @@ export class WorkspaceHub extends DurableObject<Env> {
     else this.onBrowserMessage(ws, a, message);
   }
 
-  override async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+  override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     const a = this.attachment(ws);
+    if (a?.kind === 'node') log('info', 'node.socket.closed', { nodeId: a.nodeId, code, reason: reason.slice(0, 120) });
     try {
       ws.close(code === 1005 || code === 1006 ? 1000 : code, 'closing');
     } catch {

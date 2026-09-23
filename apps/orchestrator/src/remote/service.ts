@@ -24,11 +24,13 @@ import type { OrchestratorConfig } from '../config.js';
 import type { Db } from '../db/database.js';
 import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
+import type { RepositoryService } from '../services/repositories.js';
 import type { SettingsService } from '../services/settings.js';
 import type { Store } from '../store/store.js';
 import type { CredentialBroker } from '../tools/credentials.js';
 import type { ToolService } from '../tools/service.js';
 import type { UsageService } from '../usage/service.js';
+import type { TerminalService } from '../tools/terminals.js';
 import { RemoteConnection } from './connection.js';
 import { RemoteDispatcher, type CommandReport, type LocalHttp } from './dispatcher.js';
 import { EgressSanitizer, MIRRORED_MESSAGE_TYPES } from './egress.js';
@@ -36,6 +38,7 @@ import { repositoryFingerprint } from './fingerprint.js';
 import { generateNodeKeyPair } from './identity.js';
 import { normalizeRelayUrl, RelayClient, RelayError } from './relay-client.js';
 import { RemoteStore } from './store.js';
+import { TerminalGrants, TERMINAL_GRANT } from './terminal-grants.js';
 
 export class RemoteError extends Error {
   constructor(
@@ -54,9 +57,11 @@ export interface RemoteNodeDeps {
   views: TaskViews;
   settings: SettingsService;
   agents: AgentRegistry;
+  repositories: RepositoryService;
   tools: ToolService;
   credentials: CredentialBroker;
   usage: UsageService;
+  terminals: TerminalService;
   /** Tests shorten timers. */
   timings?: Partial<typeof DEFAULT_TIMINGS>;
 }
@@ -67,6 +72,8 @@ export const DEFAULT_TIMINGS = {
   heartbeatMs: 30_000,
   /** Refresh the repository snapshot (fingerprints) at most this often. */
   snapshotMs: 5 * 60_000,
+  terminalIdleMs: TERMINAL_GRANT.idleMs,
+  terminalMaxMs: TERMINAL_GRANT.maxMs,
 };
 
 /** Seal binding for the node private key: purpose + node id. */
@@ -113,6 +120,7 @@ export class RemoteNodeService {
   readonly store: RemoteStore;
   private readonly egress: EgressSanitizer;
   private readonly dispatcher: RemoteDispatcher;
+  private readonly grants: TerminalGrants;
   private readonly timings: typeof DEFAULT_TIMINGS;
   private http: LocalHttp | null = null;
   private connection: RemoteConnection | null = null;
@@ -137,6 +145,9 @@ export class RemoteNodeService {
     this.store = new RemoteStore(d.db);
     this.timings = { ...DEFAULT_TIMINGS, ...d.timings };
     this.egress = new EgressSanitizer({ repositories: this.repositoryRoots(), dataDir: d.config.dataDir });
+    this.grants = new TerminalGrants(d.terminals, () => d.settings.get().autoApproveUpToLevel, { idleMs: this.timings.terminalIdleMs, maxMs: this.timings.terminalMaxMs }, Date.now, (terminalId, text) =>
+      this.send({ type: 'event.live', payload: { message: { type: 'terminal.output', terminalId, data: text, cursor: 0, notice: true } } }),
+    );
     this.dispatcher = new RemoteDispatcher({
       store: this.store,
       http: () => this.http,
@@ -157,6 +168,7 @@ export class RemoteNodeService {
         if (!rec) return null;
         return this.store.syncObject(`artifact:${artifactId}`)?.sensitivity ?? defaultArtifactSensitivity(rec.type);
       },
+      onTerminalOpened: (terminalId) => this.grants.grant(terminalId),
     });
     // The local API token must never leave this machine, whatever carries it.
     registerSecretValues([d.config.token]);
@@ -188,6 +200,7 @@ export class RemoteNodeService {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.disconnect();
+    await this.grants.revokeAll();
     await Promise.allSettled([...this.queues.values()]);
   }
 
@@ -291,6 +304,7 @@ export class RemoteNodeService {
 
   async unpair(): Promise<RemoteNodeStatus> {
     this.disconnect();
+    await this.grants.revokeAll();
     this.store.clearPairing();
     this.setState('unpaired', null);
     return this.status();
@@ -300,6 +314,7 @@ export class RemoteNodeService {
     const patch = remotePermissionsSchema.parse(raw);
     if (!this.store.config()) throw new RemoteError('This machine is not paired', 'NOT_PAIRED');
     this.store.updatePermissions(patch);
+    if (patch.remoteTerminals === false || patch.enabled === false) await this.grants.revokeAll();
     if (patch.enabled === false) {
       this.disconnect();
       this.setState('disabled');
@@ -355,6 +370,7 @@ export class RemoteNodeService {
     const code = error instanceof RelayError ? error.code : '';
     if (code === 'NODE_REVOKED' || code === 'NODE_NOT_FOUND' || status === 403) {
       this.setState('revoked', 'The cloud revoked this node. Pair it again to restore remote control.');
+      void this.grants.revokeAll();
       this.connection = null;
       return false;
     }
@@ -374,6 +390,8 @@ export class RemoteNodeService {
   }
 
   private onClose(code: number, reason: string): void {
+    // One line in the orchestrator log per drop: the close code says who ended it and why.
+    console.warn(JSON.stringify({ level: 40, time: Date.now(), msg: 'remote link closed', code, reason: reason.slice(0, 200) }));
     this.welcomed = false;
     this.inflightBatches = 0;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -382,6 +400,7 @@ export class RemoteNodeService {
     this.terminalSubscriptions.clear();
     if (code === 4003) {
       this.setState('revoked', 'The cloud revoked this node. Pair it again to restore remote control.');
+      void this.grants.revokeAll();
       this.connection?.stop();
       this.connection = null;
       return;
@@ -435,12 +454,17 @@ export class RemoteNodeService {
         return void this.rotate().catch((error: unknown) => this.setState(this.state, `Key rotation failed: ${(error as Error).message}`));
       case 'node.revoked':
         this.setState('revoked', 'The cloud revoked this node. Pair it again to restore remote control.');
+      void this.grants.revokeAll();
         this.connection?.stop();
         this.connection = null;
         return;
-      case 'sync.complete':
       case 'terminal.input':
+        if (this.store.config()?.remoteTerminals) this.grants.input(message.payload.terminalId, message.payload.data);
+        return;
       case 'terminal.resize':
+        if (this.store.config()?.remoteTerminals) this.grants.resize(message.payload.terminalId, message.payload.cols, message.payload.rows);
+        return;
+      case 'sync.complete':
         return;
     }
   }
@@ -539,7 +563,7 @@ export class RemoteNodeService {
       this.egress.setRoots({ repositories: this.repositoryRoots(), dataDir: this.d.config.dataDir });
       this.scheduleSnapshotIfRepositoriesChanged();
     }
-    const clean = this.egress.message(message, (terminalId) => this.terminalSubscriptions.has(terminalId) && config.remoteTerminals);
+    const clean = this.egress.message(message, (terminalId) => this.terminalSubscriptions.has(terminalId) && config.remoteTerminals && this.grants.has(terminalId));
     if (!clean) return;
     if (MIRRORED_MESSAGE_TYPES.has(message.type)) {
       this.store.enqueue(entityKey(message), 'message', clean);
@@ -593,6 +617,11 @@ export class RemoteNodeService {
     }
     const agents = this.egress.message({ type: 'agents', agents: this.d.agents.list() });
     if (agents) this.store.enqueue('agents', 'message', agents);
+    // Repositories too, so the cloud can list them (and start queued tasks) while the node is away.
+    for (const repository of await this.d.repositories.list()) {
+      const clean = this.egress.message({ type: 'repository', repository });
+      if (clean) this.store.enqueue(`repository:${repository.id}`, 'message', clean);
+    }
     const to = new Date();
     const from = new Date(to.getTime() - USAGE_BACKFILL_DAYS * 86_400_000);
     let cursor: string | undefined;

@@ -297,6 +297,8 @@ export interface CloudPairingToken {
 
 export interface CloudSession {
   user: { email: string };
+  /** The address a node pairs with (the relay hostname). */
+  relayUrl: string;
   protocolVersion: number;
   minProtocolVersion: number;
   environment: string;

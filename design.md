@@ -189,6 +189,10 @@ background processes, terminals, MCP servers, credentials and the execution
 policy) exists independently of any task (§7.11).
 Usage & Costs is another: spend, tokens, budgets and provider limits span every
 task and outlive them (§7.10).
+Nodes is the last, and exists **only in the cloud dashboard**: the machines that
+run the work, their pairing, keys and presence (§7.12). The local dashboard and
+VS Code never show it — a machine manages its own link under Settings → Remote
+access (§7.8).
 
 Secondary content belongs inside the relevant section.
 
@@ -224,9 +228,10 @@ Order:
 8. Source Control
 9. Approvals
 10. Usage & Costs
-11. flexible spacer
-12. Settings
-13. local service status
+11. Nodes (cloud dashboard only)
+12. flexible spacer
+13. Settings
+14. service status (local: the orchestrator; cloud: the selected node)
 
 Rules:
 - one icon family only,
@@ -245,6 +250,9 @@ Contains:
 - optional repository or task context,
 - global search / command palette trigger,
 - orchestrator connection indicator,
+- cloud dashboard only: the **node selector** — the machine every page is
+  showing, with its status in text (Online, Degraded, Offline, Revoked, Update
+  required); switching refetches every view,
 - **New Task** primary button.
 
 Do not put task-specific destructive controls in the global top bar.
@@ -1303,6 +1311,47 @@ destructive actions always ask; the page says so and offers no switch for it.
 
 ---
 
+# 7.12 Nodes (cloud dashboard only)
+
+The machines paired with the cloud control plane. Work, files and credentials
+stay on each machine; the header description says so once.
+
+## Header
+
+Title **Nodes**, primary action **Pair a node**.
+
+## Pair a node
+
+A dialog: name for the machine → **Create pairing code**. The result shows the
+relay address and the one-time code in mono with copy buttons, the expiry
+(15 minutes) and the steps to take on that machine (Settings → Remote access →
+paste → Pair). The code is shown once; closing the dialog forgets it.
+
+## Node list
+
+One row per node: name, status chip (text and icon, never color alone),
+operating system, app version, last seen (relative), repositories, agents and
+their health. **Update required** is shown as a badge when the node's protocol
+is too old. Row actions: **Show** (make it the selected node), **Replace key**
+(only while online) and **Revoke** — destructive, with a typed confirmation
+(`REVOKE`) that explains the machine is cut off at once and must be paired
+again.
+
+## Below the list
+
+- **Pairing codes**: active and recent codes (never the code itself), with
+  **Cancel** on active ones.
+- **Recent remote actions**: operation, node, status, who, when — the audit of
+  what the cloud asked machines to do.
+
+## Offline and degraded
+
+An offline node keeps its row and its history; pages that need it show the
+cloud connection banner (§9.4) instead of stale success. Degraded (no heartbeat
+for two minutes) uses the warning tone, not an error.
+
+---
+
 # 8. Component Standards
 
 ## 8.1 Buttons
@@ -1488,6 +1537,13 @@ Show a persistent banner:
 ```text
 Orchestrator disconnected. Showing last known state.   [Reconnect]
 ```
+
+Cloud dashboard: the same banner names what is missing — the cloud link
+("Cloud disconnected. Showing last known state.") or the selected node
+("Desk PC is offline. Showing the history saved in the cloud." with a **Nodes**
+action, warning tone). History stays readable; actions that need the machine are
+disabled. Only New Task may be queued, and only when the user ticks **Run when
+the node is back**.
 
 Disable actions that cannot safely be queued.
 

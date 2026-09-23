@@ -248,7 +248,7 @@ export function useCreateTask() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: CreateTaskInput) => api.post<TaskDetail>('/api/tasks', input),
+    mutationFn: ({ routing, ...input }: CreateTaskInput & { routing?: Record<string, string> }) => api.post<TaskDetail>('/api/tasks', input, routing),
     onSuccess: (task) => {
       qc.setQueryData(keys.task(task.id), task);
       void qc.invalidateQueries({ queryKey: keys.tasksRoot });

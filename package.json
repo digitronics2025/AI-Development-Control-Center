@@ -18,10 +18,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "pnpm --filter @acc/dashboard e2e",
+    "e2e:cloud": "pnpm --filter @acc/dashboard e2e:cloud",
     "verify:agents": "tsx scripts/verify-agents.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm docs:guard && pnpm test",
     "demo": "node scripts/demo.mjs",
-    "package:vscode": "pnpm --filter acc-vscode package"
+    "package:vscode": "pnpm --filter acc-vscode package",
+    "cloud:test": "pnpm --filter @acc/cloud-control test",
+    "cloud:dev": "pnpm --filter @acc/cloud-control dev"
   },
   "devDependencies": {
     "@acc/agent-claude": "workspace:*",

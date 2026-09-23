@@ -9,7 +9,8 @@
     "build": "vite build && vite build --mode webview",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:cloud": "playwright test --config playwright.cloud.config.ts"
   },
   "dependencies": {
     "@acc/shared": "workspace:*",

@@ -2,11 +2,11 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
-import { Banner, Drawer, Skeleton } from '@acc/ui';
+import { Banner, Button, Drawer, Skeleton } from '@acc/ui';
 import type { TerminalSession } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useTerminalMutations } from '../api/tools';
-import { useApi, useRuntime } from '../app/runtime';
+import { useApi, useRuntime, useSelectedNode } from '../app/runtime';
 
 function token(name: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
@@ -50,7 +50,8 @@ export function TerminalView({ terminal }: { terminal: TerminalSession }) {
       }
     };
     // Catch up with what the terminal printed before this view opened, then stream.
-    const unsubscribe = realtime.subscribeTerminal(terminal.id, (data, next) => {
+    const unsubscribe = realtime.subscribeTerminal(terminal.id, (data, next, notice) => {
+      if (notice) return void term.write(data);
       if (next <= cursor) return;
       term.write(data);
       cursor = next;
@@ -82,18 +83,26 @@ export function TerminalView({ terminal }: { terminal: TerminalSession }) {
 /** "Open terminal" drawer for a task or repository; closing the drawer closes the terminal. */
 export function TerminalDrawer({ open, onOpenChange, taskId, repositoryId, title }: { open: boolean; onOpenChange: (open: boolean) => void; taskId?: string; repositoryId?: string; title: string }) {
   const mutations = useTerminalMutations();
+  const { mode } = useRuntime();
+  const { node } = useSelectedNode();
+  // Cloud: opening a shell on a remote machine is confirmed each time (design.md §7.12, remote-node.md §Terminals).
+  const [confirmed, setConfirmed] = useState(mode === 'local');
   const [terminal, setTerminal] = useState<TerminalSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { mutate: openTerminal } = mutations.open;
   const { mutate: closeTerminal } = mutations.close;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) setConfirmed(mode === 'local');
+  }, [open, mode]);
+
+  useEffect(() => {
+    if (!open || !confirmed) return;
     let current: TerminalSession | null = null;
     let closed = false;
     setError(null);
     openTerminal(
-      { taskId, repositoryId, cols: 120, rows: 32 },
+      { taskId, repositoryId, cols: 120, rows: 32, confirmed: mode === 'cloud' },
       {
         onSuccess: (t) => {
           // Closed before it started: close it at once rather than leave it running.
@@ -109,11 +118,25 @@ export function TerminalDrawer({ open, onOpenChange, taskId, repositoryId, title
       if (current) closeTerminal(current.id);
       setTerminal(null);
     };
-  }, [open, taskId, repositoryId, openTerminal, closeTerminal]);
+  }, [open, confirmed, mode, taskId, repositoryId, openTerminal, closeTerminal]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} title={title} description={terminal ? `${terminal.shell} in ${terminal.cwd}. Commands typed here run as you.` : 'Starting a terminal…'} width={960}>
-      {error ? (
+      {!confirmed ? (
+        <div className="flex flex-col gap-4">
+          <Banner tone="warning" title={`Open a terminal on ${node?.label ?? 'the node'}?`}>
+            Commands run on that machine as its user. Each line is checked first: anything above the machine's approval level, or dangerous, is refused. The terminal closes after 10 idle minutes and 30 minutes at most, and nothing you type is stored in the cloud.
+          </Banner>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => setConfirmed(true)}>
+              Open terminal
+            </Button>
+          </div>
+        </div>
+      ) : error ? (
         <Banner tone="danger" title="The terminal could not start">
           {error}
         </Banner>

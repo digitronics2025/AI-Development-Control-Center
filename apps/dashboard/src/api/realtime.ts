@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from '@acc/shared';
+import type { ClientMessage, RelayedServerMessage, ServerMessage } from '@acc/shared';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
@@ -13,6 +13,16 @@ export interface ConnectionState {
 type Listener = () => void;
 
 /**
+ * Cloud mode only: which relayed messages this page keeps (those of the selected
+ * node, plus the cloud's own), and what the hub needs added to outgoing ones.
+ */
+export interface RealtimeRouting {
+  accept: (message: RelayedServerMessage) => boolean;
+  decorate: (message: ClientMessage) => ClientMessage & { nodeId?: string };
+  onCloudMessage: (message: RelayedServerMessage) => void;
+}
+
+/**
  * WebSocket client with bounded exponential backoff. Every (re)connect
  * triggers `onOpen`, which the app uses to refetch and reconcile with the
  * orchestrator — the client never trusts its cache across a disconnect.
@@ -23,7 +33,7 @@ export class RealtimeClient {
   private readonly listeners = new Set<Listener>();
   private readonly logRefs = new Map<string, number>();
   /** Terminal output is delivered to listeners directly, never through the query cache. */
-  private readonly terminalListeners = new Map<string, Set<(data: string, cursor: number) => void>>();
+  private readonly terminalListeners = new Map<string, Set<(data: string, cursor: number, notice?: boolean) => void>>();
   private retryTimer: number | null = null;
   private stopped = false;
 
@@ -31,6 +41,7 @@ export class RealtimeClient {
     private readonly url: string,
     private readonly onMessage: (message: ServerMessage) => void,
     private readonly onOpen: (isReconnect: boolean) => void,
+    private readonly routing: RealtimeRouting | null = null,
   ) {}
 
   start(): void {
@@ -80,7 +91,7 @@ export class RealtimeClient {
   }
 
   /** Receive a terminal's output while mounted; the subscription is renewed after reconnects. */
-  subscribeTerminal(terminalId: string, listener: (data: string, cursor: number) => void): () => void {
+  subscribeTerminal(terminalId: string, listener: (data: string, cursor: number, notice?: boolean) => void): () => void {
     const set = this.terminalListeners.get(terminalId) ?? new Set();
     set.add(listener);
     this.terminalListeners.set(terminalId, set);
@@ -103,7 +114,7 @@ export class RealtimeClient {
   }
 
   private send(message: ClientMessage): void {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(this.routing ? this.routing.decorate(message) : message));
   }
 
   private setState(patch: Partial<ConnectionState>): void {
@@ -130,9 +141,17 @@ export class RealtimeClient {
     };
     socket.onmessage = (event) => {
       try {
-        const message = JSON.parse(String(event.data)) as ServerMessage;
+        const relayed = JSON.parse(String(event.data)) as RelayedServerMessage;
+        if (this.routing) {
+          if (relayed.type === 'remote.node' || relayed.type === 'remote.command') {
+            this.routing.onCloudMessage(relayed);
+            return;
+          }
+          if (!this.routing.accept(relayed)) return;
+        }
+        const message = relayed as ServerMessage;
         if (message.type === 'terminal.output') {
-          for (const listener of this.terminalListeners.get(message.terminalId) ?? []) listener(message.data, message.cursor);
+          for (const listener of this.terminalListeners.get(message.terminalId) ?? []) listener(message.data, message.cursor, message.notice);
           return;
         }
         this.onMessage(message);

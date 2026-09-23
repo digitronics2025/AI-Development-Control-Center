@@ -58,7 +58,7 @@ export type ServerMessage =
   | { type: 'taskProcess'; process: TaskProcess }
   | { type: 'terminal'; terminal: TerminalSession }
   /** Terminal output goes only to clients that subscribed to that terminal. */
-  | { type: 'terminal.output'; terminalId: string; data: string; cursor: number }
+  | { type: 'terminal.output'; terminalId: string; data: string; cursor: number; /** A message to the viewer (e.g. a refused remote line), not shell output. */ notice?: boolean }
   | { type: 'mcpServer'; server: McpServerView }
   | { type: 'mcpServer.deleted'; serverId: string }
   | { type: 'credential'; credential: CredentialView }

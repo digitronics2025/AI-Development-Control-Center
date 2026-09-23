@@ -34,7 +34,7 @@ import { ToolService } from './tools/service.js';
 import { ToolStore } from './tools/store.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
-import { RemoteNodeService } from './remote/service.js';
+import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -85,7 +85,7 @@ export function defaultAdapters(config: Pick<OrchestratorConfig, 'simulatedAgent
 /** Composition root: wires persistence, services and the engine. No I/O beyond the database. */
 export function createServices(
   config: OrchestratorConfig,
-  options: { adapters?: AgentAdapter[]; baseEnv?: NodeJS.ProcessEnv; databaseFile?: string } = {},
+  options: { adapters?: AgentAdapter[]; baseEnv?: NodeJS.ProcessEnv; databaseFile?: string; remoteTimings?: RemoteNodeDeps['timings'] } = {},
 ): AppServices {
   const db = openDatabase(options.databaseFile ?? path.join(config.dataDir, 'acc.db'));
   migrate(db);
@@ -147,7 +147,7 @@ export function createServices(
     }),
   });
   mcp.restore();
-  const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, tools, credentials, usage });
+  const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, repositories, tools, credentials, usage, terminals, timings: options.remoteTimings });
 
   return {
     config,

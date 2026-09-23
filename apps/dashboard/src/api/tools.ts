@@ -73,7 +73,9 @@ export function useTerminalMutations() {
   const qc = useQueryClient();
   return {
     open: useMutation({
-      mutationFn: (input: { repositoryId?: string; taskId?: string; cols?: number; rows?: number }) => api.post<TerminalSession>('/api/terminals', input),
+      // `confirmed`: the cloud needs an explicit confirmation to open a terminal on a node.
+      mutationFn: ({ confirmed, ...input }: { repositoryId?: string; taskId?: string; cols?: number; rows?: number; confirmed?: boolean }) =>
+        api.post<TerminalSession>('/api/terminals', input, confirmed ? { 'x-acc-confirm': 'open-terminal' } : undefined),
       onSuccess: (t) => qc.setQueryData<TerminalSession[]>(keys.terminals, (old) => (old ? [t, ...old.filter((x) => x.id !== t.id)] : old)),
     }),
     close: useMutation({ mutationFn: (id: string) => api.del<{ ok: boolean }>(`/api/terminals/${id}`) }),

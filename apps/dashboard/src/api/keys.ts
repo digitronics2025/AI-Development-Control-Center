@@ -46,5 +46,10 @@ export const keys = {
   usageRoot: ['usage'] as const,
   /** This machine's link to the cloud control plane (local mode only). */
   remoteStatus: ['remote', 'status'] as const,
+  /** Cloud mode: control-plane state (never cleared by a node switch). */
+  cloudNodes: ['cloud', 'nodes'] as const,
+  cloudCommands: ['cloud', 'commands'] as const,
+  cloudPairingTokens: ['cloud', 'pairing-tokens'] as const,
+  cloudSession: ['cloud', 'session'] as const,
   usage: (view: string, params: Record<string, string | number | undefined> = {}) => ['usage', view, params] as const,
 };

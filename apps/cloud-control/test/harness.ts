@@ -99,7 +99,7 @@ export interface Cloud {
   logs: string[];
 }
 
-export async function startCloud(options: { vars?: Record<string, string> } = {}): Promise<Cloud> {
+export async function startCloud(options: { vars?: Record<string, string>; port?: number } = {}): Promise<Cloud> {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-cloud-'));
   const persist = path.join(dir, 'state');
   const signer = await accessSigner();
@@ -115,7 +115,7 @@ export async function startCloud(options: { vars?: Record<string, string> } = {}
   };
   const migrate = spawnSync(process.execPath, [WRANGLER, 'd1', 'migrations', 'apply', 'acc-control-dev', '--local', '--env', '', '--persist-to', persist], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });
   if (migrate.status !== 0) throw new Error(`D1 migrations failed: ${migrate.stderr || migrate.stdout}`);
-  const port = await freePort();
+  const port = options.port ?? (await freePort());
   const logs: string[] = [];
   let child: ChildProcess | null = null;
 

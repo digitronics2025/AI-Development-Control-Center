@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { newCredentialKey, openSecret, sealSecret, secretFingerprint } from '@acc/security';
 import { createServices } from '../src/app.js';
 import type { OrchestratorConfig } from '../src/config.js';
 import { migrate, openDatabase, schemaVersion } from '../src/db/database.js';
@@ -68,7 +69,7 @@ describe('remote node migration (v5 → v6)', () => {
     migrate(db, previous);
     const ts = '2026-09-23T10:00:00.000Z';
     db.prepare("INSERT INTO repositories (id, name, path, created_at, updated_at) VALUES ('r1', 'kept', ?, ?, ?)").run(dataDir, ts, ts);
-    expect(migrate(db)).toEqual([6]);
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 6))).toEqual([6]);
     expect(schemaVersion(db)).toBe(6);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'remote_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
     expect(tables).toEqual(['remote_artifact_sync', 'remote_commands_received', 'remote_config', 'remote_outbox', 'remote_sync_state']);
@@ -78,6 +79,43 @@ describe('remote node migration (v5 → v6)', () => {
     // A second config row is impossible: the node has exactly one identity.
     db.prepare("INSERT INTO remote_config (id, relay_url, node_id, label, public_key, private_key_ciphertext, private_key_iv, private_key_tag, paired_at, updated_at) VALUES (1, 'u', 'n', 'l', '{}', 'c', 'i', 't', ?, ?)").run(ts, ts);
     expect(() => db.prepare("INSERT INTO remote_config (id, relay_url, node_id, label, public_key, private_key_ciphertext, private_key_iv, private_key_tag, paired_at, updated_at) VALUES (2, 'u', 'n', 'l', '{}', 'c', 'i', 't', ?, ?)").run(ts, ts)).toThrow();
+    db.close();
+  });
+});
+
+/**
+ * MyVault credential bridge (docs/plans/myvault-credential-bridge.md):
+ * migration 7 adds metadata tables next to credential_references and leaves
+ * every stored credential — ciphertext, fingerprint, scope — exactly as it was.
+ */
+describe('credential bridge migration (v6 → v7)', () => {
+  it('keeps existing sealed credentials byte-identical and still openable', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-bridge-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 6);
+    migrate(db, previous);
+    const key = newCredentialKey();
+    const value = ['legacy', 'credential', 'value'].join('-');
+    const sealed = sealSecret(key, value, 'cred-legacy');
+    const ts = '2026-09-23T10:00:00.000Z';
+    db.prepare(
+      `INSERT INTO credential_references (id, name, kind, env_var, description, repository_ids, ciphertext, iv, tag, fingerprint, created_at, updated_at, last_used_at)
+       VALUES ('cred-legacy', 'legacy', 'cloudflare', NULL, 'before the bridge', '["r1"]', ?, ?, ?, ?, ?, ?, NULL)`,
+    ).run(sealed.ciphertext, sealed.iv, sealed.tag, secretFingerprint(value), ts, ts);
+    const before = db.prepare('SELECT * FROM credential_references').all();
+    expect(migrate(db)).toEqual([7]);
+    expect(schemaVersion(db)).toBe(7);
+    expect(db.prepare('SELECT * FROM credential_references').all()).toEqual(before);
+    const row = db.prepare('SELECT ciphertext, iv, tag FROM credential_references WHERE id = ?').get('cred-legacy') as { ciphertext: string; iv: string; tag: string };
+    expect(openSecret(key, row, 'cred-legacy')).toBe(value);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('credential_vault_links', 'vault_bridge_origins', 'credential_events') ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
+    expect(tables).toEqual(['credential_events', 'credential_vault_links', 'vault_bridge_origins']);
+    // A link follows its credential: deleting the credential removes the link, never the other way round.
+    db.prepare("INSERT INTO credential_vault_links (credential_id, authority, state, created_at, updated_at) VALUES ('cred-legacy', 'control-center', 'pending_push', ?, ?)").run(ts, ts);
+    db.prepare("DELETE FROM credential_references WHERE id = 'cred-legacy'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM credential_vault_links').get()).toEqual({ n: 0 });
+    // The previous binary applies nothing and does not fail.
+    expect(migrate(db, previous)).toEqual([]);
     db.close();
   });
 });

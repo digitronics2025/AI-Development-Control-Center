@@ -67,7 +67,7 @@ if (!boot?.token || !vscode) {
     <StrictMode>
       <MemoryRouter initialEntries={[boot.initialPath ?? '/']}>
         <HostNavigation />
-        <App config={{ baseUrl: boot.baseUrl, token: boot.token, host: 'vscode', postToHost, pickFolder }} queryClient={createQueryClient()} />
+        <App config={{ baseUrl: boot.baseUrl, mode: 'local', token: boot.token, host: 'vscode', postToHost, pickFolder }} queryClient={createQueryClient()} />
       </MemoryRouter>
     </StrictMode>,
   );

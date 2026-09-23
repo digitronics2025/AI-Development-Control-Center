@@ -5,6 +5,7 @@ coverage/
 .vite/
 test-results/
 playwright-report/
+playwright-report-cloud/
 *.vsix
 .env
 .env.*

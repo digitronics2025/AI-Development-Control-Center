@@ -7,6 +7,7 @@ import {
   GitBranch,
   House,
   ListChecks,
+  Server,
   Menu as MenuIcon,
   Plus,
   Search,
@@ -25,6 +26,8 @@ import {
   Drawer,
   IconButton,
   Kbd,
+  NODE_STATUS_VISUAL,
+  Select,
   Skeleton,
   Tooltip,
   cn,
@@ -36,7 +39,7 @@ import {
 import { useApprovals, useHealth, useSettings } from '../api/hooks';
 import { useCrumbs } from './breadcrumbs';
 import { useCommandRegistry } from './commands';
-import { useConnection, useRuntime } from './runtime';
+import { useCloudNodes, useConnection, useRuntime, useSelectedNode } from './runtime';
 
 interface NavItem {
   to: string;
@@ -115,10 +118,19 @@ function NavEntry({ item, collapsed, badge, onNavigate }: { item: NavItem; colla
   );
 }
 
+/** What the status line and banners call the thing we talk to. */
+function connectionLabel(c: ReturnType<typeof useConnection>): string {
+  if (c.mode === 'local') return c.online ? 'Orchestrator connected' : c.status === 'connecting' ? 'Connecting…' : 'Orchestrator disconnected';
+  if (!c.linkOpen) return c.status === 'connecting' ? 'Connecting…' : 'Cloud disconnected';
+  if (!c.node) return 'No node selected';
+  if (c.node.updateRequired) return `${c.node.label}: update required`;
+  return c.online ? `${c.node.label} online` : `${c.node.label} offline`;
+}
+
 function ServiceStatus({ collapsed }: { collapsed: boolean }) {
   const connection = useConnection();
   const health = useHealth();
-  const label = connection.online ? 'Orchestrator connected' : connection.status === 'connecting' ? 'Connecting…' : 'Orchestrator disconnected';
+  const label = connectionLabel(connection);
   const dot = (
     <span
       aria-hidden
@@ -131,7 +143,7 @@ function ServiceStatus({ collapsed }: { collapsed: boolean }) {
       {collapsed ? <span className="sr-only">{label}</span> : (
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-small font-semibold text-fg">{label}</span>
-          {health.data ? <span className="truncate text-small text-fg-tertiary">v{health.data.version} · localhost:{health.data.port}</span> : null}
+          {health.data ? <span className="truncate text-small text-fg-tertiary">v{health.data.version}{connection.mode === 'local' ? ` · localhost:${health.data.port}` : ' · via the cloud'}</span> : null}
         </span>
       )}
     </div>
@@ -140,6 +152,7 @@ function ServiceStatus({ collapsed }: { collapsed: boolean }) {
 }
 
 function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
+  const { mode } = useRuntime();
   const approvals = useApprovals('pending');
   const pending = approvals.data?.length ?? 0;
   return (
@@ -147,6 +160,7 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
       {NAV.map((item) => (
         <NavEntry key={item.to} item={item} collapsed={collapsed} badge={item.to === '/approvals' ? pending : undefined} onNavigate={onNavigate} />
       ))}
+      {mode === 'cloud' ? <NavEntry item={{ to: '/nodes', label: 'Nodes', icon: Server }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       <div className="flex-1" />
       <NavEntry item={{ to: '/settings', label: 'Settings', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onNavigate} />
       <ServiceStatus collapsed={collapsed} />
@@ -176,6 +190,23 @@ function Sidebar({ collapsed, onToggle, canExpand }: { collapsed: boolean; onTog
   );
 }
 
+/** Cloud dashboard: the machine every page shows (design.md §3.1 top bar). */
+function NodeSelector() {
+  const nodes = useCloudNodes();
+  const { nodeId, select } = useSelectedNode();
+  const usable = (nodes.data ?? []).filter((n) => n.status !== 'revoked');
+  if (!usable.length) return null;
+  return (
+    <Select
+      aria-label="Node shown"
+      value={nodeId ?? undefined}
+      onValueChange={select}
+      className="w-auto max-w-56"
+      options={usable.map((n) => ({ value: n.id, label: `${n.label} · ${n.updateRequired ? 'Update required' : NODE_STATUS_VISUAL[n.status].label}` }))}
+    />
+  );
+}
+
 function TopBar({ onOpenNav, showMenu }: { onOpenNav: () => void; showMenu: boolean }) {
   const crumbs = useCrumbs();
   const navigate = useNavigate();
@@ -184,6 +215,7 @@ function TopBar({ onOpenNav, showMenu }: { onOpenNav: () => void; showMenu: bool
   const health = useHealth();
   const { setPaletteOpen } = useCommandRegistry();
   const { isTabletUp } = useBreakpoint();
+  const { mode } = useRuntime();
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-canvas px-4 sm:px-5 md:px-6 xl:px-8">
       {showMenu ? <IconButton icon={MenuIcon} label="Open navigation" onClick={onOpenNav} /> : null}
@@ -220,6 +252,7 @@ function TopBar({ onOpenNav, showMenu }: { onOpenNav: () => void; showMenu: bool
           <span className="hidden h-7 items-center rounded-sm border border-info px-2 text-small font-semibold text-fg md:inline-flex">Simulated agents</span>
         </Tooltip>
       ) : null}
+      {mode === 'cloud' ? <NodeSelector /> : null}
       {isTabletUp ? (
         <button
           type="button"
@@ -233,9 +266,9 @@ function TopBar({ onOpenNav, showMenu }: { onOpenNav: () => void; showMenu: bool
       ) : null}
       <IconButton icon={Search} label="Search or run a command (Ctrl+K)" onClick={() => setPaletteOpen(true)} className="lg:hidden" />
       <span className="sr-only" role="status">
-        {connection.online ? '' : 'Orchestrator disconnected'}
+        {connection.online ? '' : connectionLabel(connection)}
       </span>
-      <Button variant="primary" icon={Plus} onClick={() => navigate('/tasks/new')} disabled={!connection.online} disabledReason="Reconnect to the orchestrator to create tasks">
+      <Button variant="primary" icon={Plus} onClick={() => navigate('/tasks/new')} disabled={mode === 'cloud' ? !connection.linkOpen || !connection.node : !connection.online} disabledReason={connection.mode === 'cloud' ? 'The selected node must be online to create tasks' : 'Reconnect to the orchestrator to create tasks'}>
         <span className="hidden sm:inline">New Task</span>
         <span className="sr-only sm:hidden">New Task</span>
       </Button>
@@ -243,8 +276,41 @@ function TopBar({ onOpenNav, showMenu }: { onOpenNav: () => void; showMenu: bool
   );
 }
 
+function CloudConnectionBanner() {
+  const connection = useConnection();
+  const navigate = useNavigate();
+  if (connection.online || (!connection.everConnected && connection.attempts < 2)) return null;
+  if (!connection.linkOpen) {
+    return (
+      <div className="px-4 pt-3 sm:px-5 md:px-6 xl:px-8">
+        <Banner tone="danger" role="alert" title="Cloud disconnected. Showing last known state." actions={<Button size="compact" onClick={connection.reconnect} loading={connection.status === 'connecting'}>Reconnect</Button>}>
+          Actions are disabled until the connection is back. Work already running on your machines continues.
+        </Banner>
+      </div>
+    );
+  }
+  const node = connection.node;
+  return (
+    <div className="px-4 pt-3 sm:px-5 md:px-6 xl:px-8">
+      <Banner
+        tone="warning"
+        role="status"
+        title={!node ? 'No execution node is paired yet.' : node.updateRequired ? `${node.label} needs an update.` : `${node.label} is offline. Showing the history saved in the cloud.`}
+        actions={<Button size="compact" onClick={() => navigate('/nodes')}>{node ? 'Nodes' : 'Pair a node'}</Button>}
+      >
+        {!node
+          ? 'Pair a machine on the Nodes page to run tasks from here.'
+          : node.updateRequired
+            ? `It speaks protocol ${node.protocolVersion ?? '?'}; update the Control Center on that machine. It receives no commands until then.`
+            : 'Task history stays readable. Anything that needs the machine is disabled until it reconnects; nothing is queued behind your back.'}
+      </Banner>
+    </div>
+  );
+}
+
 function ConnectionBanner() {
   const connection = useConnection();
+  if (connection.mode === 'cloud') return <CloudConnectionBanner />;
   if (connection.online || (!connection.everConnected && connection.attempts < 2)) return null;
   return (
     <div className="px-4 pt-3 sm:px-5 md:px-6 xl:px-8">
@@ -267,6 +333,7 @@ function ConnectionBanner() {
 function GlobalCommands() {
   const navigate = useNavigate();
   const { pageCommands, paletteOpen, setPaletteOpen } = useCommandRegistry();
+  const { mode } = useRuntime();
   useHotkey('k', (e) => {
     e.preventDefault();
     setPaletteOpen(!paletteOpen);
@@ -283,9 +350,10 @@ function GlobalCommands() {
       { id: 'go-approvals', label: 'Go to Approvals', group: 'Go to', icon: ShieldCheck, onSelect: () => navigate('/approvals') },
       { id: 'go-usage', label: 'Go to Usage & Costs', group: 'Go to', icon: Coins, onSelect: () => navigate('/usage') },
       { id: 'go-home', label: 'Go to Home', group: 'Go to', icon: House, onSelect: () => navigate('/') },
+      ...(mode === 'cloud' ? [{ id: 'go-nodes', label: 'Go to Nodes', group: 'Go to', icon: Server, onSelect: () => navigate('/nodes') }] : []),
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },
     ],
-    [pageCommands, navigate],
+    [pageCommands, navigate, mode],
   );
   return <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} commands={commands} />;
 }

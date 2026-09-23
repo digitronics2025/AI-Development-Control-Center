@@ -171,14 +171,16 @@ function PromptTemplates() {
 /** design.md §7.8 */
 export function SettingsPage() {
   const { section = 'general' } = useParams();
-  const active: SectionId = (SECTIONS.find((s) => s.id === section)?.id ?? 'general') as SectionId;
-  useBreadcrumb([{ label: 'Settings', to: '/settings' }, { label: SECTIONS.find((s) => s.id === active)!.label }]);
+  const activeRequested: SectionId = (SECTIONS.find((s) => s.id === section)?.id ?? 'general') as SectionId;
+  useBreadcrumb([{ label: 'Settings', to: '/settings' }, { label: SECTIONS.find((s) => s.id === activeRequested)!.label }]);
   const settings = useSettings();
   const update = useUpdateSettings();
   const workflows = useWorkflows();
   const health = useHealth();
   const connection = useConnection();
-  const { host } = useRuntime();
+  const { host, mode } = useRuntime();
+  // Remote access belongs to the machine itself: never offered from the cloud dashboard.
+  const sections = SECTIONS.filter((s) => s.id !== 'remote' || mode === 'local');
   const { toast } = useFeedback();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [apiConfirmOpen, setApiConfirmOpen] = useState(false);
@@ -190,6 +192,7 @@ export function SettingsPage() {
   }, [settings.data]);
   const dirty = useMemo(() => Boolean(draft && settings.data && JSON.stringify(draft) !== JSON.stringify(settings.data)), [draft, settings.data]);
 
+  const active: SectionId = activeRequested === 'remote' && mode !== 'local' ? 'general' : activeRequested;
   if (settings.isLoading || !draft) return <div className="p-6"><Skeleton className="h-96" /></div>;
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft({ ...draft, [key]: value });
   const setAutomation = <K extends keyof RepositoryAutomationSettings>(key: K, value: RepositoryAutomationSettings[K]) =>
@@ -462,10 +465,10 @@ export function SettingsPage() {
             <KeyValueList
               items={[
                 { label: 'Version', value: health.data.version },
-                { label: 'Address', value: <code className="font-mono text-code">{health.data.host}:{health.data.port}</code> },
+                { label: 'Address', value: <code className="font-mono text-code">{health.data.host}:{health.data.port}</code>, hidden: !health.data.host },
                 { label: 'Started', value: new Date(health.data.startedAt).toLocaleString() },
-                { label: 'Data folder', value: <code className="font-mono text-code wrap-anywhere">{health.data.dataDir}</code> },
-                { label: 'API token', value: 'Stored in the data folder as auth-token (readable only by you).' },
+                { label: 'Data folder', value: <code className="font-mono text-code wrap-anywhere">{health.data.dataDir}</code>, hidden: !health.data.dataDir },
+                { label: 'API token', value: 'Stored in the data folder as auth-token (readable only by you).', hidden: mode !== 'local' },
                 { label: 'Agents', value: health.data.simulatedAgents ? 'Simulated (testing)' : 'Real CLIs' },
               ]}
             />
@@ -484,7 +487,7 @@ export function SettingsPage() {
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[200px_minmax(0,900px)]">
         <nav aria-label="Settings sections" className="min-w-0">
           <ul className="flex gap-1 overflow-x-auto md:flex-col">
-            {SECTIONS.map((s) => (
+            {sections.map((s) => (
               <li key={s.id} className="shrink-0">
                 <NavLink
                   to={`/settings/${s.id}`}

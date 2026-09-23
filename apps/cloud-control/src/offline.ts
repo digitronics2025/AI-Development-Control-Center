@@ -6,7 +6,7 @@ import { ATTENTION_TASK_STATUSES, type NodeCapabilities } from '@acc/shared';
  * `offline` in the catalog reach here; everything live-only answers
  * NODE_OFFLINE instead of showing stale success.
  */
-export async function offlineRead(db: D1Database, nodeId: string, op: string, params: Record<string, string>, query: Record<string, string>): Promise<{ status: number; body: unknown } | null> {
+export async function offlineRead(db: D1Database, nodeId: string, op: string, params: Record<string, string>, query: Record<string, string>, objects?: R2Bucket): Promise<{ status: number; body: unknown } | null> {
   const parse = <T>(rows: Array<{ json?: string; summary?: string; detail?: string | null }>, field: 'json' | 'summary' = 'json') => rows.map((r) => JSON.parse(String(r[field])) as T);
   switch (op) {
     case 'task.list': {
@@ -103,6 +103,32 @@ export async function offlineRead(db: D1Database, nodeId: string, op: string, pa
       const total = await db.prepare('SELECT COUNT(*) AS n FROM cloud_usage_events WHERE node_id = ? AND started_at >= ? AND started_at <= ?').bind(nodeId, from, to).first<{ n: number }>();
       const page = rows.results.slice(0, limit);
       return { status: 200, body: { items: parse(page), nextCursor: rows.results.length > limit ? (page.at(-1)?.started_at ?? null) : null, total: total?.n ?? 0 } };
+    }
+    case 'artifact.content': {
+      // Only what the node uploaded under the sync policy; local-only artifacts were never here.
+      const m = await db.prepare("SELECT r2_key, name, sha256 FROM artifact_manifests WHERE node_id = ? AND artifact_id = ? AND status = 'uploaded'").bind(nodeId, params.id).first<{ r2_key: string; name: string; sha256: string }>();
+      const entity = await db.prepare("SELECT json FROM cloud_entities WHERE node_id = ? AND kind = 'artifact' AND entity_id = ?").bind(nodeId, params.id).first<{ json: string }>();
+      const object = m && objects ? await objects.get(m.r2_key) : null;
+      if (!object || !entity) return { status: 503, body: { error: { code: 'NODE_OFFLINE', message: 'The node is offline and this artifact is not stored in the cloud.' } } };
+      const text = await object.text();
+      const limit = 2 * 1024 * 1024;
+      return { status: 200, body: { artifact: JSON.parse(entity.json), content: text.slice(0, limit), truncated: text.length > limit, source: 'cloud', sha256: m!.sha256 } };
+    }
+    case 'execution.logs': {
+      // History from the uploaded chunks: "<at> <stream> <text>" per line.
+      const chunks = await db.prepare('SELECT r2_key FROM log_chunks WHERE node_id = ? AND execution_id = ? ORDER BY chunk_index').bind(nodeId, params.id).all<{ r2_key: string }>();
+      if (!chunks.results.length || !objects) return { status: 503, body: { error: { code: 'NODE_OFFLINE', message: 'The node is offline and this log is not stored in the cloud yet.' } } };
+      const lines: Array<{ executionId: string; seq: number; stream: string; text: string; at: string }> = [];
+      for (const c of chunks.results) {
+        const object = await objects.get(c.r2_key);
+        for (const raw of (await object?.text())?.split('\n') ?? []) {
+          if (!raw) continue;
+          const [at, stream, ...rest] = raw.split(' ');
+          lines.push({ executionId: params.id!, seq: lines.length, stream: stream ?? 'stdout', text: rest.join(' '), at: at ?? '' });
+        }
+      }
+      const tail = Number(query.tail ?? 0);
+      return { status: 200, body: tail > 0 ? lines.slice(-tail) : lines.slice(0, Number(query.limit ?? 1000) || 1000) };
     }
     default:
       return null;

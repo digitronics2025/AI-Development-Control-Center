@@ -295,14 +295,14 @@ async function proxy(request: Request, env: Env, url: URL, identity: AccessIdent
     const connected = await hub(env).isNodeConnected(target.nodeId);
     if (!connected) {
       if (operation.offline) {
-        const cached = await offlineRead(env.DB, target.nodeId, operation.op, params, query);
+        const cached = await offlineRead(env.DB, target.nodeId, operation.op, params, query, env.ARTIFACTS);
         if (cached) return json(cached.body, cached.status, { 'x-acc-source': 'cache' });
       }
       throw new HttpError(503, 'NODE_OFFLINE', 'The node is offline. This view needs a live node.');
     }
     const reply = await hub(env).rpc(target.nodeId, { op: operation.op, params, query, ...(rawBody !== undefined ? { body: rawBody } : {}) });
     if ((reply.httpStatus === 503 || reply.httpStatus === 504) && operation.offline) {
-      const cached = await offlineRead(env.DB, target.nodeId, operation.op, params, query);
+      const cached = await offlineRead(env.DB, target.nodeId, operation.op, params, query, env.ARTIFACTS);
       if (cached) return json(cached.body, cached.status, { 'x-acc-source': 'cache' });
     }
     return replyToResponse(reply, 'live');

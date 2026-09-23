@@ -90,12 +90,12 @@ export class RelayClient {
   }
 
   /** Upload an artifact or log chunk; R2 verifies the SHA-256 on write. */
-  async upload(path: string, session: string, body: Buffer, sha256: string, contentType: string): Promise<void> {
+  async upload(path: string, session: string, body: Buffer, sha256: string, contentType: string, extraHeaders: Record<string, string> = {}): Promise<void> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method: 'PUT',
-        headers: { authorization: `Bearer ${session}`, 'content-type': contentType, 'x-acc-sha256': sha256, 'content-length': String(body.length) },
+        headers: { ...extraHeaders, authorization: `Bearer ${session}`, 'content-type': contentType, 'x-acc-sha256': sha256 },
         body,
         signal: AbortSignal.timeout(120_000),
         redirect: 'error',

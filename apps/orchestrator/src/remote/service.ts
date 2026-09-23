@@ -23,6 +23,7 @@ import type { Bus } from '../bus.js';
 import type { OrchestratorConfig } from '../config.js';
 import type { Db } from '../db/database.js';
 import type { TaskViews } from '../engine/views.js';
+import type { ArtifactService } from '../services/artifacts.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { RepositoryService } from '../services/repositories.js';
 import type { SettingsService } from '../services/settings.js';
@@ -39,6 +40,7 @@ import { generateNodeKeyPair } from './identity.js';
 import { normalizeRelayUrl, RelayClient, RelayError } from './relay-client.js';
 import { RemoteStore } from './store.js';
 import { TerminalGrants, TERMINAL_GRANT } from './terminal-grants.js';
+import { UploadQueue } from './uploads.js';
 
 export class RemoteError extends Error {
   constructor(
@@ -62,6 +64,7 @@ export interface RemoteNodeDeps {
   credentials: CredentialBroker;
   usage: UsageService;
   terminals: TerminalService;
+  artifacts: ArtifactService;
   /** Tests shorten timers. */
   timings?: Partial<typeof DEFAULT_TIMINGS>;
 }
@@ -74,6 +77,7 @@ export const DEFAULT_TIMINGS = {
   snapshotMs: 5 * 60_000,
   terminalIdleMs: TERMINAL_GRANT.idleMs,
   terminalMaxMs: TERMINAL_GRANT.maxMs,
+  uploadMs: 20_000,
 };
 
 /** Seal binding for the node private key: purpose + node id. */
@@ -121,6 +125,8 @@ export class RemoteNodeService {
   private readonly egress: EgressSanitizer;
   private readonly dispatcher: RemoteDispatcher;
   private readonly grants: TerminalGrants;
+  private readonly uploads: UploadQueue;
+  private uploadTimer: NodeJS.Timeout | null = null;
   private readonly timings: typeof DEFAULT_TIMINGS;
   private http: LocalHttp | null = null;
   private connection: RemoteConnection | null = null;
@@ -170,6 +176,23 @@ export class RemoteNodeService {
       },
       onTerminalOpened: (terminalId) => this.grants.grant(terminalId),
     });
+    this.uploads = new UploadQueue({
+      remote: this.store,
+      store: d.store,
+      artifacts: d.artifacts,
+      egress: this.egress,
+      online: () => this.welcomed,
+      target: {
+        session: async () => {
+          const config = this.store.config();
+          if (!config) throw new RemoteError('Not paired', 'NOT_PAIRED');
+          const pkcs8 = await this.d.credentials.openValue(config.sealedKey, identityBinding(config.nodeId));
+          return (await new RelayClient(config.relayUrl).session(config.nodeId, pkcs8)).session;
+        },
+        upload: (path, session, body, sha, contentType, headers) => new RelayClient(this.store.config()!.relayUrl).upload(path, session, body, sha, contentType, headers),
+        manifest: (payload) => void this.send({ type: 'artifact.manifest', payload }),
+      },
+    });
     // The local API token must never leave this machine, whatever carries it.
     registerSecretValues([d.config.token]);
   }
@@ -200,6 +223,7 @@ export class RemoteNodeService {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.disconnect();
+    await this.uploads.stop();
     await this.grants.revokeAll();
     await Promise.allSettled([...this.queues.values()]);
   }
@@ -239,6 +263,8 @@ export class RemoteNodeService {
     this.flushTimer = null;
     if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
     this.snapshotTimer = null;
+    if (this.uploadTimer) clearInterval(this.uploadTimer);
+    this.uploadTimer = null;
     for (const t of this.detailTimers.values()) clearTimeout(t);
     this.detailTimers.clear();
     this.logSubscriptions.clear();
@@ -499,6 +525,11 @@ export class RemoteNodeService {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = setInterval(() => this.heartbeat(), this.timings.heartbeatMs);
     this.heartbeatTimer.unref?.();
+    // Artifacts and finished logs go to R2 in the background; a failure never touches the task.
+    if (this.uploadTimer) clearInterval(this.uploadTimer);
+    this.uploadTimer = setInterval(() => void this.uploads.run(), this.timings.uploadMs);
+    this.uploadTimer.unref?.();
+    void this.uploads.run();
   }
 
   private heartbeat(): void {
@@ -559,6 +590,8 @@ export class RemoteNodeService {
     if (message.type === 'remote.status') return;
     const config = this.store.config();
     if (!config || !config.enabled) return;
+    if (message.type === 'artifact') this.uploads.trackArtifact(message.artifact);
+    if (message.type === 'execution') this.uploads.trackExecution(message.execution);
     if (message.type === 'repository' || message.type === 'repository.deleted') {
       this.egress.setRoots({ repositories: this.repositoryRoots(), dataDir: this.d.config.dataDir });
       this.scheduleSnapshotIfRepositoriesChanged();

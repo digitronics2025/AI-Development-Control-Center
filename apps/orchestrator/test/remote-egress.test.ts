@@ -144,3 +144,27 @@ describe('egress field rules', () => {
     expect(scrubbed.nested.text).toBe(`opened <repo:secret-project>${path.sep === '\\' ? '\\' : '\\'}src\\a.ts and <home>/notes.txt and <path>/file.log`);
   });
 });
+
+describe('uploads', () => {
+  it('records a failed upload for retry and never touches the task', async () => {
+    // The fake relay has no upload endpoint: every upload fails, as in an R2 outage.
+    const r = await new FakeRelay().start();
+    cleanups.push(() => r.stop());
+    const t = await createTestApp({ remoteTimings: { uploadMs: 300 } });
+    cleanups.push(() => t.close());
+    await t.services.remote.pair({ relayUrl: r.url, code: r.newPairingToken(), label: 'PC' });
+    await waitFor(() => t.services.remote.status().state, (s) => s === 'connected', 15_000);
+    const taskId = await createTask(t, await addRepo(t, await makeRepo()), 'Upload outage');
+    expect((await waitForStatus(t, taskId, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000)).status).toBe('COMPLETED');
+    const report = t.services.store.listArtifacts(taskId).find((a) => a.type === 'final-report')!;
+    const synced = await waitFor(() => t.services.remote.store.syncObject(`artifact:${report.id}`), (o) => o?.status === 'failed', 20_000, 'failed upload recorded');
+    expect(synced).toMatchObject({ attempts: 1, sensitivity: 'safe_sync' });
+    expect(synced!.nextAttemptAt).toBeTruthy();
+    const diff = t.services.store.listArtifacts(taskId).find((a) => a.type === 'git-diff');
+    if (diff) expect(t.services.remote.store.syncObject(`artifact:${diff.id}`)).toMatchObject({ status: 'local_only' });
+    // The manifest tells the cloud the truth: pending retry, not uploaded.
+    const manifests = r.frames.filter((f) => f.type === 'artifact.manifest').map((f) => f.payload as { artifactId: string; status: string });
+    expect(manifests.filter((m) => m.artifactId === report.id).map((m) => m.status)).not.toContain('uploaded');
+    expect(t.services.store.getTask(taskId)!.status).toBe('COMPLETED');
+  });
+});

@@ -113,8 +113,8 @@ export const REMOTE_OPERATIONS: readonly RemoteOperation[] = [
   c('chairman.action', 'POST', '/api/tasks/:id/chairman/actions', { body: chairmanActionBodySchema }),
   // executions, logs, artifacts
   r('execution.get', 'GET', '/api/executions/:id'),
-  r('execution.logs', 'GET', '/api/executions/:id/logs'),
-  r('artifact.content', 'GET', '/api/artifacts/:id/content'),
+  r('execution.logs', 'GET', '/api/executions/:id/logs', { offline: true }),
+  r('artifact.content', 'GET', '/api/artifacts/:id/content', { offline: true }),
   r('artifact.download', 'GET', '/api/artifacts/:id/download', { binary: true }),
   // approvals
   r('approval.list', 'GET', '/api/approvals', { offline: true }),

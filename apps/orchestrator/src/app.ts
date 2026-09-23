@@ -147,7 +147,7 @@ export function createServices(
     }),
   });
   mcp.restore();
-  const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, repositories, tools, credentials, usage, terminals, timings: options.remoteTimings });
+  const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, repositories, tools, credentials, usage, terminals, artifacts, timings: options.remoteTimings });
 
   return {
     config,

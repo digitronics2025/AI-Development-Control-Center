@@ -857,4 +857,51 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_remote_artifact_sync_due ON remote_artifact_sync(status, next_attempt_at);
     `,
   },
+  {
+    // MyVault credential bridge (docs/plans/myvault-credential-bridge.md).
+    // Metadata only: values stay AES-GCM ciphertext in credential_references;
+    // these tables hold ids, states, fingerprints and redacted notes.
+    version: 7,
+    name: 'myvault credential bridge',
+    sql: `
+      CREATE TABLE vault_bridge_origins (
+        origin TEXT PRIMARY KEY,
+        vault_id TEXT,
+        trusted_at TEXT NOT NULL,
+        last_connected_at TEXT
+      );
+      CREATE TABLE credential_vault_links (
+        credential_id TEXT PRIMARY KEY REFERENCES credential_references(id) ON DELETE CASCADE,
+        authority TEXT NOT NULL,
+        origin TEXT,
+        vault_id TEXT,
+        vault_item_id TEXT,
+        state TEXT NOT NULL,
+        synced_fingerprint TEXT,
+        vault_fingerprint TEXT,
+        replace_vault_fingerprint TEXT,
+        vault_updated_at TEXT,
+        first_synced_at TEXT,
+        last_synced_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX idx_credential_vault_links_item ON credential_vault_links(origin, vault_id, vault_item_id) WHERE vault_item_id IS NOT NULL;
+      CREATE INDEX idx_credential_vault_links_state ON credential_vault_links(state);
+      CREATE TABLE credential_events (
+        id TEXT PRIMARY KEY,
+        credential_id TEXT,
+        credential_name TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        direction TEXT,
+        status TEXT NOT NULL,
+        task_id TEXT,
+        target TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_credential_events_credential ON credential_events(credential_id, created_at);
+    `,
+  },
 ];

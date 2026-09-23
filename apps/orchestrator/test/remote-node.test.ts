@@ -75,7 +75,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach } from 'vitest';
 import { backoffDelay, BACKOFF } from '../src/remote/connection.js';
 import { FakeRelay } from './fake-relay.js';
-import { createTestApp, waitFor, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -160,6 +160,27 @@ describe('connection', () => {
     r.dropConnections();
     await waitFor(() => r.connections, (n) => n >= 2, 15_000, 'second connection');
     await waitFor(() => t.services.remote.status().state, (s) => s === 'connected', 15_000);
+  });
+
+  it('brings the cloud copy up to date when remote access is switched back on', async () => {
+    const r = await relay();
+    const t = await app();
+    await t.services.remote.pair({ relayUrl: r.url, code: r.newPairingToken(), label: 'PC' });
+    await waitFor(() => t.services.remote.status().state, (s) => s === 'connected', 15_000);
+    await t.services.remote.updatePermissions({ enabled: false });
+    // Work done while remote access is off is not queued.
+    const repositoryId = await addRepo(t, await makeRepo());
+    const taskId = await createTask(t, repositoryId, 'Work while remote access is off');
+    await waitForStatus(t, taskId, ['COMPLETED'], 90_000);
+    const seen = r.events.length;
+    await t.services.remote.updatePermissions({ enabled: true });
+    const mirrored = await waitFor(
+      () => r.events.slice(seen).find((e) => e.payload?.type === 'task' && e.payload.task?.id === taskId),
+      Boolean,
+      15_000,
+      'task resent after re-enabling',
+    );
+    expect(mirrored!.payload.task.status).toBe('COMPLETED');
   });
 
   it('keeps the local service fully usable when the cloud is unreachable', async () => {

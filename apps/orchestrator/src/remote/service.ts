@@ -342,6 +342,8 @@ export class RemoteNodeService {
     this.store.updatePermissions(patch);
     if (patch.remoteTerminals === false || patch.enabled === false) await this.grants.revokeAll();
     if (patch.enabled === false) {
+      // Nothing is queued while remote access is off, so the cloud copy goes stale: send everything when it is back on.
+      this.store.setResyncRequired(true);
       this.disconnect();
       this.setState('disabled');
     } else if (patch.enabled === true && !this.connection) {

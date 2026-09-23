@@ -13,7 +13,11 @@ export interface RunOptions {
   stdin?: string;
   timeoutMs?: number;
   onLine?: (stream: StreamName, line: string) => void;
-  /** Longest line forwarded before it is split (protects against minified blobs). */
+  /**
+   * Longest line forwarded before it is split (protects against minified
+   * blobs). Callers parsing a line-delimited protocol must raise it so one
+   * event is never delivered as several fragments.
+   */
   maxLineLength?: number;
 }
 
@@ -43,27 +47,36 @@ export interface ProcessHandle {
 }
 
 const TAIL_LINES = 200;
+/** Tail entries are for error classification only; a huge line must not pin megabytes. */
+const TAIL_LINE_CHARS = 4000;
 const KILL_GRACE_MS = 3000;
+export const DEFAULT_MAX_LINE_LENGTH = 8000;
 
 function createLineSplitter(stream: StreamName, maxLen: number, emit: (stream: StreamName, line: string) => void) {
   let buffer = '';
+  // Everything before this offset is known to contain no newline, so a long
+  // line arriving in many chunks is scanned once rather than once per chunk.
+  let scanned = 0;
   return {
     push(chunk: string) {
       buffer += chunk;
       let index: number;
-      while ((index = buffer.search(/\r?\n/)) !== -1) {
-        const line = buffer.slice(0, index);
-        buffer = buffer.slice(buffer[index] === '\r' ? index + 2 : index + 1);
-        emitLong(line);
+      while ((index = buffer.indexOf('\n', scanned)) !== -1) {
+        emitLong(buffer.slice(0, index > 0 && buffer[index - 1] === '\r' ? index - 1 : index));
+        buffer = buffer.slice(index + 1);
+        scanned = 0;
       }
       while (buffer.length > maxLen) {
         emit(stream, buffer.slice(0, maxLen));
         buffer = buffer.slice(maxLen);
       }
+      // A trailing '\r' may be the first half of a '\r\n' split across chunks.
+      scanned = buffer.endsWith('\r') ? buffer.length - 1 : buffer.length;
     },
     flush() {
-      if (buffer.length) emitLong(buffer);
+      if (buffer.length) emitLong(buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer);
       buffer = '';
+      scanned = 0;
     },
   };
   function emitLong(line: string) {
@@ -108,13 +121,13 @@ export function killTree(child: ChildProcess): Promise<void> {
 function start(child: ChildProcess, options: RunOptions | ShellRunOptions): ProcessHandle {
   const startedAt = new Date();
   const tail: string[] = [];
-  const maxLen = options.maxLineLength ?? 8000;
+  const maxLen = options.maxLineLength ?? DEFAULT_MAX_LINE_LENGTH;
   let timedOut = false;
   let cancelled = false;
   let spawnError: string | null = null;
 
   const emit = (stream: StreamName, line: string) => {
-    tail.push(line);
+    tail.push(line.length > TAIL_LINE_CHARS ? line.slice(0, TAIL_LINE_CHARS) : line);
     if (tail.length > TAIL_LINES) tail.shift();
     options.onLine?.(stream, line);
   };

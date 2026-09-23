@@ -8,6 +8,14 @@ travel on **stdin**; argv holds only fixed flags and validated model/effort
 values. Processes are killed as a tree on cancel/timeout
 ([process.ts](../../packages/executor/src/process.ts)).
 
+**Line lengths.** `runProcess` splits lines longer than `maxLineLength`
+(default 8,000 characters) for display. Agent CLIs stream one JSON event per
+line, and a single event — a long final answer, a large file read — exceeds
+that, so `CliAgentAdapter.execute` raises the limit to
+`PROTOCOL_MAX_LINE_LENGTH` (32 MiB) and bounds only the lines the parser logs.
+When events were split, the `result` event never parsed and a successful run
+was reported as "finished without producing any output".
+
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
 - Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] -`

@@ -2,7 +2,7 @@
 // Test double for the Claude Code CLI. Behaviour is chosen by environment variables:
 //   FAKE_CLAUDE_AUTH            subscription | apikey | none
 //   FAKE_CLAUDE_APIKEY_SOURCE   value reported in the init event (default "none")
-//   FAKE_CLAUDE_SCENARIO        ok | usage | hang | error
+//   FAKE_CLAUDE_SCENARIO        ok | usage | hang | error | long
 import { writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -48,6 +48,25 @@ if (args[0] === '-p') {
     if (scenario === 'hang' || (process.env.FAKE_CLAUDE_APIKEY_SOURCE ?? 'none') !== 'none') {
       setInterval(() => {}, 1000);
       return; // inside the stdin callback
+    }
+    if (scenario === 'long') {
+      // Real sessions emit single JSON lines far past any display limit: a
+      // large file read, then a long final answer. Written in small pieces so
+      // each line reaches the reader across many chunks.
+      const lines = [
+        { type: 'user', message: { content: [{ type: 'tool_result', content: 'r'.repeat(120_000) }] } },
+        { type: 'result', subtype: 'success', is_error: false, result: `## Findings\n${'f'.repeat(30_000)}\nEND` },
+      ].map((event) => JSON.stringify(event) + '\r\n');
+      const text = lines.join('');
+      let offset = 0;
+      const writeNext = () => {
+        if (offset >= text.length) return process.exit(0);
+        const piece = text.slice(offset, offset + 4096);
+        offset += piece.length;
+        process.stdout.write(piece, writeNext);
+      };
+      writeNext();
+      return;
     }
     if (scenario === 'usage') {
       out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1790122800, rateLimitType: 'five_hour' } });

@@ -79,6 +79,23 @@ describe('runProcess', () => {
     }).done;
     expect(lines).toEqual(['xxxxxxxxxx', 'xxxxxxxxxx', 'xxxxx']);
   });
+
+  it('keeps a line whole across many chunks when the limit allows, including a split CRLF', async () => {
+    const lines: string[] = [];
+    const script =
+      'const t="a".repeat(200000)+"\\r\\nb\\r\\n";let o=0;' +
+      'const w=()=>{if(o>=t.length)return;const p=t.slice(o,o+4095);o+=p.length;process.stdout.write(p,w)};w()';
+    await runProcess({
+      command: node,
+      args: ['-e', script],
+      cwd: os.tmpdir(),
+      env: process.env,
+      maxLineLength: 1024 * 1024,
+      onLine: (_s, l) => lines.push(l),
+    }).done;
+    expect(lines.map((l) => l.length)).toEqual([200000, 1]);
+    expect(lines[1]).toBe('b');
+  });
 });
 
 describe('runShell', () => {

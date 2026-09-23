@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { runProcess, which, type ProcessHandle, type ProcessResult } from '@acc/executor';
+import { DEFAULT_MAX_LINE_LENGTH, runProcess, which, type ProcessHandle, type ProcessResult } from '@acc/executor';
 import { sanitizeEnv } from '@acc/security';
 import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
 import { classifyFailureText, summarizeFailure } from './classify.js';
@@ -36,6 +36,12 @@ export interface CaptureResult {
 }
 
 const HEALTH_TTL_MS = 5 * 60 * 1000;
+/**
+ * Agent CLIs stream one JSON event per line, and a single event (a long final
+ * answer, a large file read) easily exceeds the display limit. Events must
+ * reach the parser whole; only what the parser logs is bounded for display.
+ */
+export const PROTOCOL_MAX_LINE_LENGTH = 32 * 1024 * 1024;
 
 /** Run a short-lived CLI command (version, auth status) and capture its output. */
 export async function capture(
@@ -187,7 +193,11 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     const args = this.buildArgs(input);
     let guardViolation: string | null = null;
     let handle: ProcessHandle | null = null;
-    const emit = (stream: AgentLogStream, text: string) => input.onLine?.(stream, text);
+    const emit = (stream: AgentLogStream, text: string) => {
+      for (let i = 0; i < Math.max(text.length, 1); i += DEFAULT_MAX_LINE_LENGTH) {
+        input.onLine?.(stream, text.slice(i, i + DEFAULT_MAX_LINE_LENGTH));
+      }
+    };
     const parser = this.createParser({
       input,
       emit,
@@ -206,6 +216,7 @@ export abstract class CliAgentAdapter implements AgentAdapter {
       env,
       stdin: input.prompt,
       timeoutMs: input.timeoutMs,
+      maxLineLength: PROTOCOL_MAX_LINE_LENGTH,
       onLine: (stream, line) => (stream === 'stdout' ? parser.onStdout(line) : parser.onStderr(line)),
     });
     this.running.set(input.executionId, handle);

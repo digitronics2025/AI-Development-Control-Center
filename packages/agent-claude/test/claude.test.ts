@@ -84,6 +84,19 @@ describe('ClaudeCodeAdapter', () => {
     expect(result).toMatchObject({ status: 'failed', errorClass: 'USAGE_LIMIT' });
   });
 
+  it('reads stream events longer than the display limit whole', async () => {
+    const lines: string[] = [];
+    const result = await (
+      await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_SCENARIO: 'long' }, onLine: (_s, t) => lines.push(t) }))
+    ).done;
+    expect(result.status).toBe('succeeded');
+    expect(result.output.startsWith('## Findings')).toBe(true);
+    expect(result.output.endsWith('END')).toBe(true);
+    // Parsed events are summarised, never dumped raw into the log.
+    expect(lines.some((l) => l.includes('"type":"result"'))).toBe(false);
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(8000);
+  });
+
   it('reports an execution error', async () => {
     const result = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_SCENARIO: 'error' } }))).done;
     expect(result).toMatchObject({ status: 'failed', errorMessage: 'Something broke' });

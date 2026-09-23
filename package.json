@@ -24,7 +24,11 @@
     "demo": "node scripts/demo.mjs",
     "package:vscode": "pnpm --filter acc-vscode package",
     "cloud:test": "pnpm --filter @acc/cloud-control test",
-    "cloud:dev": "pnpm --filter @acc/cloud-control dev"
+    "cloud:dev": "pnpm --filter @acc/cloud-control dev",
+    "cloud:deploy:staging": "node apps/cloud-control/scripts/deploy.mjs staging",
+    "cloud:deploy:production": "node apps/cloud-control/scripts/deploy.mjs production",
+    "cloud:smoke": "node apps/cloud-control/scripts/smoke.mjs production",
+    "cloud:admin": "node apps/cloud-control/scripts/admin.mjs"
   },
   "devDependencies": {
     "@acc/agent-claude": "workspace:*",

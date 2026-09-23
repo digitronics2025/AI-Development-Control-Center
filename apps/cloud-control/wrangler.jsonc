@@ -45,7 +45,7 @@
         { "pattern": "acc-staging.dr-badawi-abdalsalam.com", "custom_domain": true },
         { "pattern": "acc-relay-staging.dr-badawi-abdalsalam.com", "custom_domain": true }
       ],
-      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-staging", "database_id": "00000000-0000-4000-8000-000000000001", "migrations_dir": "migrations" }],
+      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-staging", "database_id": "8f4edcf1-b6b2-4790-9b86-cd2588a4704c", "migrations_dir": "migrations" }],
       "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "acc-artifacts-staging" }],
       "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "WorkspaceHub" }] },
       "ratelimits": [
@@ -71,7 +71,7 @@
         { "pattern": "acc.dr-badawi-abdalsalam.com", "custom_domain": true },
         { "pattern": "acc-relay.dr-badawi-abdalsalam.com", "custom_domain": true }
       ],
-      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-production", "database_id": "00000000-0000-4000-8000-000000000002", "migrations_dir": "migrations" }],
+      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-production", "database_id": "8a7b3714-b772-4009-9f75-74caf13973fa", "migrations_dir": "migrations" }],
       "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "acc-artifacts-production" }],
       "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "WorkspaceHub" }] },
       "ratelimits": [

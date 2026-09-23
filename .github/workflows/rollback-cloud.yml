@@ -1,0 +1,37 @@
+# Roll the cloud control plane back to an earlier Worker version
+# (docs/systems/cloud-control.md §Rollback). D1 is not rolled back here: use
+# D1 Time Travel (wrangler d1 time-travel restore) as documented.
+name: Roll back cloud control plane
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+      version:
+        description: Worker version id to restore (from `wrangler deployments list`); empty = the previous one
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @acc/cloud-control exec wrangler rollback ${{ inputs.version }} --env ${{ inputs.environment }} --message "Rollback from GitHub Actions" --yes
+      - run: node apps/cloud-control/scripts/smoke.mjs ${{ inputs.environment }}

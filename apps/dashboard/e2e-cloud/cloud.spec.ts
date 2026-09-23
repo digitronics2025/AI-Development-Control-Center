@@ -185,7 +185,10 @@ test('15: responsive and accessible in both themes at every viewport', async ({ 
         await expect(page.locator('main')).toBeVisible();
         // Realtime keeps a socket open, so the network never idles: wait for the page to settle instead.
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-        await page.waitForTimeout(250);
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+        // Controls enable once the node is known online; scan after that, not mid-transition.
+        await expect(page.getByRole('button', { name: 'New Task' })).toBeEnabled();
+        await page.waitForTimeout(400);
         await expectNoHorizontalOverflow(page);
         if (viewport.name === 'desktop' || viewport.name === 'mobile') await expectNoAxeViolations(page, testInfo);
       }

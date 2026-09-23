@@ -33,6 +33,9 @@ import { toArtifactView } from '../services/artifacts.js';
 import { RepositoryError } from '../services/repositories.js';
 import { WorkflowError } from '../services/workflows.js';
 import { SOURCE_CONTROL_HTTP_STATUS, SourceControlError } from '../source-control/errors.js';
+import { CredentialError } from '../tools/credentials.js';
+import { McpError } from '../tools/mcp.js';
+import { TerminalError } from '../tools/terminals.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
 
@@ -62,6 +65,18 @@ export function registerErrorHandler(app: FastifyInstance): void {
     if (error instanceof SourceControlError) {
       // Messages are already redacted; details carry paths, operation ids and findings, never secrets.
       return sendError(reply, SOURCE_CONTROL_HTTP_STATUS[error.code], error.code, error.message, error.details);
+    }
+    if (error instanceof TerminalError) {
+      const status = { NOT_FOUND: 404, DISABLED: 403, UNAVAILABLE: 503, LIMIT: 429, DENIED: 403 }[error.code];
+      return sendError(reply, status, error.code, error.message);
+    }
+    if (error instanceof CredentialError) {
+      const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400, KEY_UNAVAILABLE: 503 }[error.code];
+      return sendError(reply, status, error.code, error.message);
+    }
+    if (error instanceof McpError) {
+      const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400 }[error.code];
+      return sendError(reply, status, error.code, error.message);
     }
     const statusCode = (error as { statusCode?: number }).statusCode;
     if (statusCode && statusCode < 500) return sendError(reply, statusCode, 'BAD_REQUEST', (error as Error).message);

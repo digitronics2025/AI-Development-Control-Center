@@ -18,6 +18,12 @@ async function main(): Promise<void> {
   const port = typeof address === 'object' && address ? address.port : config.port;
   const url = `http://${config.host === '::1' ? '[::1]' : config.host}:${port}`;
 
+  // Agent stages reach the tool layer's MCP bridge through this address.
+  services.tooling.setListenUrl(url);
+  // Tool health is cached for hours; detect only what is stale, in the background.
+  void services.tools.refreshStale();
+  void services.credentials.primeRedactor().catch((error: unknown) => app.log.warn(`Credential key unavailable: ${(error as Error).message}`));
+
   // Discovery file for the VS Code extension and launchers (no secrets: the token has its own file).
   const runtimeFile = path.join(config.dataDir, 'runtime.json');
   writeFileSync(runtimeFile, JSON.stringify({ url, port, pid: process.pid, startedAt: services.startedAt, version: config.version }, null, 2));

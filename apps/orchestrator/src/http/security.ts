@@ -69,6 +69,9 @@ export function registerSecurity(app: FastifyInstance, options: { token: string;
     const isApi = url.startsWith('/api/') || url === '/api' || url.startsWith('/ws');
     if (!isApi) return;
     if (request.method === 'OPTIONS') return reply.code(204).send();
+    // Tool sessions carry their own short-lived, scoped token; the route checks
+    // it (and only it: the local API token does not open these routes).
+    if (url.startsWith('/api/tool-session/')) return;
     const header = request.headers.authorization;
     const bearer = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
     // Browsers cannot set headers on a WebSocket handshake, so /ws also accepts ?token=.

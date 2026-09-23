@@ -11,3 +11,6 @@ playwright-report/
 !.env.example
 *.log
 .acc-data/
+.dev.vars
+.dev.vars.*
+.wrangler/

@@ -1,0 +1,24 @@
+{
+  "name": "@acc/cloud-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare control plane: serves the dashboard, authenticates people with Access, relays typed commands to paired execution nodes.",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run --root ../.. --project @acc/cloud-control",
+    "deploy:staging": "node scripts/deploy.mjs staging",
+    "deploy:production": "node scripts/deploy.mjs production"
+  },
+  "dependencies": {
+    "@acc/shared": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260919.1",
+    "wrangler": "4.135.0",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.21.3"
+  }
+}

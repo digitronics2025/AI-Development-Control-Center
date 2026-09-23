@@ -129,6 +129,8 @@ export class RemoteNodeService {
   private readonly queues = new Map<string, Promise<unknown>>();
   private unsubscribe: (() => void) | null = null;
   private lastSnapshotAt = 0;
+  private snapshotRepoIds = '';
+  private snapshotTimer: NodeJS.Timeout | null = null;
   private started = false;
 
   constructor(private readonly d: RemoteNodeDeps) {
@@ -222,6 +224,8 @@ export class RemoteNodeService {
     this.heartbeatTimer = null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
+    if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = null;
     for (const t of this.detailTimers.values()) clearTimeout(t);
     this.detailTimers.clear();
     this.logSubscriptions.clear();
@@ -499,12 +503,26 @@ export class RemoteNodeService {
     this.send({ type: 'node.capabilities', payload: this.capabilities() });
   }
 
+  /** A repository was added or removed: the cloud needs its fingerprint for routing and leases. */
+  private scheduleSnapshotIfRepositoriesChanged(): void {
+    if (!this.welcomed || this.snapshotTimer) return;
+    const ids = this.d.store.listRepositories().map((r) => r.id).sort().join(',');
+    if (ids === this.snapshotRepoIds) return;
+    this.snapshotTimer = setTimeout(() => {
+      this.snapshotTimer = null;
+      void this.sendSnapshot(true);
+    }, 1_000);
+    this.snapshotTimer.unref?.();
+  }
+
   private async sendSnapshot(force: boolean): Promise<void> {
     const config = this.store.config();
     if (!config || (!force && Date.now() - this.lastSnapshotAt < this.timings.snapshotMs)) return;
     this.lastSnapshotAt = Date.now();
+    const records = this.d.store.listRepositories().slice(0, 1000);
+    this.snapshotRepoIds = records.map((r) => r.id).sort().join(',');
     const repositories: NodeRepository[] = [];
-    for (const rec of this.d.store.listRepositories().slice(0, 1000)) {
+    for (const rec of records) {
       const { fingerprint, remoteHost } = await repositoryFingerprint(rec.path, config.nodeId, rec.id);
       repositories.push({ localId: rec.id, name: rec.name.slice(0, 200), fingerprint, remoteHost, defaultBranch: null });
     }
@@ -517,7 +535,10 @@ export class RemoteNodeService {
     if (message.type === 'remote.status') return;
     const config = this.store.config();
     if (!config || !config.enabled) return;
-    if (message.type === 'repository' || message.type === 'repository.deleted') this.egress.setRoots({ repositories: this.repositoryRoots(), dataDir: this.d.config.dataDir });
+    if (message.type === 'repository' || message.type === 'repository.deleted') {
+      this.egress.setRoots({ repositories: this.repositoryRoots(), dataDir: this.d.config.dataDir });
+      this.scheduleSnapshotIfRepositoriesChanged();
+    }
     const clean = this.egress.message(message, (terminalId) => this.terminalSubscriptions.has(terminalId) && config.remoteTerminals);
     if (!clean) return;
     if (MIRRORED_MESSAGE_TYPES.has(message.type)) {

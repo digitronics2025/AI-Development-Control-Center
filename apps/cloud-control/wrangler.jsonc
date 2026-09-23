@@ -1,0 +1,93 @@
+// Cloud control plane (docs/systems/cloud-control.md).
+// The top level is local development and tests (`wrangler dev --local`); staging and
+// production are the `env` blocks. Bindings are not inherited by environments, so each
+// block repeats them. No workers.dev or preview URL is ever published: the Worker is
+// reachable only on its custom hostnames, and the control hostname sits behind
+// Cloudflare Access (the Worker verifies the Access token as well).
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "acc-cloud-control-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../dashboard/dist/web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Every request, assets included, passes the Worker's authentication first.
+    "run_worker_first": true
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "acc-control-dev", "database_id": "00000000-0000-4000-8000-000000000000", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "acc-artifacts-dev" }],
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "WorkspaceHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceHub"] }],
+  "ratelimits": [
+    { "name": "PAIRING_LIMITER", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
+    { "name": "AUTH_LIMITER", "namespace_id": "4102", "simple": { "limit": 60, "period": 60 } },
+    { "name": "COMMAND_LIMITER", "namespace_id": "4103", "simple": { "limit": 300, "period": 60 } }
+  ],
+  "triggers": { "crons": ["17 3 * * *"] },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "CONTROL_HOSTS": "127.0.0.1,localhost",
+    "RELAY_HOSTS": "127.0.0.1,localhost",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+  "env": {
+    "staging": {
+      "name": "acc-cloud-control-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        { "pattern": "acc-staging.dr-badawi-abdalsalam.com", "custom_domain": true },
+        { "pattern": "acc-relay-staging.dr-badawi-abdalsalam.com", "custom_domain": true }
+      ],
+      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-staging", "database_id": "00000000-0000-4000-8000-000000000001", "migrations_dir": "migrations" }],
+      "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "acc-artifacts-staging" }],
+      "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "WorkspaceHub" }] },
+      "ratelimits": [
+        { "name": "PAIRING_LIMITER", "namespace_id": "4201", "simple": { "limit": 20, "period": 60 } },
+        { "name": "AUTH_LIMITER", "namespace_id": "4202", "simple": { "limit": 60, "period": 60 } },
+        { "name": "COMMAND_LIMITER", "namespace_id": "4203", "simple": { "limit": 300, "period": 60 } }
+      ],
+      "triggers": { "crons": ["17 3 * * *"] },
+      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "CONTROL_HOSTS": "acc-staging.dr-badawi-abdalsalam.com",
+        "RELAY_HOSTS": "acc-relay-staging.dr-badawi-abdalsalam.com",
+        "ACCESS_TEAM_DOMAIN": "",
+        "ACCESS_AUD": ""
+      }
+    },
+    "production": {
+      "name": "acc-cloud-control",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        { "pattern": "acc.dr-badawi-abdalsalam.com", "custom_domain": true },
+        { "pattern": "acc-relay.dr-badawi-abdalsalam.com", "custom_domain": true }
+      ],
+      "d1_databases": [{ "binding": "DB", "database_name": "acc-control-production", "database_id": "00000000-0000-4000-8000-000000000002", "migrations_dir": "migrations" }],
+      "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "acc-artifacts-production" }],
+      "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "WorkspaceHub" }] },
+      "ratelimits": [
+        { "name": "PAIRING_LIMITER", "namespace_id": "4301", "simple": { "limit": 20, "period": 60 } },
+        { "name": "AUTH_LIMITER", "namespace_id": "4302", "simple": { "limit": 60, "period": 60 } },
+        { "name": "COMMAND_LIMITER", "namespace_id": "4303", "simple": { "limit": 300, "period": 60 } }
+      ],
+      "triggers": { "crons": ["17 3 * * *"] },
+      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "CONTROL_HOSTS": "acc.dr-badawi-abdalsalam.com",
+        "RELAY_HOSTS": "acc-relay.dr-badawi-abdalsalam.com",
+        "ACCESS_TEAM_DOMAIN": "",
+        "ACCESS_AUD": ""
+      }
+    }
+  }
+}

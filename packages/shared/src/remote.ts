@@ -79,7 +79,7 @@ function toHex(buffer: ArrayBuffer): string {
 /** SHA-256 of a string or bytes, lowercase hex. Web Crypto: identical in Node.js 22 and Workers. */
 export async function sha256Hex(input: string | Uint8Array<ArrayBuffer>): Promise<string> {
   const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
-  return toHex(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+  return toHex(await crypto.subtle.digest('SHA-256', bytes));
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +408,7 @@ export type CloudFrame =
 
 export const cloudFrameSchema = z.object({ v: z.number().int(), id: z.string().max(120), at: isoSchema, type: z.string().max(60), payload: z.unknown() });
 
-export function frame<T extends { type: string; payload: unknown }>(message: T, id: string = globalThis.crypto.randomUUID()): T & { v: number; id: string; at: string } {
+export function frame<T extends { type: string; payload: unknown }>(message: T, id: string = crypto.randomUUID()): T & { v: number; id: string; at: string } {
   return { v: REMOTE_PROTOCOL_VERSION, id, at: new Date().toISOString(), ...message };
 }
 

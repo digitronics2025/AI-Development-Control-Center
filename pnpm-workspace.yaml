@@ -8,5 +8,7 @@ allowBuilds:
   '@vscode/vsce-sign': false
   better-sqlite3: true
   esbuild: true
+  # The Workers runtime (wrangler dev / tests) downloads its platform binary at install.
+  workerd: true
   # Only runs its prebuild check: node-pty ships Windows binaries (conpty) in the package.
   node-pty: true

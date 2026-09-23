@@ -2,6 +2,6 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    projects: ['packages/*', 'apps/orchestrator', 'apps/vscode-extension'],
+    projects: ['packages/*', 'apps/orchestrator', 'apps/vscode-extension', 'apps/cloud-control'],
   },
 });

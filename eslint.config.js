@@ -11,6 +11,8 @@ export default tseslint.config(
       '**/coverage/**',
       '**/playwright-report/**',
       '**/test-results/**',
+      // Wrangler's local state and temporary bundles.
+      '**/.wrangler/**',
       'apps/vscode-extension/media/**',
       // Vendored by the docs-systems skill; re-vendored, never hand-edited.
       'scripts/docs-*.mjs',
@@ -27,6 +29,11 @@ export default tseslint.config(
       'no-empty': ['error', { allowEmptyCatch: false }],
       eqeqeq: ['error', 'always'],
     },
+  },
+  {
+    // The Worker runs in the Workers runtime, not Node.js.
+    files: ['apps/cloud-control/src/**/*.ts'],
+    languageOptions: { globals: { ...globals.serviceworker, WebSocketPair: 'readonly', WebSocketRequestResponsePair: 'readonly' } },
   },
   {
     files: ['apps/dashboard/**/*.{ts,tsx}', 'packages/ui/**/*.{ts,tsx}'],

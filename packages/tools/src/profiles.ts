@@ -42,7 +42,7 @@ export const PROFILES: Record<ProfileId, CapabilityProfile> = {
     id: 'cloudflare-worker',
     title: 'Cloudflare Worker',
     description: 'Node tooling plus Wrangler, D1, R2 and HTTP checks.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'cloudflare.*', 'database.*', 'browser.*', 'verify.*', 'github.*'],
+    include: [...CORE, ...INSPECT, ...DEVELOP, 'cloudflare.*', 'credential.generate', 'database.*', 'browser.*', 'verify.*', 'github.*'],
   },
   'android-development': {
     id: 'android-development',

@@ -1,6 +1,7 @@
 import { androidProviders } from './packs/android.js';
 import { browserProvider } from './packs/browser.js';
 import { cloudflareProvider } from './packs/cloudflare.js';
+import { credentialProvider } from './packs/credential-broker.js';
 import { databaseProviders } from './packs/database.js';
 import { dockerProvider } from './packs/docker.js';
 import { filesystemProvider } from './packs/filesystem.js';
@@ -49,6 +50,7 @@ export function builtinProviders(): ToolProvider[] {
     ...networkProviders(),
     windowsProvider(),
     cloudflareProvider(),
+    credentialProvider(),
     ...databaseProviders(),
     dockerProvider(),
     ...androidProviders(),

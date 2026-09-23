@@ -53,7 +53,10 @@ trigger, [usage.md](usage.md)), and the tool
 layer's `tools`, `tool_capabilities`, `tool_health`, `tool_executions`,
 `task_processes`, `pty_sessions`, `recovery_attempts`, `mcp_servers`,
 `capability_escalations`, `credential_references` (migration 5,
-[tool-system.md](tool-system.md), [tools/store.ts](../../apps/orchestrator/src/tools/store.ts)). Access goes through
+[tool-system.md](tool-system.md), [tools/store.ts](../../apps/orchestrator/src/tools/store.ts)),
+the MyVault bridge's `credential_vault_links`, `vault_bridge_origins`,
+`credential_events` (migration 7, metadata only,
+[credential-broker.md](credential-broker.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 

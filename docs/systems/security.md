@@ -88,7 +88,10 @@ needs an approval with a typed confirmation (the task ID).
 - Every path a tool touches is confined to the task's roots after resolving
   links ([paths.ts](../../packages/tools/src/paths.ts)); files holding the
   user's pre-existing work are refused for writes, commits and restores.
-- Credentials: [credential-broker.md](credential-broker.md). Policy and the
+- Credentials: [credential-broker.md](credential-broker.md), including the
+  MyVault bridge: its routes take the local token like any `/api` route, are
+  not tools, not MCP and not remote operations, and trusted MyVault origins
+  are added only from the dashboard. Policy and the
   privileged helper: [autopilot.md](autopilot.md). Terminals are loopback only
   ([pty.md](pty.md)).
 - Redaction also covers values the broker hands out

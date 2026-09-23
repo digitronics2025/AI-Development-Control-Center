@@ -1,0 +1,93 @@
+{
+  "protocol": "mvcc-bridge-v1",
+  "note": "Fixed keys and IVs for interoperability tests only. Never use these keys for anything else.",
+  "sessionId": "vector-session-000000001",
+  "myvault": {
+    "privateJwk": {
+      "key_ops": [
+        "deriveBits"
+      ],
+      "ext": true,
+      "kty": "EC",
+      "x": "RucLN6OMkoTIKqvkFxxh82mCN5sd5TBHzM_ucAvxH4A",
+      "y": "bFu9_Xx10xxgqaLMELk6NL3AMq819n94BtXxDesykk8",
+      "crv": "P-256",
+      "d": "p2W04-hh65bntpeTQDANUO4mISEQxSq1bAzkC69dFBQ"
+    },
+    "publicKey": "BEbnCzejjJKEyCqr5BccYfNpgjebHeUwR8zP7nAL8R-AbFu9_Xx10xxgqaLMELk6NL3AMq819n94BtXxDesykk8"
+  },
+  "controlCenter": {
+    "privateJwk": {
+      "key_ops": [
+        "deriveBits"
+      ],
+      "ext": true,
+      "kty": "EC",
+      "x": "0keASL5bonf4UIJ7d_O-WXBkn_Ez7Rca7YXcdS52iUE",
+      "y": "I4m6J4pk5jAkkAUggOP_kG9O6dF89szS_VsO7HXHeW0",
+      "crv": "P-256",
+      "d": "kxwwj6fyvVT48W4DaYzm4gm2nei7LmLGNIJ_mWszSxs"
+    },
+    "publicKey": "BNJHgEi-W6J3-FCCe3fzvllwZJ_xM-0XGu2F3HUudolBI4m6J4pk5jAkkAUggOP_kG9O6dF89szS_VsO7HXHeW0"
+  },
+  "code": "6E2D-5C46",
+  "fingerprints": {
+    "generated-vector-value": "82dbc5cf"
+  },
+  "messages": [
+    {
+      "from": "myvault",
+      "iv": "BwcHBwcHBwcHBwcH",
+      "type": "snapshot.part",
+      "body": {
+        "part": 1,
+        "final": true,
+        "items": [
+          {
+            "itemId": "item-1",
+            "title": "Stripe test key",
+            "kind": "other",
+            "envVar": "STRIPE_KEY",
+            "value": "sk_test_vector_ünïcødé",
+            "updatedAt": "2026-09-23T00:00:00.000Z",
+            "ccId": null,
+            "authority": "myvault"
+          }
+        ]
+      },
+      "envelope": {
+        "v": "mvcc-bridge-v1",
+        "sid": "vector-session-000000001",
+        "dir": "mv2cc",
+        "seq": 1,
+        "type": "snapshot.part",
+        "iv": "BwcHBwcHBwcHBwcH",
+        "ct": "dvU8_RFQxTNfHrYVZyZCh8VdMwcXVFotOM5vwWw_b8AmdKyDIqQ6iaqM_KJqDzHvKd8ByRQKSHU7MwgcT2CKPT0OVNyHBqghedjDsfZEWPGJdKjuobb_9Ah2knpbnDwlzA7o5SVG0Val3eSj1WrsWDDx1iGQZAOKrXbYv-xgf3975utOi83y9PPRavhrkVYd50Fakt3t8LX9EiT9K5Us57wdZrvXHWvNYuNIyoB1YQyreyCpjoqd5oap8y5AsBIfl9jMzRxuzYHXgl3e7pxJtpeYWF_M3OlQOX4NHAvbKuLdIQ91oWN26_wWHoeUud22lqg"
+      }
+    },
+    {
+      "from": "control-center",
+      "iv": "CQkJCQkJCQkJCQkJ",
+      "type": "credential.push",
+      "body": {
+        "ccId": "cred-1",
+        "name": "SESSION_SECRET",
+        "kind": "other",
+        "envVar": null,
+        "description": "",
+        "value": "generated-vector-value",
+        "fingerprint": "82dbc5cf",
+        "force": false
+      },
+      "envelope": {
+        "v": "mvcc-bridge-v1",
+        "sid": "vector-session-000000001",
+        "dir": "cc2mv",
+        "seq": 1,
+        "type": "credential.push",
+        "iv": "CQkJCQkJCQkJCQkJ",
+        "ct": "MYyz61oLNaTkRepBjBHM3_5tlmOFcG4oBDflVpmdnwhx0u50xbvplDmENNPaWdreqF0bZ3Ggq24zO9yDJddmkXepboEsEy8gaK1GgGutEMHipFvSvbmCXeFP7wqCJI6KoOHQapsesl01t0hmVOpO1yZvd_wmTBdS_u1P5hf3-CUGLe-UtHeQcCuwyAugcZZHHhfxUPK29TBRjNabDo4LoICUCVg-RCrdVQhh1whBnQ"
+      }
+    }
+  ]
+}

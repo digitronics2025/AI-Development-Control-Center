@@ -38,6 +38,7 @@ import { CredentialError } from '../tools/credentials.js';
 import { McpError } from '../tools/mcp.js';
 import { RemoteError } from '../remote/service.js';
 import { TerminalError } from '../tools/terminals.js';
+import { VAULT_BRIDGE_HTTP_STATUS, VaultBridgeError } from '../tools/vault-bridge.js';
 import { usageErrorStatus } from './usage-routes.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
@@ -76,9 +77,10 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof CredentialError) {
-      const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400, KEY_UNAVAILABLE: 503 }[error.code];
+      const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400, KEY_UNAVAILABLE: 503, MANAGED: 409 }[error.code];
       return sendError(reply, status, error.code, error.message);
     }
+    if (error instanceof VaultBridgeError) return sendError(reply, VAULT_BRIDGE_HTTP_STATUS[error.code], error.code, error.message);
     if (error instanceof McpError) {
       const status = { NOT_FOUND: 404, DUPLICATE: 409, INVALID: 400 }[error.code];
       return sendError(reply, status, error.code, error.message);

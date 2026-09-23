@@ -33,13 +33,9 @@ import {
   type Column,
 } from '@acc/ui';
 import {
-  CREDENTIAL_KIND_ENV,
-  CREDENTIAL_KINDS,
   POLICY_MODE_DESCRIPTION,
   POLICY_MODE_LABEL,
   POLICY_MODES,
-  type CredentialKind,
-  type CredentialView,
   type ExecutionSettings,
   type McpServerView,
   type PermissionLevel,
@@ -50,10 +46,11 @@ import {
 } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useRepositories, useSettings, useUpdateSettings } from '../api/hooks';
-import { useCredentialMutations, useCredentials, useMcpMutations, useMcpServers, useProcesses, useStopProcess, useTerminals, useToolMutations, useTools } from '../api/tools';
+import { useCredentials, useMcpMutations, useMcpServers, useProcesses, useStopProcess, useTerminals, useToolMutations, useTools } from '../api/tools';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection } from '../app/runtime';
 import { TerminalDrawer } from '../components/terminal';
+import { CredentialsTab } from './tools/CredentialsTab';
 import { LIVE_PROCESS, PROCESS_VISUAL, TOOL_HEALTH_VISUAL } from '../components/tools';
 
 const TABS = ['overview', 'processes', 'terminals', 'mcp', 'credentials', 'policy'] as const;
@@ -374,112 +371,6 @@ function McpTab() {
         title={`Remove ${removing?.name ?? 'server'}?`}
         description="Tasks lose its tools at once. Its credentials stay stored."
         confirmLabel="Remove server"
-        destructive
-        busy={mutations.remove.isPending}
-        onConfirm={() => {
-          if (removing) mutations.remove.mutate(removing.id, { onSuccess: () => setRemoving(null) });
-        }}
-      />
-    </div>
-  );
-}
-
-function CredentialsTab() {
-  const credentials = useCredentials();
-  const mutations = useCredentialMutations();
-  const connection = useConnection();
-  const { toast } = useFeedback();
-  const [editing, setEditing] = useState<CredentialView | 'new' | null>(null);
-  const [removing, setRemoving] = useState<CredentialView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', kind: 'cloudflare' as CredentialKind, envVar: '', description: '', value: '' });
-  const startNew = () => {
-    setForm({ name: '', kind: 'cloudflare', envVar: '', description: '', value: '' });
-    setError(null);
-    setEditing('new');
-  };
-  const save = () => {
-    setError(null);
-    const done = { onSuccess: () => { toast(editing === 'new' ? 'Credential stored' : 'Value replaced'); setEditing(null); }, onError: (e: unknown) => setError(errorMessage(e)) };
-    if (editing === 'new') mutations.create.mutate({ name: form.name.trim(), kind: form.kind, envVar: form.envVar.trim() || null, description: form.description.trim(), value: form.value }, done);
-    else if (editing) mutations.replace.mutate({ id: editing.id, value: form.value }, done);
-  };
-  const columns: Column<CredentialView>[] = [
-    { key: 'name', header: 'Name', primary: true, sortValue: (c) => c.name, cell: (c) => <span className="font-semibold text-fg">{c.name}</span> },
-    { key: 'kind', header: 'Kind', cell: (c) => <Badge>{c.kind}</Badge> },
-    { key: 'env', header: 'Given to tools as', hideStacked: true, cell: (c) => <code className="font-mono text-small text-fg-secondary">{c.envVar ?? CREDENTIAL_KIND_ENV[c.kind] ?? 'header / by name'}</code> },
-    { key: 'fingerprint', header: 'Fingerprint', hideStacked: true, cell: (c) => <code className="font-mono text-small text-fg-secondary">{c.fingerprint}</code> },
-    { key: 'used', header: 'Last used', sortValue: (c) => c.lastUsedAt ?? '', cell: (c) => (c.lastUsedAt ? <RelativeTime iso={c.lastUsedAt} /> : <span className="text-fg-secondary">Never</span>) },
-    {
-      key: 'actions',
-      header: 'Actions',
-      align: 'right',
-      cell: (c) => (
-        <span className="inline-flex gap-1">
-          <Button size="compact" onClick={() => { setForm({ ...form, value: '' }); setError(null); setEditing(c); }} disabled={!connection.online}>
-            Replace value
-          </Button>
-          <IconButton icon={Trash2} label={`Delete ${c.name}`} size="compact" onClick={() => setRemoving(c)} />
-        </span>
-      ),
-    },
-  ];
-  return (
-    <div className="flex flex-col gap-4">
-      <Banner tone="info" title="Values are write-only">
-        Stored encrypted with a key only your Windows account can unlock. Tools receive a value only for the one call that needs it; agents, logs and reports never see it.
-      </Banner>
-      <div>
-        <Button icon={Plus} variant="primary" onClick={startNew} disabled={!connection.online}>
-          Add credential
-        </Button>
-      </div>
-      {credentials.isLoading ? <Skeleton className="h-40" /> : <DataTable caption="Credentials" columns={columns} rows={credentials.data ?? []} rowKey={(c) => c.id} empty={<EmptyState icon={KeyRound} title="No credentials stored" description="Add a Cloudflare, GitHub or database credential so tools can use it without it ever reaching an agent." />} />}
-      <Dialog
-        open={editing !== null}
-        onOpenChange={(o) => !o && setEditing(null)}
-        title={editing === 'new' ? 'Add a credential' : `Replace the value of ${editing?.name ?? ''}`}
-        description="The value is not shown again after you save it."
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setEditing(null)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={save} loading={mutations.create.isPending || mutations.replace.isPending} disabled={!form.value || (editing === 'new' && !/^[\w.-]+$/.test(form.name.trim()))}>
-              Save
-            </Button>
-          </>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          {error ? <Banner tone="danger" role="alert" title="Not saved">{error}</Banner> : null}
-          {editing === 'new' ? (
-            <>
-              <Field label="Name" helper="Letters, digits, dot, dash and underscore.">
-                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="cloudflare-api" />
-              </Field>
-              <Field label="Kind">
-                <Select value={form.kind} onValueChange={(v) => setForm({ ...form, kind: v as CredentialKind })} options={CREDENTIAL_KINDS.map((k) => ({ value: k, label: k, description: CREDENTIAL_KIND_ENV[k] ? `Given as ${CREDENTIAL_KIND_ENV[k]}` : 'Used by name (e.g. an HTTP header)' }))} />
-              </Field>
-              <Field label="Environment variable" optional helper={`Default: ${CREDENTIAL_KIND_ENV[form.kind] ?? 'none'}`}>
-                <Input value={form.envVar} onChange={(e) => setForm({ ...form, envVar: e.target.value })} className="font-mono" />
-              </Field>
-              <Field label="Description" optional>
-                <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </Field>
-            </>
-          ) : null}
-          <Field label="Value">
-            <Input type="password" autoComplete="off" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} className="font-mono" spellCheck={false} />
-          </Field>
-        </div>
-      </Dialog>
-      <ConfirmDialog
-        open={removing !== null}
-        onOpenChange={(o) => !o && setRemoving(null)}
-        title={`Delete ${removing?.name ?? 'credential'}?`}
-        description="Tools that use it will ask for sign-in again. The value cannot be recovered."
-        confirmLabel="Delete credential"
         destructive
         busy={mutations.remove.isPending}
         onConfirm={() => {

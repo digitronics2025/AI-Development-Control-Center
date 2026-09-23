@@ -1,21 +1,108 @@
+import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { captureScript, resolveShell } from '@acc/executor';
-import { newCredentialKey, openSecret, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues } from '@acc/security';
-import { CREDENTIAL_KIND_ENV, credentialInputSchema, credentialUpdateSchema, type CredentialKind, type CredentialView } from '@acc/shared';
+import { newCredentialKey, openSecret, redact, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues } from '@acc/security';
+import {
+  CREDENTIAL_KINDS,
+  CREDENTIAL_KIND_ENV,
+  credentialInputSchema,
+  credentialUpdateSchema,
+  type CredentialEventView,
+  type CredentialKind,
+  type CredentialVaultLinkView,
+  type CredentialView,
+  type VaultResolveAction,
+} from '@acc/shared';
 import type { z } from 'zod';
 import type { Bus } from '../bus.js';
 import { newId, now } from '../store/store.js';
-import type { CredentialRecord, ToolStore } from './store.js';
+import type { CredentialRecord, ToolStore, VaultLinkRecord } from './store.js';
 
 export class CredentialError extends Error {
   constructor(
     message: string,
-    readonly code: 'NOT_FOUND' | 'DUPLICATE' | 'INVALID' | 'KEY_UNAVAILABLE',
+    readonly code: 'NOT_FOUND' | 'DUPLICATE' | 'INVALID' | 'KEY_UNAVAILABLE' | 'MANAGED',
   ) {
     super(message);
   }
 }
+
+/** Formats `credential.generate` offers: enough for session keys, signing secrets and webhook tokens. */
+export const GENERATED_ENCODINGS = ['base64url', 'hex'] as const;
+export type GeneratedEncoding = (typeof GENERATED_ENCODINGS)[number];
+
+export interface GenerateInput {
+  name: string;
+  kind: CredentialKind;
+  envVar: string | null;
+  description: string;
+  bytes: number;
+  encoding: GeneratedEncoding;
+  repositoryIds: string[] | null;
+  taskId: string | null;
+}
+
+/** One shared MyVault item as the bridge delivers it (already schema-checked). */
+export interface VaultItemInput {
+  itemId: string;
+  title: string;
+  kind: CredentialKind;
+  envVar: string | null;
+  value: string;
+  updatedAt: string | null;
+  /** Set on items the Control Center created (a generated secret MyVault stores). */
+  ccId: string | null;
+  authority: 'myvault' | 'control-center';
+}
+
+export type VaultItemOutcome = 'imported' | 'updated' | 'unchanged' | 'pending' | 'conflict' | 'rejected';
+
+export interface VaultPush {
+  credentialId: string;
+  name: string;
+  kind: CredentialKind;
+  envVar: string | null;
+  description: string;
+  value: string;
+  fingerprint: string;
+  /** Replace the MyVault copy only if it still holds exactly this value ("keep the Control Center value"). */
+  replaceFingerprint: string | null;
+}
+
+export interface VaultAck {
+  itemId: string | null;
+  status: 'saved' | 'unchanged' | 'conflict' | 'detached' | 'error';
+  fingerprint: string | null;
+  vaultFingerprint: string | null;
+  updatedAt: string | null;
+  cloudPending: boolean;
+  detail: string | null;
+}
+
+/** Shown to an operator or a task when a generated secret is not yet in MyVault. */
+export const VAULT_SYNC_REQUIRED =
+  'MyVault sync required before deploying this newly generated secret. Unlock MyVault and choose Connect and sync in its Settings (Control Center → Tools → Credentials shows the state). The value is kept and will not be regenerated.';
+
+const note = (text: string) => redact(text).slice(0, 300);
+
+/**
+ * Variables a generated or imported credential may not take: the broker strips
+ * the variables it manages from every process it launches, so a secret named
+ * PATH would break every task on the machine, and one named after a provider
+ * variable would stand in for the real token.
+ */
+const RESERVED_ENV_VARS = new Set(
+  [
+    'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'USERPROFILE', 'USERNAME', 'APPDATA',
+    'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'TEMP', 'TMP', 'TMPDIR', 'PWD', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'PSMODULEPATH', 'LANG',
+    'CLOUDFLARE_ACCOUNT_ID', ...Object.values(CREDENTIAL_KIND_ENV).filter((v): v is string => Boolean(v)),
+  ].map((v) => v.toUpperCase()),
+);
+const reservedEnvVar = (name: string | null) => name !== null && RESERVED_ENV_VARS.has(name.toUpperCase());
+/** Provider kinds are injected as provider tokens; a random value is never one, so generation keeps to the others. */
+const GENERATABLE_KINDS: ReadonlySet<CredentialKind> = new Set(['other', 'http']);
+const NAME_IN_USE = 'This name is already in use. Choose another name.';
 
 /**
  * Where the 32-byte key that seals credentials lives. On Windows it is
@@ -70,8 +157,37 @@ export function fileKeyProvider(dataDir: string): KeyProvider {
   };
 }
 
-function view(r: CredentialRecord): CredentialView {
-  return { id: r.id, name: r.name, kind: r.kind, envVar: r.envVar, description: r.description, repositoryIds: r.repositoryIds, fingerprint: r.fingerprint, createdAt: r.createdAt, updatedAt: r.updatedAt, lastUsedAt: r.lastUsedAt };
+function linkView(l: VaultLinkRecord | null): CredentialVaultLinkView | null {
+  if (!l) return null;
+  return { authority: l.authority, state: l.state, origin: l.origin, itemId: l.itemId, firstSyncedAt: l.firstSyncedAt, lastSyncedAt: l.lastSyncedAt, vaultUpdatedAt: l.vaultUpdatedAt, lastError: l.lastError };
+}
+
+function view(r: CredentialRecord, link: VaultLinkRecord | null): CredentialView {
+  return {
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    envVar: r.envVar,
+    description: r.description,
+    repositoryIds: r.repositoryIds,
+    fingerprint: r.fingerprint,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    lastUsedAt: r.lastUsedAt,
+    source: !link ? 'manual' : link.authority === 'myvault' ? 'myvault' : 'generated',
+    vault: linkView(link),
+  };
+}
+
+/** A broker name from a MyVault title: the allowed characters only, never empty. */
+function nameFromTitle(title: string): string {
+  const base = title
+    .normalize('NFKD')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 90);
+  return base || 'myvault-item';
 }
 
 function envVarOf(r: Pick<CredentialRecord, 'kind' | 'envVar'>): string | null {
@@ -110,7 +226,38 @@ export class CredentialBroker {
   }
 
   list(): CredentialView[] {
-    return this.store.listCredentials().map(view);
+    const links = new Map(this.store.listVaultLinks().map((l) => [l.credentialId, l]));
+    return this.store.listCredentials().map((r) => view(r, links.get(r.id) ?? null));
+  }
+
+  get(id: string): CredentialView | null {
+    const r = this.store.credential(id);
+    return r ? view(r, this.store.vaultLink(r.id)) : null;
+  }
+
+  events(credentialId?: string, limit = 100): CredentialEventView[] {
+    return this.store.listCredentialEvents({ credentialId, limit });
+  }
+
+  private publish(id: string): CredentialView | null {
+    const v = this.get(id);
+    if (v) this.bus.publish({ type: 'credential', credential: v });
+    return v;
+  }
+
+  private event(e: Pick<CredentialEventView, 'credentialId' | 'credentialName' | 'operation' | 'status'> & Partial<Pick<CredentialEventView, 'detail' | 'target' | 'taskId' | 'direction'>>): void {
+    this.store.insertCredentialEvent({
+      id: newId(),
+      credentialId: e.credentialId,
+      credentialName: e.credentialName,
+      operation: e.operation,
+      direction: e.direction ?? null,
+      status: e.status,
+      taskId: e.taskId ?? null,
+      target: e.target ? note(e.target) : null,
+      detail: e.detail ? note(e.detail) : null,
+      createdAt: now(),
+    });
   }
 
   /**
@@ -136,15 +283,19 @@ export class CredentialBroker {
     this.store.upsertCredential(rec);
     registerSecretValues([input.value]);
     this.syncManagedEnv();
-    const v = view(rec);
-    this.bus.publish({ type: 'credential', credential: v });
-    return v;
+    this.event({ credentialId: id, credentialName: rec.name, operation: 'create', direction: 'local', status: 'ok' });
+    return this.publish(id)!;
   }
 
   async update(id: string, raw: z.input<typeof credentialUpdateSchema>): Promise<CredentialView> {
     const current = this.store.credential(id);
     if (!current) throw new CredentialError('Credential not found', 'NOT_FOUND');
     const input = credentialUpdateSchema.parse(raw);
+    const link = this.store.vaultLink(current.id);
+    // Server-side, not only in the dashboard: MyVault owns the value of an imported item.
+    if (input.value !== undefined && link?.authority === 'myvault' && link.state !== 'detached') {
+      throw new CredentialError('This credential is managed by MyVault: change the value there and sync, or detach it first', 'MANAGED');
+    }
     let sealed = { ciphertext: current.ciphertext, iv: current.iv, tag: current.tag };
     let fingerprint = current.fingerprint;
     if (input.value !== undefined) {
@@ -168,19 +319,276 @@ export class CredentialBroker {
       fingerprint,
       updatedAt: now(),
     };
-    this.store.upsertCredential(rec);
+    this.store.transaction(() => {
+      this.store.upsertCredential(rec);
+      // A new value for a generated secret is owed to MyVault again.
+      if (input.value !== undefined && link?.authority === 'control-center' && link.state !== 'detached') this.store.upsertVaultLink({ ...link, state: 'pending_push', lastError: null, updatedAt: now() });
+    });
     this.syncManagedEnv();
-    const v = view(rec);
-    this.bus.publish({ type: 'credential', credential: v });
-    return v;
+    if (input.value !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'replace', direction: 'local', status: 'ok' });
+    if (input.repositoryIds !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'scope', direction: 'local', status: 'ok', target: rec.repositoryIds === null ? 'all repositories' : `${rec.repositoryIds.length} repositories` });
+    return this.publish(rec.id)!;
   }
 
   delete(id: string): void {
     const current = this.store.credential(id);
     if (!current) throw new CredentialError('Credential not found', 'NOT_FOUND');
+    // Local only: a linked MyVault item is never deleted from here.
     this.store.deleteCredential(current.id);
     this.syncManagedEnv();
+    this.event({ credentialId: current.id, credentialName: current.name, operation: 'delete', direction: 'local', status: 'ok' });
     this.bus.publish({ type: 'credential.deleted', credentialId: current.id });
+  }
+
+  // ===========================================================================
+  // Generated secrets (credential.generate)
+  // ===========================================================================
+
+  /**
+   * Generate a secret with the CSPRNG and seal it before anything else sees
+   * it. Idempotent by name: a retry returns the credential already generated
+   * — never a new value — so a failed sync or deploy cannot rotate a secret.
+   */
+  async generate(input: GenerateInput): Promise<{ credential: CredentialView; created: boolean }> {
+    const parsed = credentialInputSchema.omit({ value: true }).parse({ name: input.name, kind: input.kind, envVar: input.envVar, description: input.description, repositoryIds: input.repositoryIds });
+    if (!Number.isInteger(input.bytes) || input.bytes < 16 || input.bytes > 64) throw new CredentialError('A generated secret is 16 to 64 random bytes', 'INVALID');
+    if (!GENERATABLE_KINDS.has(parsed.kind)) throw new CredentialError('A generated secret is an application secret (kind "other" or "http"); provider tokens come from the provider', 'INVALID');
+    if (reservedEnvVar(parsed.envVar ?? null)) throw new CredentialError(`${parsed.envVar} is reserved for the system or a provider token; choose another variable name`, 'INVALID');
+    const existing = this.store.credential(parsed.name);
+    if (existing) {
+      // One answer whether the name belongs to a manual credential or to a secret of another repository.
+      const sameScope = existing.repositoryIds === null || (parsed.repositoryIds ?? []).every((id) => existing.repositoryIds!.includes(id));
+      if (this.store.vaultLink(existing.id)?.authority === 'control-center' && sameScope) return { credential: this.get(existing.id)!, created: false };
+      throw new CredentialError(NAME_IN_USE, 'DUPLICATE');
+    }
+    const key = await this.loadKey();
+    const value = randomBytes(input.bytes).toString(input.encoding);
+    // The redactor learns the value before it exists anywhere else.
+    registerSecretValues([value]);
+    const id = newId();
+    const ts = now();
+    const rec: CredentialRecord = { id, name: parsed.name, kind: parsed.kind, envVar: parsed.envVar ?? null, description: parsed.description, repositoryIds: parsed.repositoryIds, ...sealSecret(key, value, id), fingerprint: secretFingerprint(value), createdAt: ts, updatedAt: ts, lastUsedAt: null };
+    this.store.transaction(() => {
+      this.store.upsertCredential(rec);
+      this.store.upsertVaultLink({ credentialId: id, authority: 'control-center', origin: null, vaultId: null, itemId: null, state: 'pending_push', syncedFingerprint: null, vaultFingerprint: null, replaceVaultFingerprint: null, vaultUpdatedAt: null, firstSyncedAt: null, lastSyncedAt: null, lastError: null, createdAt: ts, updatedAt: ts });
+    });
+    this.syncManagedEnv();
+    this.event({ credentialId: id, credentialName: rec.name, operation: 'generate', direction: 'local', status: 'ok', taskId: input.taskId, target: rec.repositoryIds === null ? 'all repositories' : rec.repositoryIds.join(', ') || 'no repository', detail: `${input.bytes} bytes, ${input.encoding}` });
+    return { credential: this.publish(id)!, created: true };
+  }
+
+  /**
+   * Vault before external deploy: a generated value may leave this machine
+   * only once MyVault has acknowledged holding exactly that value. Returns
+   * the blocker, or null when deployment may go ahead.
+   */
+  deployGate(name: string, repositoryId: string | null, context: { taskId: string | null; target: string }): string | null {
+    const r = this.store.credential(name);
+    if (!r || !this.inScope(r, repositoryId)) return null;
+    const link = this.store.vaultLink(r.id);
+    if (link?.authority !== 'control-center' || link.syncedFingerprint === r.fingerprint) return null;
+    this.event({ credentialId: r.id, credentialName: r.name, operation: 'deploy_blocked', status: 'blocked', taskId: context.taskId, target: context.target, detail: 'MyVault has not acknowledged this value yet' });
+    return VAULT_SYNC_REQUIRED;
+  }
+
+  // ===========================================================================
+  // MyVault bridge (called by VaultBridgeService only; never an HTTP response)
+  // ===========================================================================
+
+  private async reseal(current: CredentialRecord, value: string, patch: Partial<CredentialRecord> = {}): Promise<CredentialRecord> {
+    const key = await this.loadKey();
+    try {
+      unregisterSecretValues([openSecret(key, current, current.id)]);
+    } catch {
+      /* previous value unreadable: nothing to forget */
+    }
+    registerSecretValues([value]);
+    return { ...current, ...patch, ...sealSecret(key, value, current.id), fingerprint: secretFingerprint(value), updatedAt: now() };
+  }
+
+  private uniqueName(base: string): string {
+    let name = base;
+    for (let n = 2; this.store.credential(name); n += 1) name = `${base.slice(0, 90)}-${n}`;
+    return name;
+  }
+
+  /** Generated secrets MyVault still owes an acknowledgement for, in this vault or not bound to any yet. */
+  async pendingPushes(origin: string, vaultId: string, limit: number): Promise<VaultPush[]> {
+    const due = this.store.listVaultLinks().filter((l) => l.authority === 'control-center' && l.state === 'pending_push' && (l.origin === null || (l.origin === origin && l.vaultId === vaultId)));
+    if (!due.length) return [];
+    const key = await this.loadKey();
+    const out: VaultPush[] = [];
+    for (const l of due.slice(0, limit)) {
+      const r = this.store.credential(l.credentialId);
+      if (!r) continue;
+      const value = openSecret(key, r, r.id);
+      registerSecretValues([value]);
+      out.push({ credentialId: r.id, name: r.name, kind: r.kind, envVar: r.envVar, description: r.description, value, fingerprint: r.fingerprint, replaceFingerprint: l.replaceVaultFingerprint });
+    }
+    return out;
+  }
+
+  /** MyVault's answer to one push. The fingerprint must match the value pushed, or nothing is marked synced. */
+  recordPushAck(credentialId: string, origin: string, vaultId: string, pushedFingerprint: string, ack: VaultAck): void {
+    const r = this.store.credential(credentialId);
+    const link = r && r.id === credentialId ? this.store.vaultLink(r.id) : null;
+    if (!r || !link || link.authority !== 'control-center') return;
+    if (link.origin !== null && (link.origin !== origin || link.vaultId !== vaultId)) return;
+    const ts = now();
+    const bound = { ...link, origin, vaultId, itemId: ack.itemId ?? link.itemId, vaultUpdatedAt: ack.updatedAt ?? link.vaultUpdatedAt, vaultFingerprint: ack.vaultFingerprint ?? link.vaultFingerprint, updatedAt: ts };
+    let next: VaultLinkRecord;
+    if ((ack.status === 'saved' || ack.status === 'unchanged') && ack.fingerprint === pushedFingerprint) {
+      // The value changed here while the push was in flight: MyVault holds the older one; the new one is still owed.
+      const current = r.fingerprint === pushedFingerprint;
+      next = { ...bound, state: current ? 'synced' : 'pending_push', syncedFingerprint: pushedFingerprint, vaultFingerprint: pushedFingerprint, replaceVaultFingerprint: null, firstSyncedAt: link.firstSyncedAt ?? ts, lastSyncedAt: ts, lastError: null };
+      this.event({ credentialId: r.id, credentialName: r.name, operation: 'ack', direction: 'to_vault', status: 'ok', target: origin, detail: ack.cloudPending ? 'Saved in MyVault on this device; its cloud sync is pending' : 'Saved in MyVault' });
+    } else if (ack.status === 'conflict') {
+      next = { ...bound, state: 'conflict', lastError: 'The MyVault copy was changed there: choose which value to keep' };
+      this.event({ credentialId: r.id, credentialName: r.name, operation: 'conflict', direction: 'to_vault', status: 'failed', target: origin });
+    } else if (ack.status === 'detached') {
+      next = { ...bound, state: 'detached', lastError: 'The MyVault item is no longer shared with the Control Center' };
+      this.event({ credentialId: r.id, credentialName: r.name, operation: 'detached', direction: 'to_vault', status: 'failed', target: origin });
+    } else {
+      next = { ...link, lastError: note(ack.detail ?? 'MyVault could not save the value'), updatedAt: ts };
+      this.event({ credentialId: r.id, credentialName: r.name, operation: 'push', direction: 'to_vault', status: 'failed', target: origin, detail: next.lastError ?? undefined });
+    }
+    this.store.upsertVaultLink(next);
+    this.publish(r.id);
+  }
+
+  /** One shared MyVault item from a snapshot. MyVault-owned values follow MyVault; generated ones never change silently. */
+  async applyVaultItem(origin: string, vaultId: string, item: VaultItemInput): Promise<{ outcome: VaultItemOutcome; credentialId: string | null }> {
+    const ts = now();
+    const vaultFingerprint = secretFingerprint(item.value);
+    // A reserved variable from MyVault is dropped, not taken.
+    if (reservedEnvVar(item.envVar)) item = { ...item, envVar: null };
+    const kind: CredentialKind = (CREDENTIAL_KINDS as readonly string[]).includes(item.kind) ? item.kind : 'other';
+
+    if (item.authority === 'control-center' && item.ccId) {
+      const r = this.store.credential(item.ccId);
+      const link = r && r.id === item.ccId ? this.store.vaultLink(r.id) : null;
+      if (!r || !link || link.authority !== 'control-center') return { outcome: 'rejected', credentialId: null };
+      if (link.origin !== null && (link.origin !== origin || link.vaultId !== vaultId)) return { outcome: 'rejected', credentialId: null };
+      if (link.state === 'detached') {
+        // The operator stopped following MyVault for this secret: nothing moves.
+        this.store.upsertVaultLink({ ...link, vaultFingerprint, vaultUpdatedAt: item.updatedAt, updatedAt: ts });
+        return { outcome: 'unchanged', credentialId: r.id };
+      }
+      const seen: VaultLinkRecord = { ...link, origin, vaultId, itemId: item.itemId, vaultFingerprint, vaultUpdatedAt: item.updatedAt, updatedAt: ts };
+      if (vaultFingerprint === r.fingerprint) {
+        this.store.upsertVaultLink({ ...seen, state: 'synced', syncedFingerprint: r.fingerprint, replaceVaultFingerprint: null, firstSyncedAt: link.firstSyncedAt ?? ts, lastSyncedAt: ts, lastError: null });
+        if (link.state !== 'synced') this.publish(r.id);
+        return { outcome: 'unchanged', credentialId: r.id };
+      }
+      if (link.state === 'pending_pull') {
+        // The operator chose the MyVault value for this generated secret.
+        const rec = await this.reseal(r, item.value);
+        this.store.transaction(() => {
+          this.store.upsertCredential(rec);
+          this.store.upsertVaultLink({ ...seen, state: 'synced', syncedFingerprint: rec.fingerprint, replaceVaultFingerprint: null, firstSyncedAt: link.firstSyncedAt ?? ts, lastSyncedAt: ts, lastError: null });
+        });
+        this.event({ credentialId: r.id, credentialName: r.name, operation: 'update_from_vault', direction: 'from_vault', status: 'ok', target: origin, detail: 'Took the MyVault value, as chosen' });
+        this.publish(r.id);
+        return { outcome: 'updated', credentialId: r.id };
+      }
+      if (vaultFingerprint === link.syncedFingerprint || (link.state === 'pending_push' && link.replaceVaultFingerprint === vaultFingerprint)) {
+        // MyVault still holds the last agreed value (or the one the operator chose to replace): the value here is owed to it.
+        this.store.upsertVaultLink({ ...seen, state: 'pending_push' });
+        return { outcome: 'pending', credentialId: r.id };
+      }
+      this.store.upsertVaultLink({ ...seen, state: 'conflict', lastError: 'The MyVault copy was changed there: choose which value to keep' });
+      if (link.state !== 'conflict') {
+        this.event({ credentialId: r.id, credentialName: r.name, operation: 'conflict', direction: 'from_vault', status: 'failed', target: origin });
+        this.publish(r.id);
+      }
+      return { outcome: 'conflict', credentialId: r.id };
+    }
+
+    const link = this.store.vaultLinkByItem(origin, vaultId, item.itemId);
+    if (!link) {
+      // First import: sealed at once, and usable by no repository until the operator assigns one.
+      const key = await this.loadKey();
+      registerSecretValues([item.value]);
+      const id = newId();
+      const name = this.uniqueName(nameFromTitle(item.title));
+      const rec: CredentialRecord = { id, name, kind, envVar: item.envVar, description: 'Imported from MyVault', repositoryIds: [], ...sealSecret(key, item.value, id), fingerprint: vaultFingerprint, createdAt: ts, updatedAt: ts, lastUsedAt: null };
+      this.store.transaction(() => {
+        this.store.upsertCredential(rec);
+        this.store.upsertVaultLink({ credentialId: id, authority: 'myvault', origin, vaultId, itemId: item.itemId, state: 'synced', syncedFingerprint: vaultFingerprint, vaultFingerprint, replaceVaultFingerprint: null, vaultUpdatedAt: item.updatedAt, firstSyncedAt: ts, lastSyncedAt: ts, lastError: null, createdAt: ts, updatedAt: ts });
+      });
+      this.syncManagedEnv();
+      this.event({ credentialId: id, credentialName: name, operation: 'import', direction: 'from_vault', status: 'ok', target: origin });
+      this.publish(id);
+      return { outcome: 'imported', credentialId: id };
+    }
+    const r = this.store.credential(link.credentialId);
+    if (!r || link.authority !== 'myvault') return { outcome: 'rejected', credentialId: null };
+    const seen: VaultLinkRecord = { ...link, vaultFingerprint, vaultUpdatedAt: item.updatedAt, updatedAt: ts };
+    if (link.state === 'detached') {
+      // Detached on purpose: the operator stopped following MyVault for this one.
+      this.store.upsertVaultLink(seen);
+      return { outcome: 'unchanged', credentialId: r.id };
+    }
+    if (r.fingerprint !== link.syncedFingerprint && link.state !== 'pending_pull') {
+      // The local copy moved without MyVault: never pick a winner silently.
+      this.store.upsertVaultLink({ ...seen, state: 'conflict', lastError: 'The local copy differs from the MyVault value it came from' });
+      if (link.state !== 'conflict') this.publish(r.id);
+      return { outcome: 'conflict', credentialId: r.id };
+    }
+    const metadata = { kind, envVar: item.envVar };
+    const metadataChanged = r.kind !== metadata.kind || r.envVar !== metadata.envVar;
+    if (vaultFingerprint === r.fingerprint && !metadataChanged) {
+      this.store.upsertVaultLink({ ...seen, state: 'synced', syncedFingerprint: vaultFingerprint, lastSyncedAt: ts, lastError: null });
+      if (link.state !== 'synced') this.publish(r.id);
+      return { outcome: 'unchanged', credentialId: r.id };
+    }
+    const rec = vaultFingerprint === r.fingerprint ? { ...r, ...metadata, updatedAt: ts } : await this.reseal(r, item.value, metadata);
+    this.store.transaction(() => {
+      this.store.upsertCredential(rec);
+      this.store.upsertVaultLink({ ...seen, state: 'synced', syncedFingerprint: rec.fingerprint, lastSyncedAt: ts, lastError: null });
+    });
+    this.syncManagedEnv();
+    this.event({ credentialId: r.id, credentialName: r.name, operation: 'update_from_vault', direction: 'from_vault', status: 'ok', target: origin, detail: vaultFingerprint === r.fingerprint ? 'Kind or variable changed in MyVault' : 'New value from MyVault' });
+    this.publish(r.id);
+    return { outcome: 'updated', credentialId: r.id };
+  }
+
+  /**
+   * After a complete snapshot only: links of this vault whose item was not in
+   * it are marked missing. The local credential stays; nothing is deleted.
+   */
+  markUnseen(origin: string, vaultId: string, seen: ReadonlySet<string>): number {
+    let missing = 0;
+    for (const l of this.store.listVaultLinks()) {
+      if (l.origin !== origin || l.vaultId !== vaultId || seen.has(l.credentialId)) continue;
+      if (l.state !== 'synced' && l.state !== 'conflict' && l.state !== 'error' && l.state !== 'pending_pull') continue;
+      const r = this.store.credential(l.credentialId);
+      if (!r) continue;
+      this.store.upsertVaultLink({ ...l, state: 'missing', lastError: 'The MyVault item was deleted or is no longer shared. The copy here is kept.', updatedAt: now() });
+      this.event({ credentialId: r.id, credentialName: r.name, operation: 'missing', direction: 'from_vault', status: 'failed', target: origin });
+      this.publish(r.id);
+      missing += 1;
+    }
+    return missing;
+  }
+
+  /** The operator's choice for a conflict, a missing item or a detached link. */
+  resolve(id: string, action: VaultResolveAction): CredentialView {
+    const r = this.store.credential(id);
+    const link = r ? this.store.vaultLink(r.id) : null;
+    if (!r || !link) throw new CredentialError('This credential is not linked to MyVault', 'NOT_FOUND');
+    const generated = link.authority === 'control-center';
+    let next: VaultLinkRecord;
+    if (action === 'keep-control-center' && generated && link.state === 'conflict') next = { ...link, state: 'pending_push', replaceVaultFingerprint: link.vaultFingerprint, lastError: null };
+    else if (action === 'use-myvault' && link.state === 'conflict') next = { ...link, state: 'pending_pull', lastError: null };
+    else if (action === 'push-again' && generated && (link.state === 'missing' || link.state === 'detached' || link.state === 'error' || link.state === 'pending_push'))
+      // Unbound again: the next trusted MyVault to connect receives it (and finds its item by id if it already has it).
+      next = { ...link, state: 'pending_push', origin: null, vaultId: null, itemId: null, lastError: null };
+    else if (action === 'detach' && link.state !== 'detached') next = { ...link, state: 'detached', lastError: null };
+    else throw new CredentialError(`"${action}" does not apply to a ${link.state.replace('_', ' ')} ${generated ? 'generated' : 'MyVault'} credential`, 'INVALID');
+    this.store.upsertVaultLink({ ...next, updatedAt: now() });
+    this.event({ credentialId: r.id, credentialName: r.name, operation: 'resolve', direction: 'local', status: 'ok', detail: action });
+    return this.publish(r.id)!;
   }
 
   private inScope(r: CredentialRecord, repositoryId: string | null): boolean {
@@ -194,10 +602,25 @@ export class CredentialBroker {
     return value;
   }
 
-  /** Plaintext of one named credential for one call, if this repository may use it. */
-  async value(name: string, repositoryId: string | null): Promise<string | null> {
+  /**
+   * A generated value MyVault has not acknowledged yet is held back from every
+   * tool path (an HTTP header, an injected variable, an MCP server), not only
+   * from `cloudflare.secret_put`: any of them can carry it off this machine.
+   */
+  private heldForVault(r: CredentialRecord): boolean {
+    const link = this.store.vaultLink(r.id);
+    return link?.authority === 'control-center' && link.syncedFingerprint !== r.fingerprint;
+  }
+
+  /**
+   * Plaintext of one named credential for one call, if this repository may use
+   * it. `includeUnsynced` is for the orchestrator's own checks only; no tool
+   * path passes it.
+   */
+  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean } = {}): Promise<string | null> {
     const r = this.store.credential(name);
     if (!r || !this.inScope(r, repositoryId)) return null;
+    if (!opts.includeUnsynced && this.heldForVault(r)) return null;
     return this.open(r);
   }
 
@@ -205,7 +628,7 @@ export class CredentialBroker {
   async envFor(kinds: readonly string[], repositoryId: string | null): Promise<Record<string, string>> {
     if (!kinds.length) return {};
     const env: Record<string, string> = {};
-    const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId));
+    const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r));
     for (const kind of kinds) {
       for (const r of all.filter((c) => c.kind === kind)) {
         const name = envVarOf(r);

@@ -32,6 +32,7 @@ import { PrivilegedHelper } from './tools/privileged.js';
 import { ProcessManager } from './tools/processes.js';
 import { ToolService } from './tools/service.js';
 import { ToolStore } from './tools/store.js';
+import { VaultBridgeService } from './tools/vault-bridge.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
 import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
@@ -63,6 +64,8 @@ export interface AppServices {
   processes: ProcessManager;
   terminals: TerminalService;
   credentials: CredentialBroker;
+  /** MyVault bridge sessions (memory only) and trusted origins. */
+  vaultBridge: VaultBridgeService;
   mcp: McpService;
   tooling: EngineTooling;
   privileged: PrivilegedHelper;
@@ -111,6 +114,7 @@ export function createServices(
   const executionEnv = () => ({ base: baseEnv, billing: settings.get().billingMode });
   const toolStore = new ToolStore(db);
   const credentials = new CredentialBroker(toolStore, bus, fileKeyProvider(config.dataDir));
+  const vaultBridge = new VaultBridgeService(toolStore, credentials);
   const processes = new ProcessManager(toolStore, bus, executionEnv);
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });
   const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, dataDir: config.dataDir, baseEnv });
@@ -175,6 +179,7 @@ export function createServices(
     processes,
     terminals,
     credentials,
+    vaultBridge,
     mcp,
     tooling,
     privileged,
@@ -196,6 +201,7 @@ export function createServices(
     },
     async close() {
       await remote.stop();
+      vaultBridge.closeAll();
       watchdog.stop();
       await repositoryAutomation.stop();
       await engine.shutdown();

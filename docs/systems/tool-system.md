@@ -32,7 +32,8 @@ Built-in packs live in [packs/](../../packages/tools/src/packs): shell,
 filesystem, git, github, runtime (Node/pnpm/npm/Python/uv/Java), browser
 (Playwright), http (+curl), network, windows, cloudflare, database (SQLite,
 psql, mysql), docker, android (adb, Gradle), hosted (processes, terminals,
-checkpoints, privileged helper, VS Code), verify. The orchestrator adds
+checkpoints, privileged helper, VS Code), verify, credential-broker
+(`credential.generate`). The orchestrator adds
 `environment` and one `mcp:<id>` provider per healthy MCP server
 ([mcp.md](mcp.md)). About 110 capabilities in total.
 
@@ -113,7 +114,14 @@ it; otherwise they are marked gone.
 `capability_escalations`, `credential_references`; `task_checkpoints` gains
 `type` and `metadata`; `tasks.policy_mode`, `repositories.policy_mode` and
 `repositories.runtime`. Migration 4 belongs to the usage ledger developed in
-parallel; the two apply in either order.
+parallel; the two apply in either order. Migration 7 adds the MyVault link,
+trusted-origin and credential-event tables ([credential-broker.md](credential-broker.md)).
+
+Secrets an agent needs but must not see go through `credential.generate`
+(sealed in the orchestrator, returns metadata only) and are used by reference,
+e.g. `cloudflare.secret_put {credential, secretName, environment}`, which feeds
+the value to Wrangler on stdin and refuses a generated value MyVault has not
+saved yet. `CredentialHost` gains optional `generate` and `deployGate` for this.
 
 ## API
 

@@ -225,3 +225,20 @@ describe.skipIf(!browser)('browser pack (real Chromium)', () => {
     expect(failing.summary).toMatch(/step 1/);
   }, 90_000);
 });
+
+describe('credential and secret packs without a broker', () => {
+  it('refuse cleanly when the session has no credential host', async () => {
+    const generate = await call('credential.generate', { name: 'NO_HOST' }, ctx(repo));
+    expect(generate.error?.code).toBe('UNAVAILABLE');
+    // Called on the provider directly: routing would first require Wrangler on this machine.
+    const secretPut = registry.provider('wrangler')!.operations.find((o) => o.id === 'cloudflare.secret_put')!;
+    const input = secretPut.input.parse({ credential: 'X', secretName: 'Y', environment: 'staging' });
+    const put = await secretPut.run(input, ctx(repo));
+    expect(put.error?.code).toBe('UNAVAILABLE');
+    // A gate from the broker stops the call before Wrangler runs; the value is never asked for.
+    let asked = false;
+    const gated = await secretPut.run(input, ctx(repo, { credentials: { value: async () => { asked = true; return 'v'; }, envFor: async () => ({}), deployGate: async () => 'held for MyVault' } }));
+    expect(gated).toMatchObject({ ok: false, summary: 'held for MyVault' });
+    expect(asked).toBe(false);
+  });
+});

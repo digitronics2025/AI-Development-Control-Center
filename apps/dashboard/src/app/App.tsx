@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { lazy, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Route, Routes } from 'react-router';
 import { EmptyState, FeedbackProvider, TooltipProvider } from '@acc/ui';
 import { TASK_STATUS_LABEL, type TaskStatus } from '@acc/shared';
@@ -26,6 +26,10 @@ const UsagePage = lazy(() => import('../pages/usage/UsagePage').then((m) => ({ d
 const UsageTaskPage = lazy(() => import('../pages/usage/UsageTaskPage').then((m) => ({ default: m.UsageTaskPage })));
 const NodesPage = lazy(() => import('../pages/NodesPage').then((m) => ({ default: m.NodesPage })));
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const VaultBridgePage = lazy(() => import('../pages/VaultBridgePage').then((m) => ({ default: m.VaultBridgePage })));
+
+/** MyVault's popup (docs/systems/credential-broker.md): a bare relay page, no navigation around it. */
+const VAULT_BRIDGE_PATH = '/vault-bridge';
 
 function NotFound() {
   useBreadcrumb([{ label: 'Not found' }]);
@@ -125,9 +129,15 @@ export function App({ config, queryClient }: { config: RuntimeConfig; queryClien
               <CommandProvider>
                 <ThemeSync />
                 <NotificationBridge />
-                <Shell>
-                  <AppRoutes />
-                </Shell>
+                {config.host === 'web' && window.location.pathname === VAULT_BRIDGE_PATH ? (
+                  <Suspense fallback={null}>
+                    <VaultBridgePage />
+                  </Suspense>
+                ) : (
+                  <Shell>
+                    <AppRoutes />
+                  </Shell>
+                )}
               </CommandProvider>
             </BreadcrumbProvider>
           </RuntimeProvider>

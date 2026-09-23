@@ -59,7 +59,10 @@ Home, Tasks, New Task (execution policy, isolated worktree), Task Detail
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md)),
 Tools (`/tools/:tab`: Overview, Processes, Terminals, MCP servers,
-Credentials, Policy — see [tool-system.md](tool-system.md)),
+Credentials, Policy — see [tool-system.md](tool-system.md); Credentials lives in
+[pages/tools/CredentialsTab.tsx](../../apps/dashboard/src/pages/tools/CredentialsTab.tsx), and the
+bare `/vault-bridge` page is MyVault's popup relay, rendered outside the Shell —
+see [credential-broker.md](credential-broker.md)),
 Usage & Costs (`/usage`: Overview, Tasks, Models, Agents, Providers, Budgets,
 Attempts; `/usage/tasks/:id` cost ledger; a live Usage panel in the task
 inspector — see [usage.md](usage.md)), Settings (10 sections, including Repositories). Routes are

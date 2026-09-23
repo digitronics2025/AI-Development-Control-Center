@@ -1,5 +1,6 @@
 import type {
   CapabilityEscalation,
+  CredentialEventView,
   CredentialKind,
   McpServerView,
   PermissionLevel,
@@ -7,6 +8,8 @@ import type {
   TaskProcess,
   TerminalSession,
   ToolExecution,
+  VaultAuthority,
+  VaultLinkState,
 } from '@acc/shared';
 import type { ToolHealthRecord } from '@acc/tools';
 import type { Db } from '../db/database.js';
@@ -463,4 +466,115 @@ export class ToolStore {
   deleteCredential(id: string): void {
     this.db.prepare('DELETE FROM credential_references WHERE id = ?').run(id);
   }
+
+  // ----- MyVault bridge (migration 7): links, trusted origins, credential events ----------
+
+  /** Run several writes atomically (a generated credential and its link land together or not at all). */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
+  vaultLink(credentialId: string): VaultLinkRecord | null {
+    const r = this.db.prepare('SELECT * FROM credential_vault_links WHERE credential_id = ?').get(credentialId) as Row | undefined;
+    return r ? toVaultLink(r) : null;
+  }
+
+  vaultLinkByItem(origin: string, vaultId: string, itemId: string): VaultLinkRecord | null {
+    const r = this.db.prepare('SELECT * FROM credential_vault_links WHERE origin = ? AND vault_id = ? AND vault_item_id = ?').get(origin, vaultId, itemId) as Row | undefined;
+    return r ? toVaultLink(r) : null;
+  }
+
+  listVaultLinks(): VaultLinkRecord[] {
+    return (this.db.prepare('SELECT * FROM credential_vault_links').all() as Row[]).map(toVaultLink);
+  }
+
+  upsertVaultLink(l: VaultLinkRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO credential_vault_links (credential_id, authority, origin, vault_id, vault_item_id, state, synced_fingerprint, vault_fingerprint, replace_vault_fingerprint, vault_updated_at, first_synced_at, last_synced_at, last_error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(credential_id) DO UPDATE SET authority = excluded.authority, origin = excluded.origin, vault_id = excluded.vault_id, vault_item_id = excluded.vault_item_id,
+           state = excluded.state, synced_fingerprint = excluded.synced_fingerprint, vault_fingerprint = excluded.vault_fingerprint, replace_vault_fingerprint = excluded.replace_vault_fingerprint, vault_updated_at = excluded.vault_updated_at, first_synced_at = excluded.first_synced_at,
+           last_synced_at = excluded.last_synced_at, last_error = excluded.last_error, updated_at = excluded.updated_at`,
+      )
+      .run(l.credentialId, l.authority, l.origin, l.vaultId, l.itemId, l.state, l.syncedFingerprint, l.vaultFingerprint, l.replaceVaultFingerprint, l.vaultUpdatedAt, l.firstSyncedAt, l.lastSyncedAt, l.lastError, l.createdAt, l.updatedAt);
+  }
+
+  listTrustedOrigins(): TrustedOriginRecord[] {
+    return (this.db.prepare('SELECT * FROM vault_bridge_origins ORDER BY trusted_at').all() as Row[]).map((r) => ({ origin: r.origin, vaultId: r.vault_id, trustedAt: r.trusted_at, lastConnectedAt: r.last_connected_at }));
+  }
+
+  trustOrigin(origin: string): void {
+    this.db.prepare('INSERT INTO vault_bridge_origins (origin, trusted_at) VALUES (?, ?) ON CONFLICT(origin) DO NOTHING').run(origin, now());
+  }
+
+  untrustOrigin(origin: string): boolean {
+    return this.db.prepare('DELETE FROM vault_bridge_origins WHERE origin = ?').run(origin).changes > 0;
+  }
+
+  touchOrigin(origin: string, vaultId: string): void {
+    this.db.prepare('UPDATE vault_bridge_origins SET vault_id = ?, last_connected_at = ? WHERE origin = ?').run(vaultId, now(), origin);
+  }
+
+  insertCredentialEvent(e: CredentialEventRecord): void {
+    this.db
+      .prepare('INSERT INTO credential_events (id, credential_id, credential_name, operation, direction, status, task_id, target, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(e.id, e.credentialId, e.credentialName, e.operation, e.direction, e.status, e.taskId, e.target, e.detail, e.createdAt);
+  }
+
+  listCredentialEvents(filter: { credentialId?: string; limit?: number } = {}): CredentialEventRecord[] {
+    const rows = filter.credentialId
+      ? (this.db.prepare('SELECT * FROM credential_events WHERE credential_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(filter.credentialId, filter.limit ?? 100) as Row[])
+      : (this.db.prepare('SELECT * FROM credential_events ORDER BY created_at DESC, rowid DESC LIMIT ?').all(filter.limit ?? 100) as Row[]);
+    return rows.map((r) => ({ id: r.id, credentialId: r.credential_id, credentialName: r.credential_name, operation: r.operation, direction: r.direction, status: r.status, taskId: r.task_id, target: r.target, detail: r.detail, createdAt: r.created_at }));
+  }
 }
+
+export interface VaultLinkRecord {
+  credentialId: string;
+  authority: VaultAuthority;
+  /** The trusted MyVault origin; null for a generated secret never synchronized yet. */
+  origin: string | null;
+  vaultId: string | null;
+  itemId: string | null;
+  state: VaultLinkState;
+  /** Fingerprint of the value both sides last agreed on. */
+  syncedFingerprint: string | null;
+  /** Fingerprint of the value MyVault last reported holding. */
+  vaultFingerprint: string | null;
+  /** Set by "keep the Control Center value": the next push may replace exactly this MyVault value. */
+  replaceVaultFingerprint: string | null;
+  vaultUpdatedAt: string | null;
+  firstSyncedAt: string | null;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustedOriginRecord {
+  origin: string;
+  vaultId: string | null;
+  trustedAt: string;
+  lastConnectedAt: string | null;
+}
+
+export type CredentialEventRecord = CredentialEventView;
+
+const toVaultLink = (r: Row): VaultLinkRecord => ({
+  credentialId: r.credential_id,
+  authority: r.authority,
+  origin: r.origin,
+  vaultId: r.vault_id,
+  itemId: r.vault_item_id,
+  state: r.state,
+  syncedFingerprint: r.synced_fingerprint,
+  vaultFingerprint: r.vault_fingerprint,
+  replaceVaultFingerprint: r.replace_vault_fingerprint,
+  vaultUpdatedAt: r.vault_updated_at,
+  firstSyncedAt: r.first_synced_at,
+  lastSyncedAt: r.last_synced_at,
+  lastError: r.last_error,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});

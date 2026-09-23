@@ -115,6 +115,30 @@ export interface CredentialHost {
   value(name: string): Promise<string | null>;
   /** Environment for credential kinds (e.g. `cloudflare` → CLOUDFLARE_API_TOKEN). */
   envFor(kinds: readonly string[]): Promise<Record<string, string>>;
+  /**
+   * Generate and seal a random secret under a name, scoped to this call's
+   * repository. Returns metadata only; a name already generated returns the
+   * existing secret rather than a new value.
+   */
+  generate?(input: GenerateSecretInput): Promise<GeneratedSecret>;
+  /** Why this credential may not leave the machine yet (a generated secret MyVault has not saved), or null. */
+  deployGate?(name: string, target: string): Promise<string | null>;
+}
+
+export interface GenerateSecretInput {
+  name: string;
+  kind: 'cloudflare' | 'github' | 'postgres' | 'mysql' | 'http' | 'npm' | 'other';
+  envVar: string | null;
+  description: string;
+  bytes: number;
+  encoding: 'base64url' | 'hex';
+}
+
+export interface GeneratedSecret {
+  created: boolean;
+  credential: { id: string; name: string; kind: string; envVar: string | null; fingerprint: string; repositoryIds: string[] | null };
+  /** MyVault link state: `pending_push` until MyVault has saved it. */
+  vaultSync: string | null;
 }
 
 export interface PrivilegedHost {

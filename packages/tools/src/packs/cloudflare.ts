@@ -33,7 +33,8 @@ function envFlags(env: Environment): string[] {
   return env === 'staging' || env === 'production' ? ['--env', env] : [];
 }
 
-async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_000): Promise<{ code: number | null; stdout: string; stderr: string; spawnError: string | null }> {
+/** `stdin` carries a secret value when one is needed: never argv, never the environment, never a file. */
+async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_000, stdin?: string): Promise<{ code: number | null; stdout: string; stderr: string; spawnError: string | null }> {
   const exe = localBin(ctx.cwd, 'wrangler') ?? ctx.detection('wrangler')?.path ?? 'wrangler';
   const lines: string[] = [];
   const errs: string[] = [];
@@ -43,6 +44,7 @@ async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_0
     cwd: ctx.cwd,
     env: { ...ctx.env, WRANGLER_SEND_METRICS: 'false', CI: '1', NO_COLOR: '1' },
     timeoutMs,
+    ...(stdin !== undefined ? { stdin } : {}),
     onLine: (stream, line) => {
       const text = redact(line);
       (stream === 'stdout' ? lines : errs).push(text);
@@ -275,6 +277,40 @@ export function cloudflareProvider(): ToolProvider {
           const where = input.environment === 'local' ? ['--local'] : ['--remote', ...envFlags(input.environment)];
           const r = await wrangler(ctx, ['d1', 'export', input.database, '--output', file, ...where], 600_000);
           return { ...resultOf(r, `Backed up ${input.database} (${input.environment})`, { file }), evidence: r.code === 0 ? [`d1 backup ${file}`] : [] };
+        },
+      }),
+      operation({
+        id: 'cloudflare.secret_put',
+        title: 'Set a Worker secret',
+        description:
+          'Store a credential from the broker as a Worker secret, by name: the value goes to Wrangler on stdin and never appears to you, in arguments or in logs. staging is Level 4; production needs your typed approval. A secret made with credential.generate must be saved to MyVault before its first deployment. Success is verified by listing secret names — Cloudflare never returns values. Retrying deploys the same value.',
+        input: z.object({
+          credential: z.string().min(1).max(100).regex(/^[\w.-]+$/),
+          secretName: z.string().min(1).max(100).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Letters, digits and underscore, not starting with a digit'),
+          environment: z.enum(['staging', 'production']),
+        }),
+        level: 4,
+        classify: (i) => levelFor(i.environment, true),
+        credentials: CREDENTIALS,
+        async run(input, ctx) {
+          if (!ctx.credentials) return failure('UNAVAILABLE', 'Credentials are not available in this session');
+          const target = `Worker secret ${input.secretName} (${input.environment})`;
+          const blocked = await ctx.credentials.deployGate?.(input.credential, target);
+          if (blocked) return failure('UNAVAILABLE', blocked);
+          const value = await ctx.credentials.value(input.credential);
+          if (value === null) return failure('INVALID_INPUT', `No credential named "${input.credential}" is available to this repository`);
+          const put = resultOf(await wrangler(ctx, ['secret', 'put', input.secretName, ...envFlags(input.environment)], 180_000, value), `Set ${target}`);
+          if (!put.ok) return put;
+          // Presence is all Cloudflare can prove: secret values are never readable back.
+          const listed = await wrangler(ctx, ['secret', 'list', '--format', 'json', ...envFlags(input.environment)], 90_000);
+          const names = parseJson(listed.stdout);
+          const present = listed.code === 0 && Array.isArray(names) && names.some((n) => (n as { name?: unknown } | null)?.name === input.secretName);
+          const output = { credential: input.credential, secretName: input.secretName, environment: input.environment, verified: present };
+          if (!present) {
+            const message = `Deployment unverified: Wrangler reported the secret was set, but ${input.secretName} is not in the ${input.environment} secret list. The same value will be used on retry.`;
+            return { ...put, ok: false, summary: message, output, error: { code: 'FAILED', message } };
+          }
+          return { ...put, output, evidence: [`secret ${input.secretName} present in ${input.environment} (value not readable back by design)`] };
         },
       }),
       operation({

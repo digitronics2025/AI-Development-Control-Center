@@ -447,7 +447,17 @@ export class ToolService {
       terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel) : undefined,
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
-      credentials: { value: (name) => this.d.credentials.value(name, scope.repositoryId), envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId) },
+      credentials: {
+        value: (name) => this.d.credentials.value(name, scope.repositoryId),
+        envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
+        // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
+        generate: async (input) => {
+          const r = await this.d.credentials.generate({ ...input, repositoryIds: scope.repositoryId ? [scope.repositoryId] : [], taskId: scope.taskId });
+          const c = r.credential;
+          return { created: r.created, credential: { id: c.id, name: c.name, kind: c.kind, envVar: c.envVar, fingerprint: c.fingerprint, repositoryIds: c.repositoryIds }, vaultSync: c.vault?.state ?? null };
+        },
+        deployGate: async (name, target) => this.d.credentials.deployGate(name, scope.repositoryId, { taskId: scope.taskId, target }),
+      },
       privileged: this.privileged,
       protectedPaths: scope.protectedPaths,
     };

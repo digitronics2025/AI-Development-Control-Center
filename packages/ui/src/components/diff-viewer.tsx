@@ -43,7 +43,8 @@ export function DiffViewer({ diff, truncated, className }: { diff: string; trunc
   if (!diff.trim()) return <p className="text-body text-fg-secondary">No changes in this file.</p>;
   return (
     <div className={cn('min-w-0 overflow-hidden rounded-lg border border-border-subtle bg-canvas', className)}>
-      <div className="overflow-x-auto">
+      {/* Long lines scroll sideways; the region is focusable so keyboard users can scroll it (WCAG 2.1.1). */}
+      <div tabIndex={0} role="region" aria-label="Diff lines" className="overflow-x-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus">
         <table className="w-full border-collapse font-mono text-code">
           <caption className="sr-only">Diff</caption>
           <tbody>

@@ -55,6 +55,48 @@ function makeRepo(name, { dirty = false, failingTests = false } = {}) {
   return dir;
 }
 
+/**
+ * A repository for Source Control: a local bare `origin`, a merged feature
+ * branch, a tag, one unpushed commit, and staged, unstaged and untracked
+ * work. No task ever runs in it, so its Git state stays predictable.
+ */
+function makeSourceControlRepo(name) {
+  const dir = makeRepo(name);
+  const remote = path.join(reposDir, `${name}.git`);
+  rmSync(remote, { recursive: true, force: true });
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote], { stdio: 'ignore' });
+  const git = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
+  const write = (file, content) => {
+    mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    writeFileSync(path.join(dir, file), content);
+  };
+  git('config', 'tag.gpgsign', 'false');
+  write('src/routes.ts', 'export const routes = ["/health"];\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Add route table');
+  git('switch', '-qc', 'feature/rate-limit');
+  write('src/limiter.ts', 'export const limit = 100;\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Add a request rate limiter');
+  git('switch', '-q', 'main');
+  write('docs/routes.md', '# Routes\n\n- /health\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Document the routes');
+  git('merge', '-q', '--no-ff', '-m', 'Merge feature/rate-limit', 'feature/rate-limit');
+  git('tag', 'v1.0.0');
+  git('remote', 'add', 'origin', remote);
+  git('push', '-q', '-u', 'origin', 'main', '--tags');
+  write('src/timeouts.ts', 'export const timeoutMs = 5000;\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Tune upstream timeouts');
+  // Working tree: one staged edit, one unstaged edit, one untracked file.
+  write('src/routes.ts', 'export const routes = ["/health", "/status"];\n');
+  git('add', 'src/routes.ts');
+  write('README.md', `# ${name}\n\nGateway in front of the internal APIs.\n`);
+  write('notes/todo.md', '- add auth\n');
+  return dir;
+}
+
 const env = {
   ...process.env,
   ACC_DATA_DIR: dataDir,
@@ -99,6 +141,7 @@ if (seed) {
   const billing = await api('POST', '/api/repositories', { path: makeRepo('billing-api'), name: 'billing-api' });
   const mobile = await api('POST', '/api/repositories', { path: makeRepo('mobile-app'), name: 'mobile-app' });
   const docs = await api('POST', '/api/repositories', { path: makeRepo('docs-site', { failingTests: true }), name: 'docs-site' });
+  await api('POST', '/api/repositories', { path: makeSourceControlRepo('api-gateway'), name: 'api-gateway' });
   const task = (b) => api('POST', '/api/tasks', { workflowId: 'normal-development', mode: 'autopilot', ...b });
   const waitFor = async (id, statuses) => {
     for (let i = 0; i < 400; i++) {

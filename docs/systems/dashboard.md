@@ -4,7 +4,7 @@ sources:
   - apps/dashboard/**
   - packages/ui/**
   - design.md
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # Dashboard and design system
@@ -42,7 +42,8 @@ removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 ## Pages
 
 Home, Tasks, New Task, Task Detail (Overview/Activity/Changes/Tests/Artifacts/
-Logs + inspector), Approvals, Workflows (stage-sequence editor with inline
+Logs + inspector), Source Control (Changes/History, see
+[source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail), Settings (8 sections). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,

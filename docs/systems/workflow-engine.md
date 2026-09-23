@@ -5,7 +5,7 @@ sources:
   - packages/shared/src/workflow.ts
   - workflows/**
   - prompts/**
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # Workflow engine
@@ -54,7 +54,11 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
 
-Completion writes `git-diff.patch`, `final-report.md` and `task.json`. The final
+Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
+before `COMPLETED` is published, so clients never see a report without its
+task record. A reviewer/verifier stage with `verdict: false` still records an
+advisory verdict (it does not route); a FAIL makes the report
+`NEEDS_USER_ACTION` (used by the built-in Staged Review workflow). The final
 status is `READY` only when the last test stage passed (not skipped), the last
 review/verification passed, and no file mixes pre-existing user work with task
 changes; otherwise `NEEDS_USER_ACTION`. Lines starting `NEEDS OPERATOR:` in the
@@ -76,7 +80,12 @@ without asking for approval (`skipsForLackOfCommands`).
 
 At most one task works in a repository: a queued task waits while another task
 there is running or has started changing files (has a Git baseline) and is not
-finished. The blocker says which task holds it.
+finished. The blocker says which task holds it. Read-only workflows (every
+stage an `agent` at Level 1, e.g. `staged-review`) neither wait nor hold.
+A stage with permission level ≥ 2 registers as a writer with the shared
+[RepositoryCoordinator](../../apps/orchestrator/src/services/repository-coordinator.ts):
+it waits for a Source Control mutation in flight, and Source Control refuses
+mutations while it runs ([source-control.md](source-control.md)).
 
 ## Restart recovery
 

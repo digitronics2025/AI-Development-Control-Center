@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoAxeViolations, expectNoHorizontalOverflow, trackConsoleErrors } from './helpers';
@@ -90,5 +90,29 @@ test.describe('VS Code WebView (design.md §13)', () => {
     // Details drawer carries the inspector controls in narrow panels.
     await page.getByRole('button', { name: 'Details' }).click();
     await expect(page.getByRole('dialog', { name: 'Task details' })).toBeVisible();
+  });
+
+  test('Source Control is the same page, with editor integrations', async ({ page, baseURL }, testInfo) => {
+    const repoDir = path.join(process.env.ACC_E2E_DATA_ROOT!, 'repos', 'api-gateway');
+    writeFileSync(path.join(repoDir, 'webview-note.md'), 'from the editor\n');
+    try {
+      await page.setViewportSize({ width: 480, height: 900 });
+      await openWebview(page, baseURL!, '/source-control');
+      await expect(page.getByRole('heading', { level: 1, name: 'Source Control' })).toBeVisible();
+      await expect(page.getByRole('list', { name: /^Changes/ })).toContainText('webview-note.md');
+      await expectNoHorizontalOverflow(page);
+      await page.getByRole('button', { name: /^untracked webview-note\.md/ }).click();
+      await expect(page.getByRole('heading', { level: 3, name: 'webview-note.md' })).toBeVisible();
+      await page.getByRole('button', { name: 'Open file' }).click();
+      await page.getByRole('button', { name: 'Open diff in editor' }).click();
+      await page.getByRole('button', { name: 'Reveal' }).click();
+      const posted = await page.evaluate(() => (window as unknown as { __posted: Array<{ type: string }> }).__posted);
+      expect(posted).toContainEqual(expect.objectContaining({ type: 'openSourceControlDiff', path: 'webview-note.md', mode: 'unstaged' }));
+      expect(posted).toContainEqual(expect.objectContaining({ type: 'openFile', path: 'webview-note.md' }));
+      expect(posted).toContainEqual(expect.objectContaining({ type: 'revealRepository' }));
+      await expectNoAxeViolations(page, testInfo);
+    } finally {
+      rmSync(path.join(repoDir, 'webview-note.md'), { force: true });
+    }
   });
 });

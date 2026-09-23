@@ -6,7 +6,7 @@ sources:
   - apps/orchestrator/src/http/**
   - apps/orchestrator/src/store/**
   - apps/orchestrator/src/services/**
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # Orchestrator
@@ -41,7 +41,8 @@ hub, SQLite persistence and the workflow engine. Entry:
 `settings`, `repositories`, `agents`, `models`, `workflow_profiles`,
 `workflow_stages`, `prompt_templates`, `tasks`, `task_stages`, `executions`,
 `execution_logs`, `task_events`, `task_directives`, `task_artifacts`,
-`approvals`, `git_snapshots`, `test_runs`. Access goes through
+`approvals`, `git_snapshots`, `test_runs`, and `git_operations` (Source
+Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -57,6 +58,7 @@ before any row is written.
 | Agents | `GET agents`, `POST agents/refresh`, `POST agents/:id/refresh`, `PATCH agents/:id`, `POST/DELETE agents/:id/models` |
 | Workflows | `GET workflows[/:id]`, `POST workflows/validate`, `PUT workflows/:id`, `POST workflows/:id/duplicate`, `DELETE workflows/:id` |
 | Repositories | `GET/POST repositories`, `GET/PATCH/DELETE repositories/:id`, `POST repositories/:id/redetect` |
+| Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
 | Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
@@ -67,9 +69,19 @@ strict CSP.
 
 `/ws?token=` pushes complete entities (`task`, `stage`, `event`, `execution`,
 `approval`, `directive`, `artifact`, `testRun`, `agents`, `settings`,
-`repository`, `workflow`). Log lines (`logs`) go only to clients that sent
+`repository`, `workflow`) plus `sourceControl` (`{repositoryId}` only: refetch that
+repository's Git state; sent by `RepositoryService.invalidate` and every Source
+Control mutation). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log
 batches and refetch. Log lines are batched every 150 ms or 250 lines.
+
+## Coordination
+
+[RepositoryCoordinator](../../apps/orchestrator/src/services/repository-coordinator.ts)
+is shared by the engine and Source Control: a stage with permission level ≥ 2
+registers as a writer (waiting for any Git mutation in flight), and Source
+Control refuses mutations while a writer is active. Startup runs Source
+Control reconciliation in the background after `listen`.
 
 ## Gotchas
 

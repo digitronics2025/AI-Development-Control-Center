@@ -18,6 +18,8 @@ export const PAGES = [
   { name: 'workflows', path: '/workflows/normal-development', ready: 'Stages' },
   { name: 'agents', path: '/agents', ready: 'Re-check all' },
   { name: 'repositories', path: '/repositories', ready: 'Add repository' },
+  { name: 'source-control', path: '/source-control', ready: 'Recent Git operations' },
+  { name: 'source-control-history', path: '/source-control?tab=history', ready: 'End of history' },
   { name: 'settings-billing', path: '/settings/billing', ready: 'Billing Mode' },
 ] as const;
 

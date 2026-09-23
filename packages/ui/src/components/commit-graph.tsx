@@ -12,8 +12,21 @@ const LANE_WIDTH = 14;
  * subject, SHA, parents and refs as text. Rows must share one fixed height
  * so lane lines join across rows.
  */
-export function CommitGraphCell({ row, height, maxLanes = 8, className }: { row: GraphRow; height: number; maxLanes?: number; className?: string }) {
-  const lanes = Math.min(Math.max(row.width, 1), maxLanes);
+export function CommitGraphCell({
+  row,
+  height,
+  maxLanes = 8,
+  columns,
+  className,
+}: {
+  row: GraphRow;
+  height: number;
+  maxLanes?: number;
+  /** Lanes to reserve; pass the page's widest row so subjects line up. */
+  columns?: number;
+  className?: string;
+}) {
+  const lanes = Math.min(Math.max(columns ?? row.width, 1), maxLanes);
   const x = (lane: number) => Math.min(lane, maxLanes - 1) * LANE_WIDTH + LANE_WIDTH / 2 + 2;
   const mid = height / 2;
   const stroke = (lane: number) => LANE_STROKE[lane % LANE_STROKE.length];

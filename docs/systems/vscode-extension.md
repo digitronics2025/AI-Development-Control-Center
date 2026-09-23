@@ -2,7 +2,7 @@
 system: vscode-extension
 sources:
   - apps/vscode-extension/**
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # VS Code extension
@@ -30,6 +30,11 @@ URLs are accepted. If the orchestrator is not running it re-checks every 10 s;
 The WebView posts `openDiff`, `openArtifact`, `openFile` and
 `pickRepositoryFolder` to the host, which opens real editors / the native
 folder picker; the host sends `navigate` to change route without reloading.
+
+Source Control runs in the same WebView page. Host messages
+`openSourceControlDiff` and `openCommitDiff` open the orchestrator's (redacted,
+bounded) diff in an editor tab; `revealRepository` reveals the folder. VS Code's
+own SCM API is not used as a second source of truth.
 
 ## Verified
 

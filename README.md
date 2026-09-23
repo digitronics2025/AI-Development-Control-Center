@@ -61,6 +61,18 @@ and editor panel), and commands: New Task, Pause/Resume, Cancel, Add Directive,
 Retry Stage, Reroute, Open Logs/Artifacts/Diff. It finds the orchestrator
 through `%LOCALAPPDATA%\AIDevControlCenter\runtime.json`.
 
+### Source Control
+
+**Source Control** in the sidebar shows one registered repository's Git state:
+staged, unstaged, untracked and conflicted files with per-file diffs, a commit
+composer (with an optional suggested message and a read-only AI review of what
+is staged), paginated history with a branch graph, and Fetch / Sync / Publish
+branch. Sync fetches first and only pushes or fast-forwards when that is safe;
+it never merges, rebases or force-pushes. Commits and pushes that include
+environment files, keys or credential-shaped values are blocked. While a task
+is editing the repository, Git actions wait and everything stays readable.
+Details: [docs/systems/source-control.md](docs/systems/source-control.md).
+
 ### Try it without spending any subscription usage
 
 ```powershell

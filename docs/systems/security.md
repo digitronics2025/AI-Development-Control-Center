@@ -4,7 +4,7 @@ sources:
   - packages/security/**
   - apps/orchestrator/src/http/security.ts
   - apps/orchestrator/src/engine/script-resolve.ts
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # Security
@@ -34,6 +34,13 @@ or broadcast. Covers provider key formats, GitHub/GitLab/Slack/AWS/Google/
 Stripe/npm tokens, JWTs, bearer/basic headers, URL credentials, cookies,
 `secret-name=value` pairs, and the literal values of sensitive environment
 variables present on the machine.
+
+`detectSecrets` reports which **blocking** rules match (provider keys, cloud
+and registry tokens, credentials in URLs, private keys — not JWTs or the broad
+`key=value` rule) and [sensitive-files.ts](../../packages/security/src/sensitive-files.ts)
+names files that are secret by name (`.env*` except `.example/.sample/.template`,
+keys, keystores, `.npmrc`, SSH and cloud credentials). Source Control uses both to
+block commits and pushes ([source-control.md](source-control.md)).
 
 ## Command classification ([commands.ts](../../packages/security/src/commands.ts))
 

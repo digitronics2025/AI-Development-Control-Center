@@ -2,7 +2,7 @@
 system: git
 sources:
   - packages/git/**
-verified_at: 8b64752
+verified_at: d0e90d5
 ---
 
 # Git integration
@@ -44,5 +44,14 @@ left uncommitted. Nothing is ever pushed automatically.
   next task's starting point. When the baseline branch is another task's
   (`taskIdFromBranch`), a `GIT_BRANCH` event and the report's Git section say
   so and ask for that task to be merged first. Worktrees are Found-for-Later.
+
+## Repository Source Control
+
+Repository-level primitives (porcelain v2 status, per-side diffs, literal
+pathspec staging, commit, history, fetch, fast-forward-only, push without
+force) live in [source-control.ts](../../packages/git/src/source-control.ts)
+and are documented in [source-control.md](source-control.md). `git()` takes
+`maxOutputBytes` (stops Git at the bound, sets `truncated`) and keeps at most
+64 KB of stderr.
 
 Last verified: 2026-09-23

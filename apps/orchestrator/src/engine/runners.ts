@@ -1,5 +1,5 @@
 import { AgentGuardError } from '@acc/agent-sdk';
-import { runShell } from '@acc/executor';
+import { runShell, type ProcessResult } from '@acc/executor';
 import { changesSince, commitPaths } from '@acc/git';
 import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
 import {
@@ -16,7 +16,9 @@ import {
   type StageDefinition,
   type StageInstance,
   type TestRun,
+  type RepositoryCommand,
 } from '@acc/shared';
+import type { RepairPlan, RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
@@ -28,6 +30,8 @@ import { LogSink } from './log-sink.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { testFailureSummary, testPassSummary } from './test-summary.js';
+import type { EngineTooling } from './tooling.js';
+import { taskWorkdir } from './workdir.js';
 
 /** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
 export type StopReason = 'pause' | 'cancel' | 'reroute' | 'shutdown' | 'redirect' | 'watchdog';
@@ -130,6 +134,7 @@ export function requiredKinds(store: Store, taskId: string): CommandKind[] {
 
 /** An optional command stage with nothing configured is skipped, so it must never ask for approval. */
 export function skipsForLackOfCommands(def: StageDefinition, repo: RepositoryRecord): boolean {
+  if (def.kind === 'verify') return !repo.runtime.devUrl;
   return def.kind === 'command' && def.optional && stageCommands(def, repo).length === 0;
 }
 
@@ -143,6 +148,16 @@ export interface RunnerDeps {
   settings: SettingsService;
   approvals: ApprovalGate;
   baseEnv: NodeJS.ProcessEnv;
+  tooling: EngineTooling;
+}
+
+/** One run of a repository command, as the tests stage and its repairs see it. */
+interface CommandRun {
+  executionId: string;
+  result: ProcessResult;
+  passed: boolean;
+  summary: string | null;
+  tail: string[];
 }
 
 export class StageRunners {
@@ -204,6 +219,7 @@ export class StageRunners {
 
     const executionId = newId();
     const startedAt = now();
+    const workdir = taskWorkdir(task, repo);
     store.insertExecution({
       id: executionId,
       taskId: task.id,
@@ -213,7 +229,7 @@ export class StageRunners {
       model: stage.model,
       effort: stage.effort,
       command: agentId,
-      cwd: repo.path,
+      cwd: workdir,
       status: 'running',
       exitCode: null,
       errorClass: null,
@@ -227,20 +243,25 @@ export class StageRunners {
     const sink = new LogSink(store, this.d.bus, task.id, executionId);
     const adapter = agents.adapter(agentId);
 
+    // The Control Center's tools, over MCP, scoped to this stage (docs/plans/tool-layer-v2).
+    const bridge = this.d.tooling.openAgentSession(task, def, stage, repo);
+    if (bridge) sink.push('system', 'Control Center tools available to this run (MCP server "acc")');
     let handle;
     try {
       handle = await adapter.execute({
         ...agents.runtimeOptions(agentId),
         executionId,
-        cwd: repo.path,
+        cwd: workdir,
         prompt,
         model: stage.model ?? 'default',
         effort: stage.effort ?? 'default',
         permissionLevel: def.permissionLevel,
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
+        toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
       });
     } catch (error) {
+      bridge?.close();
       const errorClass: ErrorClass = error instanceof AgentGuardError ? error.errorClass : 'PROCESS_CRASH';
       const message = (error as Error).message;
       sink.push('system', message);
@@ -257,7 +278,7 @@ export class StageRunners {
     publisher.updateStage(stage.id, { status: 'RUNNING' });
     publisher.event(task.id, 'AGENT_STARTED', `${agentName} started ${ROLE_ACTIVITY[def.role].toLowerCase()}`, { agentId, model: stage.model, effort: stage.effort }, stage.id);
 
-    const result = await handle.done;
+    const result = await handle.done.finally(() => bridge?.close());
     control.cancelCurrent = null;
     sink.flush();
 
@@ -353,36 +374,10 @@ export class StageRunners {
     }
 
     // Classify every command before running any of them.
+    const workdir = taskWorkdir(task, repo);
     for (const command of commands) {
-      const cls = classifyCommand(expandPackageScripts(repo.path, command.command));
-      const needs = alwaysRequiresApproval(cls) || (cls.level > def.permissionLevel && cls.level > task.autoApproveUpToLevel);
-      if (!needs) continue;
-      const shown = redact(command.command);
-      const gate = approvals.state(task.id, 'command', { command: shown });
-      if (gate === 'approved') continue;
-      publisher.updateStage(stage.id, { status: 'WAITING_APPROVAL', summary: `Waiting for approval: ${shown}` });
-      const pending = approvals.pending(task.id, 'command', { command: shown });
-      if (pending) approvals.park(task, pending);
-      else
-        approvals.request(task, {
-          kind: 'command',
-          stageId: stage.id,
-          stageKey: def.key,
-          requestedBy: 'system',
-          action: `Run "${command.name}"`,
-          command: shown,
-          permissionLevel: cls.level,
-          risk: cls.risk,
-          reason: `${def.name} runs a ${cls.risk} command: ${cls.reasons.join(', ')}.`,
-          riskExplanation:
-            cls.risk === 'dangerous'
-              ? 'This command can destroy data or history. It runs only after you type the confirmation phrase.'
-              : cls.production
-                ? 'This command targets production.'
-                : `Level ${cls.level} is above the stage's permission level ${def.permissionLevel}.`,
-          environment: cls.production ? 'production' : repo.path,
-        });
-      return { kind: 'blocked', stageId: stage.id };
+      const blocked = this.gateCommand(task, def, stage, repo, command.name, command.command);
+      if (blocked) return blocked;
     }
 
     const runs: TestRun[] = commands.map((c) => ({
@@ -415,75 +410,47 @@ export class StageRunners {
       const command = commands[i]!;
       const run = runs[i]!;
       if (control.stopReason) break;
-      const executionId = newId();
-      const startedAt = now();
-      store.insertExecution({
-        id: executionId,
-        taskId: task.id,
-        stageId: stage.id,
-        kind: 'command',
-        agentId: null,
-        model: null,
-        effort: null,
-        command: redact(command.command),
-        cwd: repo.path,
-        status: 'running',
-        exitCode: null,
-        errorClass: null,
-        errorMessage: null,
-        pid: null,
-        startedAt,
-        finishedAt: null,
-        durationMs: null,
-      });
-      this.publishExecution(executionId);
-      this.publishTestRun(store.updateTestRun(run.id, { status: 'running', executionId, startedAt }));
-      publisher.event(task.id, 'COMMAND_STARTED', `Running ${command.name}`, { command: redact(command.command), executionId }, stage.id);
+      this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now() }));
 
-      const sink = new LogSink(store, this.d.bus, task.id, executionId);
-      sink.push('system', `$ ${command.command}`);
-      const handle = runShell({ commandLine: command.command, cwd: repo.path, env, timeoutMs: command.timeoutSec * 1000, onLine: sink.push });
-      store.updateExecution(executionId, { pid: handle.pid });
-      control.cancelCurrent = () => handle.cancel();
-      if (control.stopReason) void handle.cancel();
-      const result = await handle.done;
-      control.cancelCurrent = null;
-      sink.flush();
-
-      if (result.cancelled) {
-        this.finishExecution(executionId, 'cancelled', { exitCode: result.exitCode, startedAt });
-        this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now(), durationMs: result.durationMs }));
+      // Run it; when it fails for a reason that is the environment's fault
+      // (missing dependency, port held by this task, network hiccup, file
+      // lock), repair and run it again — a bounded number of times.
+      const attempted: RepairStrategy[] = [];
+      const repairs: string[] = [];
+      let exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
+      while (exec && !exec.passed && !exec.result.cancelled && !control.stopReason) {
+        const classified = this.d.tooling.classify(exec.tail, exec.result.timedOut);
+        const plan = this.d.tooling.plan(classified, workdir, attempted);
+        if (!plan) break;
+        attempted.push(plan.strategy);
+        const row = this.d.tooling.recordRepair(task, stage.id, command.command, classified, plan, attempted.length);
+        const repaired = await this.applyRepair(task, stage, repo, workdir, plan, env, control);
+        this.d.tooling.finishRepair(row.id, repaired.ok, repaired.detail);
+        if (!repaired.ok) break;
+        repairs.push(plan.description.replace(/, then run it again$/, ''));
+        exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
+      }
+      if (!exec || exec.result.cancelled) {
+        this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now(), durationMs: exec?.result.durationMs ?? null }));
         return { kind: 'stopped', stageId: stage.id, reason: control.stopReason ?? 'cancel' };
       }
-      const passed = result.exitCode === 0 && !result.timedOut && !result.spawnError;
-      const summary = passed
-        ? testPassSummary(sink.recent(80))
-        : result.timedOut
-          ? `Timed out after ${command.timeoutSec}s`
-          : result.spawnError
-            ? `Could not start: ${result.spawnError}`
-            : testFailureSummary(sink.recent(80));
-      this.finishExecution(executionId, passed ? 'succeeded' : result.timedOut ? 'timed_out' : 'failed', {
-        exitCode: result.exitCode,
-        errorClass: passed ? null : result.timedOut ? 'TIMEOUT' : def.kind === 'tests' ? 'TEST_FAILURE' : 'COMMAND_FAILURE',
-        errorMessage: passed ? null : summary,
-        startedAt,
-      });
+      const repairedNote = repairs.length ? ` (after repair: ${repairs.join('; ')})` : '';
+      const summary = exec.passed && repairs.length ? `${exec.summary ?? 'Passed'}${repairedNote}` : exec.summary;
       this.publishTestRun(
         store.updateTestRun(run.id, {
-          status: passed ? 'passed' : 'failed',
-          exitCode: result.exitCode,
-          durationMs: result.durationMs,
+          status: exec.passed ? 'passed' : 'failed',
+          exitCode: exec.result.exitCode,
+          durationMs: exec.result.durationMs,
           summary: summary ? redact(summary) : null,
           finishedAt: now(),
         }),
       );
-      report.push(`${passed ? '✓' : '✕'} ${command.name.padEnd(16)} ${(result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
-      if (passed) {
-        publisher.event(task.id, 'TEST_PASSED', `${command.name} passed`, { executionId, durationMs: result.durationMs }, stage.id);
+      report.push(`${exec.passed ? '✓' : '✕'} ${command.name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
+      if (exec.passed) {
+        publisher.event(task.id, 'TEST_PASSED', `${command.name} passed${repairedNote}`, { executionId: exec.executionId, durationMs: exec.result.durationMs }, stage.id);
       } else {
-        publisher.event(task.id, 'TEST_FAILED', `${command.name} failed${summary ? ` · ${summary}` : ''}`, { executionId }, stage.id);
-        report.push('', `Output of ${command.name} (last lines):`, ...sink.recent(80), '');
+        publisher.event(task.id, 'TEST_FAILED', `${command.name} failed${summary ? ` · ${summary}` : ''}`, { executionId: exec.executionId }, stage.id);
+        report.push('', `Output of ${command.name} (last lines):`, ...exec.tail, '');
         failure = `${command.name} failed${summary ? `: ${summary}` : ''}`;
         break;
       }
@@ -513,6 +480,209 @@ export class StageRunners {
     return { kind: 'success', stageId: stage.id };
   }
 
+  /**
+   * Approval gate for one command the engine is about to run. Returns the
+   * blocked outcome when the task must wait for a person, or null to go on.
+   */
+  private gateCommand(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, name: string, commandLine: string): StageOutcome | null {
+    const { approvals, publisher } = this.d;
+    const cls = classifyCommand(expandPackageScripts(taskWorkdir(task, repo), commandLine));
+    const autoLevel = this.d.tooling.autoApproveLevel(task, repo);
+    const needs = alwaysRequiresApproval(cls) || (cls.level > def.permissionLevel && cls.level > autoLevel);
+    if (!needs) return null;
+    const shown = redact(commandLine);
+    const gate = approvals.state(task.id, 'command', { command: shown });
+    if (gate === 'approved') return null;
+    publisher.updateStage(stage.id, { status: 'WAITING_APPROVAL', summary: `Waiting for approval: ${shown}` });
+    const pending = approvals.pending(task.id, 'command', { command: shown });
+    if (pending) approvals.park(task, pending);
+    else
+      approvals.request(task, {
+        kind: 'command',
+        stageId: stage.id,
+        stageKey: def.key,
+        requestedBy: 'system',
+        action: `Run "${name}"`,
+        command: shown,
+        permissionLevel: cls.level,
+        risk: cls.risk,
+        reason: `${def.name} runs a ${cls.risk} command: ${cls.reasons.join(', ')}.`,
+        riskExplanation:
+          cls.risk === 'dangerous'
+            ? 'This command can destroy data or history. It runs only after you type the confirmation phrase.'
+            : cls.production
+              ? 'This command targets production.'
+              : `Level ${cls.level} is above the stage's permission level ${def.permissionLevel}.`,
+        environment: cls.production ? 'production' : repo.path,
+      });
+    return { kind: 'blocked', stageId: stage.id };
+  }
+
+  /** Run one repository command as an execution with its own log. Null when stopped before it started. */
+  private async executeCommand(task: TaskRecord, stage: StageInstance, workdir: string, command: RepositoryCommand, env: NodeJS.ProcessEnv, control: RunControl, run: TestRun): Promise<CommandRun | null> {
+    const { store, publisher } = this.d;
+    if (control.stopReason) return null;
+    const executionId = newId();
+    const startedAt = now();
+    store.insertExecution({
+      id: executionId,
+      taskId: task.id,
+      stageId: stage.id,
+      kind: 'command',
+      agentId: null,
+      model: null,
+      effort: null,
+      command: redact(command.command),
+      cwd: workdir,
+      status: 'running',
+      exitCode: null,
+      errorClass: null,
+      errorMessage: null,
+      pid: null,
+      startedAt,
+      finishedAt: null,
+      durationMs: null,
+    });
+    this.publishExecution(executionId);
+    this.publishTestRun(store.updateTestRun(run.id, { status: 'running', executionId }));
+    publisher.event(task.id, 'COMMAND_STARTED', `Running ${command.name}`, { command: redact(command.command), executionId }, stage.id);
+
+    const sink = new LogSink(store, this.d.bus, task.id, executionId);
+    sink.push('system', `$ ${command.command}`);
+    const handle = runShell({ commandLine: command.command, cwd: workdir, env, timeoutMs: command.timeoutSec * 1000, onLine: sink.push });
+    store.updateExecution(executionId, { pid: handle.pid });
+    control.cancelCurrent = () => handle.cancel();
+    if (control.stopReason) void handle.cancel();
+    const result = await handle.done;
+    control.cancelCurrent = null;
+    sink.flush();
+
+    if (result.cancelled) {
+      this.finishExecution(executionId, 'cancelled', { exitCode: result.exitCode, startedAt });
+      return { executionId, result, passed: false, summary: 'Stopped', tail: sink.recent(80) };
+    }
+    const passed = result.exitCode === 0 && !result.timedOut && !result.spawnError;
+    const tail = sink.recent(80);
+    const summary = passed
+      ? testPassSummary(tail)
+      : result.timedOut
+        ? `Timed out after ${command.timeoutSec}s`
+        : result.spawnError
+          ? `Could not start: ${result.spawnError}`
+          : testFailureSummary(tail);
+    this.finishExecution(executionId, passed ? 'succeeded' : result.timedOut ? 'timed_out' : 'failed', {
+      exitCode: result.exitCode,
+      errorClass: passed ? null : result.timedOut ? 'TIMEOUT' : stage.kind === 'tests' ? 'TEST_FAILURE' : 'COMMAND_FAILURE',
+      errorMessage: passed ? null : summary,
+      startedAt,
+    });
+    return { executionId, result, passed, summary, tail };
+  }
+
+  /** Carry out one repair; returns whether the command is worth running again. */
+  private async applyRepair(task: TaskRecord, stage: StageInstance, repo: RepositoryRecord, workdir: string, plan: RepairPlan, env: NodeJS.ProcessEnv, control: RunControl): Promise<{ ok: boolean; detail: string }> {
+    switch (plan.strategy) {
+      case 'retry_after_backoff': {
+        const until = Date.now() + (plan.delayMs ?? 2000);
+        while (Date.now() < until && !control.stopReason) await new Promise((r) => setTimeout(r, 200));
+        return { ok: !control.stopReason, detail: control.stopReason ? 'Stopped while waiting' : `Waited ${Math.round((plan.delayMs ?? 2000) / 1000)}s` };
+      }
+      case 'free_port':
+        return this.d.tooling.freePort(task, repo, plan.port!);
+      default: {
+        const repairCommand: RepositoryCommand = { id: 'repair', name: plan.strategy === 'install_browser' ? 'install browser' : 'install dependencies', command: plan.command!, kind: 'other', enabled: true, timeoutSec: 1200 };
+        const run: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: repairCommand.name, kind: 'other', command: repairCommand.command, status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
+        this.d.store.insertTestRun(run);
+        const exec = await this.executeCommand(task, stage, workdir, repairCommand, env, control, run);
+        const ok = Boolean(exec?.passed);
+        this.publishTestRun(this.d.store.updateTestRun(run.id, { status: ok ? 'passed' : exec ? 'failed' : 'not_run', exitCode: exec?.result.exitCode ?? null, durationMs: exec?.result.durationMs ?? null, summary: `Repair: ${plan.description}`, finishedAt: now() }));
+        return { ok, detail: ok ? `${repairCommand.command} succeeded` : `${repairCommand.command} failed${exec?.summary ? `: ${exec.summary}` : ''}` };
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Verify stages: the app, started and checked in a real browser (V2 plan §21)
+  // ---------------------------------------------------------------------------
+
+  async runVerify(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
+    const { store, publisher } = this.d;
+    const runtime = repo.runtime;
+    if (!runtime.devUrl) {
+      publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'No app runtime configured for this repository', finishedAt: now() });
+      publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: set how to start the app in Repositories → ${repo.name} → Runtime to verify it in a browser`, {}, stage.id);
+      return { kind: 'skipped', stageId: stage.id };
+    }
+    if (runtime.devCommand) {
+      const blocked = this.gateCommand(task, def, stage, repo, 'start the app', runtime.devCommand);
+      if (blocked) return blocked;
+    }
+    const label = runtime.verifyMode === 'browser' ? 'Browser verification' : 'HTTP verification';
+    const run: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: label, kind: 'e2e', command: redact(runtime.devCommand ?? runtime.devUrl), status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
+    store.insertTestRun(run);
+    this.publishTestRun(run);
+    const executionId = newId();
+    const startedAt = now();
+    store.insertExecution({ id: executionId, taskId: task.id, stageId: stage.id, kind: 'tool', agentId: null, model: null, effort: null, command: `verify.web ${redact(runtime.devUrl)}`, cwd: taskWorkdir(task, repo), status: 'running', exitCode: null, errorClass: null, errorMessage: null, pid: null, startedAt, finishedAt: null, durationMs: null });
+    this.publishExecution(executionId);
+    this.publishTestRun(store.updateTestRun(run.id, { executionId }));
+    publisher.updateStage(stage.id, { status: 'RUNNING' });
+    publisher.event(task.id, 'VERIFICATION', `${label} started: ${runtime.verifyPaths.join(', ')} on ${runtime.devUrl}`, { executionId }, stage.id);
+
+    const sink = new LogSink(store, this.d.bus, task.id, executionId);
+    const controller = new AbortController();
+    control.cancelCurrent = async () => controller.abort();
+    if (control.stopReason) controller.abort();
+    const outcome = await this.d.tooling.tools.invoke({
+      capability: 'verify.web',
+      input: { startCommand: runtime.devCommand ?? undefined, url: runtime.devUrl, paths: runtime.verifyPaths, readyTimeoutSec: runtime.readyTimeoutSec, mode: runtime.verifyMode },
+      origin: 'engine',
+      scope: this.d.tooling.scope(task, repo, { level: def.permissionLevel, stageId: stage.id }),
+      preApproved: true,
+      signal: controller.signal,
+      timeoutMs: def.timeoutSec * 1000,
+      onLine: (stream, line) => sink.push(stream, line),
+    });
+    control.cancelCurrent = null;
+    const r = outcome.result;
+    for (const line of r.evidence ?? []) sink.push('system', `evidence: ${line}`);
+    const problems = ((r.output as { problems?: string[] } | undefined)?.problems ?? []).slice(0, 40);
+    for (const p of problems) sink.push('stderr', p);
+    if (!r.ok && r.stdout) for (const line of r.stdout.split('\n').slice(-40)) sink.push('stdout', line);
+    sink.flush();
+    if (controller.signal.aborted && control.stopReason) {
+      this.finishExecution(executionId, 'cancelled', { startedAt });
+      this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now() }));
+      return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
+    }
+    const reportLines = [
+      `# ${label}`,
+      '',
+      `- App: ${redact(runtime.devUrl)}${runtime.devCommand ? ` (started with \`${redact(runtime.devCommand)}\`)` : ''}`,
+      `- Result: ${r.ok ? 'passed' : 'FAILED'} — ${r.summary}`,
+      '',
+      '## Evidence',
+      '',
+      ...(r.evidence ?? []).map((e) => `- ${e}`),
+      ...(problems.length ? ['', '## Problems', '', ...problems.map((p) => `- ${p}`)] : []),
+      ...(r.artifacts?.length ? ['', '## Screenshots', '', ...r.artifacts.map((a) => `- ${a.name}`)] : []),
+    ];
+    await this.d.artifacts.write(task.id, { name: 'browser-verification.md', type: 'browser-report', content: reportLines.join('\n'), stageId: stage.id, stageKey: def.key });
+    const durationMs = Date.now() - new Date(startedAt).getTime();
+    this.finishExecution(executionId, r.ok ? 'succeeded' : 'failed', { exitCode: r.ok ? 0 : 1, errorClass: r.ok ? null : 'TEST_FAILURE', errorMessage: r.ok ? null : r.summary, startedAt });
+    this.publishTestRun(store.updateTestRun(run.id, { status: r.ok ? 'passed' : 'failed', exitCode: r.ok ? 0 : 1, durationMs, summary: redact(r.summary).slice(0, 400), finishedAt: now() }));
+    publisher.event(task.id, 'VERIFICATION', `${label} ${r.ok ? 'passed' : 'failed'}: ${r.summary}`, { executionId, ok: r.ok }, stage.id);
+    if (!r.ok) {
+      const message = `${label} failed: ${problems[0] ?? r.summary}`;
+      publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'TEST_FAILURE', errorMessage: redact(message), summary: redact(message), finishedAt: now() });
+      publisher.event(task.id, 'STAGE_FAILED', `${def.name} failed: ${message}`, {}, stage.id);
+      return { kind: 'tests_failed', stageId: stage.id, message: redact(message) };
+    }
+    publisher.updateStage(stage.id, { status: 'SUCCESS', summary: redact(r.summary).slice(0, 240), finishedAt: now() });
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed`, {}, stage.id);
+    return { kind: 'success', stageId: stage.id };
+  }
+
   // ---------------------------------------------------------------------------
   // Git checkpoint stages
   // ---------------------------------------------------------------------------
@@ -526,10 +696,11 @@ export class StageRunners {
       return { kind: 'skipped', stageId: stage.id };
     }
     try {
-      const files = await changesSince(repo.path, baseline);
+      const workdir = taskWorkdir(task, repo);
+      const files = await changesSince(workdir, baseline);
       const own = files.filter((f) => f.origin === 'task').map((f) => f.path);
       const mixed = files.filter((f) => f.origin === 'both').map((f) => f.path);
-      const commit = await commitPaths(repo.path, own, `${task.id}: ${task.title}\n\nCreated by AI Development Control Center (${def.name}).`);
+      const commit = await commitPaths(workdir, own, `${task.id}: ${task.title}\n\nCreated by AI Development Control Center (${def.name}).`);
       if (!commit) {
         publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'Nothing to commit', finishedAt: now() });
         publisher.event(task.id, 'STAGE_SKIPPED', `${def.name}: nothing to commit`, {}, stage.id);

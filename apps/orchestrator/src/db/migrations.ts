@@ -435,4 +435,165 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_git_operations_commit ON git_operations(commit_sha) WHERE commit_sha IS NOT NULL;
     `,
   },
+  {
+    version: 4,
+    name: 'universal tool layer',
+    // docs/plans/tool-layer-v2. Only operational metadata: tool inputs are
+    // stored as redacted, bounded summaries; credential values only as
+    // AES-GCM ciphertext under a DPAPI-protected key; terminal output and
+    // tool output are never stored here.
+    sql: `
+      CREATE TABLE tools (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        builtin INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'builtin',
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE tool_capabilities (
+        tool_id TEXT NOT NULL REFERENCES tools(id) ON DELETE CASCADE,
+        capability_id TEXT NOT NULL,
+        permission_level INTEGER NOT NULL,
+        PRIMARY KEY (tool_id, capability_id)
+      );
+      CREATE TABLE tool_health (
+        tool_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL,
+        installed INTEGER NOT NULL,
+        version TEXT,
+        path TEXT,
+        message TEXT,
+        auth TEXT NOT NULL DEFAULT '{}',
+        checked_at TEXT NOT NULL,
+        auth_checked_at TEXT,
+        duration_ms INTEGER
+      );
+      CREATE TABLE tool_executions (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        stage_id TEXT,
+        session_id TEXT,
+        capability TEXT NOT NULL,
+        provider_id TEXT,
+        origin TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        route_reason TEXT,
+        permission_level INTEGER NOT NULL,
+        risk TEXT NOT NULL,
+        effects TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL,
+        summary TEXT,
+        error_code TEXT,
+        input_summary TEXT NOT NULL DEFAULT '',
+        attempt INTEGER NOT NULL DEFAULT 1,
+        recovery_of TEXT,
+        artifacts TEXT NOT NULL DEFAULT '[]',
+        files_changed TEXT NOT NULL DEFAULT '[]',
+        network_targets TEXT NOT NULL DEFAULT '[]',
+        evidence TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        duration_ms INTEGER
+      );
+      CREATE INDEX idx_tool_executions_task ON tool_executions(task_id, started_at);
+      CREATE INDEX idx_tool_executions_capability ON tool_executions(capability, started_at);
+      CREATE TABLE pty_sessions (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        shell TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        pid INTEGER,
+        owner_kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        cols INTEGER NOT NULL,
+        rows INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        exit_code INTEGER
+      );
+      CREATE TABLE task_processes (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        stage_id TEXT,
+        name TEXT NOT NULL,
+        command TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        pid INTEGER,
+        process_started_at TEXT,
+        port INTEGER,
+        url TEXT,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        stopped_at TEXT,
+        exit_code INTEGER,
+        stop_reason TEXT
+      );
+      CREATE INDEX idx_task_processes_task ON task_processes(task_id);
+      CREATE INDEX idx_task_processes_live ON task_processes(status) WHERE status IN ('starting', 'running', 'healthy', 'unhealthy');
+      CREATE TABLE recovery_attempts (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        stage_id TEXT,
+        command TEXT NOT NULL,
+        category TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        status TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        evidence TEXT,
+        attempt INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX idx_recovery_attempts_task ON recovery_attempts(task_id, created_at);
+      CREATE TABLE mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        transport TEXT NOT NULL,
+        command TEXT,
+        args TEXT NOT NULL DEFAULT '[]',
+        url TEXT,
+        env_credentials TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        permission_level INTEGER NOT NULL DEFAULT 2,
+        allowed_tools TEXT,
+        timeout_ms INTEGER NOT NULL DEFAULT 60000,
+        health TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE capability_escalations (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        stage_id TEXT,
+        session_id TEXT,
+        capability TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        permission_level INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_capability_escalations_task ON capability_escalations(task_id, created_at);
+      CREATE TABLE credential_references (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        env_var TEXT,
+        description TEXT NOT NULL DEFAULT '',
+        repository_ids TEXT,
+        ciphertext TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT
+      );
+      ALTER TABLE task_checkpoints ADD COLUMN type TEXT NOT NULL DEFAULT 'git';
+      ALTER TABLE task_checkpoints ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE tasks ADD COLUMN policy_mode TEXT;
+      ALTER TABLE repositories ADD COLUMN policy_mode TEXT;
+      ALTER TABLE repositories ADD COLUMN runtime TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
 ];

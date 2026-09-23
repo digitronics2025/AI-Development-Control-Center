@@ -101,6 +101,7 @@ export class TaskViews {
     return {
       ...this.summary(task, stages),
       description: task.description,
+      policyMode: task.policyMode ?? this.settings.get().execution.policyMode,
       workflow: task.workflow,
       overrides: task.overrides,
       autoApproveUpToLevel: task.autoApproveUpToLevel,
@@ -111,6 +112,8 @@ export class TaskViews {
         taskBranch: task.git.taskBranch,
         preexistingChanges: task.git.preexistingChanges,
         commits: task.git.commits,
+        worktreePath: task.git.worktreePath ?? null,
+        isolated: task.git.isolated ?? false,
       },
       attachments: task.attachments,
       assignments: this.assignments(task),

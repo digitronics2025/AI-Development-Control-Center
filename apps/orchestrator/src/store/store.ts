@@ -41,7 +41,10 @@ import type {
   TestRunStatus,
   WorkflowProfile,
   GitMode,
+  PolicyMode,
+  RepositoryRuntime,
 } from '@acc/shared';
+import { repositoryRuntimeSchema } from '@acc/shared';
 import type { AgentDetectionResult, AgentHealth } from '@acc/agent-sdk';
 import type { Db } from '../db/database.js';
 
@@ -90,6 +93,8 @@ export interface TaskRecord {
   recoveryCycle: number;
   /** Supervised tasks only; null for unsupervised ones. */
   limits: TaskLimits | null;
+  /** Execution policy fixed at creation (tool layer V2); null for tasks created before it. */
+  policyMode: PolicyMode | null;
   /** Command kinds the next tests stage runs in addition to its own (one-shot). */
   extraCheckKinds: CommandKind[];
   /** Bumped by the store on every material change; never set directly. */
@@ -117,6 +122,8 @@ export interface RepositoryRecord {
   autoApproveUpToLevel: PermissionLevel | null;
   tooling: string[];
   lastTaskId: string | null;
+  policyMode: PolicyMode | null;
+  runtime: RepositoryRuntime;
   createdAt: string;
   updatedAt: string;
 }
@@ -181,6 +188,7 @@ const toTask = (r: Row): TaskRecord => ({
   supervised: r.supervised === 1,
   recoveryCycle: r.recovery_cycle ?? 0,
   limits: parse(r.limits, null),
+  policyMode: r.policy_mode ?? null,
   extraCheckKinds: parse(r.extra_check_kinds, []),
   version: r.version ?? 0,
   blocker: parse(r.blocker, null),
@@ -327,6 +335,8 @@ const toRepository = (r: Row): RepositoryRecord => ({
   autoApproveUpToLevel: r.auto_approve_level,
   tooling: parse(r.tooling, []),
   lastTaskId: r.last_task_id,
+  policyMode: r.policy_mode ?? null,
+  runtime: repositoryRuntimeSchema.parse(parse(r.runtime, {})),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -385,6 +395,7 @@ const TASK_COLUMNS: Partial<Record<keyof TaskRecord, [string, (v: any) => unknow
   supervised: ['supervised', (v) => (v ? 1 : 0)],
   recoveryCycle: ['recovery_cycle', (v) => v],
   limits: ['limits', (v) => (v ? json(v) : null)],
+  policyMode: ['policy_mode', (v) => v ?? null],
   extraCheckKinds: ['extra_check_kinds', json],
   blocker: ['blocker', (v) => (v ? json(v) : null)],
   lastEvent: ['last_event', (v) => (v ? json(v) : null)],
@@ -465,8 +476,8 @@ export class Store {
   insertRepository(rec: RepositoryRecord): void {
     this.db
       .prepare(
-        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         rec.id,
@@ -481,6 +492,8 @@ export class Store {
         rec.lastTaskId,
         rec.createdAt,
         rec.updatedAt,
+        rec.policyMode,
+        json(rec.runtime),
       );
   }
 
@@ -494,6 +507,8 @@ export class Store {
     if (patch.autoApproveUpToLevel !== undefined) cols.auto_approve_level = patch.autoApproveUpToLevel;
     if (patch.tooling !== undefined) cols.tooling = json(patch.tooling);
     if (patch.lastTaskId !== undefined) cols.last_task_id = patch.lastTaskId;
+    if (patch.policyMode !== undefined) cols.policy_mode = patch.policyMode;
+    if (patch.runtime !== undefined) cols.runtime = json(patch.runtime);
     cols.updated_at = now();
     const keys = Object.keys(cols);
     this.db.prepare(`UPDATE repositories SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
@@ -645,8 +660,8 @@ export class Store {
         `INSERT INTO tasks (id, seq, title, description, repository_id, workflow_id, workflow_snapshot, mode, status, current_stage_key,
            current_stage_id, overrides, auto_approve_level, max_fix_cycles, fix_cycles, pause_requested, blocker, last_event, final_status,
            git, attachments, prompt_versions, created_at, started_at, finished_at, updated_at,
-           supervised, recovery_cycle, limits, pause_after_stage, extra_check_kinds, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           supervised, recovery_cycle, limits, pause_after_stage, extra_check_kinds, version, policy_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         t.id,
@@ -681,6 +696,7 @@ export class Store {
         t.pauseAfterStage ? 1 : 0,
         json(t.extraCheckKinds),
         t.version,
+        t.policyMode,
       );
   }
 

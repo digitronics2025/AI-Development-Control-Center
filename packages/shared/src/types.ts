@@ -18,6 +18,7 @@ import type {
   TestRunStatus,
 } from './constants.js';
 import type { DirectiveKind, DirectiveRule, DirectiveScope, DirectiveState } from './chairman.js';
+import type { PolicyMode, RepositoryRuntime } from './tools.js';
 import type {
   AgentSettings,
   GitMode,
@@ -56,6 +57,10 @@ export interface TaskGitInfo {
   taskBranch: string | null;
   preexistingChanges: string[];
   commits: string[];
+  /** Isolated worktree the task runs in (Git mode `worktree`); null once removed or when unused. */
+  worktreePath?: string | null;
+  /** The task ran in a worktree (kept after it is removed, so views diff the branch instead). */
+  isolated?: boolean;
 }
 
 export interface TaskAttachment {
@@ -103,6 +108,8 @@ export interface TaskSummary {
 
 export interface TaskDetail extends TaskSummary {
   description: string;
+  /** Execution policy this task runs under (docs/plans/tool-layer-v2). */
+  policyMode: PolicyMode;
   workflow: WorkflowProfile;
   overrides: TaskOverrides;
   autoApproveUpToLevel: PermissionLevel;
@@ -151,7 +158,7 @@ export interface Execution {
   id: string;
   taskId: string;
   stageId: string | null;
-  kind: 'agent' | 'command';
+  kind: 'agent' | 'command' | 'tool';
   agentId: string | null;
   model: string | null;
   effort: string | null;
@@ -340,6 +347,9 @@ export interface Repository {
   autoApproveUpToLevel: PermissionLevel | null;
   tooling: string[];
   lastTaskId: string | null;
+  /** Null = use Settings → Execution. */
+  policyMode: PolicyMode | null;
+  runtime: RepositoryRuntime;
   status: RepositoryStatus;
   createdAt: Iso;
   updatedAt: Iso;

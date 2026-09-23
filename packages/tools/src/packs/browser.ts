@@ -132,11 +132,12 @@ async function checkAt(ctx: OperationContext, browser: Browser, input: { url: st
     if (input.settleMs) await page.waitForTimeout(input.settleMs);
     const timing = await page
       .evaluate(() => {
-        const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+        // Runs in the page: browser globals are reached through globalThis (this package compiles without DOM types).
+        const nav = (globalThis as any).performance.getEntriesByType('navigation')[0] as { domContentLoadedEventEnd: number; loadEventEnd: number } | undefined;
         return { domContentLoadedMs: nav ? Math.round(nav.domContentLoadedEventEnd) : null, loadMs: nav ? Math.round(nav.loadEventEnd) : null };
       })
       .catch(() => ({ domContentLoadedMs: null, loadMs: null }));
-    const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1).catch(() => false);
+    const horizontalOverflow = await page.evaluate(() => (globalThis as any).document.documentElement.scrollWidth > (globalThis as any).innerWidth + 1).catch(() => false);
     const title = await page.title().catch(() => '');
     const safeName = new URL(input.url).pathname.replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '') || 'root';
     const screenshot = input.screenshot ? await saveScreenshot(ctx, page, `${safeName}-${viewport}.png`).catch(() => null) : null;
@@ -415,7 +416,7 @@ export function browserProvider(): ToolProvider {
               await page.addScriptTag({ content: axeSource });
               const result = (await page.evaluate(async () => {
                 const axe = (globalThis as any).axe;
-                const r = await axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+                const r = await axe.run((globalThis as any).document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
                 return r.violations.map((v: any) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length }));
               })) as Array<{ id: string; impact: string; help: string; nodes: number }>;
               return {
@@ -445,7 +446,7 @@ export function browserProvider(): ToolProvider {
               const page = await context.newPage();
               await page.goto(input.url, { waitUntil: 'load', timeout: 30_000 });
               const cookies = (await context.cookies()).map((c) => ({ name: c.name, domain: c.domain, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite }));
-              const storage = await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }));
+              const storage = await page.evaluate(() => ({ local: Object.keys((globalThis as any).localStorage), session: Object.keys((globalThis as any).sessionStorage) }));
               return { ok: true, summary: `${cookies.length} cookie(s), ${storage.local.length} localStorage key(s)`, output: { cookies, storage } };
             } finally {
               await context.close();

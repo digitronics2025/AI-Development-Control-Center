@@ -92,7 +92,7 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
   const auth = await authHeaders(input, ctx);
   if ('ok' in auth && typeof auth.ok === 'boolean') return auth as OperationResult;
   const headers: Record<string, string> = { ...input.headers, ...(auth as Record<string, string>) };
-  let body: BodyInit | undefined;
+  let body: NonNullable<Parameters<typeof fetch>[1]>['body'];
   if (input.json !== undefined) {
     body = JSON.stringify(input.json);
     headers['content-type'] ??= 'application/json';

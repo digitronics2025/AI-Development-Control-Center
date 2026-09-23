@@ -144,6 +144,14 @@ const toCheckpoint = (r: Row): CheckpointRecord => ({
   head: r.head,
   stageKey: r.stage_key,
   createdAt: r.created_at,
+  type: r.type ?? 'git',
+  metadata: (() => {
+    try {
+      return JSON.parse(r.metadata ?? '{}') as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  })(),
 });
 
 const toContract = (r: Row): TaskContract => ({
@@ -346,8 +354,8 @@ export class ChairmanStore {
 
   insertCheckpoint(c: CheckpointRecord): CheckpointRecord {
     this.db
-      .prepare('INSERT INTO task_checkpoints (id, task_id, seq, label, reason, commit_hash, ref, head, stage_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(c.id, c.taskId, c.seq, c.label, c.reason, c.commit, c.ref, c.head, c.stageKey, c.createdAt);
+      .prepare('INSERT INTO task_checkpoints (id, task_id, seq, label, reason, commit_hash, ref, head, stage_key, created_at, type, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(c.id, c.taskId, c.seq, c.label, c.reason, c.commit, c.ref, c.head, c.stageKey, c.createdAt, c.type ?? 'git', JSON.stringify(c.metadata ?? {}));
     return c;
   }
 

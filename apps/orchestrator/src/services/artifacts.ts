@@ -12,6 +12,12 @@ const MIME: Record<string, string> = {
   '.patch': 'text/x-diff',
   '.json': 'application/json',
   '.txt': 'text/plain',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.mp4': 'video/mp4',
+  '.sql': 'text/plain',
+  '.html': 'text/plain',
 };
 
 export const MAX_ARTIFACT_READ_BYTES = 2 * 1024 * 1024;

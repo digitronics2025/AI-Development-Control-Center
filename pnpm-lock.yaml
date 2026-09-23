@@ -132,24 +132,42 @@ importers:
       '@acc/git':
         specifier: workspace:*
         version: link:../../packages/git
+      '@acc/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@acc/pty':
+        specifier: workspace:*
+        version: link:../../packages/pty
       '@acc/security':
         specifier: workspace:*
         version: link:../../packages/security
       '@acc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@acc/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@fastify/static':
         specifier: ^10.1.4
         version: 10.1.4
       '@fastify/websocket':
         specifier: ^11.3.1
         version: 11.3.1
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
       fastify:
         specifier: ^5.12.5
         version: 5.12.5
+      node-pty:
+        specifier: 1.1.0
+        version: 1.1.0
+      playwright-core:
+        specifier: ^1.63.0
+        version: 1.63.0
       yaml:
         specifier: ^2.9.1
         version: 2.9.1

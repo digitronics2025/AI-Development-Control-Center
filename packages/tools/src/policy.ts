@@ -1,4 +1,4 @@
-import type { PermissionLevel } from '@acc/shared';
+import { POLICY_MODE_LABEL, type PermissionLevel, type PolicyMode } from '@acc/shared';
 import type { ToolRisk } from './sdk.js';
 
 /**
@@ -7,20 +7,7 @@ import type { ToolRisk } from './sdk.js';
  * the dashboard.
  */
 
-export const POLICY_MODES = ['safe', 'autopilot', 'full'] as const;
-export type PolicyMode = (typeof POLICY_MODES)[number];
-
-export const POLICY_MODE_LABEL: Record<PolicyMode, string> = {
-  safe: 'Safe',
-  autopilot: 'Autopilot',
-  full: 'Full Autopilot+',
-};
-
-export const POLICY_MODE_DESCRIPTION: Record<PolicyMode, string> = {
-  safe: 'Reads, analysis, local tests and low-risk edits run on their own; anything above Level 2 asks first.',
-  autopilot: 'Investigates, edits, installs project dependencies, tests, repairs and commits on its own up to the auto-approve level.',
-  full: 'Also runs pre-authorised infrastructure work (Level 4). Production and destructive actions still ask.',
-};
+export { POLICY_MODES, POLICY_MODE_LABEL, POLICY_MODE_DESCRIPTION, type PolicyMode } from '@acc/shared';
 
 /** Who is asking. Agents cannot wait for an approval mid-run; everyone else can. */
 export type CallOrigin = 'agent' | 'engine' | 'operator' | 'chairman';

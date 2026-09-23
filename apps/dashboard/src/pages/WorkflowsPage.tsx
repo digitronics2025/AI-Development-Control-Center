@@ -43,7 +43,7 @@ import { useConnection } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
 
-const KIND_LABEL: Record<(typeof STAGE_KINDS)[number], string> = { agent: 'Agent', tests: 'Tests (system)', command: 'Command (system)', git: 'Git checkpoint (system)' };
+const KIND_LABEL: Record<(typeof STAGE_KINDS)[number], string> = { agent: 'Agent', tests: 'Tests (system)', command: 'Command (system)', git: 'Git checkpoint (system)', verify: 'App verification (system)' };
 
 function issuesFor(issues: WorkflowIssue[], index: number | null, field?: string) {
   return issues.filter((i) => i.stageIndex === index && (field === undefined || i.field === field || i.field.startsWith(`${field}.`)));

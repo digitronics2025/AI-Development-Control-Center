@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import type { Settings, WorkflowProfile } from './schemas.js';
 import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
+import type { CapabilityEscalation, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
 
 /**
  * Messages the orchestrator pushes to every connected client. Each carries a
@@ -46,7 +47,20 @@ export type ServerMessage =
   | { type: 'chairman.message'; message: ChairmanMessage }
   | { type: 'chairman.decision'; decision: ChairmanDecision }
   | { type: 'chairman.action'; action: ChairmanAction }
-  | { type: 'checkpoint'; checkpoint: TaskCheckpoint };
+  | { type: 'checkpoint'; checkpoint: TaskCheckpoint }
+  // Universal tool layer (docs/plans/tool-layer-v2)
+  | { type: 'tool'; tool: ToolView }
+  | { type: 'toolExecution'; execution: ToolExecution }
+  | { type: 'taskProcess'; process: TaskProcess }
+  | { type: 'terminal'; terminal: TerminalSession }
+  /** Terminal output goes only to clients that subscribed to that terminal. */
+  | { type: 'terminal.output'; terminalId: string; data: string; cursor: number }
+  | { type: 'mcpServer'; server: McpServerView }
+  | { type: 'mcpServer.deleted'; serverId: string }
+  | { type: 'credential'; credential: CredentialView }
+  | { type: 'credential.deleted'; credentialId: string }
+  | { type: 'recovery'; attempt: RecoveryAttempt }
+  | { type: 'escalation'; escalation: CapabilityEscalation };
 
 export type ServerMessageType = ServerMessage['type'];
 
@@ -54,4 +68,8 @@ export type ServerMessageType = ServerMessage['type'];
 export type ClientMessage =
   | { type: 'subscribeLogs'; executionId: string }
   | { type: 'unsubscribeLogs'; executionId: string }
+  | { type: 'subscribeTerminal'; terminalId: string }
+  | { type: 'unsubscribeTerminal'; terminalId: string }
+  | { type: 'terminal.input'; terminalId: string; data: string }
+  | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
   | { type: 'ping' };

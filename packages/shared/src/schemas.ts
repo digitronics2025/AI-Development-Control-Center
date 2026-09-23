@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executionSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
 import {
   BILLING_MODES,
   COMMAND_KINDS,
@@ -113,7 +114,8 @@ export const repositoryCommandSchema = z.object({
 });
 export type RepositoryCommand = z.infer<typeof repositoryCommandSchema>;
 
-export const gitModeSchema = z.enum(['task-branch', 'current-branch']);
+/** task-branch: a branch in your working tree; current-branch: no branch; worktree: an isolated copy your working tree never sees. */
+export const gitModeSchema = z.enum(['task-branch', 'current-branch', 'worktree']);
 export type GitMode = z.infer<typeof gitModeSchema>;
 
 export const createRepositorySchema = z.object({
@@ -128,6 +130,9 @@ export const updateRepositorySchema = z.object({
   commands: z.array(repositoryCommandSchema).max(40).optional(),
   gitMode: gitModeSchema.optional(),
   autoApproveUpToLevel: permissionLevelSchema.nullable().optional(),
+  /** Overrides Settings → Execution policy for tasks in this repository. */
+  policyMode: z.enum(POLICY_MODES).nullable().optional(),
+  runtime: repositoryRuntimeSchema.optional(),
 });
 export type UpdateRepositoryInput = z.infer<typeof updateRepositorySchema>;
 
@@ -153,6 +158,10 @@ export const createTaskSchema = z.object({
   start: z.boolean().default(true),
   /** Chairman supervision; defaults to on for Autopilot tasks when enabled in Settings. */
   supervised: z.boolean().optional(),
+  /** Execution policy for this task; defaults to the repository's, then Settings. */
+  policyMode: z.enum(POLICY_MODES).optional(),
+  /** Run in an isolated worktree even if the repository uses a task branch. */
+  worktree: z.boolean().optional(),
 });
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
 
@@ -266,6 +275,7 @@ export const settingsSchema = z.object({
   developerMode: z.boolean().default(false),
   chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
   repositoryAutomation: repositoryAutomationSettingsSchema.default(repositoryAutomationSettingsSchema.parse({})),
+  execution: executionSettingsSchema.default(executionSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

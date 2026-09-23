@@ -4,3 +4,4 @@ export * from './commands.js';
 export * from './shell-parse.js';
 export * from './sensitive-files.js';
 export * from './credential-cipher.js';
+export * from './compare.js';

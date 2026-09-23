@@ -1,16 +1,16 @@
 // Bundles the orchestrator and its internal workspace packages into one ESM
-// file. better-sqlite3 stays external because it ships a native addon.
+// file, plus the stdio MCP bridge agents launch (dist/acc-mcp.js). Native
+// addons (better-sqlite3, node-pty) and packages that locate their own files
+// at run time (playwright-core, axe-core) stay external.
 import { build } from 'esbuild';
 
-await build({
-  entryPoints: ['src/main.ts'],
-  outfile: 'dist/main.js',
+const common = {
   bundle: true,
   platform: 'node',
   target: 'node22',
   format: 'esm',
   sourcemap: true,
-  external: ['better-sqlite3'],
+  external: ['better-sqlite3', 'node-pty', 'playwright-core', 'axe-core'],
   // CommonJS dependencies inside an ESM bundle need require/__dirname.
   banner: {
     js: [
@@ -23,4 +23,7 @@ await build({
     ].join('\n'),
   },
   logLevel: 'info',
-});
+};
+
+await build({ ...common, entryPoints: ['src/main.ts'], outfile: 'dist/main.js' });
+await build({ ...common, entryPoints: ['../../packages/mcp/src/bin.ts'], outfile: 'dist/acc-mcp.js' });

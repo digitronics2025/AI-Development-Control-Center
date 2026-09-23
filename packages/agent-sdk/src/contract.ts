@@ -47,6 +47,13 @@ export interface AgentExecutionInput extends AgentRuntimeOptions {
   permissionLevel: PermissionLevel;
   timeoutMs: number;
   images?: string[];
+  /**
+   * The Control Center's tools as a stdio MCP server for this run
+   * (docs/plans/tool-layer-v2). `env` carries a scoped session token; it is
+   * added to the agent's environment and forwarded to the server, never
+   * written to disk or argv.
+   */
+  toolBridge?: { name: string; command: string; args: string[]; env: Record<string, string> };
   /** Human-readable, already-parsed output lines. Callers redact before persisting. */
   onLine?: (stream: AgentLogStream, text: string) => void;
 }

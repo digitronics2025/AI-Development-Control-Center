@@ -13,6 +13,7 @@ import {
 import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
 import type { RepositoryRecord, Store, TaskRecord } from '../store/store.js';
+import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
 const MAX_DIFF_CHARS = 150_000;
@@ -56,6 +57,8 @@ export interface BuiltPrompt {
 export class ContextBuilder {
   /** Current Chairman strategy guidance for a task, set once the Chairman exists. */
   guidance: (taskId: string) => string | null = () => null;
+  /** Environment report and Control Center tools for a stage, set once the tool layer exists. */
+  toolSections: (task: TaskRecord, def: StageDefinition, repo: RepositoryRecord) => Promise<string> = async () => '';
 
   constructor(
     private readonly store: Store,
@@ -170,15 +173,16 @@ export class ContextBuilder {
     const template = this.prompts.get(def.role);
     const baseline = task.git.baselineSnapshotId ? this.store.getSnapshot(task.git.baselineSnapshotId) : null;
     const snapshot: GitSnapshot | null = baseline ? { branch: baseline.branch, head: baseline.head, files: baseline.files } : null;
+    const workdir = taskWorkdir(task, repo);
 
     const needsDiff = ['reviewer', 'fixer', 'verifier'].includes(def.role) || def.role === 'implementer';
     let diff = '';
     let changedFiles = '';
     if (snapshot && needsDiff) {
       try {
-        const { diff: raw, truncated } = await diffSince(repo.path, snapshot, { maxBytes: MAX_DIFF_CHARS });
+        const { diff: raw, truncated } = await diffSince(workdir, snapshot, { maxBytes: MAX_DIFF_CHARS });
         diff = redact(raw) + (truncated ? '\n[diff truncated]' : '');
-        const files = await changesSince(repo.path, snapshot);
+        const files = await changesSince(workdir, snapshot);
         changedFiles = files.map((f) => `- ${f.path} (${f.status}, ${f.origin === 'task' ? 'task change' : f.origin === 'both' ? 'task change on top of pre-existing user work' : 'pre-existing user work'})`).join('\n');
       } catch {
         diff = '(diff unavailable)';
@@ -195,7 +199,7 @@ export class ContextBuilder {
 
     let gitStatusText: string;
     try {
-      gitStatusText = (await gitStatus(repo.path)).slice(0, 80).map((e) => `${e.code} ${e.path}`).join('\n') || 'clean';
+      gitStatusText = (await gitStatus(workdir)).slice(0, 80).map((e) => `${e.code} ${e.path}`).join('\n') || 'clean';
     } catch {
       gitStatusText = 'not a Git repository';
     }
@@ -207,7 +211,7 @@ export class ContextBuilder {
       role: ROLE_LABEL[def.role],
       request: `# ${task.title}\n\n${task.description}`,
       repository_name: repo.name,
-      repository_path: repo.path,
+      repository_path: workdir,
       repository_facts: this.repositoryFacts(repo, task),
       git_status: gitStatusText,
       investigation: await this.artifactsOf(task.id, ['investigation']),
@@ -227,10 +231,11 @@ export class ContextBuilder {
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
     };
-    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(repo.path)}\n\n${RUN_CONTEXT}\n\n`;
+    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);
     // Chairman guidance follows the role template so user-edited templates still receive it.
     const supervisor = guidance ? `\n\n## Chairman guidance (supervisor of this task)\n\n${guidance}\n` : '';
-    return { prompt: header + renderTemplate(template.body, vars) + supervisor, templateVersion: template.version };
+    const tools = await this.toolSections(task, def, repo).catch(() => '');
+    return { prompt: header + renderTemplate(template.body, vars) + supervisor + tools, templateVersion: template.version };
   }
 }

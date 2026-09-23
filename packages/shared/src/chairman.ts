@@ -217,6 +217,10 @@ export interface TaskCheckpoint {
   head: string | null;
   stageKey: string | null;
   createdAt: string;
+  /** git (working tree), database (SQLite/D1 backup) or deployment (live version record). V1 rows are git. */
+  type?: 'git' | 'database' | 'deployment';
+  /** Branch, Git status, changed files, lockfile hashes, backup location… (no secrets, no file contents). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface ChairmanOverview {

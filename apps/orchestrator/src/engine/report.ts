@@ -14,6 +14,10 @@ export interface ReportInput {
   operatorItems?: string[];
   /** Completion-gate checks that did not pass on a supervised task. */
   gateLimitations?: string[];
+  /** Verification matrix for the project type (docs/plans/tool-layer-v2 §42). */
+  verification?: { type: string; satisfied: string[]; missing: string[] } | null;
+  /** Tool calls, repairs, escalations and processes. */
+  executionLines?: string[];
 }
 
 const MAX_OPERATOR_ITEMS = 10;
@@ -65,6 +69,8 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (input.testsSkipped) limitations.push('Verification commands were skipped with your approval; the change is not verified by tests.');
   if (hasTestsStage && !lastTestStage) limitations.push('No test stage ran.');
   if (failed > 0) limitations.push(`${failed} verification command(s) failed in the last run.`);
+  const lastVerifyStage = [...stages].reverse().find((s) => s.kind === 'verify' && s.status !== 'SKIPPED' && s.status !== 'CANCELLED');
+  if (lastVerifyStage?.status === 'FAILED') limitations.push(`The last browser/HTTP verification failed: ${lastVerifyStage.errorMessage ?? 'see browser-verification.md'}`);
   const mixed = files?.filter((f) => f.origin === 'both') ?? [];
   if (mixed.length) limitations.push(`${mixed.length} file(s) mix your pre-existing uncommitted work with task changes: ${mixed.map((f) => f.path).join(', ')}.`);
 
@@ -132,6 +138,17 @@ export function buildFinalReport(input: ReportInput): ReportResult {
         ]
       : [`- Fix cycles used: ${task.fixCycles} of ${task.maxFixCycles}`]),
     '',
+    ...(input.verification
+      ? [
+          '## Verification coverage',
+          '',
+          `- Project type: ${input.verification.type}`,
+          `- Verified: ${input.verification.satisfied.join(', ') || 'nothing yet'}`,
+          ...(input.verification.missing.length ? [`- Not verified: ${input.verification.missing.join(', ')}`] : []),
+          '',
+        ]
+      : []),
+    ...(input.executionLines?.length ? ['## Execution', '', ...input.executionLines, ''] : []),
     '## Cloud',
     '',
     input.deployed === 'staging' ? 'Staging deploy ran' : 'Not deployed',
@@ -139,7 +156,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '## Git',
     '',
     `- Baseline: ${task.git.baselineBranch ?? '—'} @ ${task.git.baselineCommit?.slice(0, 10) ?? '—'}${stackedOn ? ` (${stackedOn}'s branch — merge ${stackedOn} first)` : ''}`,
-    `- Task branch: ${task.git.taskBranch ?? 'none (worked on the current branch)'}`,
+    `- Task branch: ${task.git.taskBranch ?? 'none (worked on the current branch)'}${task.git.isolated ? ' — worked in an isolated worktree; your working tree was not touched. Merge the branch to take the change.' : ''}`,
     `- Commits: ${task.git.commits.length ? task.git.commits.map((c) => c.slice(0, 10)).join(', ') : 'none — changes are uncommitted for your review'}`,
     '',
     '## Remaining limitations',

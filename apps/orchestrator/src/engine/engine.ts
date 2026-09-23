@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { changesSince, createTaskBranch, diffSince, isGitRepository, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
+import { changesSince, createTaskBranch, currentBranch, diffSince, isGitRepository, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMPLETE,
@@ -38,6 +38,8 @@ import { buildFinalReport, latestOperatorItems } from './report.js';
 import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
+import type { EngineTooling } from './tooling.js';
+import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
 
@@ -62,6 +64,8 @@ export interface EngineDeps {
   settings: SettingsService;
   /** Shared with Source Control: stages that edit files never overlap a Git mutation. */
   coordinator: RepositoryCoordinator;
+  /** The tool layer: sessions, repairs, verification, worktrees, cleanup (docs/plans/tool-layer-v2). */
+  tooling: EngineTooling;
   baseEnv?: NodeJS.ProcessEnv;
 }
 
@@ -97,7 +101,9 @@ export class TaskEngine {
       settings: d.settings,
       approvals: this.approvals,
       baseEnv: d.baseEnv ?? process.env,
+      tooling: d.tooling,
     });
+    d.tooling.attachPublisher(this.publisher);
   }
 
   /** The Chairman registers here after construction (it needs the engine too). */
@@ -174,11 +180,12 @@ export class TaskEngine {
         ? { maxRecoveryCycles: settings.chairman.maxRecoveryCycles, maxRuntimeMinutes: settings.chairman.maxTaskRuntimeMinutes, maxAgentRuns: settings.chairman.maxAgentRuns }
         : null,
       extraCheckKinds: [],
+      policyMode: input.policyMode ?? repo.policyMode ?? settings.execution.policyMode,
       version: 0,
       blocker: null,
       lastEvent: null,
       finalStatus: null,
-      git: { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null },
+      git: { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null, worktreePath: null, isolated: input.worktree ?? repo.gitMode === 'worktree' },
       attachments: [],
       promptVersions: {},
       createdAt: ts,
@@ -291,7 +298,10 @@ export class TaskEngine {
       if (stage && !['SUCCESS', 'SKIPPED', 'FAILED'].includes(stage.status)) this.publisher.updateStage(stage.id, { status: 'CANCELLED', finishedAt: now() });
     }
     for (const a of this.d.store.cancelPendingApprovals(id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
-    this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, pauseAfterStage: false, finishedAt: now() });
+    const repo = this.d.store.getRepository(current.repositoryId);
+    await this.d.tooling.cleanup(current, repo, 'task cancelled').catch(() => []);
+    const gitPatch = repo && current.git.worktreePath ? await this.d.tooling.finalizeWorktree(current, repo, 'cancelled') : {};
+    this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, pauseAfterStage: false, finishedAt: now(), ...(Object.keys(gitPatch).length ? { git: { ...this.task(id).git, ...gitPatch } } : {}) });
     this.publisher.event(id, 'TASK_CANCELLED', 'Task cancelled');
     this.supervisor?.onTerminal(id);
     this.schedule();
@@ -696,6 +706,9 @@ export class TaskEngine {
       .finally(() => {
         this.runners.delete(task.id);
         this.d.repositories.invalidate(task.repositoryId);
+        // Background processes live only while the loop does; a paused or waiting task restarts them if it needs them.
+        const after = this.d.store.getTask(task.id);
+        if (after && !['RUNNING', 'QUEUED'].includes(after.status)) void this.d.tooling.stopProcesses(task.id, `task ${after.status.toLowerCase().replace(/_/g, ' ')}`);
         setImmediate(() => this.schedule());
       });
     this.runners.set(task.id, { control, done });
@@ -719,6 +732,7 @@ export class TaskEngine {
   // ===========================================================================
 
   private async runLoop(taskId: string, control: RunControl): Promise<void> {
+    let environmentChecked = false;
     for (;;) {
       const task = this.task(taskId);
       if (task.status !== 'RUNNING') return;
@@ -740,13 +754,20 @@ export class TaskEngine {
       if (!skipsForLackOfCommands(def, repo) && !this.stageGate(task, def)) return;
 
       // A stage that can edit files waits for any Source Control mutation in
-      // flight, and Source Control refuses to mutate while it runs.
+      // flight, and Source Control refuses to mutate while it runs — unless the
+      // task is isolated in its own worktree and never touches that working tree.
       const writes = def.permissionLevel >= 2;
-      const releaseWriter = writes ? await this.d.coordinator.acquireWriter(repo.id, taskId, def.name) : null;
+      const releaseWriter = writes && !task.git.isolated ? await this.d.coordinator.acquireWriter(repo.id, taskId, def.name) : null;
       let stage: StageInstance;
       let outcome: StageOutcome;
       try {
-        if (writes) await this.ensureBaseline(task, repo.path);
+        if (writes || task.git.isolated) await this.ensureBaseline(this.task(taskId), repo.path);
+        if (!environmentChecked) {
+          environmentChecked = true;
+          await this.d.tooling.discoverEnvironment(this.task(taskId), repo).catch((error: unknown) => {
+            this.publisher.event(taskId, 'ENVIRONMENT_DISCOVERED', `Environment discovery failed: ${redact((error as Error).message).slice(0, 200)}`);
+          });
+        }
         // The Chairman checks limits and takes its checkpoint while the writer lock is held.
         if (this.supervises(task) && !(await this.supervisor!.beforeStage(this.task(taskId), def, control))) return this.afterHook(taskId, control);
         stage = this.createStageInstance(this.task(taskId), def);
@@ -760,6 +781,9 @@ export class TaskEngine {
             break;
           case 'git':
             outcome = await this.stages.runGit(this.task(taskId), def, stage, repo);
+            break;
+          case 'verify':
+            outcome = await this.stages.runVerify(this.task(taskId), def, stage, repo, control);
             break;
         }
       } finally {
@@ -778,7 +802,8 @@ export class TaskEngine {
 
   /** Permission gate before a stage starts. Returns false when the task must wait. */
   private stageGate(task: TaskRecord, def: StageDefinition): boolean {
-    if (!def.requiresApproval && def.permissionLevel <= task.autoApproveUpToLevel) return true;
+    const autoLevel = this.d.tooling.autoApproveLevel(task, this.d.repositories.record(task.repositoryId));
+    if (!def.requiresApproval && def.permissionLevel <= autoLevel) return true;
     const state = this.approvals.state(task.id, 'stage_permission', { stageKey: def.key });
     if (state === 'approved') return true;
     const pending = this.approvals.pending(task.id, 'stage_permission', { stageKey: def.key });
@@ -798,7 +823,7 @@ export class TaskEngine {
       risk: def.permissionLevel >= 5 ? 'dangerous' : def.permissionLevel >= 3 ? 'elevated' : 'normal',
       reason: def.requiresApproval
         ? `The ${task.workflow.name} workflow requires approval before ${def.name}.`
-        : `${def.name} needs Level ${def.permissionLevel} (${level.name}); this task auto-approves up to Level ${task.autoApproveUpToLevel}.`,
+        : `${def.name} needs Level ${def.permissionLevel} (${level.name}); this task auto-approves up to Level ${autoLevel}.`,
       riskExplanation: level.description,
       environment: def.permissionLevel >= 4 ? (def.permissionLevel === 5 ? 'production' : 'staging') : null,
     });
@@ -854,10 +879,27 @@ export class TaskEngine {
       }
       return;
     }
+    const repo = this.d.repositories.record(task.repositoryId);
+    if (task.git.isolated) {
+      // Worktree mode: the task gets its own checkout of HEAD on its own branch.
+      // Nothing in your working tree — including uncommitted work — is involved.
+      const created = await this.d.tooling.createWorktree(task, repo);
+      if (created) {
+        const snapshotId = newId();
+        this.d.store.insertSnapshot({ id: snapshotId, taskId: task.id, stageId: null, kind: 'baseline', branch: created.taskBranch, head: created.head, files: [], createdAt: now() });
+        this.publisher.updateTask(task.id, {
+          git: { ...task.git, baselineSnapshotId: snapshotId, baselineCommit: created.head, baselineBranch: await currentBranch(repoPath), taskBranch: created.taskBranch, preexistingChanges: [], worktreePath: created.worktreePath, isolated: true },
+        });
+        this.publisher.event(task.id, 'GIT_BASELINE', `Baseline recorded at ${created.head.slice(0, 10)} in an isolated worktree · your working tree is not touched`, { head: created.head, branch: created.taskBranch, worktree: created.worktreePath });
+        await this.d.tooling.prepareWorktree(this.task(task.id), repo);
+        return;
+      }
+      this.publisher.updateTask(task.id, { git: { ...task.git, isolated: false } });
+      task = this.task(task.id);
+    }
     const snap: GitSnapshot = await snapshot(repoPath);
     const snapshotId = newId();
     this.d.store.insertSnapshot({ id: snapshotId, taskId: task.id, stageId: null, kind: 'baseline', branch: snap.branch, head: snap.head, files: snap.files, createdAt: now() });
-    const repo = this.d.repositories.record(task.repositoryId);
     let taskBranch: string | null = null;
     if (repo.gitMode === 'task-branch') {
       taskBranch = await createTaskBranch(repoPath, taskBranchName(task.id, task.title));
@@ -1048,11 +1090,12 @@ export class TaskEngine {
   private async complete(task: TaskRecord, gateLimitations: string[] = []): Promise<void> {
     const repo = this.d.repositories.record(task.repositoryId);
     const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
+    const workdir = taskWorkdir(task, repo);
     let files = null;
     if (baseline) {
       try {
-        files = await changesSince(repo.path, baseline);
-        const { diff, truncated } = await diffSince(repo.path, baseline, { maxBytes: 5_000_000 });
+        files = await changesSince(workdir, baseline);
+        const { diff, truncated } = await diffSince(workdir, baseline, { maxBytes: 5_000_000 });
         await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: truncated ? `${diff}\n[truncated]` : diff });
       } catch (error) {
         this.publisher.event(task.id, 'FILE_CHANGED', `Final diff could not be captured: ${(error as Error).message}`);
@@ -1065,7 +1108,16 @@ export class TaskEngine {
       await this.d.artifacts.latestText(task.id, 'review'),
       await this.d.artifacts.latestText(task.id, 'verification'),
     );
-    const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed, operatorItems, gateLimitations });
+    // Nothing the task started outlives it; an isolated task's work lands on its branch.
+    const cleanup = await this.d.tooling.cleanup(task, repo, 'task completed');
+    if (task.git.worktreePath) {
+      const git = await this.d.tooling.finalizeWorktree(task, repo, 'completed');
+      if (Object.keys(git).length) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, ...git } });
+      task = this.task(task.id);
+    }
+    const testRuns = this.d.store.listTestRuns(task.id);
+    const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
+    const report = buildFinalReport({ task, repo, stages, testRuns, files, testsSkipped, deployed, operatorItems, gateLimitations, verification, executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)] });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
     const completion = { status: 'COMPLETED' as const, finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE };

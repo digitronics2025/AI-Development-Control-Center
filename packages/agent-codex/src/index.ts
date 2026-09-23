@@ -118,6 +118,14 @@ export class CodexAdapter extends CliAgentAdapter {
     // Subscription Only: refuse any login method other than the ChatGPT session.
     if (input.billingMode === 'subscription') args.push('-c', 'forced_login_method="chatgpt"');
     if (input.loadUserConfig === false) args.push('--ignore-user-config');
+    if (input.toolBridge) {
+      // TOML literal strings ('…') keep Windows paths intact; env_vars forwards the session from Codex's own environment.
+      const literal = (v: string) => `'${v.replace(/'/g, '')}'`;
+      const name = input.toolBridge.name;
+      args.push('-c', `mcp_servers.${name}.command=${literal(input.toolBridge.command)}`);
+      args.push('-c', `mcp_servers.${name}.args=[${input.toolBridge.args.map(literal).join(',')}]`);
+      args.push('-c', `mcp_servers.${name}.env_vars=[${Object.keys(input.toolBridge.env).map(literal).join(',')}]`);
+    }
     for (const image of input.images ?? []) args.push('-i', image);
     args.push('-');
     return args;

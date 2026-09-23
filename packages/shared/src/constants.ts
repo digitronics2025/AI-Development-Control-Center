@@ -57,7 +57,7 @@ export const ROLES = [
 ] as const;
 export type Role = (typeof ROLES)[number];
 
-export const STAGE_KINDS = ['agent', 'tests', 'command', 'git'] as const;
+export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify'] as const;
 export type StageKind = (typeof STAGE_KINDS)[number];
 
 export const TASK_MODES = ['discuss', 'autopilot'] as const;
@@ -132,6 +132,18 @@ export const EVENT_TYPES = [
   'ROLLBACK_COMPLETED',
   'DIRECTIVE_REMOVED',
   'WATCHDOG',
+  // Universal tool layer (docs/plans/tool-layer-v2). Reads are not logged
+  // here — every tool call has its own row; events mark what a person
+  // following the task wants to see in the timeline.
+  'ENVIRONMENT_DISCOVERED',
+  'TOOL_CALL',
+  'CAPABILITY_ESCALATED',
+  'RECOVERY_ATTEMPT',
+  'PROCESS_STARTED',
+  'PROCESS_STOPPED',
+  'VERIFICATION',
+  'WORKTREE_CREATED',
+  'WORKTREE_REMOVED',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -184,6 +196,10 @@ export const ARTIFACT_TYPES = [
   'stage-output',
   /** Redacted staged diff a Staged Review task reviews (Source Control). */
   'staged-diff',
+  'environment',
+  'screenshot',
+  'browser-report',
+  'tool-output',
 ] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 

@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import os from 'node:os';
 import { DEFAULT_MAX_LINE_LENGTH, runProcess, which, type ProcessHandle, type ProcessResult } from '@acc/executor';
 import { sanitizeEnv } from '@acc/security';
@@ -87,6 +88,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
   abstract listModels(options: AgentRuntimeOptions): Promise<ModelDescriptor[]>;
 
   private readonly running = new Map<string, ProcessHandle>();
+  /** Files an execution created (e.g. an MCP config); removed when it ends. */
+  protected readonly executionFiles = new Map<string, string[]>();
   private healthCache: { key: string; health: AgentHealth; at: number } | null = null;
 
   protected async resolveExecutable(options: AgentRuntimeOptions): Promise<string | null> {
@@ -190,6 +193,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     if (!executable) throw new AgentGuardError(`${this.displayName} CLI was not found`, 'PROCESS_CRASH');
 
     const { env } = sanitizeEnv(input.baseEnv, input.billingMode);
+    // The tool session token reaches the agent (and the MCP server it starts) only through its environment.
+    if (input.toolBridge) Object.assign(env, input.toolBridge.env);
     const args = this.buildArgs(input);
     let guardViolation: string | null = null;
     let handle: ProcessHandle | null = null;
@@ -223,6 +228,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
 
     const done = handle.done.then(async (process) => {
       this.running.delete(input.executionId);
+      for (const file of this.executionFiles.get(input.executionId) ?? []) rmSync(file, { force: true });
+      this.executionFiles.delete(input.executionId);
       const parsed = parser.finish();
       return this.parseResult({
         executionId: input.executionId,

@@ -6,6 +6,9 @@ import {
   type ParserContext,
   type StreamParser,
 } from '@acc/agent-sdk';
+import { writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { AgentCapabilities, ModelDescriptor, PermissionLevel } from '@acc/shared';
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -118,8 +121,27 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     }));
   }
 
+  /**
+   * MCP config for the Control Center tools. The file names the environment
+   * variables (`${VAR}`), never their values: the session token stays in the
+   * process environment only.
+   */
+  private mcpConfigFile(input: AgentExecutionInput): string | null {
+    const bridge = input.toolBridge;
+    if (!bridge) return null;
+    const env = Object.fromEntries(Object.keys(bridge.env).map((k) => [k, `\${${k}}`]));
+    const config = { mcpServers: { [bridge.name]: { type: 'stdio', command: bridge.command, args: bridge.args, env } } };
+    const file = path.join(os.tmpdir(), `acc-mcp-${input.executionId}.json`);
+    writeFileSync(file, JSON.stringify(config), { mode: 0o600 });
+    this.executionFiles.set(input.executionId, [...(this.executionFiles.get(input.executionId) ?? []), file]);
+    return file;
+  }
+
   protected buildArgs(input: AgentExecutionInput): string[] {
     const policy = claudeToolPolicy(input.permissionLevel);
+    const mcpConfig = this.mcpConfigFile(input);
+    // Every tool of the Control Center server is allowed here; the Control Center applies its own policy per call.
+    if (mcpConfig) policy.allowed.push(`mcp__${input.toolBridge!.name}`);
     const args = [
       '-p',
       '--output-format',
@@ -138,6 +160,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     if (input.model !== 'default') args.push('--model', input.model);
     if (input.effort !== 'default') args.push('--effort', input.effort);
     if (input.loadUserConfig === false) args.push('--setting-sources', 'project,local', '--strict-mcp-config');
+    if (mcpConfig) args.push('--mcp-config', mcpConfig);
     return args;
   }
 

@@ -1,10 +1,13 @@
-import { createCheckpoint, deleteRefs, headCommit, isGitRepository, restoreCheckpoint, type RestoreResult } from '@acc/git';
+import { copyFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { checkpointMetadata, createCheckpoint, deleteRefs, headCommit, isGitRepository, restoreCheckpoint, type RestoreResult } from '@acc/git';
 import { redact } from '@acc/security';
 import type { Bus } from '../bus.js';
 import { EngineError } from '../engine/engine.js';
 import type { Publisher } from '../engine/publisher.js';
 import type { RepositoryService } from '../services/repositories.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
+import { taskWorkdir } from '../engine/workdir.js';
 import type { CheckpointRecord, ChairmanStore } from './store.js';
 
 export type CheckpointReason = 'before-stage' | 'recovery-pivot' | 'user' | 'before-rollback';
@@ -24,11 +27,13 @@ export class CheckpointService {
     private readonly bus: Bus,
   ) {}
 
+  /** The task's working directory (its worktree when isolated), when it has a Git baseline. */
   private async repoPath(task: TaskRecord): Promise<string | null> {
     if (!task.git.baselineSnapshotId) return null;
     const repo = this.store.getRepository(task.repositoryId);
-    if (!repo || !(await isGitRepository(repo.path))) return null;
-    return repo.path;
+    if (!repo) return null;
+    const cwd = taskWorkdir(task, repo);
+    return (await isGitRepository(cwd)) ? cwd : null;
   }
 
   /** Null when the task has no Git baseline yet (nothing it could have changed). */
@@ -38,7 +43,10 @@ export class CheckpointService {
     const seq = this.chairman.nextCheckpointSeq(task.id);
     const ref = `refs/acc/checkpoints/${task.id}/${seq}`;
     const cp = await createCheckpoint(cwd, ref, `${task.id} checkpoint ${seq}: ${opts.label}`);
+    const metadata = await checkpointMetadata(cwd).catch(() => ({}));
     const rec = this.chairman.insertCheckpoint({
+      type: 'git',
+      metadata,
       id: newId(),
       taskId: task.id,
       seq,
@@ -52,6 +60,46 @@ export class CheckpointService {
     });
     this.bus.publish({ type: 'checkpoint', checkpoint: rec });
     this.publisher.event(task.id, 'CHECKPOINT_CREATED', `Checkpoint ${seq}: ${rec.label}`, { checkpointId: rec.id, seq, reason: opts.reason });
+    return rec;
+  }
+
+  /**
+   * Back up a SQLite database file of the task (V2 plan §16). The copy is
+   * taken with SQLite's online backup, lives in the data folder, and is
+   * restored only into the same file.
+   */
+  async createDatabase(task: TaskRecord, file: string, label: string, dataDir: string): Promise<CheckpointRecord | null> {
+    const cwd = await this.repoPath(task);
+    if (!cwd) return null;
+    const absolute = path.resolve(cwd, file);
+    if (!absolute.startsWith(path.resolve(cwd) + path.sep)) throw new EngineError('The database must be inside the task working directory', 'INVALID_INPUT');
+    const seq = this.chairman.nextCheckpointSeq(task.id);
+    const dir = path.join(dataDir, 'tasks', task.id, 'checkpoints');
+    await mkdir(dir, { recursive: true });
+    const backup = path.join(dir, `${seq}-${path.basename(absolute)}.bak`);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(absolute, { readonly: true, fileMustExist: true });
+    try {
+      await db.backup(backup);
+    } finally {
+      db.close();
+    }
+    const rec = this.chairman.insertCheckpoint({
+      id: newId(),
+      taskId: task.id,
+      seq,
+      label: redact(label).slice(0, 120),
+      reason: 'user',
+      commit: '',
+      ref: backup,
+      head: null,
+      stageKey: task.currentStageKey,
+      createdAt: now(),
+      type: 'database',
+      metadata: { file: path.relative(cwd, absolute).split(path.sep).join('/'), backup },
+    });
+    this.bus.publish({ type: 'checkpoint', checkpoint: rec });
+    this.publisher.event(task.id, 'CHECKPOINT_CREATED', `Database checkpoint ${seq}: ${rec.label}`, { checkpointId: rec.id, seq, type: 'database' });
     return rec;
   }
 
@@ -71,6 +119,16 @@ export class CheckpointService {
     if (!cwd) throw new EngineError('Rollback needs a Git repository and a recorded baseline; this task has neither.', 'INVALID_STATE');
     const target = checkpointId ? this.chairman.checkpoint(checkpointId) : this.lastChangeTarget(task);
     if (!target || target.taskId !== task.id) throw new EngineError(checkpointId ? 'Checkpoint not found' : 'There is no checkpoint before the last change to roll back to.', checkpointId ? 'NOT_FOUND' : 'INVALID_STATE');
+    if (target.type === 'database') {
+      const file = String(target.metadata?.file ?? '');
+      const destination = path.resolve(cwd, file);
+      if (!file || !destination.startsWith(path.resolve(cwd) + path.sep)) throw new EngineError('This database checkpoint does not name a file in the task', 'INVALID_STATE');
+      await copyFile(destination, `${target.ref}.before-restore`).catch(() => undefined);
+      await copyFile(target.ref, destination);
+      this.publisher.event(task.id, 'ROLLBACK_COMPLETED', `Restored ${file} from database checkpoint ${target.seq}`, { checkpointId: target.id, type: 'database' });
+      return { checkpoint: target, result: { restored: [file], removed: [], skipped: [] } };
+    }
+    if (target.type === 'deployment') throw new EngineError('Deployment checkpoints record the live version; roll a deployment back with an approved deploy of that version.', 'INVALID_STATE');
     const head = await headCommit(cwd);
     if (head !== target.head) {
       throw new EngineError(`Rollback refused: the branch has new commits since checkpoint ${target.seq}, and rolling back across a commit could lose work. Revert that commit instead.`, 'INVALID_STATE');
@@ -92,7 +150,7 @@ export class CheckpointService {
   /** Drop the hidden refs once the task is finished; the rows stay as history. */
   async prune(task: TaskRecord): Promise<void> {
     const repo = this.store.getRepository(task.repositoryId);
-    if (!repo || !this.chairman.listCheckpoints(task.id).length) return;
+    if (!repo || !this.chairman.listCheckpoints(task.id).some((c) => (c.type ?? 'git') === 'git')) return;
     try {
       await deleteRefs(repo.path, `refs/acc/checkpoints/${task.id}/`);
     } catch {

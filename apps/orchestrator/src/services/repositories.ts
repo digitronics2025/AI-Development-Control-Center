@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isGitRepository, repositoryStatus, topLevel } from '@acc/git';
-import type { Repository, RepositoryCommand, RepositoryStatus, UpdateRepositoryInput } from '@acc/shared';
+import { repositoryRuntimeSchema, type Repository, type RepositoryCommand, type RepositoryRuntime, type RepositoryStatus, type UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { SettingsService } from './settings.js';
 import { newId, now, type RepositoryRecord, type Store } from '../store/store.js';
@@ -48,7 +48,11 @@ export function pathKey(folder: string): string {
 interface Detected {
   tooling: string[];
   commands: RepositoryCommand[];
+  runtime: RepositoryRuntime;
 }
+
+/** Port the verify stage starts dev servers on: uncommon, so it rarely meets a server the user runs. */
+export const VERIFY_PORT = 5199;
 
 async function readJson(file: string): Promise<Record<string, any> | null> {
   try {
@@ -66,6 +70,7 @@ export async function detectTooling(root: string): Promise<Detected> {
   const add = (id: string, name: string, command: string, kind: RepositoryCommand['kind'], timeoutSec = 900) =>
     commands.push({ id, name, command, kind, enabled: true, timeoutSec });
 
+  let runtime: RepositoryRuntime = repositoryRuntimeSchema.parse({});
   const pkg = await readJson(path.join(root, 'package.json'));
   if (pkg) {
     const pm = has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : has('bun.lockb') || has('bun.lock') ? 'bun' : 'npm';
@@ -83,6 +88,13 @@ export async function detectTooling(root: string): Promise<Detected> {
     for (const name of ['react', 'vite', 'next', 'typescript', 'vitest', 'jest', '@playwright/test', 'wrangler']) {
       if (deps[name]) tooling.push(name);
     }
+    // Propose how the verify stage starts the app; the user can change or clear it.
+    const dev = typeof scripts.dev === 'string' ? scripts.dev : '';
+    const pass = (flags: string) => (pm === 'npm' ? `npm run dev -- ${flags}` : `${pm} run dev ${flags}`);
+    const url = `http://127.0.0.1:${VERIFY_PORT}`;
+    if (/\bvite\b/.test(dev)) runtime = { ...runtime, devCommand: pass(`--host 127.0.0.1 --port ${VERIFY_PORT} --strictPort`), devUrl: url };
+    else if (/\bnext dev\b/.test(dev)) runtime = { ...runtime, devCommand: pass(`--hostname 127.0.0.1 --port ${VERIFY_PORT}`), devUrl: url };
+    else if (/\bwrangler dev\b/.test(dev)) runtime = { ...runtime, devCommand: pass(`--ip 127.0.0.1 --port ${VERIFY_PORT}`), devUrl: url, verifyMode: 'http' };
   }
   if (has('gradlew') || has('gradlew.bat')) {
     tooling.push('gradle');
@@ -104,7 +116,7 @@ export async function detectTooling(root: string): Promise<Detected> {
     if (!tooling.includes('wrangler')) tooling.push('wrangler');
   }
   if (has('.git')) tooling.push('git');
-  return { tooling: [...new Set(tooling)], commands };
+  return { tooling: [...new Set(tooling)], commands, runtime };
 }
 
 export class RepositoryService {
@@ -195,6 +207,8 @@ export class RepositoryService {
       autoApproveUpToLevel: null,
       tooling: detected.tooling,
       lastTaskId: null,
+      policyMode: null,
+      runtime: detected.runtime,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -224,7 +238,8 @@ export class RepositoryService {
     // Keep the user's commands; add newly detected ones by id.
     const existing = new Set(rec.commands.map((c) => c.id));
     const commands = [...rec.commands, ...detected.commands.filter((c) => !existing.has(c.id))];
-    this.store.updateRepository(id, { tooling: detected.tooling, commands });
+    const runtime = rec.runtime.devCommand ? rec.runtime : detected.runtime;
+    this.store.updateRepository(id, { tooling: detected.tooling, commands, runtime });
     const view = await this.get(id, true);
     this.bus.publish({ type: 'repository', repository: view });
     return view;

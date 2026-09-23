@@ -436,7 +436,9 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    version: 4,
+    // Version 4 is taken by the usage ledger, developed in parallel; the two
+    // touch different tables and apply in either order.
+    version: 5,
     name: 'universal tool layer',
     // docs/plans/tool-layer-v2. Only operational metadata: tool inputs are
     // stored as redacted, bounded summaries; credential values only as

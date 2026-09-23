@@ -13,7 +13,7 @@ import type { Db } from '../db/database.js';
 import { now } from '../store/store.js';
 
 /**
- * Persistence for the tool layer (migration 4). Everything written here is
+ * Persistence for the tool layer (migration 5). Everything written here is
  * already redacted and bounded by the caller; credential values exist only
  * as ciphertext.
  */

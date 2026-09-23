@@ -49,7 +49,7 @@ interactive terminals, checkpoints and MCP servers.
 
 | # | Phase | Scope in this repository |
 |---|---|---|
-| 1 | Foundation | `@acc/tools` SDK, registry, discovery/health (cached, persisted), structured results; migration 4 |
+| 1 | Foundation | `@acc/tools` SDK, registry, discovery/health (cached, persisted), structured results; migration 5 |
 | 2 | Shell runtime | executor shells (pwsh/powershell/cmd/bash/wsl/direct), `@acc/pty` |
 | 3 | Filesystem & Git | fs pack with root confinement, git pack, worktree mode, checkpoint types |
 | 4 | Router | profiles, routing reasons, escalation, policy integration, tool sessions |

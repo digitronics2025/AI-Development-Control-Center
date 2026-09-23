@@ -203,7 +203,7 @@ export class FakeRelay {
   private async http(req: IncomingMessage, res: import('node:http').ServerResponse): Promise<void> {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
-    let body: any = {};
+    let body: any;
     try {
       body = chunks.length && req.method === 'POST' ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
     } catch {

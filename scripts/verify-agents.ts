@@ -29,6 +29,14 @@ const adapters: Array<{ adapter: AgentAdapter; model: string }> = [
   { adapter: new ClaudeCodeAdapter(), model: value('claude-model', 'default') },
 ].filter(({ adapter }) => !args.includes('--only') || value('only', '') === adapter.id);
 
+/** Plain next steps for failures caused by the account or CLI rather than this setup. */
+const HINTS: Record<string, string> = {
+  USAGE_LIMIT:
+    '{agent} is installed and signed in correctly, but the account has no allowance left. Add credits or wait for the limit to reset. The Control Center pauses {agent} stages instead of switching to paid usage. To check the other agent only, re-run with --only.',
+  MODEL_UNAVAILABLE: 'Update the {agent} CLI, or pass another model with --{id}-model.',
+  AUTH_FAILURE: 'Sign in to {agent} with your subscription (not an API key), then re-run.',
+};
+
 const redact = Redactor.fromEnv();
 const options = { billingMode: 'subscription' as const, baseEnv: process.env, loadUserConfig: false };
 let failures = 0;
@@ -67,7 +75,11 @@ for (const { adapter, model } of adapters) {
     const ok = result.status === 'succeeded' && /PONG/i.test(result.output);
     console.log(`result:     ${result.status} · exit ${result.exitCode} · ${((Date.now() - started) / 1000).toFixed(1)}s`);
     console.log(`output:     ${redact.redact(result.output).slice(0, 200) || '(empty)'}`);
-    if (result.errorClass) console.log(`error:      ${result.errorClass} — ${redact.redact(result.errorMessage ?? '')}`);
+    if (result.errorClass) {
+      console.log(`error:      ${result.errorClass} — ${redact.redact(result.errorMessage ?? '')}`);
+      const hint = HINTS[result.errorClass];
+      if (hint) console.log(`what to do: ${hint.replaceAll('{agent}', adapter.displayName).replaceAll('{id}', adapter.id)}`);
+    }
     if (!ok) failures++;
   } finally {
     rmSync(cwd, { recursive: true, force: true });

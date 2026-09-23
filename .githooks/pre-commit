@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+# docs-systems v1.0.0 — write-time enforcement.
+#
+# Matches the staged paths against every system doc's `sources:` globs and warns
+# when a subsystem's code changed but its doc did not.
+#
+# It has a hard budget: under 200 ms. A slow hook gets deleted, and then there is
+# no write-time enforcement at all. So it does pure path matching — it never
+# parses code, never reads a doc body, never runs a test.
+#
+# Silent when: nothing is staged, the commit touches only docs, or the matching
+# doc is staged too.
+#
+# Warns by default. Create `.docs-systems-strict` at the repo root to make it
+# blocking.
+#
+# INSTALL — one of:
+#   git config core.hooksPath .githooks   # then place this file at .githooks/pre-commit
+#   cp this file to .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# If the repo ALREADY has a pre-commit hook, do not overwrite it. Add this line
+# to the existing hook instead:
+#   node scripts/docs-guard.mjs hook || exit 1
+
+command -v node >/dev/null 2>&1 || exit 0
+[ -f scripts/docs-guard.mjs ] || exit 0
+
+node scripts/docs-guard.mjs hook || exit 1
+exit 0

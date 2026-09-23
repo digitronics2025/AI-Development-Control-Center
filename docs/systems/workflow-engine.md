@@ -1,3 +1,13 @@
+---
+system: workflow-engine
+sources:
+  - apps/orchestrator/src/engine/**
+  - packages/shared/src/workflow.ts
+  - workflows/**
+  - prompts/**
+verified_at: 8b64752
+---
+
 # Workflow engine
 
 [engine.ts](../../apps/orchestrator/src/engine/engine.ts) runs one loop per

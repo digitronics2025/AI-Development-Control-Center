@@ -1,3 +1,14 @@
+---
+system: orchestrator
+sources:
+  - apps/orchestrator/src/*.ts
+  - apps/orchestrator/src/db/**
+  - apps/orchestrator/src/http/**
+  - apps/orchestrator/src/store/**
+  - apps/orchestrator/src/services/**
+verified_at: 8b64752
+---
+
 # Orchestrator
 
 The product core (PLAN §4). One Node process: Fastify HTTP API, a WebSocket

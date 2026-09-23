@@ -12,6 +12,8 @@ export default tseslint.config(
       '**/playwright-report/**',
       '**/test-results/**',
       'apps/vscode-extension/media/**',
+      // Vendored by the docs-systems skill; re-vendored, never hand-edited.
+      'scripts/docs-*.mjs',
     ],
   },
   js.configs.recommended,

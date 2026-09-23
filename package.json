@@ -14,11 +14,12 @@
     "start": "node apps/orchestrator/dist/main.js",
     "typecheck": "pnpm -r --parallel typecheck && tsc -p scripts/tsconfig.json",
     "lint": "eslint .",
+    "docs:guard": "node scripts/docs-guard.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "pnpm --filter @acc/dashboard e2e",
     "verify:agents": "tsx scripts/verify-agents.ts",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check": "pnpm typecheck && pnpm lint && pnpm docs:guard && pnpm test",
     "demo": "node scripts/demo.mjs",
     "package:vscode": "pnpm --filter acc-vscode package"
   },

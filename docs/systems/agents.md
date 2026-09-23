@@ -1,3 +1,13 @@
+---
+system: agents
+sources:
+  - packages/agent-sdk/**
+  - packages/agent-claude/**
+  - packages/agent-codex/**
+  - packages/executor/**
+verified_at: 337fe1a
+---
+
 # Agent adapters
 
 Contract: [contract.ts](../../packages/agent-sdk/src/contract.ts)

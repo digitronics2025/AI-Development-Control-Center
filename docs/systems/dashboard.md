@@ -1,3 +1,12 @@
+---
+system: dashboard
+sources:
+  - apps/dashboard/**
+  - packages/ui/**
+  - design.md
+verified_at: 8b64752
+---
+
 # Dashboard and design system
 
 Implements [design.md](../../design.md). React 19 + Vite 8 + Tailwind 4,

@@ -1,3 +1,12 @@
+---
+system: security
+sources:
+  - packages/security/**
+  - apps/orchestrator/src/http/security.ts
+  - apps/orchestrator/src/engine/script-resolve.ts
+verified_at: 8b64752
+---
+
 # Security
 
 ## Local service ([security.ts](../../apps/orchestrator/src/http/security.ts))

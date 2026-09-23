@@ -1,3 +1,10 @@
+---
+system: git
+sources:
+  - packages/git/**
+verified_at: 8b64752
+---
+
 # Git integration
 
 [packages/git](../../packages/git/src/index.ts) wraps the native `git` CLI

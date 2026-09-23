@@ -1,3 +1,12 @@
+---
+system: operations
+sources:
+  - scripts/windows/**
+  - scripts/demo.mjs
+  - scripts/verify-agents.ts
+verified_at: 8b64752
+---
+
 # Operations and Windows packaging
 
 ## Launchers ([scripts/windows](../../scripts/windows))

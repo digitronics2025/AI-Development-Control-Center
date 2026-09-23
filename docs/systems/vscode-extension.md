@@ -1,3 +1,10 @@
+---
+system: vscode-extension
+sources:
+  - apps/vscode-extension/**
+verified_at: 8b64752
+---
+
 # VS Code extension
 
 Thin client ([extension.ts](../../apps/vscode-extension/src/extension.ts)); no

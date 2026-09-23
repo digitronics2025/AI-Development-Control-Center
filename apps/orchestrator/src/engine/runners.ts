@@ -544,7 +544,18 @@ export class StageRunners {
       }
       return { kind: 'success', stageId: stage.id };
     } catch (error) {
-      return this.failStage(stage, 'COMMAND_FAILURE', `Git commit failed: ${(error as Error).message}`);
+      const message = `Git commit failed: ${(error as Error).message}`;
+      // A rejecting pre-commit hook (a docs guard, a linter) names something an
+      // agent can fix, so a stage with a failure route treats it like a failed
+      // test: the fix stage sees the message in its test results and the
+      // checkpoint runs again after it.
+      if (def.onFail) {
+        const clean = redact(message);
+        publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'COMMAND_FAILURE', errorMessage: clean, summary: clean, finishedAt: now() });
+        publisher.event(task.id, 'STAGE_FAILED', `${def.name} was rejected by the repository: ${clean}`, { errorClass: 'COMMAND_FAILURE' }, stage.id);
+        return { kind: 'tests_failed', stageId: stage.id, message: clean };
+      }
+      return this.failStage(stage, 'COMMAND_FAILURE', message);
     }
   }
 

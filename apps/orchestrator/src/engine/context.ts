@@ -103,6 +103,14 @@ export class ContextBuilder {
       const tail = this.store.tailLogLines(failed.executionId, 80).map((l) => l.text);
       lines.push('', `Output of ${failed.name} (last ${tail.length} lines):`, '```', ...tail, '```');
     }
+    // A Git checkpoint the repository rejected after these checks passed (a
+    // pre-commit hook) is the failure the fix stage is here for.
+    const stages = this.store.listStages(task.id);
+    const testsAt = stages.find((s) => s.id === lastStage)?.createdAt ?? '';
+    const rejected = stages.filter((s) => s.kind === 'git' && s.status === 'FAILED' && s.createdAt >= testsAt).at(-1);
+    if (rejected?.errorMessage) {
+      lines.push('', `${rejected.name} was rejected by the repository (its commit hook):`, '```', rejected.errorMessage, '```');
+    }
     return lines.join('\n');
   }
 

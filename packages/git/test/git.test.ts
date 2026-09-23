@@ -16,6 +16,7 @@ import {
   restoreCheckpoint,
   snapshot,
   taskBranchName,
+  failureText,
   taskIdFromBranch,
 } from '../src/index.js';
 
@@ -40,6 +41,11 @@ beforeEach(async () => {
 });
 
 describe('git helpers', () => {
+  it('drops line-ending notices from failure text', () => {
+    const text = ["warning: in the working copy of 'a.md', LF will be replaced by CRLF the next time Git touches it", 'docs guard: BLOCKED', '  fix: update the doc'].join('\n');
+    expect(failureText(text)).toBe('docs guard: BLOCKED\n  fix: update the doc');
+  });
+
   it('detects repositories', async () => {
     expect(await isGitRepository(repo)).toBe(true);
     expect(await isGitRepository(mkdtempSync(path.join(os.tmpdir(), 'acc-nogit-')))).toBe(false);

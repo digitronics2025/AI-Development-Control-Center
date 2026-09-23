@@ -92,9 +92,22 @@ export async function git(cwd: string, args: string[], options: GitOptions = {})
   };
 }
 
+/**
+ * Git's line-ending notices ("LF will be replaced by CRLF…") say nothing about
+ * why a command failed, but on Windows they can fill the whole message and
+ * bury what a pre-commit hook actually asked for.
+ */
+export function failureText(output: string): string {
+  return output
+    .split('\n')
+    .filter((line) => !/^warning: in the working copy of .* will be replaced by /.test(line))
+    .join('\n')
+    .trim();
+}
+
 async function gitOk(cwd: string, args: string[], options?: GitOptions): Promise<string> {
   const result = await git(cwd, args, options);
-  if (result.code !== 0) throw new GitError(`git ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim()}`, result);
+  if (result.code !== 0) throw new GitError(`git ${args[0]} failed: ${failureText(result.stderr) || failureText(result.stdout)}`, result);
   return result.stdout;
 }
 

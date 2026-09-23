@@ -63,6 +63,8 @@ stages:
     permissionLevel: 3
     description: Commit the task's own changes on the task branch (never pushes)
     next: staging
+    # A rejecting pre-commit hook goes back to the fixer like a failed test.
+    onFail: fix
   - key: staging
     name: Staging deploy
     role: deployer

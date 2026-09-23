@@ -72,11 +72,11 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.verdict && stage.kind !== 'agent') {
       issues.push({ stageIndex: index, field: 'verdict', message: 'Only agent stages can return a verdict' });
     }
-    if (stage.onFail && !stage.verdict && stage.kind !== 'tests') {
+    if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git') {
       issues.push({
         stageIndex: index,
         field: 'onFail',
-        message: 'A failure transition needs a verdict stage or a tests stage',
+        message: 'A failure transition needs a verdict, tests or Git stage',
       });
     }
   });

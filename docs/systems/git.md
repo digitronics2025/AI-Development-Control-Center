@@ -34,7 +34,12 @@ loaded per file in the UI and bounded (1 MB API, 150 KB in prompts).
 
 The `git` stage kind (Full Autopilot's "Git checkpoint") commits only
 `task`-origin files, with hooks running normally, and reports `both` files it
-left uncommitted. Nothing is ever pushed automatically.
+left uncommitted. Nothing is ever pushed automatically. When the repository's
+pre-commit hook rejects the commit and the stage has `onFail` (Full Autopilot
+routes it to `fix`), the rejection counts as a fix cycle: the fixer sees the
+hook's message under its test results, and the checkpoint runs again after
+test, review and verify. Git's line-ending notices are dropped from failure
+text (`failureText`) so the hook's own words are what the fixer reads.
 
 ## Checkpoints
 

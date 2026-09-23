@@ -294,6 +294,26 @@ describe('permissions and approvals', () => {
     expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'test' && s.status === 'WAITING_APPROVAL')).toHaveLength(0);
   });
 
+  it('sends a commit rejected by a pre-commit hook back to the fixer, then commits', async () => {
+    const repoPath = await makeRepo({ scripts: { test: 'node -e "0"' } });
+    // A docs-guard-like hook: rejects until the fixer has touched the file.
+    writeFileSync(
+      path.join(repoPath, '.git', 'hooks', 'pre-commit'),
+      '#!/bin/sh\ngrep -q "fixer change" sim-output.md || { echo "docs guard: sim-output.md needs its fixer line"; exit 1; }\n',
+      { mode: 0o755 },
+    );
+    const id = await createTask(t, await addRepo(t, repoPath), 'Ship it', { workflowId: 'full-autopilot' });
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(done.status).toBe('COMPLETED');
+    const keys = t.services.store.listStages(id).map((s) => `${s.stageKey}:${s.status}`);
+    expect(keys).toEqual(expect.arrayContaining(['git:FAILED', 'fix:SUCCESS', 'git:SUCCESS']));
+    expect(keys.indexOf('git:FAILED')).toBeLessThan(keys.indexOf('fix:SUCCESS'));
+    const rejected = t.services.store.listStages(id).find((s) => s.stageKey === 'git' && s.status === 'FAILED')!;
+    expect(rejected.errorMessage).toContain('docs guard: sim-output.md needs its fixer line');
+    expect(rejected.errorMessage).not.toContain('will be replaced by');
+    expect(done.git.commits).toHaveLength(1);
+  });
+
   it('skips an optional deploy stage with no command without asking for approval', async () => {
     const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"', 'test:e2e': 'node -e "console.log(\'4 passed\')"' } }));
     const id = await createTask(t, repoId, 'Document it', { workflowId: 'full-autopilot' });

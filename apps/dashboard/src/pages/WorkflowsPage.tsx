@@ -138,7 +138,7 @@ function StageInspector({
         <Field label="Next transition" error={err('next')}>
           <Select value={stage.next} onValueChange={(v) => set('next', v)} options={targets} disabled={readOnly} />
         </Field>
-        <Field label="On failure" error={err('onFail')} helper="Needs a verdict or tests stage. Counts as a fix cycle.">
+        <Field label="On failure" error={err('onFail')} helper="Needs a verdict, tests or Git stage. Counts as a fix cycle.">
           <Select value={stage.onFail ?? '__none__'} onValueChange={(v) => set('onFail', v === '__none__' ? undefined : v)} options={[{ value: '__none__', label: 'Stop the task' }, ...targets.filter((t) => t.value !== COMPLETE)]} disabled={readOnly} />
         </Field>
       </div>

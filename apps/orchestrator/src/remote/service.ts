@@ -516,7 +516,10 @@ export class RemoteNodeService {
     this.setState('connected', null);
     this.sendCapabilities();
     await this.sendSnapshot(true);
+    // The link may have closed (or the service stopped) while the snapshot was being built.
+    if (!this.welcomed) return;
     if (this.store.syncState().resyncRequired) await this.enqueueFullResync();
+    if (!this.welcomed) return;
     this.scheduleFlush(0);
     // Results the cloud never acknowledged (the connection dropped after the node ran them).
     for (const receipt of this.store.unreported()) {
@@ -583,6 +586,7 @@ export class RemoteNodeService {
       const { fingerprint, remoteHost } = await repositoryFingerprint(rec.path, config.nodeId, rec.id);
       repositories.push({ localId: rec.id, name: rec.name.slice(0, 200), fingerprint, remoteHost, defaultBranch: null });
     }
+    if (!this.welcomed) return;
     this.send({ type: 'node.snapshot', payload: { repositories, activeTasks: this.activeTaskCount() } });
   }
 
@@ -653,7 +657,9 @@ export class RemoteNodeService {
     const agents = this.egress.message({ type: 'agents', agents: this.d.agents.list() });
     if (agents) this.store.enqueue('agents', 'message', agents);
     // Repositories too, so the cloud can list them (and start queued tasks) while the node is away.
-    for (const repository of await this.d.repositories.list()) {
+    const repositories = await this.d.repositories.list();
+    if (!this.welcomed) return; // stopped meanwhile; the flag stays set for the next welcome
+    for (const repository of repositories) {
       const clean = this.egress.message({ type: 'repository', repository });
       if (clean) this.store.enqueue(`repository:${repository.id}`, 'message', clean);
     }

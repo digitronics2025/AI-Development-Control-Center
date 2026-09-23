@@ -30,6 +30,12 @@ jobs:
         with:
           node-version: 22.16.0
           cache: pnpm
+      # The runner's default temp folder is a short 8.3 name (C:\Users\RUNNER~1\…) that
+      # real paths never match; tests compare real paths, so use the long-named runner temp.
+      - name: Use a long-named temp folder
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm typecheck
@@ -37,10 +43,11 @@ jobs:
         run: pnpm lint
       - name: Docs guard
         run: pnpm docs:guard
-      - name: Unit, integration and Worker tests
-        run: pnpm test
+      # Built first: the Worker tests serve the dashboard build as the Worker's assets.
       - name: Build
         run: pnpm build
+      - name: Unit, integration and Worker tests
+        run: pnpm test
       - name: Install the browser
         run: pnpm --filter @acc/dashboard exec playwright install chromium
       - name: Local end-to-end suite

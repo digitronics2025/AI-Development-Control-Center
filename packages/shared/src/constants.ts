@@ -172,6 +172,8 @@ export const ARTIFACT_TYPES = [
   'final-report',
   'task-json',
   'stage-output',
+  /** Redacted staged diff a Staged Review task reviews (Source Control). */
+  'staged-diff',
 ] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 

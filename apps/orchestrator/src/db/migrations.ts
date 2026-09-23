@@ -267,4 +267,39 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_test_runs_task ON test_runs(task_id, started_at);
     `,
   },
+  {
+    // Version 2 is the Chairman supervisor migration, developed in parallel;
+    // the two touch different tables and apply in either order.
+    version: 3,
+    name: 'source control operation journal',
+    // Audit and recovery records of Source Control mutations. Only bounded
+    // operational metadata: never diffs, file contents, commands or credentials.
+    sql: `
+      CREATE TABLE git_operations (
+        id TEXT PRIMARY KEY,
+        repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        task_id TEXT,
+        execution_id TEXT,
+        idempotency_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        pre_head TEXT,
+        post_head TEXT,
+        pre_state_version TEXT,
+        post_state_version TEXT,
+        remote TEXT,
+        ref TEXT,
+        commit_sha TEXT,
+        error_code TEXT,
+        error_summary TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE UNIQUE INDEX idx_git_operations_idempotency ON git_operations(repository_id, idempotency_key);
+      CREATE INDEX idx_git_operations_repository ON git_operations(repository_id, started_at);
+      CREATE INDEX idx_git_operations_open ON git_operations(status) WHERE status IN ('started', 'uncertain');
+      CREATE INDEX idx_git_operations_commit ON git_operations(commit_sha) WHERE commit_sha IS NOT NULL;
+    `,
+  },
 ];

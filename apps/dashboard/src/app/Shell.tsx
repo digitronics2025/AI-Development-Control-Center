@@ -3,6 +3,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FolderGit2,
+  GitBranch,
   House,
   ListChecks,
   Menu as MenuIcon,
@@ -49,6 +50,7 @@ const NAV: NavItem[] = [
   { to: '/workflows', label: 'Workflows', icon: Workflow },
   { to: '/agents', label: 'Agents', icon: Bot },
   { to: '/repositories', label: 'Repositories', icon: FolderGit2 },
+  { to: '/source-control', label: 'Source Control', icon: GitBranch },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
 ];
 
@@ -271,6 +273,7 @@ function GlobalCommands() {
       { id: 'new-task', label: 'New Task', group: 'Create', icon: Plus, onSelect: () => navigate('/tasks/new') },
       { id: 'open-task', label: 'Open Task…', group: 'Go to', icon: ListChecks, onSelect: () => navigate('/tasks') },
       { id: 'open-repo', label: 'Open Repository…', group: 'Go to', icon: FolderGit2, onSelect: () => navigate('/repositories') },
+      { id: 'go-source-control', label: 'Go to Source Control', group: 'Go to', icon: GitBranch, onSelect: () => navigate('/source-control') },
       { id: 'go-agents', label: 'Go to Agents', group: 'Go to', icon: Bot, onSelect: () => navigate('/agents') },
       { id: 'go-workflows', label: 'Go to Workflows', group: 'Go to', icon: Workflow, onSelect: () => navigate('/workflows') },
       { id: 'go-approvals', label: 'Go to Approvals', group: 'Go to', icon: ShieldCheck, onSelect: () => navigate('/approvals') },

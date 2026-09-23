@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppServices } from '../app.js';
 import { registerErrorHandler, registerRoutes } from './routes.js';
 import { registerSecurity } from './security.js';
+import { registerSourceControlRoutes } from './source-control-routes.js';
 import { registerWebSocket } from './ws.js';
 
 const DASHBOARD_CSP = [
@@ -49,6 +50,7 @@ export async function buildServer(
   await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 } });
   registerWebSocket(app, s);
   registerRoutes(app, s);
+  registerSourceControlRoutes(app, s);
 
   // Liveness probe for launchers; reveals nothing about state.
   app.get('/healthz', async () => ({ ok: true }));

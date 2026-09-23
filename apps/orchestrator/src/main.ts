@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createServices } from './app.js';
 import { loadConfig } from './config.js';
 import { buildServer } from './http/server.js';
+import { reconcileGitOperations } from './source-control/reconcile.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -25,6 +26,15 @@ async function main(): Promise<void> {
   if (recovered.interruptedTasks.length) app.log.warn(`Marked interrupted after restart: ${recovered.interruptedTasks.join(', ')}`);
 
   services.engine.schedule();
+  // Settle Source Control operations a crash left open, from what Git and the
+  // remote show. Runs in the background with its own time budget.
+  void reconcileGitOperations({ operations: services.gitOperations, repositories: services.repositories }).then(
+    (report) => {
+      if (report.resolved.length) app.log.warn(`Source Control recovery: ${report.resolved.map((r) => `${r.kind} ${r.id} → ${r.status}`).join(', ')}`);
+      for (const repo of services.store.listRepositories()) services.sourceControl.invalidate(repo.id);
+    },
+    (error: unknown) => app.log.error(`Source Control recovery failed: ${(error as Error).message}`),
+  );
   void services.agents.refresh().then(
     (agents) => app.log.info(`Agents: ${agents.map((a) => `${a.name}=${a.health.state}`).join(', ')}`),
     (error: unknown) => app.log.error(`Agent refresh failed: ${(error as Error).message}`),

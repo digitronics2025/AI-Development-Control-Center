@@ -174,11 +174,14 @@ Tasks
 Workflows
 Agents
 Repositories
+Source Control
 Approvals
 Settings
 ```
 
 Do not add more top-level navigation unless the product gains a genuinely separate domain.
+Source Control is one: repository Git state (staged, unstaged, history, sync) is
+not task state, and it must stay reachable while no task exists (§7.9).
 
 Secondary content belongs inside the relevant section.
 
@@ -210,10 +213,11 @@ Order:
 4. Workflows
 5. Agents
 6. Repositories
-7. Approvals
-8. flexible spacer
-9. Settings
-10. local service status
+7. Source Control
+8. Approvals
+9. flexible spacer
+10. Settings
+11. local service status
 
 Rules:
 - one icon family only,
@@ -1003,6 +1007,77 @@ Subscription Only is visually marked as the safe default.
 Do not use fear-based warning styling for the normal safe mode.
 
 If Explicit API Mode is enabled later, show a concise persistent indicator.
+
+---
+
+# 7.9 Source Control
+
+Purpose: answer, for one repository, "what changed, what will be committed,
+what happened in history, and is it safely in sync?" It is repository Git
+state, not a task view — task attribution appears only as a secondary badge.
+
+## Header
+
+```text
+Source Control                                   [Repository ▾] [Refresh]
+main @ 15fd24a · origin/main · ↑2 ↓0 Ahead · 24 changes · fetched 3m ago
+                                        [Fetch] [Publish branch | Sync…]
+```
+
+- Branch, short HEAD, upstream and relation always visible; Detached HEAD,
+  No upstream, Diverged and Upstream gone are named states, never implied.
+- A task editing the repository shows a persistent warning banner with
+  **Open task** and **Pause task**; Git actions are disabled with the reason.
+- Merge/rebase in progress, index lock, conflicts and errors are persistent
+  banners, never toasts (§8.6).
+
+## Tabs
+
+Exactly two: **Changes** and **History**. No PR, stash, branch or deploy tabs.
+
+## Changes
+
+```text
+┌──────────────────────┬──────────────────────────────────────┐
+│ Conflicts (0)        │ path/to/file.ts      [Staged|Unstaged]│
+│ Staged (3)  [Unstage all]                                    │
+│ ☐ M routes.ts  −     │ diff viewer (lazy, per file)          │
+│ Changes (7) [Stage all]                                      │
+│ ☐ ?? new.ts    +     │ [Open file] [Open diff in editor]     │
+├──────────────────────┴──────────────────────────────────────┤
+│ Commit message [..........................................] │
+│ [Suggest message] [Review staged]           [Commit 3 files] │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- Rows show the status letter with its name for screen readers, the path,
+  line counts, and badges: attribution (Task change / Your change / Mixed —
+  Mixed uses the warning border) and Sensitive (danger icon + text).
+- Per-row Stage/Unstage are compact icon buttons with accessible names;
+  checkboxes enable "Stage selected" / "Unstage selected".
+- **Commit** is the page's one primary action. Suggest message is ghost;
+  Review staged is secondary.
+- Stage All that includes Mixed files opens a dialog listing them exactly.
+- Commit failures (hook output, secret findings) are a persistent danger
+  banner listing each file and reason. Success is a toast with the short SHA.
+- Below the composer, "Recent Git operations" (collapsed) is the audit trail.
+- Below 900px the list, diff and composer stack in one column.
+
+## History
+
+- Rows: graph lane cell (SVG, token colours, decorative — `aria-hidden`),
+  subject, ref badges, short SHA, author, relative time, and a TASK badge only
+  when the orchestrator recorded the commit.
+- "Load more" pages; selecting a commit opens a drawer with its files and a
+  per-file diff.
+
+## Sync
+
+Sync opens a dialog that states the plan before anything runs — e.g.
+"Fetch origin, then push 2 commits to origin/main" — with an explicit
+**Sync now** label. Its result is shown inline: pushed, fast-forwarded, up to
+date, or stopped (diverged / uncommitted changes) with the reason. Publish
+branch is its own dialog with the remote named. There is no force option.
 
 ---
 

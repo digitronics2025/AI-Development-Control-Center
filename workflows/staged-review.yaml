@@ -1,0 +1,17 @@
+# Read-only review of what is staged in Source Control (docs/systems/source-control.md).
+# Started from Source Control → Review staged, with the redacted staged diff
+# saved as the task's `staged-diff` artifact. Level 1 only: it never edits the
+# repository, so it runs alongside other tasks. Its verdict is advisory — a
+# FAIL completes the task as "needs user action" instead of starting a fix loop.
+id: staged-review
+name: Staged Review
+description: Read-only review of staged changes before a commit
+maxFixCycles: 0
+stages:
+  - key: review
+    name: Review staged changes
+    role: reviewer
+    permissionLevel: 1
+    timeoutSec: 1200
+    retry: { maxAttempts: 2 }
+    next: complete

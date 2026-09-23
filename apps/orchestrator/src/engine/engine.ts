@@ -10,6 +10,7 @@ import {
   ROLE_LABEL,
   TERMINAL_TASK_STATUSES,
   createTaskSchema,
+  isReadOnlyWorkflow,
   type CreateTaskInput,
   type Directive,
   type PartialAssignment,
@@ -24,6 +25,7 @@ import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { RepositoryService } from '../services/repositories.js';
+import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
 import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
@@ -53,6 +55,8 @@ export interface EngineDeps {
   artifacts: ArtifactService;
   context: ContextBuilder;
   settings: SettingsService;
+  /** Shared with Source Control: stages that edit files never overlap a Git mutation. */
+  coordinator: RepositoryCoordinator;
   baseEnv?: NodeJS.ProcessEnv;
 }
 
@@ -404,7 +408,7 @@ export class TaskEngine {
         const queued = this.d.store.listTasks({ statuses: ['QUEUED'], limit: 500 }).sort((a, b) => a.seq - b.seq);
         for (const task of queued) {
           if (this.runners.has(task.id)) continue;
-          const holder = this.repositoryHolder(task);
+          const holder = isReadOnlyWorkflow(task.workflow) ? null : this.repositoryHolder(task);
           if (holder) {
             const message = `Waiting for ${holder.id} (${holder.status.toLowerCase().replace(/_/g, ' ')}) in the same repository`;
             if (task.blocker?.message !== message) this.publisher.updateTask(task.id, { blocker: { kind: 'queued', message } });
@@ -421,11 +425,12 @@ export class TaskEngine {
   /**
    * The task holding a repository: one that is running, or one that has
    * already started changing files (it has a baseline) and is not finished.
+   * Read-only workflows never hold a repository.
    */
   private repositoryHolder(task: TaskRecord): TaskRecord | null {
     const others = this.d.store
       .listTasks({ repositoryId: task.repositoryId, limit: 1000 })
-      .filter((t) => t.id !== task.id && !['DRAFT', 'QUEUED', ...TERMINAL_TASK_STATUSES].includes(t.status));
+      .filter((t) => t.id !== task.id && !['DRAFT', 'QUEUED', ...TERMINAL_TASK_STATUSES].includes(t.status) && !isReadOnlyWorkflow(t.workflow));
     return others.find((t) => t.status === 'RUNNING' || this.runners.has(t.id)) ?? others.find((t) => t.git.baselineSnapshotId) ?? null;
   }
 
@@ -480,23 +485,31 @@ export class TaskEngine {
       const repo = this.d.repositories.record(task.repositoryId);
       if (!skipsForLackOfCommands(def, repo) && !this.stageGate(task, def)) return;
 
-      if (def.permissionLevel >= 2) await this.ensureBaseline(task, repo.path);
-
-      const stage = this.createStageInstance(this.task(taskId), def);
+      // A stage that can edit files waits for any Source Control mutation in
+      // flight, and Source Control refuses to mutate while it runs.
+      const writes = def.permissionLevel >= 2;
+      const releaseWriter = writes ? await this.d.coordinator.acquireWriter(repo.id, taskId, def.name) : null;
+      let stage: StageInstance;
       let outcome: StageOutcome;
-      switch (def.kind) {
-        case 'agent':
-          outcome = await this.stages.runAgent(this.task(taskId), def, stage, repo, control);
-          break;
-        case 'tests':
-        case 'command':
-          outcome = await this.stages.runCommands(this.task(taskId), def, stage, repo, control);
-          break;
-        case 'git':
-          outcome = await this.stages.runGit(this.task(taskId), def, stage, repo);
-          break;
+      try {
+        if (writes) await this.ensureBaseline(task, repo.path);
+        stage = this.createStageInstance(this.task(taskId), def);
+        switch (def.kind) {
+          case 'agent':
+            outcome = await this.stages.runAgent(this.task(taskId), def, stage, repo, control);
+            break;
+          case 'tests':
+          case 'command':
+            outcome = await this.stages.runCommands(this.task(taskId), def, stage, repo, control);
+            break;
+          case 'git':
+            outcome = await this.stages.runGit(this.task(taskId), def, stage, repo);
+            break;
+        }
+      } finally {
+        releaseWriter?.();
+        this.d.repositories.invalidate(repo.id);
       }
-      this.d.repositories.invalidate(repo.id);
       if (!(await this.handleOutcome(taskId, def, stage, outcome, control))) return;
     }
   }
@@ -751,12 +764,15 @@ export class TaskEngine {
     const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed, operatorItems });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
-    const finished = this.publisher.updateTask(task.id, { status: 'COMPLETED', finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE });
+    const completion = { status: 'COMPLETED' as const, finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE };
+    // Every artifact exists before COMPLETED is published, so a client that
+    // reacts to the status never sees a report without its task record.
     await this.d.artifacts.write(task.id, {
       name: 'task.json',
       type: 'task-json',
-      content: JSON.stringify({ ...this.d.views.detail(finished), events: this.d.store.listEvents(task.id, { limit: 2000 }) }, null, 2),
+      content: JSON.stringify({ ...this.d.views.detail({ ...this.task(task.id), ...completion, updatedAt: finishedAt }), events: this.d.store.listEvents(task.id, { limit: 2000 }) }, null, 2),
     });
+    this.publisher.updateTask(task.id, completion);
     this.publisher.event(task.id, 'TASK_COMPLETED', report.finalStatus === 'READY' ? 'Task completed · ready' : `Task completed · needs your attention: ${report.limitations[0]}`, {
       finalStatus: report.finalStatus,
     });

@@ -76,7 +76,7 @@ describe('REST API', () => {
 
   it('lists built-in workflows as read-only and validates custom ones', async () => {
     const list = await t.api('GET', '/api/workflows');
-    expect(list.body.map((w: { id: string }) => w.id).sort()).toEqual(['architecture', 'deep-investigation', 'full-autopilot', 'normal-development', 'quick-change']);
+    expect(list.body.map((w: { id: string }) => w.id).sort()).toEqual(['architecture', 'deep-investigation', 'full-autopilot', 'normal-development', 'quick-change', 'staged-review']);
     expect((await t.api('PUT', '/api/workflows/normal-development', list.body[0])).status).toBe(409);
     const copy = await t.api('POST', '/api/workflows/quick-change/duplicate', {});
     expect(copy.status).toBe(201);

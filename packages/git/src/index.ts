@@ -11,7 +11,20 @@ export interface GitResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  /** Set when `maxOutputBytes` cut stdout short; the process was stopped. */
+  truncated?: boolean;
+  timedOut?: boolean;
 }
+
+export interface GitOptions {
+  stdin?: string;
+  timeoutMs?: number;
+  /** Stop reading (and stop git) once stdout exceeds this many characters. */
+  maxOutputBytes?: number;
+}
+
+/** Hook and remote output can be enormous; only this much stderr is kept. */
+const MAX_STDERR_CHARS = 64 * 1024;
 
 export class GitError extends Error {
   constructor(
@@ -30,9 +43,13 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 };
 
 /** Run git with an argv array (never a shell). Output is kept raw so `-z` records survive. */
-export async function git(cwd: string, args: string[], options: { stdin?: string; timeoutMs?: number } = {}): Promise<GitResult> {
+export async function git(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   const out: string[] = [];
   const err: string[] = [];
+  let outChars = 0;
+  let errChars = 0;
+  let truncated = false;
+  const max = options.maxOutputBytes;
   const handle = runProcess({
     command: 'git',
     args: ['-c', 'core.quotepath=off', ...args],
@@ -40,13 +57,35 @@ export async function git(cwd: string, args: string[], options: { stdin?: string
     env: { ...process.env, ...GIT_ENV },
     stdin: options.stdin,
     timeoutMs: options.timeoutMs ?? 60_000,
-    // `-z` output is one long NUL-separated record stream; never split it.
-    maxLineLength: 256 * 1024 * 1024,
-    onLine: (stream, line) => (stream === 'stdout' ? out : err).push(line),
+    // `-z` output is one long NUL-separated record stream; never split it —
+    // unless it is bounded, where any longer line is truncated anyway.
+    maxLineLength: max !== undefined ? max + 1 : 256 * 1024 * 1024,
+    onLine: (stream, line) => {
+      if (stream === 'stderr') {
+        if (errChars < MAX_STDERR_CHARS) err.push(line.slice(0, MAX_STDERR_CHARS - errChars));
+        errChars += line.length + 1;
+        return;
+      }
+      if (truncated) return;
+      if (max !== undefined && outChars + line.length > max) {
+        out.push(line.slice(0, Math.max(0, max - outChars)));
+        truncated = true;
+        void handle.cancel();
+        return;
+      }
+      outChars += line.length + 1;
+      out.push(line);
+    },
   });
   const result = await handle.done;
   if (result.spawnError) throw new GitError(`git could not start: ${result.spawnError}`, { code: null, stdout: '', stderr: result.spawnError });
-  return { code: result.exitCode, stdout: out.join('\n'), stderr: err.join('\n') };
+  return {
+    code: result.exitCode,
+    stdout: out.join('\n'),
+    stderr: err.join('\n'),
+    ...(truncated ? { truncated: true } : {}),
+    ...(result.timedOut ? { timedOut: true } : {}),
+  };
 }
 
 async function gitOk(cwd: string, args: string[], options?: { stdin?: string }): Promise<string> {
@@ -169,7 +208,7 @@ export async function createTaskBranch(cwd: string, name: string): Promise<strin
   return candidate;
 }
 
-function parseNumstat(raw: string): Map<string, { additions: number | null; deletions: number | null }> {
+export function parseNumstat(raw: string): Map<string, { additions: number | null; deletions: number | null }> {
   const map = new Map<string, { additions: number | null; deletions: number | null }>();
   const parts = raw.split('\0');
   for (let i = 0; i < parts.length; i++) {
@@ -289,3 +328,4 @@ export async function commitPaths(cwd: string, paths: string[], message: string)
   await gitOk(cwd, ['commit', '-m', message, '--', ...paths]);
   return headCommit(cwd);
 }
+export * from './source-control.js';

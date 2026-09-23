@@ -19,6 +19,7 @@ const TYPE_LABEL: Record<Artifact['type'], string> = {
   'final-report': 'Final report',
   'task-json': 'Task record',
   'stage-output': 'Stage output',
+  'staged-diff': 'Staged diff',
 };
 
 function ArtifactPreview({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {

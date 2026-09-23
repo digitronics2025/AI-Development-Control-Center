@@ -20,6 +20,7 @@ const WorkflowsPage = lazy(() => import('../pages/WorkflowsPage').then((m) => ({
 const AgentsPage = lazy(() => import('../pages/AgentsPage').then((m) => ({ default: m.AgentsPage })));
 const RepositoriesPage = lazy(() => import('../pages/RepositoriesPage').then((m) => ({ default: m.RepositoriesPage })));
 const RepositoryDetailPage = lazy(() => import('../pages/RepositoryDetailPage').then((m) => ({ default: m.RepositoryDetailPage })));
+const SourceControlPage = lazy(() => import('../pages/source-control/SourceControlPage').then((m) => ({ default: m.SourceControlPage })));
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 function NotFound() {
@@ -94,6 +95,8 @@ export function AppRoutes() {
       <Route path="/agents" element={<AgentsPage />} />
       <Route path="/repositories" element={<RepositoriesPage />} />
       <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
+      <Route path="/source-control" element={<SourceControlPage />} />
+      <Route path="/source-control/:repositoryId" element={<SourceControlPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/settings/:section" element={<SettingsPage />} />
       <Route path="*" element={<NotFound />} />

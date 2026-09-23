@@ -10,6 +10,9 @@ import { CacheSync } from '../api/sync';
 export type HostMessage =
   | { type: 'openFile'; repositoryPath: string; path: string }
   | { type: 'openDiff'; taskId: string; path: string }
+  | { type: 'openSourceControlDiff'; repositoryId: string; path: string; mode: 'staged' | 'unstaged' }
+  | { type: 'openCommitDiff'; repositoryId: string; sha: string; path: string }
+  | { type: 'revealRepository'; repositoryPath: string }
   | { type: 'openArtifact'; artifactId: string; name: string }
   | { type: 'openExternal'; url: string }
   | { type: 'pickRepositoryFolder'; requestId: string };

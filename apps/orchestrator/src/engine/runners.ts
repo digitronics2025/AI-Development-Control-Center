@@ -263,11 +263,15 @@ export class StageRunners {
       if (!verdict) {
         return this.failStage(stage, 'UNKNOWN', `${agentName} did not end its ${def.name.toLowerCase()} with "VERDICT: PASS" or "VERDICT: FAIL"`);
       }
+    } else if (def.role === 'reviewer' || def.role === 'verifier') {
+      // Advisory verdict: recorded for the report, but it does not route the
+      // workflow (a review-only workflow completes and says changes were requested).
+      verdict = parseVerdict(output);
     }
     publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary: summarize(output), finishedAt: now() });
     if (verdict === 'FAIL') {
       publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes`, { verdict }, stage.id);
-      return { kind: 'verdict_fail', stageId: stage.id };
+      if (def.verdict) return { kind: 'verdict_fail', stageId: stage.id };
     }
     if (verdict === 'PASS') publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed`, { verdict }, stage.id);
     publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs: result.durationMs }, stage.id);

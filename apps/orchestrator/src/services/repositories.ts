@@ -190,7 +190,9 @@ export class RepositoryService {
     this.bus.publish({ type: 'repository.deleted', repositoryId: id });
   }
 
+  /** Called after every orchestrator-controlled change; Source Control views refetch too. */
   invalidate(id: string): void {
     this.statusCache.delete(id);
+    this.bus.publish({ type: 'sourceControl', repositoryId: id });
   }
 }

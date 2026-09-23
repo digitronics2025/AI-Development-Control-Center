@@ -203,3 +203,12 @@ export function resolveAssignment(stage: StageDefinition, layers: AssignmentLaye
   resolved = apply(resolved, layers.taskOverrides?.stages?.[stage.key]);
   return resolved;
 }
+
+/**
+ * A workflow whose every stage is Level 1 (Analyze) never changes the
+ * repository, so it neither waits for nor blocks the one task per
+ * repository that may edit files (e.g. the built-in Staged Review).
+ */
+export function isReadOnlyWorkflow(profile: WorkflowProfile): boolean {
+  return profile.stages.every((stage) => stage.permissionLevel === 1 && stage.kind === 'agent');
+}

@@ -35,6 +35,24 @@ export class CacheSync {
   private pendingLists = false;
   private readonly changedTasks = new Set<string>();
   private timer: number | null = null;
+  private readonly changedRepositories = new Set<string>();
+  private repositoryTimer: number | null = null;
+
+  /** Coalesce bursts of Source Control invalidations into one refetch per repository. */
+  private refreshSourceControl(repositoryId: string): void {
+    this.changedRepositories.add(repositoryId);
+    if (this.repositoryTimer !== null) return;
+    this.repositoryTimer = window.setTimeout(() => {
+      this.repositoryTimer = null;
+      for (const id of this.changedRepositories) {
+        void this.qc.invalidateQueries({ queryKey: keys.sourceControl(id) });
+        void this.qc.invalidateQueries({ queryKey: keys.sourceControlOperations(id) });
+        void this.qc.invalidateQueries({ queryKey: keys.sourceControlReview(id) });
+        void this.qc.invalidateQueries({ queryKey: keys.sourceControlHistory(id) });
+      }
+      this.changedRepositories.clear();
+    }, 300);
+  }
 
   constructor(
     private readonly qc: QueryClient,
@@ -153,6 +171,9 @@ export class CacheSync {
       }
       case 'workflow.deleted':
         qc.setQueryData<WorkflowProfile[]>(keys.workflows, (old) => old?.filter((w) => w.id !== message.workflowId));
+        return;
+      case 'sourceControl':
+        this.refreshSourceControl(message.repositoryId);
         return;
     }
   };

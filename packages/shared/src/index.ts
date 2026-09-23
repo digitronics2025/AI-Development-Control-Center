@@ -4,3 +4,5 @@ export * from './types.js';
 export * from './ws.js';
 export * from './labels.js';
 export * from './workflow.js';
+export * from './source-control.js';
+export * from './git-graph.js';

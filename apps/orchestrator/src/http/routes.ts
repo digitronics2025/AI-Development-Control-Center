@@ -30,6 +30,7 @@ import { AgentNotFoundError } from '../services/agents.js';
 import { toArtifactView } from '../services/artifacts.js';
 import { RepositoryError } from '../services/repositories.js';
 import { WorkflowError } from '../services/workflows.js';
+import { SOURCE_CONTROL_HTTP_STATUS, SourceControlError } from '../source-control/errors.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
 
@@ -56,6 +57,10 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message, error.issues.length ? error.issues : undefined);
     }
     if (error instanceof AgentNotFoundError) return sendError(reply, 404, 'NOT_FOUND', error.message);
+    if (error instanceof SourceControlError) {
+      // Messages are already redacted; details carry paths, operation ids and findings, never secrets.
+      return sendError(reply, SOURCE_CONTROL_HTTP_STATUS[error.code], error.code, error.message, error.details);
+    }
     const statusCode = (error as { statusCode?: number }).statusCode;
     if (statusCode && statusCode < 500) return sendError(reply, statusCode, 'BAD_REQUEST', (error as Error).message);
     request.log.error({ err: { message: redact((error as Error).message), stack: (error as Error).stack } }, 'request failed');

@@ -36,7 +36,9 @@ export type ServerMessage =
   | { type: 'repository'; repository: Repository }
   | { type: 'repository.deleted'; repositoryId: string }
   | { type: 'workflow'; workflow: WorkflowProfile }
-  | { type: 'workflow.deleted'; workflowId: string };
+  | { type: 'workflow.deleted'; workflowId: string }
+  /** A repository's Git state may have changed: clients refetch its Source Control snapshot. */
+  | { type: 'sourceControl'; repositoryId: string };
 
 export type ServerMessageType = ServerMessage['type'];
 

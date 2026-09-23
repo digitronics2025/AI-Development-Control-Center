@@ -12,8 +12,12 @@ import { AgentRegistry } from './services/agents.js';
 import { ArtifactService } from './services/artifacts.js';
 import { PromptService } from './services/prompts.js';
 import { RepositoryService } from './services/repositories.js';
+import { RepositoryCoordinator } from './services/repository-coordinator.js';
 import { SettingsService } from './services/settings.js';
 import { WorkflowService } from './services/workflows.js';
+import { SourceControlAssist } from './source-control/assist.js';
+import { SourceControlService } from './source-control/service.js';
+import { GitOperationStore } from './store/git-operations.js';
 import { Store } from './store/store.js';
 
 export interface AppServices {
@@ -29,6 +33,10 @@ export interface AppServices {
   artifacts: ArtifactService;
   views: TaskViews;
   engine: TaskEngine;
+  coordinator: RepositoryCoordinator;
+  gitOperations: GitOperationStore;
+  sourceControl: SourceControlService;
+  sourceControlAssist: SourceControlAssist;
   startedAt: string;
   close(): Promise<void>;
 }
@@ -62,7 +70,11 @@ export function createServices(
   if (loaded.errors.length) console.warn(`[workflows] ${loaded.errors.join('\n')}`);
   prompts.seed();
 
-  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, baseEnv: options.baseEnv });
+  const coordinator = new RepositoryCoordinator();
+  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, baseEnv: options.baseEnv });
+  const gitOperations = new GitOperationStore(db);
+  const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
+  const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
 
   return {
     config,
@@ -77,6 +89,10 @@ export function createServices(
     artifacts,
     views,
     engine,
+    coordinator,
+    gitOperations,
+    sourceControl,
+    sourceControlAssist,
     startedAt: new Date().toISOString(),
     async close() {
       await engine.shutdown();

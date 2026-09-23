@@ -6,6 +6,9 @@ import type { ApiClient, Discovery } from './connection';
 type HostMessage =
   | { type: 'openFile'; repositoryPath: string; path: string }
   | { type: 'openDiff'; taskId: string; path: string }
+  | { type: 'openSourceControlDiff'; repositoryId: string; path: string; mode: 'staged' | 'unstaged' }
+  | { type: 'openCommitDiff'; repositoryId: string; sha: string; path: string }
+  | { type: 'revealRepository'; repositoryPath: string }
   | { type: 'openArtifact'; artifactId: string; name: string }
   | { type: 'openExternal'; url: string }
   | { type: 'pickRepositoryFolder'; requestId: string };
@@ -63,6 +66,24 @@ export async function handleHostMessage(webview: vscode.Webview, api: ApiClient,
       await untitled(diff || 'No changes in this file.', 'diff');
       return;
     }
+    case 'openSourceControlDiff': {
+      // The orchestrator stays the source of truth: the editor shows its (redacted, bounded) diff.
+      const base = `/api/repositories/${encodeURIComponent(message.repositoryId)}/source-control`;
+      const mode = message.mode === 'staged' ? 'staged' : 'unstaged';
+      const { diff } = await api.request<{ diff: string }>('GET', `${base}/diff?path=${encodeURIComponent(message.path)}&mode=${mode}`);
+      await untitled(diff || 'No changes in this file.', 'diff');
+      return;
+    }
+    case 'openCommitDiff': {
+      if (!/^[0-9a-f]{7,64}$/.test(message.sha)) return;
+      const base = `/api/repositories/${encodeURIComponent(message.repositoryId)}/source-control`;
+      const { diff } = await api.request<{ diff: string }>('GET', `${base}/commits/${message.sha}/diff?path=${encodeURIComponent(message.path)}`);
+      await untitled(diff || 'No changes in this file.', 'diff');
+      return;
+    }
+    case 'revealRepository':
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.resolve(message.repositoryPath)));
+      return;
     case 'openArtifact': {
       const { content } = await api.request<{ content: string }>('GET', `/api/artifacts/${encodeURIComponent(message.artifactId)}/content`);
       await untitled(content, message.name.endsWith('.md') ? 'markdown' : message.name.endsWith('.json') ? 'json' : message.name.endsWith('.patch') ? 'diff' : 'plaintext');

@@ -23,4 +23,13 @@ export const keys = {
   workflow: (id: string) => ['workflow', id] as const,
   settings: ['settings'] as const,
   prompts: ['prompts'] as const,
+  /** Everything Source Control shows for one repository; one prefix so realtime invalidation reaches it all. */
+  sourceControlRoot: (repositoryId: string) => ['source-control', repositoryId] as const,
+  sourceControl: (repositoryId: string) => ['source-control', repositoryId, 'snapshot'] as const,
+  sourceControlDiff: (repositoryId: string, path: string | null, mode: string) => ['source-control', repositoryId, 'diff', path ?? '', mode] as const,
+  sourceControlHistory: (repositoryId: string) => ['source-control', repositoryId, 'history'] as const,
+  sourceControlCommit: (repositoryId: string, sha: string) => ['source-control', repositoryId, 'commit', sha] as const,
+  sourceControlCommitDiff: (repositoryId: string, sha: string, path: string | null) => ['source-control', repositoryId, 'commit', sha, 'diff', path ?? ''] as const,
+  sourceControlOperations: (repositoryId: string) => ['source-control', repositoryId, 'operations'] as const,
+  sourceControlReview: (repositoryId: string) => ['source-control', repositoryId, 'review'] as const,
 };

@@ -165,6 +165,14 @@ export class ContextBuilder {
       } catch {
         diff = '(diff unavailable)';
       }
+    } else if (!snapshot && needsDiff) {
+      // A Staged Review task has no baseline: it reviews the staged diff
+      // Source Control saved (already redacted and bounded) when it started.
+      const staged = await this.artifacts.latestText(task.id, 'staged-diff', MAX_DIFF_CHARS);
+      if (staged) {
+        diff = staged;
+        changedFiles = [...new Set([...staged.matchAll(/^diff --git a\/.+? b\/(.+)$/gm)].map((m) => m[1]!))].map((f) => `- ${f} (staged)`).join('\n');
+      }
     }
 
     let gitStatusText: string;

@@ -345,6 +345,15 @@ All components must consume semantic CSS variables. Never hard-code application 
 
 Never use provider-specific brand colors as major UI surfaces.
 
+### Contrast rules (measured against the tokens above)
+
+The token values were measured against WCAG 2.2 AA (4.5:1 for body and small text, 3:1 for icons and large text). They pass on `bg-canvas` and `bg-surface`; two combinations do not, so they are not allowed:
+
+- **Tertiary text only on `bg-canvas` or `bg-surface`.** On `bg-elevated` and `bg-muted` it measures 4.0–4.4:1; use `text-secondary` there (hovered rows, cards on elevated panels, chips).
+- **Semantic colors carry status through the icon and the tint, not the label text.** In the light theme, semantic text on its own `*-muted` tint measures 4.3–4.5:1. Status chips therefore render the icon in the semantic color, the background in the `*-muted` tint, and the label in `text-primary`. Semantic-colored *text* is allowed only on `bg-canvas`/`bg-surface` (≥4.5:1 in both themes).
+- Primary buttons use `text-inverse` on `accent` (7.9:1 dark, 5.2:1 light).
+- **`accent` is a fill color, not a text color.** In the VS Code mapping it becomes the editor's button background, which is not guaranteed to be readable as text on the sidebar (VS Code Dark Modern: 3.9:1). Text stays in `text-primary`/`text-secondary`; links are distinguished by underline.
+
 ## 4.3 Typography
 
 Use the operating-system font stack. Do not depend on a remote font.

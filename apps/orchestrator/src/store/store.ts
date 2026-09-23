@@ -117,7 +117,8 @@ export interface AgentRecord {
   updatedAt: string;
 }
 
-export interface ApprovalRecord extends Omit<Approval, 'taskTitle' | 'repositoryName' | 'stageName'> {}
+/** Stored approval; the API view adds task title, repository and stage names. */
+export type ApprovalRecord = Omit<Approval, 'taskTitle' | 'repositoryName' | 'stageName'>;
 
 export interface SnapshotRecord {
   id: string;

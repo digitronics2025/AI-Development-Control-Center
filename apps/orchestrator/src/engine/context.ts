@@ -154,7 +154,7 @@ export class ContextBuilder {
       }
     }
 
-    let gitStatusText = '';
+    let gitStatusText: string;
     try {
       gitStatusText = (await gitStatus(repo.path)).slice(0, 80).map((e) => `${e.code} ${e.path}`).join('\n') || 'clean';
     } catch {

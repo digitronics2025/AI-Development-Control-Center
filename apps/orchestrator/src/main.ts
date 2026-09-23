@@ -8,7 +8,9 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const services = createServices(config);
   const recovered = services.engine.recover();
-  const app = await buildServer(services, { logger: true });
+  // Filled in once the shutdown routine exists; the HTTP endpoint only exists after listen.
+  const lifecycle: { shutdown: (reason: string) => void } = { shutdown: () => undefined };
+  const app = await buildServer(services, { logger: true, onShutdownRequest: () => lifecycle.shutdown('shutdown request') });
 
   await app.listen({ host: config.host, port: config.port });
   const address = app.server.address();
@@ -43,6 +45,7 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   };
+  lifecycle.shutdown = (reason) => void shutdown(reason);
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGBREAK', () => void shutdown('SIGBREAK'));

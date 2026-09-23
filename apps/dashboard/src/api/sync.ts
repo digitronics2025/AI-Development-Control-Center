@@ -1,0 +1,159 @@
+import type { QueryClient } from '@tanstack/react-query';
+import type {
+  AgentInfo,
+  Approval,
+  Artifact,
+  Directive,
+  Execution,
+  LogLine,
+  Repository,
+  ServerMessage,
+  StageInstance,
+  TaskDetail,
+  TaskEvent,
+  TestRun,
+  WorkflowProfile,
+} from '@acc/shared';
+import { keys } from './keys';
+
+function upsert<T>(list: T[] | undefined, item: T, idOf: (x: T) => string | number): T[] | undefined {
+  if (!list) return list;
+  const id = idOf(item);
+  const index = list.findIndex((x) => idOf(x) === id);
+  if (index === -1) return [...list, item];
+  const next = list.slice();
+  next[index] = item;
+  return next;
+}
+
+/**
+ * Applies orchestrator messages to the query cache without re-mounting
+ * anything (design.md §2.7, §9.2). Entity updates are patched in place;
+ * list membership (filters, overview) is refreshed in one debounced batch.
+ */
+export class CacheSync {
+  private pendingLists = false;
+  private readonly changedTasks = new Set<string>();
+  private timer: number | null = null;
+
+  constructor(
+    private readonly qc: QueryClient,
+    private readonly onTaskStatusChange?: (taskId: string, title: string, status: string) => void,
+  ) {}
+
+  private scheduleRefresh(taskId?: string): void {
+    this.pendingLists = true;
+    if (taskId) this.changedTasks.add(taskId);
+    if (this.timer !== null) return;
+    this.timer = window.setTimeout(() => {
+      this.timer = null;
+      if (this.pendingLists) {
+        void this.qc.invalidateQueries({ queryKey: keys.tasksRoot });
+        void this.qc.invalidateQueries({ queryKey: keys.overview });
+      }
+      for (const id of this.changedTasks) void this.qc.invalidateQueries({ queryKey: keys.taskChanges(id) });
+      this.pendingLists = false;
+      this.changedTasks.clear();
+    }, 400);
+  }
+
+  apply = (message: ServerMessage): void => {
+    const qc = this.qc;
+    switch (message.type) {
+      case 'hello':
+        return;
+      case 'task': {
+        const summary = message.task;
+        const before = qc.getQueryData<TaskDetail>(keys.task(summary.id));
+        if (before && before.status !== summary.status) this.onTaskStatusChange?.(summary.id, summary.title, summary.status);
+        qc.setQueryData<TaskDetail>(keys.task(summary.id), (old) => (old ? { ...old, ...summary } : old));
+        this.scheduleRefresh();
+        return;
+      }
+      case 'task.deleted':
+        qc.removeQueries({ queryKey: keys.task(message.taskId) });
+        this.scheduleRefresh();
+        return;
+      case 'stage': {
+        const stage: StageInstance = message.stage;
+        qc.setQueryData<TaskDetail>(keys.task(stage.taskId), (old) =>
+          old ? { ...old, stages: upsert(old.stages, stage, (s) => s.id) ?? old.stages } : old,
+        );
+        if (['SUCCESS', 'FAILED', 'PAUSED', 'CANCELLED'].includes(stage.status)) this.scheduleRefresh(stage.taskId);
+        return;
+      }
+      case 'event': {
+        const event: TaskEvent = message.event;
+        qc.setQueryData<TaskEvent[]>(keys.taskEvents(event.taskId), (old) => (old && !old.some((e) => e.id === event.id) ? [...old, event] : old));
+        if (event.type === 'FILE_CHANGED' || event.type === 'GIT_COMMIT' || event.type === 'GIT_BASELINE') this.scheduleRefresh(event.taskId);
+        return;
+      }
+      case 'execution': {
+        const execution: Execution = message.execution;
+        qc.setQueryData<Execution[]>(keys.taskExecutions(execution.taskId), (old) => upsert(old, execution, (e) => e.id));
+        return;
+      }
+      case 'logs': {
+        qc.setQueryData<LogLine[]>(keys.logs(message.executionId), (old) => {
+          if (!old) return old;
+          const lastSeq = old.at(-1)?.seq ?? -1;
+          const fresh = message.lines.filter((l) => l.seq > lastSeq);
+          return fresh.length ? [...old, ...fresh] : old;
+        });
+        return;
+      }
+      case 'approval': {
+        const approval: Approval = message.approval;
+        qc.setQueryData<Approval[]>(keys.approvals('pending'), (old) => {
+          if (!old) return old;
+          const without = old.filter((a) => a.id !== approval.id);
+          return approval.status === 'pending' ? [approval, ...without] : without;
+        });
+        qc.setQueryData<Approval[]>(keys.approvals('all'), (old) => upsert(old, approval, (a) => a.id));
+        qc.setQueryData<Approval[]>(keys.taskApprovals(approval.taskId), (old) => upsert(old, approval, (a) => a.id));
+        this.scheduleRefresh();
+        return;
+      }
+      case 'directive': {
+        const directive: Directive = message.directive;
+        qc.setQueryData<Directive[]>(keys.taskDirectives(directive.taskId), (old) => upsert(old, directive, (d) => d.id));
+        return;
+      }
+      case 'artifact': {
+        const artifact: Artifact = message.artifact;
+        qc.setQueryData<Artifact[]>(keys.taskArtifacts(artifact.taskId), (old) => upsert(old, artifact, (a) => a.id));
+        return;
+      }
+      case 'testRun': {
+        const run: TestRun = message.testRun;
+        qc.setQueryData<TestRun[]>(keys.taskTests(run.taskId), (old) => upsert(old, run, (r) => r.id));
+        return;
+      }
+      case 'agents':
+        qc.setQueryData<AgentInfo[]>(keys.agents, message.agents);
+        this.scheduleRefresh();
+        return;
+      case 'settings':
+        qc.setQueryData(keys.settings, message.settings);
+        return;
+      case 'repository': {
+        const repo: Repository = message.repository;
+        qc.setQueryData<Repository[]>(keys.repositories, (old) => upsert(old, repo, (r) => r.id));
+        qc.setQueryData(keys.repository(repo.id), repo);
+        return;
+      }
+      case 'repository.deleted':
+        qc.setQueryData<Repository[]>(keys.repositories, (old) => old?.filter((r) => r.id !== message.repositoryId));
+        return;
+      case 'workflow': {
+        const wf: WorkflowProfile = message.workflow;
+        qc.setQueryData<WorkflowProfile[]>(keys.workflows, (old) => upsert(old, wf, (w) => w.id));
+        qc.setQueryData(keys.workflow(wf.id), wf);
+        return;
+      }
+      case 'workflow.deleted':
+        qc.setQueryData<WorkflowProfile[]>(keys.workflows, (old) => old?.filter((w) => w.id !== message.workflowId));
+        return;
+    }
+  };
+}

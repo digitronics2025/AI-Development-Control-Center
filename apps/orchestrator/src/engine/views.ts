@@ -72,6 +72,7 @@ export class TaskViews {
       mode: task.mode,
       status: task.status,
       currentStageKey: currentKey,
+      currentStageId: task.currentStageId,
       currentStageName: currentKey === COMPLETE ? 'Complete' : (def?.name ?? null),
       currentAssignment,
       stageProgress: {

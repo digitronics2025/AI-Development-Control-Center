@@ -62,7 +62,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
 
   protected async probeAuth(executable: string, env: NodeJS.ProcessEnv): Promise<Omit<AgentHealth, 'checkedAt'>> {
     const { stdout, stderr, result } = await capture(executable, ['auth', 'status'], env);
-    let status: { loggedIn?: boolean; authMethod?: string; apiProvider?: string; subscriptionType?: string } | null = null;
+    let status: { loggedIn?: boolean; authMethod?: string; apiProvider?: string; subscriptionType?: string } | null;
     try {
       status = JSON.parse(stdout);
     } catch {

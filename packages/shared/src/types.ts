@@ -75,6 +75,8 @@ export interface TaskSummary {
   mode: TaskMode;
   status: TaskStatus;
   currentStageKey: string | null;
+  /** The stage instance currently or most recently run for `currentStageKey`. */
+  currentStageId: string | null;
   currentStageName: string | null;
   currentAssignment: ResolvedAssignment | null;
   stageProgress: { total: number; completed: number; currentIndex: number | null };
@@ -326,6 +328,8 @@ export interface ServiceHealth {
   dataDir: string;
   host: string;
   port: number;
+  simulatedAgents: boolean;
+  git: { found: boolean; version: string | null };
 }
 
 export interface PromptTemplate {

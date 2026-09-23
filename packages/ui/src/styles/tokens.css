@@ -1,0 +1,136 @@
+/*
+ * Semantic design tokens — design.md §4. Feature code must consume these
+ * (through the Tailwind theme) and never hard-code application colors.
+ * Changing a value here is a design change: update design.md first.
+ */
+
+:root {
+  --font-sans-stack: "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono-stack: "Cascadia Code", "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --shadow-float-value: 0 8px 28px rgba(0, 0, 0, 0.24);
+  --shadow-modal-value: 0 18px 60px rgba(0, 0, 0, 0.36);
+  /* Scrim behind modal dialogs and drawers. */
+  --scrim: rgba(0, 0, 0, 0.5);
+
+  --motion-fast: 120ms;
+  --motion-panel: 180ms;
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 72px;
+  --topbar-height: 56px;
+  --inspector-width: 360px;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: #090b0f;
+  --bg-surface: #0f1319;
+  --bg-elevated: #151a22;
+  --bg-muted: #1b222c;
+
+  --border-subtle: #232b36;
+  --border-strong: #344050;
+
+  --text-primary: #f4f7fb;
+  --text-secondary: #a7b0be;
+  --text-tertiary: #758092;
+  --text-inverse: #081018;
+
+  --accent: #6ea8fe;
+  --accent-hover: #8ab8ff;
+  --accent-muted: rgba(110, 168, 254, 0.14);
+
+  --success: #41d3a2;
+  --success-muted: rgba(65, 211, 162, 0.14);
+
+  --warning: #f6c85f;
+  --warning-muted: rgba(246, 200, 95, 0.14);
+
+  --danger: #ff6b6b;
+  --danger-muted: rgba(255, 107, 107, 0.14);
+
+  --info: #70b7ff;
+  --info-muted: rgba(112, 183, 255, 0.14);
+
+  --focus-ring: #8ab8ff;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas: #f5f7fa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f9fafb;
+  --bg-muted: #eef2f6;
+
+  --border-subtle: #dde3ea;
+  --border-strong: #b8c2cf;
+
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-tertiary: #6b7280;
+  --text-inverse: #ffffff;
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-muted: rgba(37, 99, 235, 0.1);
+
+  --success: #14805e;
+  --success-muted: rgba(20, 128, 94, 0.1);
+
+  --warning: #9a6700;
+  --warning-muted: rgba(154, 103, 0, 0.1);
+
+  --danger: #c83a3a;
+  --danger-muted: rgba(200, 58, 58, 0.1);
+
+  --info: #1d70b8;
+  --info-muted: rgba(29, 112, 184, 0.1);
+
+  --focus-ring: #2563eb;
+
+  --shadow-float-value: 0 8px 28px rgba(17, 24, 39, 0.12);
+  --shadow-modal-value: 0 18px 60px rgba(17, 24, 39, 0.2);
+  --scrim: rgba(17, 24, 39, 0.4);
+}
+
+/*
+ * VS Code WebView (design.md §13): map the same semantic tokens onto the
+ * editor theme instead of forcing the standalone palette over it.
+ */
+:root[data-theme="vscode"] {
+  color-scheme: normal;
+  --font-sans-stack: var(--vscode-font-family, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif);
+  --font-mono-stack: var(--vscode-editor-font-family, "Cascadia Code", Consolas, monospace);
+
+  --bg-canvas: var(--vscode-editor-background);
+  --bg-surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --bg-elevated: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --bg-muted: var(--vscode-list-hoverBackground, var(--vscode-editorWidget-background));
+
+  --border-subtle: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  --border-strong: var(--vscode-input-border, var(--vscode-contrastBorder, rgba(128, 128, 128, 0.6)));
+
+  --text-primary: var(--vscode-foreground);
+  --text-secondary: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  --text-tertiary: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  --text-inverse: var(--vscode-button-foreground);
+
+  --accent: var(--vscode-button-background);
+  --accent-hover: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  --accent-muted: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent);
+
+  --success: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+  --success-muted: color-mix(in srgb, var(--success) 16%, transparent);
+  --warning: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+  --warning-muted: color-mix(in srgb, var(--warning) 16%, transparent);
+  --danger: var(--vscode-errorForeground, var(--vscode-charts-red));
+  --danger-muted: color-mix(in srgb, var(--danger) 16%, transparent);
+  --info: var(--vscode-editorInfo-foreground, var(--vscode-charts-blue));
+  --info-muted: color-mix(in srgb, var(--info) 16%, transparent);
+
+  --focus-ring: var(--vscode-focusBorder);
+}

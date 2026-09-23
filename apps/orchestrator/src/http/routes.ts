@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z, ZodError } from 'zod';
-import { changesSince, diffSince, isGitRepository } from '@acc/git';
+import { changesSince, diffSince, git, isGitRepository } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   ATTENTION_TASK_STATUSES,
@@ -68,9 +68,17 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
 
   // ----- service ------------------------------------------------------------
 
+  let gitInfo: Promise<ServiceHealth['git']> | null = null;
+  const detectGit = (): Promise<ServiceHealth['git']> =>
+    (gitInfo ??= git(process.cwd(), ['--version'])
+      .then((r) => ({ found: r.code === 0, version: /(\d+\.\d+\.\d+)/.exec(r.stdout)?.[1] ?? null }))
+      .catch(() => ({ found: false, version: null })));
+
   app.get('/api/health', async (): Promise<ServiceHealth> => {
     const address = app.server.address();
     return {
+      simulatedAgents: s.config.simulatedAgents,
+      git: await detectGit(),
       ok: true,
       version: s.config.version,
       startedAt: s.startedAt,

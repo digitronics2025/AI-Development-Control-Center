@@ -35,7 +35,7 @@ export class WorkflowService {
   loadBuiltins(dir: string): { loaded: string[]; errors: string[] } {
     const loaded: string[] = [];
     const errors: string[] = [];
-    let files: string[] = [];
+    let files: string[];
     try {
       files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
     } catch (error) {

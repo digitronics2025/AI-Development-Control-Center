@@ -1,0 +1,4 @@
+@import "@acc/ui/styles.css";
+
+/* Scan the dashboard's own sources as well as the design system. */
+@source "./";

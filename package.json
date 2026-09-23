@@ -12,15 +12,21 @@
     "dev": "pnpm --parallel --filter @acc/orchestrator --filter @acc/dashboard dev",
     "build": "pnpm --filter @acc/dashboard build && pnpm --filter @acc/orchestrator build && pnpm --filter acc-vscode build",
     "start": "node apps/orchestrator/dist/main.js",
-    "typecheck": "pnpm -r --parallel typecheck",
+    "typecheck": "pnpm -r --parallel typecheck && tsc -p scripts/tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "pnpm --filter @acc/dashboard e2e",
     "verify:agents": "tsx scripts/verify-agents.ts",
-    "check": "pnpm typecheck && pnpm lint && pnpm test"
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "demo": "node scripts/demo.mjs",
+    "package:vscode": "pnpm --filter acc-vscode package"
   },
   "devDependencies": {
+    "@acc/agent-claude": "workspace:*",
+    "@acc/agent-codex": "workspace:*",
+    "@acc/agent-sdk": "workspace:*",
+    "@acc/security": "workspace:*",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.4",
     "eslint": "^10.11.0",

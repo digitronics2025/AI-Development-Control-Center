@@ -12,7 +12,8 @@ const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
  * VS Code status bar never receives a build log.
  */
 export function registerWebSocket(app: FastifyInstance, s: AppServices): void {
-  app.get('/ws', { websocket: true }, (socket: WebSocket) => {
+  app.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    request.log.info({ origin: request.headers.origin ?? 'none' }, 'realtime client connected');
     const logSubscriptions = new Set<string>();
     const send = (message: ServerMessage) => {
       if (socket.readyState !== socket.OPEN) return;

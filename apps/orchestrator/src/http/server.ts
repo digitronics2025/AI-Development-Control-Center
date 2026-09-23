@@ -24,7 +24,10 @@ function escapeAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
-export async function buildServer(s: AppServices, options: { logger?: boolean } = {}): Promise<FastifyInstance> {
+export async function buildServer(
+  s: AppServices,
+  options: { logger?: boolean; onShutdownRequest?: () => void } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger
       ? {
@@ -49,6 +52,15 @@ export async function buildServer(s: AppServices, options: { logger?: boolean } 
 
   // Liveness probe for launchers; reveals nothing about state.
   app.get('/healthz', async () => ({ ok: true }));
+
+  // Graceful stop for launchers: a background process on Windows cannot
+  // receive Ctrl+C. Authenticated like every /api route; running work is
+  // marked INTERRUPTED so it can be resumed after the next start.
+  app.post('/api/service/shutdown', async (_request, reply) => {
+    if (!options.onShutdownRequest) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Shutdown is not available here' } });
+    setImmediate(options.onShutdownRequest);
+    return reply.code(202).send({ ok: true });
+  });
 
   const dashboardDir = s.config.dashboardDir;
   if (dashboardDir && existsSync(path.join(dashboardDir, 'index.html'))) {

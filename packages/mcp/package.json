@@ -1,0 +1,19 @@
+{
+  "name": "@acc/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP gateway (Control Center as an MCP client of other servers) and the Control Center MCP bridge agents launch over stdio.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bridge": "./src/bridge.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/security": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^4.6.5"
+  }
+}

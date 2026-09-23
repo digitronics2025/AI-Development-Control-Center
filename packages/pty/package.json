@@ -1,0 +1,18 @@
+{
+  "name": "@acc/pty",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive pseudo-terminal sessions (node-pty) with bounded, redacted history and tree-kill cleanup.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@acc/executor": "workspace:*",
+    "@acc/security": "workspace:*",
+    "node-pty": "1.1.0"
+  }
+}

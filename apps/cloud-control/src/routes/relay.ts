@@ -162,11 +162,14 @@ async function upload(request: Request, env: Env, store: CloudStore, target: { k
     try {
       await env.ARTIFACTS.put(key, request.body, { sha256, httpMetadata: { contentType }, customMetadata: { nodeId: node.id, taskId } });
     } catch (error) {
-      await store.upsertManifest(node.id, { artifactId: target.id, taskId, name, mime: contentType, size, sha256, sensitivity, status: 'failed', error: 'hash mismatch or storage error' });
+      // sha256 null: a failed re-upload must not overwrite the hash of the copy that is still stored.
+      await store.upsertManifest(node.id, { artifactId: target.id, taskId, name, mime: contentType, size, sha256: null, sensitivity, status: 'failed', error: 'hash mismatch or storage error' });
       log('warn', 'artifact.upload.failed', { nodeId: node.id, artifactId: target.id, message: (error as Error).message });
       throw new HttpError(422, 'HASH_MISMATCH', 'The upload did not match its SHA-256 or could not be stored.');
     }
+    const previousKey = (await store.manifest(node.id, target.id))?.r2_key ?? null;
     await store.upsertManifest(node.id, { artifactId: target.id, taskId, name, mime: contentType, size, sha256, sensitivity, status: 'uploaded', error: null, r2Key: key });
+    if (previousKey && previousKey !== key) await env.ARTIFACTS.delete(previousKey); // the replaced copy is not left behind
     return json({ ok: true, key: `${target.id}/${sha256.slice(0, 12)}` }, 201);
   }
 
@@ -179,6 +182,8 @@ async function upload(request: Request, env: Env, store: CloudStore, target: { k
   } catch {
     throw new HttpError(422, 'HASH_MISMATCH', 'The upload did not match its SHA-256 or could not be stored.');
   }
+  const previousKey = await store.logChunkKey(node.id, target.id, target.index);
   await store.addLogChunk(node.id, { executionId: target.id, taskId, chunkIndex: target.index, firstSeq, lastSeq, sha256, size, r2Key: key });
+  if (previousKey && previousKey !== key) await env.ARTIFACTS.delete(previousKey);
   return json({ ok: true }, 201);
 }

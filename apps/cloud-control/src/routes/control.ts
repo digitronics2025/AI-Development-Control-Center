@@ -19,7 +19,7 @@ import type { Env } from '../env.js';
 import type { CommandWait, RpcReply } from '../hub.js';
 import { clientIp, DASHBOARD_CSP, fromBase64url, HttpError, isoIn, json, log, randomToken, readJson } from '../http.js';
 import { offlineRead } from '../offline.js';
-import { CloudStore, commandView } from '../store.js';
+import { CloudStore, commandView, type CommandRow } from '../store.js';
 
 /**
  * The control hostname: the dashboard, the cloud API and browser realtime,
@@ -70,7 +70,7 @@ export async function handleControl(request: Request, env: Env, requestId: strin
   if (path === '/ws') {
     assertSameOrigin(request, url);
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') throw new HttpError(426, 'UPGRADE_REQUIRED', 'WebSocket upgrade required.');
-    return hub(env).fetch(new Request('https://hub/connect/browser', { headers: { upgrade: 'websocket', 'x-acc-user': identity.email } }));
+    return hub(env).fetch(new Request('https://hub/connect/browser', { headers: { upgrade: 'websocket', 'x-acc-user': identity.email, 'x-acc-signed-in': String(identity.issuedAt) } }));
   }
 
   if (path.startsWith('/api/')) {
@@ -181,7 +181,7 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
   match = m(/^\/api\/cloud\/artifacts\/(node_[A-Za-z0-9_-]{16,64})\/([A-Za-z0-9._:-]{1,200})$/);
   if (request.method === 'GET' && match) {
     const manifest = await store.manifest(match[1]!, match[2]!);
-    if (!manifest || manifest.status !== 'uploaded' || !manifest.r2_key) throw new HttpError(404, 'NOT_FOUND', 'This artifact is not stored in the cloud.');
+    if (!manifest || manifest.status !== 'uploaded' || !manifest.r2_key || manifest.sensitivity === 'local_only') throw new HttpError(404, 'NOT_FOUND', 'This artifact is not stored in the cloud.');
     const object = await env.ARTIFACTS.get(manifest.r2_key);
     if (!object) throw new HttpError(404, 'NOT_FOUND', 'The stored object is missing.');
     return new Response(object.body, {
@@ -189,6 +189,7 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
         'content-type': manifest.mime,
         'content-length': String(object.size),
         'content-disposition': `attachment; filename="${manifest.name.replace(/"/g, '')}"`,
+        'content-security-policy': "default-src 'none'; sandbox",
         'x-acc-sha256': manifest.sha256 ?? '',
       },
     });
@@ -273,9 +274,20 @@ async function resolveNode(request: Request, store: CloudStore, env: Env, operat
   throw new HttpError(409, 'NODE_REQUIRED', active.length ? 'Choose a node.' : 'Pair a node first: Nodes → Pair a node.');
 }
 
-function replyToResponse(reply: RpcReply, source: 'live' | 'cache'): Response {
+/** Content types a node's answer may be served as on this origin; anything else is a download. */
+const INLINE_TYPES = /^(application\/json|text\/plain|text\/csv|application\/x-ndjson|image\/(png|jpeg|gif|webp))(;|$)/i;
+
+function replyToResponse(reply: RpcReply, source: 'live' | 'cache', binary = false): Response {
   const body = reply.encoding === 'base64' ? fromBase64url(reply.text.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')) : reply.text;
-  return new Response(body, { status: reply.httpStatus, headers: { 'content-type': reply.contentType, 'x-acc-source': source } });
+  // A node's answer is never a page on the signed-in origin: no HTML or script types, no rendering, downloads as attachments.
+  const inline = INLINE_TYPES.test(reply.contentType);
+  const headers: Record<string, string> = {
+    'content-type': inline ? reply.contentType : 'application/octet-stream',
+    'x-acc-source': source,
+    'content-security-policy': "default-src 'none'; sandbox",
+  };
+  if (binary || !inline) headers['content-disposition'] = 'attachment';
+  return new Response(body, { status: reply.httpStatus, headers });
 }
 
 async function proxy(request: Request, env: Env, url: URL, identity: AccessIdentity, requestId: string): Promise<Response> {
@@ -305,7 +317,7 @@ async function proxy(request: Request, env: Env, url: URL, identity: AccessIdent
       const cached = await offlineRead(env.DB, target.nodeId, operation.op, params, query, env.ARTIFACTS);
       if (cached) return json(cached.body, cached.status, { 'x-acc-source': 'cache' });
     }
-    return replyToResponse(reply, 'live');
+    return replyToResponse(reply, 'live', operation.binary === true);
   }
 
   // ----- a mutation: validate, bind, persist, then notify ------------------------
@@ -314,6 +326,20 @@ async function proxy(request: Request, env: Env, url: URL, identity: AccessIdent
   const validated = validateRemoteBody(operation, rawBody);
   if (!validated.ok) throw new HttpError(400, 'VALIDATION', validated.message);
   let body = validated.body;
+  // A repeat of a request answers with what the first one produced, before any other check can
+  // turn it away (the approval is decided now, the node went offline …); a key reused for a
+  // different request is refused rather than silently answered with another command's result.
+  const suppliedKey = (request.headers.get('idempotency-key') ?? '').slice(0, 120);
+  if (suppliedKey) {
+    const previous = await store.commandByKey(identity.email, suppliedKey);
+    if (previous) {
+      // Automatic routing rewrites the repository id for the chosen node, so only the operation and target are compared then.
+      const auto = request.headers.get('x-acc-node') === 'auto';
+      const same = previous.op === operation.op && previous.params === JSON.stringify(params) && (auto || (previous.body ?? null) === (body === undefined ? null : JSON.stringify(body)));
+      if (!same) throw new HttpError(422, 'IDEMPOTENCY_MISMATCH', 'This Idempotency-Key was already used for a different request.');
+      return commandResponse(waitFromRow(previous));
+    }
+  }
   const target = await resolveNode(request, store, env, operation, body);
   if (target.repositoryId && body && typeof body === 'object') body = { ...(body as object), repositoryId: target.repositoryId };
   const node = (await store.nodeView(target.nodeId))!;
@@ -330,7 +356,7 @@ async function proxy(request: Request, env: Env, url: URL, identity: AccessIdent
   const precondition = await bindPrecondition(request, store, target.nodeId, operation, params);
   const now = Date.now();
   const ttl = queued ? QUEUED_TASK_TTL_SECONDS : (operation.ttlSeconds ?? 120);
-  const idempotencyKey = (request.headers.get('idempotency-key') ?? '').slice(0, 120) || randomToken(18);
+  const idempotencyKey = suppliedKey || randomToken(18);
   if (idempotencyKey.length < 8) throw new HttpError(400, 'VALIDATION', 'Idempotency-Key must be 8 to 120 characters.');
   const base = {
     id: `cmd_${randomToken(18)}`,
@@ -352,17 +378,18 @@ async function proxy(request: Request, env: Env, url: URL, identity: AccessIdent
     const repositoryId = operation.op === 'task.create' ? (body as { repositoryId?: string }).repositoryId : (await store.taskVersion(target.nodeId, params.id ?? ''))?.repositoryId;
     leaseFingerprint = repositoryId ? await store.repositoryFingerprint(target.nodeId, repositoryId) : null;
   }
-  const inserted = await store.insertCommand({ ...command, taskId: operation.op.startsWith('task.') ? (params.id ?? null) : null, leaseFingerprint });
-  if (!inserted.created) {
-    // Same idempotency key again: answer with what the first request produced; never a second command.
-    return commandResponse(inserted.command.status === 'succeeded' || inserted.command.status === 'failed' ? { status: inserted.command.status, command: commandView(inserted.command), ...(inserted.command.result_status ? { outcome: { httpStatus: inserted.command.result_status, body: inserted.command.result_body ? JSON.parse(inserted.command.result_body) : null } } : {}), ...(inserted.command.error_code ? { error: { code: inserted.command.error_code, message: inserted.command.error_message ?? '' } } : {}) } : { status: inserted.command.status, command: commandView(inserted.command) });
-  }
+  // The lease comes first: a command row is deliverable the moment it exists, so it must never exist without its lease.
   if (leaseFingerprint) {
     const lease = await store.acquireLease(leaseFingerprint, target.nodeId, command.id, identity.email);
     if (!lease.ok) {
-      await store.transition(command.id, target.nodeId, 'rejected', { errorCode: 'LEASE_CONFLICT', errorMessage: 'Another node is working on this repository.' });
       throw new HttpError(409, 'LEASE_CONFLICT', `Another node is already working on this repository${lease.taskId ? ` (${lease.taskId})` : ''}. Wait for it to finish.`, { heldBy: lease.heldBy, taskId: lease.taskId });
     }
+  }
+  const inserted = await store.insertCommand({ ...command, taskId: operation.op.startsWith('task.') ? (params.id ?? null) : null, leaseFingerprint });
+  // The same key raced in from a parallel request: answer with that one; never a second command.
+  if (!inserted.created) {
+    if (leaseFingerprint) await store.repointLease(leaseFingerprint, command.id, inserted.command.id);
+    return commandResponse(waitFromRow(inserted.command));
   }
   await store.audit({ actor: identity.email, action: `command.${operation.op}`, nodeId: target.nodeId, target: params.id ?? null, result: 'created', detail: { commandId: command.id, payloadHash: command.payloadHash, queued }, requestId });
   // Persisted first; only now is the node told. A missed notification is repaired by the node's reconnect sync.
@@ -385,6 +412,18 @@ async function bindPrecondition(request: Request, store: CloudStore, nodeId: str
     return { kind: 'taskVersion', taskId: params.id, version };
   }
   return null;
+}
+
+/** What an earlier command with the same key produced, in the shape a live wait would give. */
+function waitFromRow(row: CommandRow): CommandWait {
+  const view = commandView(row);
+  if (row.status !== 'succeeded' && row.status !== 'failed') return { status: row.status, command: view };
+  return {
+    status: row.status,
+    command: view,
+    ...(row.result_status ? { outcome: { httpStatus: row.result_status, body: row.result_body ? JSON.parse(row.result_body) : null } } : {}),
+    ...(row.error_code ? { error: { code: row.error_code, message: row.error_message ?? '' } } : {}),
+  };
 }
 
 function commandResponse(w: CommandWait): Response {

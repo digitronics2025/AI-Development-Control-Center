@@ -39,4 +39,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @acc/dashboard build
       - name: Migrate D1, then deploy, then check
-        run: node apps/cloud-control/scripts/deploy.mjs ${{ inputs.environment }}
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+        run: node apps/cloud-control/scripts/deploy.mjs "$TARGET_ENV"

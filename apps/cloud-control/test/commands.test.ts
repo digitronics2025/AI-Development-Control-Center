@@ -144,6 +144,37 @@ describe('commands and history', () => {
     expect([...a.t.services.store.listTasks({}), ...b.t.services.store.listTasks({})].some((x) => x.id === auto.body.id)).toBe(true);
   });
 
+  it('answers a repeated request once, refuses a reused key, and holds the lease until every task on the repository is done', async () => {
+    const remote = 'https://github.com/example/held.git';
+    const a = await node({ delayMs: 1_500, repos: [await repoWithRemote(remote)] });
+    const b = await node({ repos: [await repoWithRemote(remote)] });
+    const [lease] = await cloud.d1(`SELECT fingerprint FROM node_repositories WHERE node_id = '${a.nodeId}'`);
+    const key = { 'x-acc-node': a.nodeId, 'idempotency-key': `idem-${Date.now()}` };
+    const first = await cloud.api('POST', '/api/tasks', taskBody(a.repoIds[0]!, 'Once only'), key);
+    expect(first.status).toBe(201);
+    const again = await cloud.api('POST', '/api/tasks', taskBody(a.repoIds[0]!, 'Once only'), key);
+    expect(again.status).toBe(201);
+    expect(again.headers.get('x-acc-command-id')).toBe(first.headers.get('x-acc-command-id'));
+    expect(again.body.id).toBe(first.body.id);
+    expect(a.t.services.store.listTasks({}).filter((x) => x.description === 'Once only')).toHaveLength(1);
+    const reused = await cloud.api('POST', '/api/tasks', taskBody(a.repoIds[0]!, 'Something else'), key);
+    expect(reused).toMatchObject({ status: 422, body: { error: { code: 'IDEMPOTENCY_MISMATCH' } } });
+
+    // A second task on the same repository that ends first must not free the repository while the first still runs.
+    const second = await cloud.api('POST', '/api/tasks', taskBody(a.repoIds[0]!, 'Short second task', { start: false }), { 'x-acc-node': a.nodeId });
+    expect(second.status).toBe(201);
+    expect((await cloud.api('POST', `/api/tasks/${second.body.id}/cancel`, {}, { 'x-acc-node': a.nodeId })).status).toBeLessThan(300);
+    await waitFor(async () => (await cloud.d1(`SELECT status FROM cloud_tasks WHERE task_id = '${second.body.id}'`))[0]?.status, (s) => s === 'CANCELLED', 20_000, 'second task mirrored as cancelled');
+    expect(a.t.services.store.getTask(first.body.id)!.status).not.toBe('COMPLETED');
+    expect((await cloud.d1(`SELECT released_at FROM repository_leases WHERE fingerprint = '${lease.fingerprint}'`))[0].released_at).toBeNull();
+    const blocked = await cloud.api('POST', '/api/tasks', taskBody(b.repoIds[0]!, 'Not yet'), { 'x-acc-node': b.nodeId });
+    expect(blocked).toMatchObject({ status: 409, body: { error: { code: 'LEASE_CONFLICT' } } });
+    expect(b.t.services.store.listTasks({})).toHaveLength(0);
+    // When the last task on it ends, the repository is free again.
+    await waitForStatus(a.t, first.body.id, ['COMPLETED'], 120_000);
+    await waitFor(async () => (await cloud.d1(`SELECT released_at FROM repository_leases WHERE fingerprint = '${lease.fingerprint}'`))[0]?.released_at, Boolean, 30_000, 'lease released after the last task');
+  });
+
   it('survives a control-plane restart: the node reconnects and history is intact', async () => {
     const { t, nodeId } = await node();
     const connections = (await cloud.d1(`SELECT connected_at FROM nodes WHERE id = '${nodeId}'`))[0].connected_at;

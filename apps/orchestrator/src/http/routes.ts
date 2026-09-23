@@ -430,7 +430,7 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     const patch = updateSettingsSchema.parse(request.body);
     if (patch.defaultWorkflowId) s.workflows.get(patch.defaultWorkflowId);
     const before = s.settings.get().billingMode;
-    const next = s.settings.update(patch);
+    const next = s.settings.update(request.body as typeof patch); // the raw body: only the keys sent change
     // Billing mode changes what "connected" means; re-verify every agent.
     if (patch.billingMode && patch.billingMode !== before) void s.agents.refresh();
     return next;

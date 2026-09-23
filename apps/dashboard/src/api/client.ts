@@ -26,7 +26,10 @@ export interface ApiConfig {
   auth: ApiAuth;
 }
 
-/** A random key per mutation, so a retried request never runs twice in the cloud. */
+/**
+ * A fresh key per action. The cloud answers a repeat of the same request (same key) with the
+ * first result instead of creating a second command; pressing the button again is a new action.
+ */
 function idempotencyKey(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);

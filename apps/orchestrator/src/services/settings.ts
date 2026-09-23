@@ -17,6 +17,26 @@ export const DEFAULT_ROLE_DEFAULTS: RoleAssignments = {
 
 const KEY = 'settings';
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * A settings patch applied as people mean it: only the keys sent change, and a
+ * section sent in part (`{ execution: { terminals: false } }`) keeps its other
+ * fields. Parsing the patch alone would not do: zod fills every missing key with
+ * its default, which silently reset the auto-approve level and policy.
+ */
+export function mergeSettings(current: Settings, patch: unknown): Settings {
+  updateSettingsSchema.parse(patch); // the same validation errors as before
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    const existing = (current as unknown as Record<string, unknown>)[key];
+    next[key] = isPlainObject(value) && isPlainObject(existing) ? { ...existing, ...value } : value;
+  }
+  return settingsSchema.parse(next);
+}
+
 export class SettingsService {
   constructor(
     private readonly store: Store,
@@ -35,8 +55,7 @@ export class SettingsService {
   }
 
   update(patch: UpdateSettingsInput): Settings {
-    const valid = updateSettingsSchema.parse(patch);
-    const next = settingsSchema.parse({ ...this.get(), ...valid });
+    const next = mergeSettings(this.get(), patch);
     this.store.setSetting(KEY, next);
     this.bus.publish({ type: 'settings', settings: next });
     return next;

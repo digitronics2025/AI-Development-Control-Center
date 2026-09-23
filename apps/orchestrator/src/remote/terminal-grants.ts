@@ -128,7 +128,7 @@ export class TerminalGrants {
         continue;
       }
       if (ch === '\x7f' || ch === '\b') {
-        g.line = g.line.slice(0, -1);
+        g.line = Array.from(g.line).slice(0, -1).join(''); // one character, not one UTF-16 unit (emoji)
         out += ch;
         continue;
       }

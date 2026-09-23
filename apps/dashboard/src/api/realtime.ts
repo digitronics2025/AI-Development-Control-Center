@@ -144,7 +144,8 @@ export class RealtimeClient {
         const relayed = JSON.parse(String(event.data)) as RelayedServerMessage;
         if (this.routing) {
           if (relayed.type === 'remote.node' || relayed.type === 'remote.command') {
-            this.routing.onCloudMessage(relayed);
+            // Only the cloud itself sends these; one relayed from a node (it carries a nodeId) is an impersonation attempt.
+            if (!relayed.nodeId) this.routing.onCloudMessage(relayed);
             return;
           }
           if (!this.routing.accept(relayed)) return;

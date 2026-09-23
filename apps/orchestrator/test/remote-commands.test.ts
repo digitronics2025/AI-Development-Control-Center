@@ -169,6 +169,52 @@ describe('remote commands', () => {
     expect((await outcome(r, renamed.id)).payload).toMatchObject({ outcome: { httpStatus: 200 } });
     expect(t.services.agents.list().find((a) => a.id === agentId)!.settings.executablePath).toBeNull();
     expect(t.services.workflows.get(custom.id).stages[0]!.requiresApproval).toBe(true);
+
+    // Discovery roots register every repository under them; removed repositories stay removed.
+    const root = await makeRepo();
+    const addRoot = await r.command(nodeId, 'settings.update', {}, { repositoryAutomation: { roots: [root] } });
+    t.services.settings.update({ repositoryAutomation: { ...t.services.settings.get().repositoryAutomation, ignoredPaths: [root] } });
+    const unignore = await r.command(nodeId, 'settings.update', {}, { repositoryAutomation: { ignoredPaths: [] } });
+    // A section sent in part keeps its other fields: neither the ignore list nor the policy is reset to a default.
+    t.services.settings.update({ execution: { ...t.services.settings.get().execution, policyMode: 'safe' } });
+    const partial = await r.command(nodeId, 'settings.update', {}, { repositoryAutomation: { intervalMinutes: 30 } });
+    const terminalsOnly = await r.command(nodeId, 'settings.update', {}, { execution: { terminals: false } });
+    const themeOnly = await r.command(nodeId, 'settings.update', {}, { theme: 'light' });
+    for (const c of [addRoot, unignore, partial, terminalsOnly, themeOnly]) r.deliver(c);
+    expect((await outcome(r, addRoot.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN' });
+    expect((await outcome(r, unignore.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN' });
+    for (const c of [partial, terminalsOnly, themeOnly]) expect((await outcome(r, c.id)).payload).toMatchObject({ outcome: { httpStatus: 200 } });
+    expect(t.services.settings.get().repositoryAutomation).toMatchObject({ roots: [], ignoredPaths: [root], intervalMinutes: 30 });
+    expect(t.services.settings.get().execution).toMatchObject({ policyMode: 'safe', terminals: false });
+    expect(t.services.settings.get().theme).toBe('light');
+
+    // Clearing a repository's stricter override falls back to Settings: that is loosening too.
+    const repoId = await addRepo(t, await makeRepo());
+    t.services.settings.update({ autoApproveUpToLevel: 3, execution: { ...t.services.settings.get().execution, policyMode: 'autopilot' } });
+    await t.api('PATCH', `/api/repositories/${repoId}`, { autoApproveUpToLevel: 1, policyMode: 'safe' });
+    const clearLevel = await r.command(nodeId, 'repository.update', { id: repoId }, { autoApproveUpToLevel: null });
+    const clearPolicy = await r.command(nodeId, 'repository.update', { id: repoId }, { policyMode: null });
+    for (const c of [clearLevel, clearPolicy]) r.deliver(c);
+    expect((await outcome(r, clearLevel.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN' });
+    expect((await outcome(r, clearPolicy.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN' });
+    expect(t.services.store.getRepository(repoId)).toMatchObject({ autoApproveUpToLevel: 1, policyMode: 'safe' });
+  });
+
+  it('ignores malformed cloud messages and refuses an approval decision not bound to what was seen', async () => {
+    const { r, t, nodeId } = await paired();
+    for (const bad of [
+      { type: 'sync.ack', payload: null },
+      { type: 'rpc.request', payload: { requestId: 'x1', op: 'artifact.content', deadline: new Date().toISOString(), params: { id: '../../etc' } } },
+      { type: 'subscriptions', payload: { logs: 'nope' } },
+      { type: 'terminal.resize', payload: { terminalId: 't', cols: -1, rows: 1e9 } },
+      { type: 'no.such.message', payload: {} },
+    ]) r.send(bad);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(t.services.remote.status().state).toBe('connected');
+    expect((await t.api('GET', '/api/health')).status).toBe(200);
+    const approve = await r.command(nodeId, 'approval.approve', { id: 'apr-unbound' }, {});
+    r.deliver(approve);
+    expect((await outcome(r, approve.id)).payload).toMatchObject({ code: 'REMOTE_INVALID' });
   });
 
   it('answers typed reads and refuses anything outside the catalog', async () => {

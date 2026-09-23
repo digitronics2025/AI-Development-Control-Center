@@ -382,7 +382,7 @@ export const nodeFrameSchema = z.discriminatedUnion('type', [
       contentType: z.string().max(200),
       /** Response text (JSON, or base64 when `encoding` says so), split when large. */
       chunk: z.string(),
-      index: z.number().int().min(0),
+      index: z.number().int().min(0).max(63),
       total: z.number().int().min(1).max(64),
       encoding: z.enum(['utf8', 'base64']),
     }),
@@ -409,6 +409,30 @@ export type CloudFrame =
   | { v: number; id: string; at: string; type: 'node.revoked'; payload: { reason: string } };
 
 export const cloudFrameSchema = z.object({ v: z.number().int(), id: z.string().max(120), at: isoSchema, type: z.string().max(60), payload: z.unknown() });
+
+const shortId = z.string().min(1).max(120);
+const seq = z.number().int().min(0);
+/** Payload of each cloud → node message; anything that does not match is ignored by the node. */
+export const cloudFramePayloadSchemas: Record<CloudFrame['type'], z.ZodType> = {
+  'session.welcome': z.object({ nodeId: shortId, protocolVersion: z.number().int(), minProtocolVersion: z.number().int(), ackedSeq: seq, serverTime: z.string().max(40) }),
+  'command.available': z.object({ command: z.unknown() }), // the dispatcher validates the command itself
+  'sync.ack': z.object({ upToSeq: seq }),
+  'command.ack': z.object({ commandId: shortId }),
+  'sync.complete': z.object({ pending: seq }),
+  'rpc.request': z.object({
+    requestId: shortId,
+    op: z.string().min(1).max(80),
+    params: z.record(z.string().min(1).max(60), pathParamSchema).default({}),
+    query: remoteQuerySchema.default({}),
+    body: z.unknown().optional(),
+    deadline: z.string().max(40),
+  }),
+  subscriptions: z.object({ logs: z.array(shortId).max(200), terminals: z.array(shortId).max(100) }),
+  'terminal.input': z.object({ terminalId: shortId, data: z.string().max(64 * 1024) }),
+  'terminal.resize': z.object({ terminalId: shortId, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  'node.rotate': z.object({ requestedBy: z.string().max(320) }),
+  'node.revoked': z.object({ reason: z.string().max(200) }),
+};
 
 export function frame<T extends { type: string; payload: unknown }>(message: T, id: string = crypto.randomUUID()): T & { v: number; id: string; at: string } {
   return { v: REMOTE_PROTOCOL_VERSION, id, at: new Date().toISOString(), ...message };

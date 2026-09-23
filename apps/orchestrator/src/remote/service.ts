@@ -1,5 +1,6 @@
 import os from 'node:os';
 import {
+  cloudFramePayloadSchemas,
   cloudFrameSchema,
   defaultArtifactSensitivity,
   frame,
@@ -176,6 +177,7 @@ export class RemoteNodeService {
         return this.store.syncObject(`artifact:${artifactId}`)?.sensitivity ?? defaultArtifactSensitivity(rec.type);
       },
       onTerminalOpened: (terminalId) => this.grants.grant(terminalId),
+      terminalGranted: (terminalId) => this.grants.has(terminalId),
     });
     this.uploads = new UploadQueue({
       remote: this.store,
@@ -458,10 +460,21 @@ export class RemoteNodeService {
     }
     const parsed = cloudFrameSchema.safeParse(raw);
     if (!parsed.success) return;
-    const message = parsed.data as unknown as CloudFrame;
+    const payloadSchema = cloudFramePayloadSchemas[parsed.data.type as CloudFrame['type']];
+    const payload = payloadSchema?.safeParse(parsed.data.payload);
+    if (!payload?.success) return; // unknown or malformed: ignored, never a crash
+    const message = { ...parsed.data, payload: payload.data } as unknown as CloudFrame;
+    try {
+      this.handleCloudFrame(message);
+    } catch (error) {
+      console.warn('[remote] could not handle a cloud message', message.type, (error as Error).message);
+    }
+  }
+
+  private handleCloudFrame(message: CloudFrame): void {
     switch (message.type) {
       case 'session.welcome':
-        return void this.onWelcome(message.payload);
+        return void this.onWelcome(message.payload).catch((error: unknown) => console.warn('[remote] welcome failed', (error as Error).message));
       case 'sync.ack':
         this.store.acknowledge(Math.min(message.payload.upToSeq, this.store.lastIssuedSeq()));
         this.inflightBatches = Math.max(0, this.inflightBatches - 1);
@@ -472,7 +485,7 @@ export class RemoteNodeService {
       case 'command.ack':
         return this.store.markReported(message.payload.commandId);
       case 'rpc.request':
-        return void this.answerRpc(message.payload);
+        return void this.answerRpc(message.payload).catch((error: unknown) => console.warn('[remote] read failed', (error as Error).message));
       case 'subscriptions':
         this.logSubscriptions.clear();
         for (const id of message.payload.logs.slice(0, 100)) this.logSubscriptions.add(id);

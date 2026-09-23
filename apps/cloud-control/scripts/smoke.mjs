@@ -6,8 +6,9 @@
 // Proves, from the public internet, that: both hostnames answer /health; the
 // control host refuses the dashboard, the API and realtime without a Cloudflare
 // Access sign-in (fail closed); the relay host serves no dashboard; the relay
-// rejects an unknown node; workers.dev serves nothing.
+// rejects an unknown node and a forged session on a real WebSocket upgrade.
 import { readFileSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -50,7 +51,31 @@ await check('control realtime without sign-in is refused', `https://${control}/w
 await check('control API with a forged token is refused', `https://${control}/api/tasks`, { headers: { 'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.eyJ9.e30' } }, refused);
 await check('relay serves no dashboard', `https://${relay}/`, {}, (s) => s === 404);
 await check('relay rejects an unknown node', `https://${relay}/node/v1/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nodeId: 'node_smoke0000000000000000' }) }, (s) => s === 404);
-await check('relay refuses a forged session', `https://${relay}/node/v1/connect`, { headers: { authorization: 'Bearer accs1.e30.AAAA' } }, (s) => s === 401 || s === 426);
+
+// fetch cannot send upgrade headers, so the forged session goes through a raw WebSocket handshake:
+// anything but 101 Switching Protocols is a refusal, and only 401 proves the session itself was checked.
+function upgradeStatus(url, headers) {
+  return new Promise((resolve) => {
+    const req = httpsRequest(url, { headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'ZmFrZS1zbW9rZS1rZXktMTY=', ...headers }, timeout: 15_000 });
+    req.on('response', (res) => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('upgrade', (res, socket) => {
+      socket.destroy();
+      resolve(101);
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(0));
+    req.end();
+  });
+}
+{
+  const status = await upgradeStatus(`https://${relay}/node/v1/connect`, { authorization: 'Bearer accs1.e30.AAAA' });
+  const ok = status === 401;
+  if (!ok) failures++;
+  console.log(`${ok ? '✓' : '✗'} relay refuses a forged session on a WebSocket upgrade: ${status || 'no answer'}`);
+}
 
 console.log(failures ? `\n✗ ${failures} check(s) failed.` : '\n✓ All live checks passed.');
 process.exit(failures ? 1 : 0);

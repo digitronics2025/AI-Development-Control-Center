@@ -143,6 +143,13 @@ describe('egress field rules', () => {
     expect(scrubbed.nested.apiKey).toBeUndefined();
     expect(scrubbed.nested.text).toBe(`opened <repo:secret-project>${path.sep === '\\' ? '\\' : '\\'}src\\a.ts and <home>/notes.txt and <path>/file.log`);
   });
+
+  it('scrubs JSON-escaped drive paths and network shares, and leaves ordinary text alone', () => {
+    expect(sanitizer.scrubText('"D:\\\\Other\\\\secret\\\\plan.txt"')).toBe('"<path>/plan.txt"');
+    expect(sanitizer.scrubText('ran \\\\fileserver\\team\\secret\\tool.exe')).toBe('ran <path>/tool.exe');
+    expect(sanitizer.scrubText('"\\\\\\\\fileserver\\\\team\\\\tool.exe"')).toBe('"<path>/tool.exe"');
+    expect(sanitizer.scrubText('ratio 3:4, a \\n escape and https://example.com/a/b')).toBe('ratio 3:4, a \\n escape and https://example.com/a/b');
+  });
 });
 
 describe('uploads', () => {

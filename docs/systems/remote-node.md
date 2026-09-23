@@ -7,7 +7,7 @@ sources:
   - packages/shared/src/remote-operations.ts
   - apps/dashboard/src/components/remote-access.tsx
   - apps/dashboard/src/api/remote.ts
-verified_at: 010ac0f
+verified_at: 953e754
 ---
 
 # Remote execution node
@@ -58,6 +58,10 @@ a ping every 30 s. A refused session with `NODE_REVOKED`/`NODE_NOT_FOUND` or a
 close code `4003` stops retrying (`revoked`); `426`/`4026` or a welcome that
 requires a newer protocol stops with `update-required`.
 
+Every cloud message is checked against its own payload schema
+(`cloudFramePayloadSchemas` in [remote.ts](../../packages/shared/src/remote.ts));
+an unknown or malformed one is ignored and can never crash the node.
+
 States (`RemoteLinkState`): `unpaired`, `disabled`, `connecting`, `connected`,
 `offline`, `revoked`, `update-required`. Every change is published locally as a
 `remote.status` message (never relayed).
@@ -95,16 +99,20 @@ A restart marks running receipts `interrupted`: they are reported as
 in order; different targets run side by side.
 
 Preconditions: `taskVersion` for `task.update/start/retry/reroute/assignments`
-(stale → `REMOTE_CONFLICT`); `approval` for approve/deny — the SHA-256 of the
-approval's sanitized view (`approvalBindingHash`) must match what the cloud
-mirrored.
+(stale → `REMOTE_CONFLICT`; optional — sent when the person saw a version);
+`approval` for approve/deny — required, and the SHA-256 of the approval's
+sanitized view (`approvalBindingHash`) must match what the cloud mirrored.
 
 Remote guards ([guards.ts](../../apps/orchestrator/src/remote/guards.ts)) refuse
 what only the machine may decide: billing mode, raising auto-approve levels, a
 more permissive policy (settings, repository, task), editing a repository's
 commands or dev command, choosing an agent's program (`executablePath`),
-removing the approval step from a workflow stage that has one, and
-attachments. Lowering is allowed.
+removing the approval step from a workflow stage that has one, adding a
+repository-discovery folder or un-ignoring a removed repository, and
+attachments. Lowering is allowed. Settings are judged as they would be saved
+(`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
+and a repository override set to `null` is judged by the Settings value it falls
+back to.
 
 ## Reads
 
@@ -129,9 +137,10 @@ mirrored event, live message, command result and read:
    keys named `env`, `token`, `apiKey`, `secret`, `password`, `authorization`,
    `cookie`, `ciphertext`, `privateKey`… dropped at any depth.
 3. Deep scrub: repository roots → `<repo:name>`, the data folder →
-   `<acc-data>`, the home folder → `<home>`, any other absolute path → its last
-   segment; then the shared redactor (credential values, environment secrets,
-   token formats, the local API token).
+   `<acc-data>`, the home folder → `<home>`, any other absolute path (a drive
+   path, also JSON-escaped, or a network share) → its last segment; then the
+   shared redactor (credential values, environment secrets, token formats, the
+   local API token). Plain-text fallbacks get the redactor too.
 
 ## Outbox and sync
 
@@ -164,7 +173,10 @@ shell). Escape sequences and Tab are dropped, because history recall and
 completion would change the line without the classifier seeing it. A Level 5
 line is refused remotely rather than turned into an approval: the approval gate
 is task-bound and a free terminal has no task. Switching remote access or remote
-terminals off revokes every grant.
+terminals off revokes every grant. Reading, resizing or closing a
+terminal from the cloud also needs its grant: local and agent terminals are
+never touched remotely. The cloud refuses keystrokes from a browser whose
+sign-in is older than one hour.
 
 ## Uploads
 
@@ -175,12 +187,16 @@ gets a sync policy once (`defaultArtifactSensitivity` in
 `safe_sync` unless larger than 25 MB. The cloud receives a manifest either way,
 the bytes only for `safe_sync`/`user_shared`. A finished execution's log becomes
 chunks of at most 1 MB of whole lines. Text is scrubbed and redacted again right
-before upload; the SHA-256 of the exact bytes travels with them
+before upload (upload errors too); the SHA-256 of the exact bytes travels with them
 (`PUT /node/v1/artifacts/:id`, `PUT /node/v1/logs/:executionId/:index`) and R2
 verifies it on write. Uploads run in the background while connected; a failure
 backs off from 30 s doubling to 1 h (manifest `failed` after 8 attempts) and
 never changes the task — the local file stays the source of truth. Shutdown
 stops the queue first, and no upload writes after the database closes.
+
+The sync policy decides what is **stored** in the cloud. Live reads while the
+node is online (a task's diff, Source Control diffs) still travel over RPC,
+redacted and path-scrubbed, and are never stored there.
 
 ## Local routes and UI
 

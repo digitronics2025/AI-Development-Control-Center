@@ -24,7 +24,12 @@ import { CloudStore, commandFromRow, commandView } from './store.js';
 
 type Attachment =
   | { kind: 'node'; nodeId: string; protocol: number; lastTouch: number }
-  | { kind: 'browser'; user: string; logs: string[]; terminals: string[] };
+  | { kind: 'browser'; user: string; signedInAt: number; logs: string[]; terminals: string[] };
+
+/** Terminal keystrokes need a sign-in no older than this (the same rule as opening one). */
+const TERMINAL_SIGN_IN_S = 60 * 60;
+/** `remote.*` messages come from the cloud itself; a node may never send one (it could impersonate another node). */
+const fromNodeAllowed = (m: Record<string, unknown>): boolean => typeof m.type === 'string' && !m.type.startsWith('remote.');
 
 interface RpcWaiter {
   nodeId: string;
@@ -148,11 +153,12 @@ export class WorkspaceHub extends DurableObject<Env> {
 
   private acceptBrowser(request: Request): Response {
     const user = request.headers.get('x-acc-user');
+    const signedInAt = Number(request.headers.get('x-acc-signed-in') ?? '0');
     if (!user || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Bad request', { status: 400 });
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server, ['browser']);
-    server.serializeAttachment({ kind: 'browser', user, logs: [], terminals: [] } satisfies Attachment);
+    server.serializeAttachment({ kind: 'browser', user, signedInAt: Number.isFinite(signedInAt) ? signedInAt : 0, logs: [], terminals: [] } satisfies Attachment);
     server.send(JSON.stringify({ type: 'hello', version: 'cloud', serverTime: nowIso(), startedAt: nowIso() }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -238,6 +244,10 @@ export class WorkspaceHub extends DurableObject<Env> {
         const terminalId = id(m.terminalId);
         const nodeId = id(m.nodeId);
         if (!terminalId || !nodeId || !a.terminals.includes(terminalId)) return;
+        if (Date.now() / 1000 - a.signedInAt > TERMINAL_SIGN_IN_S) {
+          ws.send(JSON.stringify({ type: 'terminal.output', terminalId, nodeId, data: '\r\n[Sign in again (within the last hour) to type in a remote terminal.]\r\n', cursor: 0, notice: true }));
+          return;
+        }
         if (m.type === 'terminal.input' && typeof m.data === 'string' && m.data.length <= 64 * 1024) this.sendNode(nodeId, { type: 'terminal.input', payload: { terminalId, data: m.data } });
         if (m.type === 'terminal.resize') this.sendNode(nodeId, { type: 'terminal.resize', payload: { terminalId, cols: Number(m.cols), rows: Number(m.rows) } });
         return;
@@ -312,6 +322,8 @@ export class WorkspaceHub extends DurableObject<Env> {
           if (!(await this.store.touch(nodeId))) {
             this.sendNode(nodeId, { type: 'node.revoked', payload: { reason: 'revoked' } });
             ws.close(4003, 'revoked');
+          } else {
+            await this.store.releaseIdleLeases(nodeId); // catches anything the event path could not decide yet
           }
         }
         return;
@@ -319,12 +331,12 @@ export class WorkspaceHub extends DurableObject<Env> {
       case 'event.batch': {
         const { fresh, ackedSeq } = await this.store.ingest(nodeId, f.payload.events);
         this.sendNode(nodeId, { type: 'sync.ack', payload: { upToSeq: ackedSeq } });
-        for (const e of fresh) if (e.kind === 'message') this.broadcast(e.payload as Record<string, unknown>, nodeId);
+        for (const e of fresh) if (e.kind === 'message' && fromNodeAllowed(e.payload as Record<string, unknown>)) this.broadcast(e.payload as Record<string, unknown>, nodeId);
         return;
       }
       case 'event.live': {
         const m = f.payload.message as Record<string, unknown> | null;
-        if (m && typeof m.type === 'string') this.broadcast(m, nodeId);
+        if (m && fromNodeAllowed(m)) this.broadcast(m, nodeId);
         return;
       }
       case 'sync.request': {
@@ -347,7 +359,7 @@ export class WorkspaceHub extends DurableObject<Env> {
         // Acknowledge even a duplicate: the node stops replaying it.
         this.sendNode(nodeId, { type: 'command.ack', payload: { commandId } });
         if (!row) return;
-        await this.afterCommand(row.id, row.op, to, outcome.body);
+        await this.afterCommand(nodeId, row.id, row.op, to, outcome.body);
         const view = commandView(row);
         this.broadcast({ type: 'remote.command', command: view });
         this.resolveCommand(commandId, { status: view.status, command: view, outcome });
@@ -358,7 +370,7 @@ export class WorkspaceHub extends DurableObject<Env> {
         const row = await this.store.transition(commandId, nodeId, status, { errorCode: code, errorMessage: message });
         this.sendNode(nodeId, { type: 'command.ack', payload: { commandId } });
         if (!row) return;
-        await this.afterCommand(row.id, row.op, 'failed', null);
+        await this.afterCommand(nodeId, row.id, row.op, 'failed', null);
         const view = commandView(row);
         this.broadcast({ type: 'remote.command', command: view });
         this.resolveCommand(commandId, { status: view.status, command: view, error: { code, message } });
@@ -367,7 +379,7 @@ export class WorkspaceHub extends DurableObject<Env> {
       case 'rpc.response': {
         const p = f.payload;
         const w = this.rpcWaiters.get(p.requestId);
-        if (!w || w.nodeId !== nodeId) return;
+        if (!w || w.nodeId !== nodeId || p.index >= p.total) return;
         w.meta ??= { httpStatus: p.httpStatus, contentType: p.contentType, encoding: p.encoding };
         w.chunks[p.index] = p.chunk;
         const received = w.chunks.filter((c) => c !== undefined);
@@ -385,25 +397,25 @@ export class WorkspaceHub extends DurableObject<Env> {
         }
         return;
       }
-      case 'artifact.manifest':
+      case 'artifact.manifest': {
+        // An artifact the node now keeps local-only leaves the cloud entirely.
+        const previousKey = f.payload.sensitivity === 'local_only' ? ((await this.store.manifest(nodeId, f.payload.artifactId))?.r2_key ?? null) : null;
         await this.store.upsertManifest(nodeId, f.payload);
+        if (previousKey) await this.env.ARTIFACTS.delete(previousKey);
         return;
+      }
       case 'log.chunk.manifest':
         // The chunk itself arrives by HTTP upload, which records it; the frame is informational.
         return;
     }
   }
 
-  /** Lease bookkeeping once a command ends. */
-  private async afterCommand(commandId: string, op: string, status: 'succeeded' | 'failed', body: unknown): Promise<void> {
+  /** Lease bookkeeping once a command ends: remember the task it started, then free whatever is idle. */
+  private async afterCommand(nodeId: string, commandId: string, op: string, status: 'succeeded' | 'failed', body: unknown): Promise<void> {
     if (op !== 'task.create' && op !== 'task.start') return;
     const taskId = (body as { id?: unknown } | null)?.id;
-    if (status === 'succeeded' && typeof taskId === 'string') {
-      await this.store.bindLeaseTask(commandId, taskId);
-      await this.store.setCommandTask(commandId, taskId);
-    } else {
-      await this.store.releaseLeaseForCommand(commandId);
-    }
+    if (status === 'succeeded' && typeof taskId === 'string') await this.store.setCommandTask(commandId, taskId);
+    await this.store.releaseIdleLeases(nodeId);
   }
 
   private resolveCommand(commandId: string, w: CommandWait): void {

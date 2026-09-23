@@ -78,6 +78,17 @@ describe('remote terminals', () => {
     expect(output(r, local.id)).toBe('');
     const read = (await t.api('GET', `/api/terminals/${local.id}/output`)).body as { output: string };
     expect(read.output).not.toContain('sneaky-7777');
+    // Nor can the cloud read, resize or close it.
+    expect((await r.rpc('terminal.output', { id: local.id })).httpStatus).toBe(403);
+    const close = await r.command(t.services.remote.status().nodeId!, 'terminal.close', { id: local.id }, undefined);
+    const resize = await r.command(t.services.remote.status().nodeId!, 'terminal.resize', { id: local.id }, { cols: 90, rows: 20 });
+    r.deliver(close);
+    r.deliver(resize);
+    for (const c of [close, resize]) {
+      await waitFor(() => r.results.get(c.id)?.length ?? 0, (n) => n > 0, 15_000, 'refusal');
+      expect(r.results.get(c.id)![0]).toMatchObject({ type: 'command.failed', payload: { code: 'REMOTE_FORBIDDEN' } });
+    }
+    expect((await t.api('GET', `/api/terminals/${local.id}/output`)).status).toBe(200);
   });
 
   it('closes when the grant runs out and when the node is revoked', async () => {

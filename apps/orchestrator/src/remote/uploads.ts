@@ -106,10 +106,12 @@ export class UploadQueue {
           failed++;
           const attempts = object.attempts + 1;
           const delay = Math.min(60 * 60_000, 30_000 * 2 ** Math.min(attempts, 7));
-          this.d.remote.markObject(object.objectKey, { status: 'failed', error: (error as Error).message.slice(0, 500), nextAttemptAt: new Date(this.now() + delay).toISOString(), attempted: true });
+          // The message can carry a local path (ENOENT …): it is scrubbed like everything else that leaves.
+          const message = this.d.egress.scrub((error as Error).message.slice(0, 500));
+          this.d.remote.markObject(object.objectKey, { status: 'failed', error: message, nextAttemptAt: new Date(this.now() + delay).toISOString(), attempted: true });
           if (object.kind === 'artifact') {
             const rec = this.d.store.getArtifact(object.objectKey.slice('artifact:'.length));
-            if (rec) this.d.target.manifest({ artifactId: rec.id, taskId: rec.taskId, name: rec.name, mime: rec.mime, size: rec.size, sha256: null, sensitivity: object.sensitivity, status: attempts >= MAX_ATTEMPTS ? 'failed' : 'pending', error: (error as Error).message.slice(0, 500) });
+            if (rec) this.d.target.manifest({ artifactId: rec.id, taskId: rec.taskId, name: rec.name, mime: rec.mime, size: rec.size, sha256: null, sensitivity: object.sensitivity, status: attempts >= MAX_ATTEMPTS ? 'failed' : 'pending', error: message });
           }
         }
       }

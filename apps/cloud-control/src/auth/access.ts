@@ -46,7 +46,12 @@ function tokenFrom(request: Request): string | null {
   if (header) return header.trim();
   const cookie = request.headers.get('cookie') ?? '';
   const match = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(cookie);
-  return match ? decodeURIComponent(match[1]!) : null;
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]!);
+  } catch {
+    return null; // a malformed cookie is no sign-in (401), not an error
+  }
 }
 
 function decodePart<T>(part: string): T {

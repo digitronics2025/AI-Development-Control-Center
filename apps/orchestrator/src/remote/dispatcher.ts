@@ -53,6 +53,8 @@ export interface DispatcherDeps {
   artifactPolicy: (artifactId: string) => 'safe_sync' | 'local_only' | 'user_shared' | null;
   /** A terminal the cloud opened: the service starts its grant. */
   onTerminalOpened?: (terminalId: string) => void;
+  /** Whether the cloud holds a live grant for this terminal (only terminals it opened). */
+  terminalGranted?: (terminalId: string) => boolean;
   now?: () => number;
 }
 
@@ -134,10 +136,19 @@ export class RemoteDispatcher {
     const operation = remoteOperation(command.op);
     if (!operation || operation.kind !== 'command') throw new Refusal('REMOTE_INVALID', `Unknown remote operation: ${command.op}`);
     this.checkGate(operation, config);
+    this.checkTerminalGrant(operation, command.params);
     const guard = guardRemoteCommand(operation.op, command.params, command.body, this.deps.guard());
     if (!guard.ok) throw new Refusal('REMOTE_FORBIDDEN', guard.message);
+    // An honest cloud always binds an approval decision to what the person saw.
+    if (operation.precondition === 'approval' && !command.precondition) throw new Refusal('REMOTE_INVALID', 'This decision is not bound to the approval you saw. Refresh and decide again.');
     if (command.precondition) await this.checkPrecondition(command.precondition, operation, command.params);
     return operation;
+  }
+
+  /** A terminal the cloud did not open (local, or an agent's) is never read, resized or closed from the cloud. */
+  private checkTerminalGrant(operation: RemoteOperation, params: Record<string, string>): void {
+    if (!operation.op.startsWith('terminal.') || params.id === undefined) return;
+    if (!this.deps.terminalGranted?.(params.id)) throw new Refusal('REMOTE_FORBIDDEN', 'This terminal was not opened from the cloud, or its remote session ended.');
   }
 
   private checkGate(operation: RemoteOperation, config: RemoteConfig): void {
@@ -168,7 +179,7 @@ export class RemoteDispatcher {
       try {
         body = this.deps.egress.response(JSON.parse(text));
       } catch {
-        body = { message: this.deps.egress.scrubText(text.slice(0, 2000)) };
+        body = { message: this.deps.egress.scrub(text.slice(0, 2000)) };
       }
     }
     if (JSON.stringify(body ?? null).length > MAX_RESULT_CHARS) body = { note: 'The result is too large to relay; the view refreshes from the node.' };
@@ -207,6 +218,7 @@ export class RemoteDispatcher {
     if (!operation || operation.kind !== 'read') return error(400, 'REMOTE_INVALID', `Unknown remote read: ${request.op}`);
     try {
       this.checkGate(operation, config);
+      this.checkTerminalGrant(operation, request.params);
     } catch (refusal) {
       return error(403, 'REMOTE_FORBIDDEN', (refusal as Error).message);
     }
@@ -226,7 +238,7 @@ export class RemoteDispatcher {
       if (response.rawPayload.length > REMOTE_LIMITS.rpcResponseBytes * 0.7) return error(413, 'REMOTE_INVALID', 'This file is too large to open remotely.');
       // Text downloads (CSV exports, text artifacts) are scrubbed like everything else; true binaries were redacted when written.
       if (/^(text\/|application\/(json|x-ndjson|csv))/.test(contentType)) {
-        return { httpStatus: response.statusCode, contentType, text: Buffer.from(this.deps.egress.scrubText(response.rawPayload.toString('utf8')), 'utf8').toString('base64'), encoding: 'base64' };
+        return { httpStatus: response.statusCode, contentType, text: Buffer.from(this.deps.egress.scrub(response.rawPayload.toString('utf8')), 'utf8').toString('base64'), encoding: 'base64' };
       }
       return { httpStatus: response.statusCode, contentType, text: response.rawPayload.toString('base64'), encoding: 'base64' };
     }
@@ -235,7 +247,7 @@ export class RemoteDispatcher {
     try {
       out = JSON.stringify(this.deps.egress.response(JSON.parse(text)));
     } catch {
-      out = this.deps.egress.scrubText(text);
+      out = this.deps.egress.scrub(text);
     }
     if (out.length > REMOTE_LIMITS.rpcResponseBytes) return error(413, 'REMOTE_INVALID', 'The answer is too large to relay. Narrow the request.');
     return { httpStatus: response.statusCode, contentType: contentType.startsWith('application/json') ? 'application/json' : contentType, text: out, encoding: 'utf8' };

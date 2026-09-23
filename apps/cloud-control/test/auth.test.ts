@@ -71,6 +71,8 @@ describe('people: Cloudflare Access on the control host', () => {
       expect(status, name).toBe(name === 'notAllowed' || name === 'noEmail' ? 403 : 401);
     }
     expect(await raw('/api/cloud/session', { 'cf-access-jwt-assertion': 'not.a.jwt' })).toBe(401);
+    // A malformed cookie is no sign-in, not a server error.
+    expect(await raw('/api/cloud/session', { cookie: 'CF_Authorization=%E0%A4%A' })).toBe(401);
     expect(await wsStatus({ origin: cloud.url, 'cf-access-jwt-assertion': cases.forged })).toBe(401);
   });
 

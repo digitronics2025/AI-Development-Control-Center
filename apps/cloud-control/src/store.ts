@@ -226,6 +226,10 @@ export class CloudStore {
     return { created: r.meta.changes > 0, command: row! };
   }
 
+  async commandByKey(createdBy: string, idempotencyKey: string): Promise<CommandRow | null> {
+    return this.db.prepare('SELECT * FROM remote_commands WHERE created_by = ? AND idempotency_key = ?').bind(createdBy, idempotencyKey).first<CommandRow>();
+  }
+
   async command(id: string): Promise<CommandRow | null> {
     return this.db.prepare('SELECT * FROM remote_commands WHERE id = ?').bind(id).first<CommandRow>();
   }
@@ -297,12 +301,37 @@ export class CloudStore {
     return { ok: false, heldBy: row?.node_id ?? 'unknown', taskId: row?.task_id ?? null };
   }
 
-  async bindLeaseTask(commandId: string, taskId: string): Promise<void> {
-    await this.db.prepare('UPDATE repository_leases SET task_id = ? WHERE command_id = ? AND released_at IS NULL').bind(taskId, commandId).run();
+  /**
+   * Release this node's leases on repositories where it has nothing left in flight: no
+   * undelivered or running command, and no task a command started that is still unfinished
+   * (or not mirrored yet). Judged from state rather than one remembered task, so a second task
+   * on the same repository keeps the lease until both are done. A lease whose latest command
+   * row is not written yet (it is written right after the lease) is kept too.
+   */
+  releaseIdleLeasesStatement(nodeId: string): D1PreparedStatement {
+    const now = Date.now();
+    return this.db
+      .prepare(
+        `UPDATE repository_leases SET released_at = ?
+         WHERE node_id = ? AND released_at IS NULL
+           AND EXISTS (SELECT 1 FROM remote_commands k WHERE k.id = repository_leases.command_id)
+           AND NOT EXISTS (
+             SELECT 1 FROM remote_commands c
+             WHERE c.node_id = repository_leases.node_id AND c.lease_fingerprint = repository_leases.fingerprint
+               AND (c.status IN ('pending', 'delivered', 'claimed')
+                 OR (c.status = 'succeeded' AND c.task_id IS NOT NULL AND c.finished_at > ?
+                   AND NOT EXISTS (SELECT 1 FROM cloud_tasks t WHERE t.node_id = c.node_id AND t.task_id = c.task_id AND t.status IN ('COMPLETED', 'CANCELLED', 'FAILED')))))`,
+      )
+      .bind(new Date(now).toISOString(), nodeId, new Date(now - LEASE_TTL_MS).toISOString());
   }
 
-  async releaseLeaseForCommand(commandId: string): Promise<void> {
-    await this.db.prepare('UPDATE repository_leases SET released_at = ? WHERE command_id = ? AND released_at IS NULL AND task_id IS NULL').bind(nowIso(), commandId).run();
+  /** The lease was taken for a command that turned out to be a repeat: point it at the command that exists. */
+  async repointLease(fingerprint: string, fromCommandId: string, toCommandId: string): Promise<void> {
+    await this.db.prepare('UPDATE repository_leases SET command_id = ? WHERE fingerprint = ? AND command_id = ?').bind(toCommandId, fingerprint, fromCommandId).run();
+  }
+
+  async releaseIdleLeases(nodeId: string): Promise<void> {
+    await this.releaseIdleLeasesStatement(nodeId).run();
   }
 
   // ----- mirrored history ------------------------------------------------------------------------
@@ -351,9 +380,7 @@ export class CloudStore {
             )
             .bind(nodeId, String(t.id), t.repositoryId ?? null, t.repositoryName ?? null, String(t.title ?? ''), String(t.status), Number(t.version ?? 0), String(t.createdAt ?? ts), String(t.updatedAt ?? ts), JSON.stringify(t)),
         ];
-        if ((TERMINAL_TASK_STATUSES as readonly string[]).includes(String(t.status)) || t.status === 'FAILED') {
-          out.push(this.db.prepare('UPDATE repository_leases SET released_at = ? WHERE node_id = ? AND task_id = ? AND released_at IS NULL').bind(ts, nodeId, String(t.id)));
-        }
+        if ((TERMINAL_TASK_STATUSES as readonly string[]).includes(String(t.status)) || t.status === 'FAILED') out.push(this.releaseIdleLeasesStatement(nodeId));
         return out;
       }
       case 'task.deleted':
@@ -412,8 +439,9 @@ export class CloudStore {
     await this.db
       .prepare(
         `INSERT INTO artifact_manifests (node_id, artifact_id, task_id, name, mime, size, sha256, sensitivity, status, r2_key, error, created_at, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (node_id, artifact_id) DO UPDATE SET status = CASE WHEN artifact_manifests.status = 'uploaded' AND excluded.status != 'uploaded' THEN artifact_manifests.status ELSE excluded.status END,
-           sha256 = COALESCE(excluded.sha256, artifact_manifests.sha256), r2_key = COALESCE(excluded.r2_key, artifact_manifests.r2_key), error = excluded.error, sensitivity = excluded.sensitivity,
+         ON CONFLICT (node_id, artifact_id) DO UPDATE SET status = CASE WHEN excluded.sensitivity = 'local_only' THEN 'local_only' WHEN artifact_manifests.status = 'uploaded' AND excluded.status != 'uploaded' THEN artifact_manifests.status ELSE excluded.status END,
+           sha256 = CASE WHEN excluded.sensitivity = 'local_only' THEN NULL ELSE COALESCE(excluded.sha256, artifact_manifests.sha256) END,
+           r2_key = CASE WHEN excluded.sensitivity = 'local_only' THEN NULL ELSE COALESCE(excluded.r2_key, artifact_manifests.r2_key) END, error = excluded.error, sensitivity = excluded.sensitivity,
            uploaded_at = COALESCE(excluded.uploaded_at, artifact_manifests.uploaded_at)`,
       )
       .bind(nodeId, m.artifactId, m.taskId, m.name, m.mime, m.size, m.sha256, m.sensitivity, m.status, m.r2Key ?? null, m.error, ts, m.status === 'uploaded' ? ts : null)
@@ -427,6 +455,11 @@ export class CloudStore {
   async manifestsForTask(nodeId: string, taskId: string): Promise<Array<Record<string, unknown>>> {
     const rows = await this.db.prepare('SELECT artifact_id, name, mime, size, sha256, sensitivity, status, error, uploaded_at FROM artifact_manifests WHERE node_id = ? AND task_id = ? ORDER BY created_at').bind(nodeId, taskId).all();
     return rows.results;
+  }
+
+  async logChunkKey(nodeId: string, executionId: string, chunkIndex: number): Promise<string | null> {
+    const row = await this.db.prepare('SELECT r2_key FROM log_chunks WHERE node_id = ? AND execution_id = ? AND chunk_index = ?').bind(nodeId, executionId, chunkIndex).first<{ r2_key: string }>();
+    return row?.r2_key ?? null;
   }
 
   async addLogChunk(nodeId: string, c: { executionId: string; taskId: string; chunkIndex: number; firstSeq: number; lastSeq: number; sha256: string; size: number; r2Key: string }): Promise<void> {

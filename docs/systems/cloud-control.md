@@ -7,7 +7,7 @@ sources:
   - apps/dashboard/src/pages/NodesPage.tsx
   - apps/dashboard/e2e-cloud/**
   - .github/workflows/**
-verified_at: 010ac0f
+verified_at: 953e754
 ---
 
 # Cloud control plane
@@ -93,10 +93,17 @@ picks an online node that has the same repository by fingerprint, preferring
   approvals, agents, repositories, usage events. Others: 503 `NODE_OFFLINE`.
 - **Mutations** become durable commands: body validated against the operation,
   node chosen, precondition bound (task version, or the approval's hash), the
-  command row written to D1 **before** the node is told, keyed by the
-  `Idempotency-Key` (a repeat returns the first answer, never a second command).
-  Repository-bound operations take a lease per repository fingerprint, so two
-  nodes never work on the same repository at once (409 `LEASE_CONFLICT`). The
+  command row written to D1 **before** the node is told. The `Idempotency-Key`
+  is looked up first: a repeat of the same request returns the first answer
+  (never a second command, even if the approval was decided or the node went
+  away meanwhile); the same key with a different request is 422
+  `IDEMPOTENCY_MISMATCH`. Repository-bound operations take a lease per
+  repository fingerprint **before** the command row exists, so two nodes never
+  work on the same repository at once (409 `LEASE_CONFLICT`). A lease is
+  released when its node has nothing left in flight on that repository: no
+  undelivered or running command and no unfinished (or not yet mirrored) task a
+  command started — checked after each command, each finished task and every
+  heartbeat. The
   request waits briefly for the result; a command still running answers 202
   with `x-acc-command-status`. A new task may be queued for an offline node
   (`x-acc-queue: 1`); anything else needs the node online.
@@ -112,12 +119,23 @@ claim and its result can never overtake each other.
 
 Browsers connect to `/ws` (same-origin, Access-verified); the hub forwards the
 node's live messages and mirrored events to every browser, tagged by node, and
-the dashboard keeps only the selected node's. Nodes send heartbeats; the hub
+the dashboard keeps only the selected node's. `remote.*` messages come only
+from the cloud: the hub drops any a node sends, and the dashboard ignores one
+that carries a `nodeId`, so a node cannot impersonate another. A node's answer
+keeps its content type only when it is JSON, plain text, CSV or a raster image;
+anything else is `application/octet-stream`, and every relayed answer carries
+`Content-Security-Policy: default-src 'none'; sandbox` (binary operations also
+`Content-Disposition: attachment`), so nothing a node returns runs as a page on
+the signed-in origin. Terminal keystrokes need a sign-in younger than one hour,
+as opening a terminal does. Nodes send heartbeats; the hub
 writes `last_seen_at` at most once a minute and checks revocation on that write.
 
 ## Retention (daily cron)
 
-Cloud copies only; nodes keep their own history. Artifact bytes, log chunks and
+Cloud copies only; nodes keep their own history. A replaced artifact or log
+chunk deletes its previous R2 object, a failed re-upload keeps the stored
+copy's hash, and an artifact the node marks `local_only` is deleted from R2 and
+no longer served. Artifact bytes, log chunks and
 task events: 90 days. Finished commands, expired pairing codes and released
 leases: 30 days. Usage events and audit: 400 days.
 
@@ -136,7 +154,7 @@ do (Settings → Remote access, attachments). See [dashboard.md](dashboard.md).
 | Task | Command |
 |---|---|
 | Release | `pnpm cloud:deploy:staging` / `pnpm cloud:deploy:production` ([deploy.mjs](../../apps/cloud-control/scripts/deploy.mjs)): refuses a test key set → applies D1 migrations (a failure stops before any code ships) → deploys → creates `NODE_SESSION_SECRET` on first release → live smoke |
-| Live check | `pnpm cloud:smoke` ([smoke.mjs](../../apps/cloud-control/scripts/smoke.mjs)): both `/health`, control host refuses dashboard/API/realtime/forged tokens, relay serves no dashboard and refuses unknown nodes and forged sessions |
+| Live check | `pnpm cloud:smoke` ([smoke.mjs](../../apps/cloud-control/scripts/smoke.mjs)): both `/health`, control host refuses dashboard/API/realtime/forged tokens, relay serves no dashboard, refuses unknown nodes, and answers a forged session on a real WebSocket upgrade with 401 |
 | Turn on Access | `pnpm cloud:access --env production --team <team>.cloudflareaccess.com --aud <tag> --email you@…` ([access-setup.mjs](../../apps/cloud-control/scripts/access-setup.mjs)) after creating a self-hosted Access application for the **control** hostname only; writes the three vars into wrangler.jsonc and releases. Commit the changed file. |
 | Pairing code without the dashboard | `pnpm cloud:admin pair-code --env production --label "Desk PC"` |
 | Emergency revocation | `pnpm cloud:admin revoke --env production --node node_…` — works with Access or the dashboard down (writes D1 through Wrangler); pending commands are rejected and leases released |

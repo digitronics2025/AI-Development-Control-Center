@@ -73,7 +73,10 @@ export interface EgressRoots {
   homeDir?: string;
 }
 
-const WINDOWS_PATH = /\b[A-Za-z]:[\\/](?:[^\\/\s"'<>|:*?]+[\\/])*[^\\/\s"'<>|:*?]*/g;
+// Separators may repeat: text that went through JSON escaping carries `D:\\x\\y`.
+const WINDOWS_PATH = /\b[A-Za-z]:[\\/]+(?:[^\\/\s"'<>|:*?]+[\\/]+)*[^\\/\s"'<>|:*?]*/g;
+/** Network shares: `\\server\share\…` (also JSON-escaped). */
+const UNC_PATH = /\\{2,}[^\\/\s"'<>|:*?]+(?:[\\/]+[^\\/\s"'<>|:*?]+)+/g;
 const POSIX_HOME_PATH = /(?<![\w.])\/(?:home|Users|root|var|tmp|private|opt|mnt|srv)\/(?:[^/\s"'<>|:]+\/)*[^/\s"'<>|:]*/g;
 
 function escapeRegExp(value: string): string {
@@ -111,6 +114,7 @@ export class EgressSanitizer {
     let out = text;
     for (const root of this.roots) out = out.replace(root.pattern, root.replacement);
     out = out.replace(WINDOWS_PATH, (match) => `<path>${lastSegment(match)}`);
+    out = out.replace(UNC_PATH, (match) => `<path>${lastSegment(match)}`);
     out = out.replace(POSIX_HOME_PATH, (match) => `<path>${lastSegment(match)}`);
     return out;
   }

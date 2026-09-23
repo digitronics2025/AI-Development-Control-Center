@@ -33,5 +33,15 @@ jobs:
           node-version: 22.16.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @acc/cloud-control exec wrangler rollback ${{ inputs.version }} --env ${{ inputs.environment }} --message "Rollback from GitHub Actions" --yes
-      - run: node apps/cloud-control/scripts/smoke.mjs ${{ inputs.environment }}
+      # Inputs reach the shell as environment variables, never pasted into the script; the version must look like one.
+      - name: Roll back
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9a-fA-F-]{8,64}$'; then echo "Not a Worker version id: $VERSION"; exit 1; fi
+          pnpm --filter @acc/cloud-control exec wrangler rollback $VERSION --env "$TARGET_ENV" --message "Rollback from GitHub Actions" --yes
+      - name: Live check
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+        run: node apps/cloud-control/scripts/smoke.mjs "$TARGET_ENV"

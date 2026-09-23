@@ -1,4 +1,5 @@
 import { POLICY_MODES, type PolicyMode, type Repository, type Settings, type WorkflowProfile } from '@acc/shared';
+import { mergeSettings } from '../services/settings.js';
 
 /**
  * Remote-only restrictions (docs/systems/remote-node.md §Local enforcement).
@@ -32,11 +33,22 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
   const { settings } = ctx;
   switch (op) {
     case 'settings.update': {
-      if ('billingMode' in b && b.billingMode !== settings.billingMode) return deny('Billing mode can only be changed on this machine (subscription-only guard).');
-      if (typeof b.autoApproveUpToLevel === 'number' && b.autoApproveUpToLevel > settings.autoApproveUpToLevel) return deny('Raising the auto-approve level can only be done on this machine.');
-      const execution = obj(b.execution);
-      if (typeof execution.policyMode === 'string' && policyRank(execution.policyMode as PolicyMode) > policyRank(settings.execution.policyMode)) {
-        return deny('A more permissive execution policy can only be chosen on this machine.');
+      // Judge the settings exactly as they would be saved, not just the fields that were sent.
+      let n: Settings;
+      try {
+        n = mergeSettings(settings, body);
+      } catch {
+        return allow; // the route answers with the validation error
+      }
+      if (n.billingMode !== settings.billingMode) return deny('Billing mode can only be changed on this machine (subscription-only guard).');
+      if (n.autoApproveUpToLevel > settings.autoApproveUpToLevel) return deny('Raising the auto-approve level can only be done on this machine.');
+      if (policyRank(n.execution.policyMode) > policyRank(settings.execution.policyMode)) return deny('A more permissive execution policy can only be chosen on this machine.');
+      // Discovery roots register every repository under them: adding one is adding repositories by local path.
+      if (n.repositoryAutomation.roots.some((root) => !settings.repositoryAutomation.roots.includes(root))) {
+        return deny('Folders to discover repositories in can only be added on this machine.');
+      }
+      if (settings.repositoryAutomation.ignoredPaths.some((path) => !n.repositoryAutomation.ignoredPaths.includes(path))) {
+        return deny('Bringing back a removed repository can only be done on this machine.');
       }
       return allow;
     }
@@ -46,10 +58,17 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       if ('commands' in b) return deny("A repository's commands can only be changed on this machine.");
       const runtime = obj(b.runtime);
       if ('devCommand' in runtime && runtime.devCommand !== repo.runtime.devCommand) return deny("A repository's dev command can only be changed on this machine.");
+      // Effective values: `null` clears the repository's override and falls back to Settings, which may be looser.
       const currentLevel = repo.autoApproveUpToLevel ?? settings.autoApproveUpToLevel;
-      if (typeof b.autoApproveUpToLevel === 'number' && b.autoApproveUpToLevel > currentLevel) return deny('Raising the auto-approve level can only be done on this machine.');
+      if ('autoApproveUpToLevel' in b) {
+        const nextLevel = typeof b.autoApproveUpToLevel === 'number' ? b.autoApproveUpToLevel : settings.autoApproveUpToLevel;
+        if (nextLevel > currentLevel) return deny('Raising the auto-approve level can only be done on this machine.');
+      }
       const currentPolicy = repo.policyMode ?? settings.execution.policyMode;
-      if (typeof b.policyMode === 'string' && policyRank(b.policyMode as PolicyMode) > policyRank(currentPolicy)) return deny('A more permissive execution policy can only be chosen on this machine.');
+      if ('policyMode' in b) {
+        const nextPolicy = typeof b.policyMode === 'string' ? (b.policyMode as PolicyMode) : settings.execution.policyMode;
+        if (policyRank(nextPolicy) > policyRank(currentPolicy)) return deny('A more permissive execution policy can only be chosen on this machine.');
+      }
       return allow;
     }
     case 'agent.update':

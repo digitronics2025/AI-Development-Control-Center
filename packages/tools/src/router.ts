@@ -64,7 +64,8 @@ export class ToolRouter {
     if (request.prefer && chosen.provider.id === request.prefer) why.push('requested');
     else if (installed.length === 1) why.push(onPlatform.length > 1 ? 'the only installed provider' : 'the only provider');
     else why.push('preferred provider');
-    if ((failures.get(chosen.provider.id) ?? 0) === 0 && [...failures.values()].some((n) => n > 0)) why.push('others failed earlier in this task');
+    // Only a failure of another candidate for this capability explains the choice.
+    if ((failures.get(chosen.provider.id) ?? 0) === 0 && ranked.some((r) => (failures.get(r.provider.id) ?? 0) > 0)) why.push('others failed earlier in this task');
     if (request.prefer && chosen.provider.id !== request.prefer) why.push(`${request.prefer} is not available`);
     return {
       ok: true,

@@ -33,6 +33,8 @@ import type { TerminalService } from '../tools/terminals.js';
 import type { Publisher } from './publisher.js';
 import { taskWorkdir } from './workdir.js';
 
+const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
+
 export interface AgentToolBridge {
   command: string;
   args: string[];
@@ -287,10 +289,18 @@ export class EngineTooling {
     }
   }
 
-  /** A fresh worktree has no dependencies installed; install them once with the project's package manager. */
+  /**
+   * A fresh worktree has no dependencies installed; install them once from the
+   * lockfile. Without a lockfile an install would write one into the task's
+   * changes, so it is left to the test stage's repair instead.
+   */
   async prepareWorktree(task: TaskRecord, repo: RepositoryRecord): Promise<void> {
     const cwd = taskWorkdir(task, repo);
     if (!packageManager(cwd) || existsSync(path.join(cwd, 'node_modules'))) return;
+    if (!LOCKFILES.some((f) => existsSync(path.join(cwd, f)))) {
+      this.event(task.id, 'TOOL_CALL', 'No lockfile in the worktree: dependencies are installed when a check needs them', {});
+      return;
+    }
     const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null }), preApproved: true, timeoutMs: 20 * 60_000 });
     this.event(task.id, 'TOOL_CALL', `Installed dependencies in the worktree: ${outcome.result.summary}`, { executionId: outcome.execution.id, ok: outcome.result.ok });
   }

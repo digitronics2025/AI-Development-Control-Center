@@ -62,6 +62,12 @@ const MATRIX: Record<ProjectType, CheckRequirement[]> = {
   ],
 };
 
+const EXTRA_EVIDENCE: Record<'browser' | 'http' | 'device', CheckRequirement> = {
+  browser: { id: 'browser', label: 'Browser check (console, network, phone width)', evidence: 'browser', advisory: true },
+  http: { id: 'http', label: 'HTTP check', evidence: 'http', advisory: true },
+  device: { id: 'device', label: 'Install and launch on a device', evidence: 'device', advisory: true },
+};
+
 export function requiredChecks(type: ProjectType): CheckRequirement[] {
   return MATRIX[type];
 }
@@ -88,6 +94,11 @@ export function assessVerification(type: ProjectType, evidence: VerificationEvid
     const byCommand = check.commandKinds?.some((k) => evidence.passedKinds.has(k)) ?? false;
     const byEvidence = check.evidence ? evidence.observed.has(check.evidence) : false;
     (byCommand || byEvidence ? satisfied : missingChecks).push(check);
+  }
+  // Evidence the orchestrator observed counts even where the type does not ask for it
+  // (a plain Node server has no framework to be detected as "web", yet was checked in a browser).
+  for (const kind of evidence.observed) {
+    if (!requiredChecks(type).some((c) => c.evidence === kind)) satisfied.push(EXTRA_EVIDENCE[kind]);
   }
   return { type, satisfied, missing: missingChecks, blocking: missingChecks.filter((c) => !c.advisory) };
 }

@@ -52,7 +52,9 @@ Agent stages get a scoped Control Center tool session over MCP
 ([autopilot.md](autopilot.md)) caps the auto-approve level for stage gates and
 command approvals. Background processes stop whenever the loop exits in a
 state other than running or queued; completion and cancellation also close
-terminals, remove the worktree and add "Verification coverage" and
+terminals, remove the worktree and add "Verification coverage" (the checks
+the project type calls for, plus any browser, HTTP or device evidence the
+orchestrator observed) and
 "Execution" sections to the report.
 
 Assignment precedence: global role default → workflow stage pin → repository

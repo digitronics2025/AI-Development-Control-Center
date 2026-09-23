@@ -3,7 +3,7 @@
 **Project:** `digitronics2025/AI-Development-Control-Center`
 **Plan type:** Focused upgrade plan (extends V1; does not replace it)
 **Verified against current repository:** 2026-09-23 (`dd8704f`)
-**Status:** In progress — see [Implementation status](#implementation-status).
+**Status:** Implemented — see [Implementation status](#implementation-status).
 
 > The root `PLAN.md` stays the product-level architecture. This file records
 > how the V2 upgrade maps onto the real code, the decisions taken, and what was
@@ -67,9 +67,50 @@ interactive terminals, checkpoints and MCP servers.
 
 ## Implementation status
 
-_Updated at the end of the implementation._
+Updated 2026-09-23. "Verified" means observed on this Windows 11 machine, not claimed.
+
+| # | Phase | State | Evidence |
+|---|---|---|---|
+| 1 | Foundation | Done | Registry and router tests; migration 5 applied in the orchestrator tests; tool health persisted and re-checked lazily |
+| 2 | Shell runtime | Done | Real PowerShell 5.1 (no `pwsh` installed, so the fallback is what ran), CMD, Git Bash and WSL; ConPTY terminal answering an interactive `Read-Host`, whole-tree kill |
+| 3 | Filesystem & Git | Done | Path confinement incl. links; real Git operations; worktree isolation and cancellation tests |
+| 4 | Router & sessions | Done | Scoped agent sessions (level refusal, escalation outside the profile, token separation, revocation) |
+| 5 | Recovery | Done | Real `npm ci` → `npm install` repair in a test stage, then the test re-ran and passed |
+| 6 | Browser | Done | Headless Chromium at desktop and phone width; a console error sent the task back to the fixer |
+| 7 | HTTP & network | Done | Real HTTP calls; port ownership from Windows; task-owned process detection |
+| 8 | Cloudflare & databases | Partly verified | SQLite and SQL classification tested; Wrangler, D1, Postgres and MySQL operations are built but were not run against real services |
+| 9 | Android & Docker | Partly verified | Packs build and detect; no device or Docker daemon was exercised |
+| 10 | MCP | Done | Real stdio MCP server through the gateway; a real Claude Code 2.1.280 run used the Control Center tools (below). Codex wiring built, not run live |
+| 11 | Credentials | Done | DPAPI-wrapped key; value absent from API and raw SQLite; injected into one call; echo redacted |
+| 12 | Autopilot policy | Done | Every decision path unit-tested; per-repository and per-task modes |
+| 13 | Dashboard | Done | Tools page, Execution tab, terminal drawer; full Playwright matrix (57 tests, both themes, axe WCAG 2.2 AA) green |
+| 14 | Hardening | Done | Restart cleanup kills a leftover only when pid and creation time match; cancel stops processes and removes the worktree |
+| 15 | Real E2E | Done | See below |
+
+**Phase 15 run.** A small Node shop app with four planted problems (a missing
+`file:` dependency with no lockfile, a price total ignoring quantity, a typo
+that throws in the page, a stylesheet link that 404s), registered on a separate
+orchestrator (own port and data folder) in *Isolated worktree* mode, task on
+**Full Autopilot** with every role on Claude Code. It completed in about six
+minutes with no human input: Investigate found all four problems; during
+Implement the agent itself called `process.start`, `http.request`,
+`browser.check_page`, `browser.run_flow` and `process.stop` through the MCP
+bridge; the orchestrator's own Test and App check stages passed; Review and
+Verify passed; one commit (three one-line fixes) landed on
+`ai/TASK-0001-fix-the-cart`; the worktree was removed, the user's checkout was
+untouched and nothing was left listening. The run exposed three defects, fixed
+afterwards: a misleading routing reason, a pointless locked install in a
+worktree without a lockfile, and a coverage report that ignored the browser
+check for a plain Node server.
 
 ## Found for Later
 
 | Issue | Why it matters | Recommended fix | Priority | Blocks V2? |
 |---|---|---|---|---|
+| No scheduler for several isolated tasks in one repository | Worktrees make it safe, but tasks still queue one per repository | A per-repository concurrency limit in the engine's queue, worktree tasks only | Medium | No |
+| Codex MCP bridge not run live | The Codex CLI here is too old for its default model and the workspace has no credits | Re-run `pnpm verify:agents --run` after updating Codex; then one tool call through the bridge | Medium | No |
+| Wrangler, D1, Postgres, MySQL, Docker and Android not run against real services | Only detection, schemas and classification are proven | One smoke per pack on a machine with each service, behind an opt-in test flag | Medium | No |
+| Privileged helper never elevated in a test | Elevation needs a person at the UAC prompt | A manual checklist run once per release (install one allowlisted package) | Low | No |
+| Deployment checkpoints are metadata only | A rollback of a deploy still needs an approved deploy of the old version | Record the deployed version id from Wrangler and offer it as the rollback target | Low | No |
+| Terminal output is redacted per chunk | A secret split across two output chunks could pass unredacted | Keep a small rolling tail between chunks when redacting | Medium | No |
+| Machine memory pressure breaks e2e runs | With many sessions open, Windows refused process launches and Playwright workers crashed; reruns passed | Run the e2e suite with fewer concurrent sessions, or add a single retry for worker crashes only | Low | No |

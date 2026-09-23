@@ -77,6 +77,10 @@ describe('ToolRouter', () => {
     expect(router.route({ capability: 'network.port_owner', platform: 'linux', detection: all }).ok && router.route({ capability: 'network.port_owner', platform: 'linux', detection: all })).toMatchObject({ route: { provider: { id: 'netstat' } } });
     const failed = router.route({ capability: 'network.port_owner', platform: 'win32', detection: all, failures: new Map([['windows', 2]]) });
     expect(failed.ok && failed.route.provider.id).toBe('netstat');
+    expect(failed.ok && failed.reason).toMatch(/others failed earlier/);
+    // A failure of an unrelated tool (another capability) does not explain this choice.
+    const unrelated = router.route({ capability: 'network.port_owner', platform: 'win32', detection: all, failures: new Map([['node', 1]]) });
+    expect(unrelated.ok && unrelated.reason).not.toMatch(/failed earlier/);
     const noWindows = router.route({ capability: 'network.port_owner', platform: 'win32', detection: (id) => (id === 'windows' ? missing('gone') : installed) });
     expect(noWindows.ok && noWindows.route.provider.id).toBe('netstat');
   });
@@ -169,5 +173,10 @@ describe('verification matrix', () => {
     const withBrowser = assessVerification('web', { passedKinds: new Set(['test', 'build']), observed: new Set(['browser']) });
     expect(withBrowser.blocking).toEqual([]);
     expect(assessVerification('library', { passedKinds: new Set(['test']), observed: new Set() }).blocking).toEqual([]);
+    // A plain Node server checked in a browser gets credit for it.
+    const plain = assessVerification('library', { passedKinds: new Set(['test']), observed: new Set(['browser']) });
+    expect(plain.satisfied.map((c) => c.id)).toEqual(['tests', 'browser']);
+    expect(plain.blocking).toEqual([]);
+    expect(withBrowser.satisfied.filter((c) => c.id === 'browser')).toHaveLength(1);
   });
 });

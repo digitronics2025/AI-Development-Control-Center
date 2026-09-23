@@ -42,8 +42,11 @@ Repository Git mode **Isolated worktree** (or `worktree: true` on a task):
 1. Before the first stage the engine runs `git worktree add -b ai/TASK-… <data>/worktrees/<repo>-<id>/<task> HEAD`.
    The baseline is that commit with no pre-existing changes — your
    uncommitted work stays in your working tree and is never seen.
-2. Dependencies are installed once with the project's package manager
-   (`node.install`, locked).
+2. When the project has a lockfile, dependencies are installed once with its
+   package manager (`node.install`, locked). Without one nothing is installed
+   up front — an install would write a new lockfile into the task's changes —
+   and the test stage's repair installs when a check needs it
+   ([recovery.md](recovery.md)).
 3. Every stage, command, tool call, checkpoint and terminal of the task uses
    the worktree. Its stages do not take the repository's writer lock, so
    Source Control stays usable while it runs.

@@ -29,6 +29,11 @@ resolvable transitions, every stage reachable, reaches `complete`, and the
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
 `maxFixCycles`. Each task stores a snapshot of its profile.
 
+A `tests` stage runs the repository's enabled commands of its `commandKinds`,
+by default `lint, typecheck, test, build`. Full Autopilot adds `e2e`, so an
+end-to-end pass is observed by the orchestrator rather than taken from an
+agent's report; the other built-ins keep the fast default.
+
 Assignment precedence: global role default → workflow stage pin → repository
 role override → task role override → task stage override.
 

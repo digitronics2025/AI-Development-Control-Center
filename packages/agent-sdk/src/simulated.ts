@@ -3,9 +3,6 @@ import path from 'node:path';
 import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
 import type {
   AgentAdapter,
-  AgentUsageReport,
-  CapacityObservation,
-  ProviderUsageCapabilities,
   AgentDetectionResult,
   AgentExecutionHandle,
   AgentExecutionInput,
@@ -29,21 +26,12 @@ import type {
  *   [sim:verify-plan-mismatch] verifier rejects once: the work misses the request
  *   [sim:chairman-down]      the Chairman's reasoning agent always crashes
  *   [sim:chairman-bad-json]  the Chairman answers without JSON once
- *   [sim:expensive]          every run reports 50× the usual token usage
- *
- * Usage: every finished or crashed run reports deterministic token counts
- * derived from the prompt and output sizes. The simulated `claude` also
- * reports a cost and a 5-hour window reading, like Claude Code; the simulated
- * `codex` reports tokens only, like Codex, so its cost comes from the
- * pricing registry (or stays Unknown). All of it is labelled simulated.
  *
  * With role `chairman` it answers the Chairman's recovery and chat prompts
  * with valid JSON: the first candidate strategy, or a status reply.
  */
 export class SimulatedAgentAdapter implements AgentAdapter {
   readonly displayName: string;
-  readonly usageCapabilities: ProviderUsageCapabilities;
-  private runs = 0;
   private readonly timers = new Map<string, { cancel: () => void }>();
   private static readonly seen = new Set<string>();
 
@@ -53,61 +41,6 @@ export class SimulatedAgentAdapter implements AgentAdapter {
     private readonly delayMs = Number(process.env.ACC_SIM_DELAY_MS ?? 300),
   ) {
     this.displayName = displayName ?? `${id} (simulated)`;
-    const reportsCost = id === 'claude';
-    this.usageCapabilities = {
-      provider: 'simulated',
-      tokenUsage: true,
-      providerCost: reportsCost,
-      credit: false,
-      quota: reportsCost,
-      rateLimits: reportsCost,
-      cacheTokens: true,
-      reasoningTokens: false,
-      resetTime: reportsCost,
-    };
-  }
-
-  /** Deterministic usage: ~4 characters per token, a fixed cached prefix, simulated list prices. */
-  private usage(input: AgentExecutionInput, output: string, sessionId: string): AgentUsageReport {
-    const scale = input.prompt.includes('[sim:expensive]') ? 50 : 1;
-    const inputTokens = Math.ceil(input.prompt.length / 4) * scale;
-    const outputTokens = (Math.ceil(output.length / 4) + 40) * scale;
-    const cacheReadTokens = 2000 * scale;
-    const cost = this.usageCapabilities.providerCost ? (inputTokens * 3 + outputTokens * 15 + cacheReadTokens * 0.3) / 1_000_000 : null;
-    return {
-      providerRequestId: sessionId,
-      resolvedModel: input.model === 'default' ? 'sim-standard' : input.model,
-      lines: [
-        {
-          model: input.model === 'default' ? 'sim-standard' : input.model,
-          inputTokens,
-          outputTokens,
-          cacheReadTokens,
-          cacheWriteTokens: 0,
-          cacheWrite1hTokens: 0,
-          reasoningTokens: null,
-          reportedCostUsd: cost,
-        },
-      ],
-      turns: 1,
-      apiDurationMs: null,
-    };
-  }
-
-  private capacity(): CapacityObservation[] {
-    if (!this.usageCapabilities.rateLimits) return [];
-    const usedPercent = Math.min(99, 10 + this.runs);
-    return [
-      {
-        metric: 'window:five_hour',
-        label: '5-hour window',
-        usedPercent,
-        status: usedPercent >= 80 ? 'warning' : 'ok',
-        resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
-        detail: null,
-        observedAt: new Date().toISOString(),
-      },
-    ];
   }
 
   static reset(): void {
@@ -192,40 +125,25 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       }
       this.timers.delete(input.executionId);
       const finishedAt = new Date();
-      const sessionId = `sim-${input.executionId.slice(0, 8)}`;
-      this.runs += 1;
       const base = {
         executionId: input.executionId,
         durationMs: finishedAt.getTime() - startedAt.getTime(),
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
-        sessionId,
+        sessionId: null,
         filesChanged: [] as string[],
-        usage: null as AgentUsageReport | null,
-        capacity: [] as CapacityObservation[],
       };
       if (cancelled) {
         return { ...base, status: 'cancelled', exitCode: null, output: '', errorClass: null, errorMessage: 'Cancelled' };
       }
       if (has(`fail:${role}`)) {
         emit(`[${role}] simulated crash`);
-        return { ...base, usage: this.usage(input, '', sessionId), capacity: this.capacity(), status: 'failed', exitCode: 1, output: '', errorClass: 'PROCESS_CRASH', errorMessage: `Simulated ${role} crash` };
+        return { ...base, status: 'failed', exitCode: 1, output: '', errorClass: 'PROCESS_CRASH', errorMessage: `Simulated ${role} crash` };
       }
       if (role === 'implementer' && has('usage-limit') && this.once(`${taskId}:usage`)) {
         emit('You have hit your usage limit. Limit resets at 21:00.');
         return {
           ...base,
-          capacity: [
-            {
-              metric: 'usage_limit',
-              label: 'Usage limit',
-              usedPercent: null,
-              status: 'exhausted',
-              resetsAt: null,
-              detail: 'You have hit your usage limit. Limit resets at 21:00.',
-              observedAt: new Date().toISOString(),
-            },
-          ],
           status: 'failed',
           exitCode: 1,
           output: '',
@@ -296,7 +214,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           output = `Simulated ${role} output.`;
       }
       for (const line of output.split('\n')) if (line.trim()) emit(line);
-      return { ...base, usage: this.usage(input, output, sessionId), capacity: this.capacity(), status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null };
+      return { ...base, status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null };
     })();
 
     return { executionId: input.executionId, pid: null, commandLine: `${this.id} (simulated) --model ${input.model}`, done };
@@ -319,8 +237,6 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       finishedAt: raw.process.finishedAt.toISOString(),
       sessionId: raw.sessionId,
       filesChanged: raw.filesChanged,
-      usage: raw.usage,
-      capacity: raw.capacity,
     };
   }
 }

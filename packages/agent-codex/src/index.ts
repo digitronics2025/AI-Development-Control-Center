@@ -2,18 +2,12 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  capacityFromFailure,
-  CapacityCollector,
   capture,
   CliAgentAdapter,
-  sumCounts,
-  tokenCount,
   type AgentExecutionInput,
   type AgentHealth,
   type AgentRuntimeOptions,
-  type AgentUsageReport,
   type ParserContext,
-  type ProviderUsageCapabilities,
   type StreamParser,
 } from '@acc/agent-sdk';
 import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
@@ -49,59 +43,9 @@ function unwrapError(message: string): string {
   }
 }
 
-interface CodexTurnUsage {
-  input: number | null;
-  cached: number | null;
-  output: number | null;
-  reasoning: number | null;
-}
-
-/**
- * One usage line from Codex's `turn.completed` totals. Codex (OpenAI) counts
- * cached input inside `input_tokens`, so the uncached share is the
- * difference; reasoning is part of `output_tokens`. Codex reports no cost and
- * does not name the model, so the line carries the requested model (or
- * `default` when the CLI picked it).
- */
-export function codexUsage(turns: CodexTurnUsage[], threadId: string | null, requestedModel: string): AgentUsageReport | null {
-  if (!turns.length) return null;
-  const input = sumCounts(...turns.map((t) => t.input));
-  const cached = sumCounts(...turns.map((t) => t.cached));
-  return {
-    providerRequestId: threadId,
-    resolvedModel: null,
-    lines: [
-      {
-        model: requestedModel,
-        inputTokens: input === null ? null : Math.max(0, input - (cached ?? 0)),
-        outputTokens: sumCounts(...turns.map((t) => t.output)),
-        cacheReadTokens: cached,
-        // OpenAI prices no cache writes; reporting them as 0 would claim a measurement Codex never made.
-        cacheWriteTokens: null,
-        cacheWrite1hTokens: null,
-        reasoningTokens: sumCounts(...turns.map((t) => t.reasoning)),
-        reportedCostUsd: null,
-      },
-    ],
-    turns: turns.length,
-    apiDurationMs: null,
-  };
-}
-
 export class CodexAdapter extends CliAgentAdapter {
   readonly id = 'codex';
   readonly displayName = 'Codex';
-  readonly usageCapabilities: ProviderUsageCapabilities = {
-    provider: 'openai',
-    tokenUsage: true,
-    providerCost: false,
-    credit: false,
-    quota: false,
-    rateLimits: false,
-    cacheTokens: true,
-    reasoningTokens: true,
-    resetTime: false,
-  };
   protected readonly binaryName = 'codex';
 
   protected async readVersion(executable: string, env: NodeJS.ProcessEnv): Promise<string | null> {
@@ -179,10 +123,9 @@ export class CodexAdapter extends CliAgentAdapter {
     return args;
   }
 
-  protected createParser({ emit, input }: ParserContext): StreamParser {
+  protected createParser({ emit }: ParserContext): StreamParser {
     let finalMessage: string | null = null;
     let sessionId: string | null = null;
-    const turns: CodexTurnUsage[] = [];
     const failureMessages: string[] = [];
     const filesChanged = new Set<string>();
 
@@ -200,16 +143,6 @@ export class CodexAdapter extends CliAgentAdapter {
           case 'thread.started':
             sessionId = event.thread_id ?? null;
             break;
-          case 'turn.completed': {
-            const u = (event.usage ?? {}) as Record<string, unknown>;
-            turns.push({
-              input: tokenCount(u.input_tokens),
-              cached: tokenCount(u.cached_input_tokens),
-              output: tokenCount(u.output_tokens),
-              reasoning: tokenCount(u.reasoning_output_tokens),
-            });
-            break;
-          }
           case 'turn.failed': {
             const message = unwrapError(String(event.error?.message ?? 'Turn failed'));
             failureMessages.push(message);
@@ -252,12 +185,6 @@ export class CodexAdapter extends CliAgentAdapter {
         if (line.trim()) emit('stderr', line);
       },
       finish() {
-        // Codex exposes no limits feed; the only capacity signal is a failure that states it.
-        const capacity = new CapacityCollector();
-        for (const message of failureMessages) {
-          const signal = capacityFromFailure(message);
-          if (signal) capacity.add(signal);
-        }
         return {
           finalMessage,
           failureMessages,
@@ -265,8 +192,6 @@ export class CodexAdapter extends CliAgentAdapter {
           usageLimited: false,
           guardViolation: null,
           filesChanged: [...filesChanged],
-          usage: codexUsage(turns, sessionId, input.model),
-          capacity: capacity.list(),
         };
       },
     };

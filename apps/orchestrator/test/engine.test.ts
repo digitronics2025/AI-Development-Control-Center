@@ -56,6 +56,17 @@ describe('normal development workflow', () => {
     expect(report).toContain('READY');
   });
 
+  it('reports operator decisions named by the verifier instead of calling the task ready', async () => {
+    const repoId = await addRepo(t, await makeRepo());
+    const id = await createTask(t, repoId, 'Check the service end to end [sim:needs-operator]');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('COMPLETED');
+    expect(task.fixCycles).toBe(0);
+    expect(task.finalStatus).toBe('NEEDS_USER_ACTION');
+    const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
+    expect(report).toContain('- Needs your decision: Choose whether the service listens on the network.');
+  });
+
   it('protects pre-existing uncommitted work and reports it separately', async () => {
     const repoPath = await makeRepo({ dirty: { 'README.md': '# Test repo\nuser edit in progress\n', 'notes.txt': 'mine\n' } });
     const id = await createTask(t, await addRepo(t, repoPath), 'Change something');
@@ -267,6 +278,16 @@ describe('permissions and approvals', () => {
     expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'test' && s.status === 'WAITING_APPROVAL')).toHaveLength(0);
   });
 
+  it('skips an optional deploy stage with no command without asking for approval', async () => {
+    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"' } }));
+    const id = await createTask(t, repoId, 'Document it', { workflowId: 'full-autopilot' });
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(done.status).toBe('COMPLETED');
+    expect(t.services.store.listApprovals({ limit: 10 })).toHaveLength(0);
+    expect(t.services.store.latestStage(id, 'staging')!.status).toBe('SKIPPED');
+    expect(t.services.store.latestStage(id, 'smoke')!.status).toBe('SKIPPED');
+  });
+
   it('gates level 4 stages behind approval and denies cleanly', async () => {
     const repoPath = await makeRepo({ scripts: { test: 'node -e "0"', 'deploy:staging': 'node -e "console.log(\'deployed\')"' } });
     const repoId = await addRepo(t, repoPath);
@@ -327,6 +348,25 @@ describe('restart recovery', () => {
     await t.api('POST', `/api/tasks/${id}/resume`);
     await waitFor(() => t.services.store.listStages(id).filter((s) => s.stageKey === 'investigate' && s.status === 'SUCCESS'), (s) => s.length === 1, 30_000);
     await t.api('POST', `/api/tasks/${id}/cancel`);
+  });
+
+  it('withdraws a waiting approval for an optional stage whose command was removed', async () => {
+    const dataDir = t.dataDir;
+    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"' } }));
+    const repo = (await t.api('GET', `/api/repositories/${repoId}`)).body;
+    const staging = { id: 'staging', name: 'staging deploy', command: 'node -e "0"', kind: 'deploy-staging', enabled: true, timeoutSec: 60 };
+    await t.api('PATCH', `/api/repositories/${repoId}`, { commands: [...repo.commands, staging] });
+    const id = await createTask(t, repoId, 'Ship it', { workflowId: 'full-autopilot' });
+    expect((await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED'])).blocker?.kind).toBe('approval');
+    await t.api('PATCH', `/api/repositories/${repoId}`, { commands: repo.commands });
+    await t.close();
+
+    t = await createTestApp({ dataDir, adapters: simAdapters() });
+    t.services.engine.schedule(); // as main.ts does after recovery
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(done.status).toBe('COMPLETED');
+    expect(t.services.store.listApprovals({ limit: 10 }).map((a) => a.status)).toEqual(['cancelled']);
+    expect(t.services.store.latestStage(id, 'staging')!.status).toBe('SKIPPED');
   });
 
   it('recovers executions left running by a crash', async () => {

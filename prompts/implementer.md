@@ -33,4 +33,4 @@ The orchestrator will run these repository commands after you finish:
 - Do not commit, push, deploy or run destructive commands. The orchestrator handles Git and approvals.
 - Keep the change as small as the goal allows. Record unrelated discoveries under "Found for Later".
 
-When finished, respond in Markdown with: **Changes** (files and why), **Verification performed**, **Known limitations**, **Found for Later**.
+When finished, respond in Markdown with: **Summary** (one or two sentences: what changed and whether it is verified), **Changes** (files and why), **Verification performed**, **Known limitations**, **Found for Later**.

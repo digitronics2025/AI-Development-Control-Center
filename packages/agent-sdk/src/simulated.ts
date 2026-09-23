@@ -22,6 +22,7 @@ import type {
  *   [sim:usage-limit]        implementer hits a usage limit on its first run
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
+ *   [sim:needs-operator]     verifier passes but names an operator decision
  */
 export class SimulatedAgentAdapter implements AgentAdapter {
   readonly displayName: string;
@@ -170,7 +171,9 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           break;
         }
         case 'verifier':
-          output = '## Verification\n\nAll success criteria were checked.\n\nVERDICT: PASS';
+          output = has('needs-operator')
+            ? '## Verification\n\nThe code criteria are met.\n\nNEEDS OPERATOR: Choose whether the service listens on the network.\n\nVERDICT: PASS'
+            : '## Verification\n\nAll success criteria were checked.\n\nVERDICT: PASS';
           break;
         default:
           output = `Simulated ${role} output.`;

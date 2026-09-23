@@ -44,7 +44,8 @@ Structured provider messages are classified before log noise: `USAGE_LIMIT`
 [simulated.ts](../../packages/agent-sdk/src/simulated.ts) is registered only
 with `ACC_SIMULATED_AGENTS=1` and labelled in the UI. Markers in a task
 description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
-`[sim:usage-limit]`, `[sim:fail:<role>]`, `[sim:slow]`.
+`[sim:usage-limit]`, `[sim:fail:<role>]`, `[sim:slow]`,
+`[sim:needs-operator]` (verifier names an operator decision).
 
 ## Observed on the operator's machine (2026-09-23)
 

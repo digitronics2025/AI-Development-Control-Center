@@ -74,7 +74,7 @@ export function TestsTab({ task }: { task: TaskDetail }) {
                         <span className="truncate font-mono text-code text-fg">
                           {run.name} <span className="font-sans text-small text-fg-secondary">· {COMMAND_KIND_LABEL[run.kind]} · {STATUS_TEXT[run.status]}</span>
                         </span>
-                        {run.summary && run.status === 'failed' ? <span className="truncate text-small text-fg">{run.summary}</span> : null}
+                        {run.summary ? <span className="truncate text-small text-fg">{run.summary}</span> : null}
                         <span className="truncate font-mono text-small text-fg-secondary">{run.command}</span>
                       </span>
                       <span className="tabular text-small text-fg-secondary">{run.durationMs !== null ? formatDuration(run.durationMs) : run.status === 'not_run' ? 'not run' : '—'}</span>

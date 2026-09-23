@@ -42,7 +42,13 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 Completion writes `git-diff.patch`, `final-report.md` and `task.json`. The final
 status is `READY` only when the last test stage passed (not skipped), the last
 review/verification passed, and no file mixes pre-existing user work with task
-changes; otherwise `NEEDS_USER_ACTION`.
+changes; otherwise `NEEDS_USER_ACTION`. Lines starting `NEEDS OPERATOR:` in the
+latest review or verification — things only the operator can settle, which
+those roles are told not to fail for — are listed as "Needs your decision"
+and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
+
+An optional `command` stage with no matching command configured is skipped
+without asking for approval (`skipsForLackOfCommands`).
 
 ## Live control
 
@@ -61,7 +67,8 @@ finished. The blocker says which task holds it.
 
 On start, executions/stages left `running` are marked interrupted and
 `RUNNING` tasks become `INTERRUPTED` with an explanation; queued tasks keep
-waiting. Graceful shutdown does the same for work in progress.
+waiting. A task parked on a stage approval for a stage that would now be
+skipped (its command was removed) has the approval withdrawn and continues. Graceful shutdown does the same for work in progress.
 
 ## Prompts
 
@@ -70,5 +77,11 @@ edit is a new version and tasks record which version each role used. The
 context builder ([context.ts](../../apps/orchestrator/src/engine/context.ts))
 gives each role only what it needs (e.g. the reviewer gets the diff and test
 results, bounded to 150 KB).
+
+Stage summaries in timelines and reports come from the agent's **Summary**
+section (or Goal/Findings), else its first prose line — never a heading,
+table row or verdict line (`summarize`). Verification commands record their
+runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`
+([test-summary.ts](../../apps/orchestrator/src/engine/test-summary.ts)).
 
 Last verified: 2026-09-23

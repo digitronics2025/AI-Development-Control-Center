@@ -9,6 +9,22 @@ export interface ReportInput {
   files: ChangedFile[] | null;
   testsSkipped: boolean;
   deployed: 'none' | 'staging';
+  /** Items the last review or verification said only the operator can settle. */
+  operatorItems?: string[];
+}
+
+const MAX_OPERATOR_ITEMS = 10;
+
+/** `NEEDS OPERATOR: …` lines from a reviewer's or verifier's output (see prompts/verifier.md). */
+export function extractOperatorItems(...outputs: Array<string | null | undefined>): string[] {
+  const items = new Set<string>();
+  for (const output of outputs) {
+    for (const match of (output ?? '').matchAll(/^[\s>*+-]*\**NEEDS OPERATOR:?\**:?\s*(.+)$/gim)) {
+      const text = match[1]!.replace(/\*\*/g, '').trim();
+      if (text) items.add(text.length > 300 ? `${text.slice(0, 299)}…` : text);
+    }
+  }
+  return [...items].slice(0, MAX_OPERATOR_ITEMS);
 }
 
 export interface ReportResult {
@@ -44,6 +60,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const lastVerify = [...verdictStages].reverse().find((s) => s.role === 'verifier');
   if (lastReview?.verdict === 'FAIL') limitations.push('The last review did not pass.');
   if (lastVerify?.verdict === 'FAIL') limitations.push('The last verification did not pass.');
+  for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);
 
   const taskFiles = files?.filter((f) => f.origin !== 'preexisting') ?? [];
   const finalStatus: FinalStatus = limitations.length === 0 ? 'READY' : 'NEEDS_USER_ACTION';

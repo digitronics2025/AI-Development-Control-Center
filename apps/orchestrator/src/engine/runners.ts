@@ -25,6 +25,7 @@ import type { ContextBuilder } from './context.js';
 import { LogSink } from './log-sink.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
+import { testFailureSummary, testPassSummary } from './test-summary.js';
 
 export type StopReason = 'pause' | 'cancel' | 'reroute' | 'shutdown';
 
@@ -60,21 +61,49 @@ export function parseVerdict(output: string): 'PASS' | 'FAIL' | null {
   return last ? (last.toUpperCase() as 'PASS' | 'FAIL') : null;
 }
 
-/** First meaningful prose line of Markdown output, for timelines and reports. */
+const SUMMARY_LABEL = /^(summary|goal|findings)$/i;
+
+/** A Markdown line reduced to plain prose, or null when it is structure rather than content. */
+function proseLine(raw: string): { text: string; label: string | null } | null {
+  const line = raw.trim();
+  if (!line || line.startsWith('|') || /^(-{3,}|\*{3,}|_{3,}|```)/.test(line)) return null;
+  const heading = /^#{1,6}\s+(.*)$/.exec(line)?.[1] ?? /^\*\*([^*]+?)\*\*:?$/.exec(line)?.[1];
+  const text = (heading ?? line)
+    .replace(/^(?:[>*+-]|\d+[.)])\s+/, '')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^\d+[.)]\s*/, '')
+    .trim();
+  if (heading !== undefined) return { text, label: text.replace(/:$/, '') };
+  // A bare "Summary: text" label line carries its own content.
+  const inline = /^(summary|goal)\s*:\s*(.+)$/i.exec(text);
+  if (inline) return { text: inline[2]!, label: null };
+  if (text.length <= 3 || /^verdict:\s*(pass|fail)\.?$/i.test(text)) return null;
+  return { text, label: null };
+}
+
+/**
+ * One line describing an agent's result, for timelines and reports: the first
+ * prose line under a Summary (or Goal/Findings) heading when there is one,
+ * otherwise the first prose line that is not a heading, table or verdict.
+ */
 export function summarize(output: string, max = 240): string | null {
-  const line = output
-    .split('\n')
-    .map((l) => l.replace(/^[#>*\-\s\d.]+/, '').trim())
-    .find((l) => l.length > 3 && !/^verdict:/i.test(l) && !/^(summary|findings|changes|review|fixes|criteria|goal)$/i.test(l));
+  const lines = output.split('\n').map(proseLine).filter((l) => l !== null);
+  const labelled = lines.findIndex((l) => l.label !== null && SUMMARY_LABEL.test(l.label));
+  const after = labelled === -1 ? undefined : lines.slice(labelled + 1).find((l) => l.label === null);
+  const line = (after ?? lines.find((l) => l.label === null))?.text;
   if (!line) return null;
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-function testFailureSummary(lines: string[]): string {
-  const counted = [...lines].reverse().find((l) => /\b\d+\s+(?:failed|failing|errors?|failures?)\b/i.test(l));
-  const fallback = [...lines].reverse().find((l) => l.trim().length > 0);
-  const text = (counted ?? fallback ?? 'Command failed').trim();
-  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+/** The repository's enabled commands a tests/command stage would run. */
+export function stageCommands(def: StageDefinition, repo: RepositoryRecord) {
+  const kinds = new Set(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS);
+  return repo.commands.filter((c) => c.enabled && kinds.has(c.kind));
+}
+
+/** An optional command stage with nothing configured is skipped, so it must never ask for approval. */
+export function skipsForLackOfCommands(def: StageDefinition, repo: RepositoryRecord): boolean {
+  return def.kind === 'command' && def.optional && stageCommands(def, repo).length === 0;
 }
 
 export interface RunnerDeps {
@@ -252,7 +281,7 @@ export class StageRunners {
   async runCommands(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
     const { store, publisher, approvals } = this.d;
     const kinds = new Set(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS);
-    const commands = repo.commands.filter((c) => c.enabled && kinds.has(c.kind));
+    const commands = stageCommands(def, repo);
 
     if (commands.length === 0) {
       const wanted = [...kinds].map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ');
@@ -394,7 +423,7 @@ export class StageRunners {
       }
       const passed = result.exitCode === 0 && !result.timedOut && !result.spawnError;
       const summary = passed
-        ? null
+        ? testPassSummary(sink.recent(80))
         : result.timedOut
           ? `Timed out after ${command.timeoutSec}s`
           : result.spawnError
@@ -403,7 +432,7 @@ export class StageRunners {
       this.finishExecution(executionId, passed ? 'succeeded' : result.timedOut ? 'timed_out' : 'failed', {
         exitCode: result.exitCode,
         errorClass: passed ? null : result.timedOut ? 'TIMEOUT' : def.kind === 'tests' ? 'TEST_FAILURE' : 'COMMAND_FAILURE',
-        errorMessage: summary,
+        errorMessage: passed ? null : summary,
         startedAt,
       });
       this.publishTestRun(

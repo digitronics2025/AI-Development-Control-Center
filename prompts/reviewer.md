@@ -36,7 +36,11 @@ Review the actual change against the requirement and the plan. **Do not modify a
 
 Check correctness, completeness against the success criteria, security (secrets, injection, auth), data safety, and whether pre-existing user work was preserved. Only raise issues that matter. An agent saying "done" is not evidence; the diff and test results are.
 
-Respond in Markdown with **Summary** and **Issues** (each with file, problem, and required fix). End with exactly one line:
+Respond in Markdown with **Summary** (one or two sentences: the overall assessment) and **Issues** (each with file, problem, and required fix).
+
+Fail only for problems a fix stage can correct in this repository. Something only the operator can settle — a decision, credentials, access, a setting outside the repository, or an action a user directive forbids — is not a reason to fail: put each on its own line starting `NEEDS OPERATOR:` and judge the rest. These lines appear in the completion report.
+
+End with exactly one line:
 
 VERDICT: PASS
 or

@@ -121,6 +121,12 @@ describe('REST API', () => {
     expect(report.path).toBeUndefined();
     const content = await t.api('GET', `/api/artifacts/${report.id}/content`);
     expect(content.body.content).toContain('TASK COMPLETED');
+    const download = await t.app.inject({
+      method: 'GET',
+      url: `/api/artifacts/${report.id}/download`,
+      headers: { host: '127.0.0.1:4317', authorization: `Bearer ${TOKEN}` },
+    });
+    expect(download.headers['content-type']).toBe('text/markdown; charset=utf-8');
     const diff = await t.api('GET', `/api/tasks/${id}/diff?path=sim-output.md`);
     expect(diff.body.diff).toContain('sim-output.md');
     expect((await t.api('GET', `/api/tasks/${id}/diff?path=../../etc/passwd`)).status).toBe(400);

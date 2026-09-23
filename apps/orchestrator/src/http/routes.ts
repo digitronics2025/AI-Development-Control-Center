@@ -252,7 +252,9 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   app.get('/api/artifacts/:id/download', async (request, reply) => {
     const rec = store.getArtifact(idParam.parse(request.params).id);
     if (!rec) return sendError(reply, 404, 'NOT_FOUND', 'Artifact not found');
-    reply.header('content-type', rec.mime);
+    // Artifacts are written as UTF-8; say so, or viewers fall back to a legacy codepage.
+    const textual = /^text\/|^application\/(json|x-ndjson)/.test(rec.mime) && !/charset=/i.test(rec.mime);
+    reply.header('content-type', textual ? `${rec.mime}; charset=utf-8` : rec.mime);
     reply.header('content-disposition', `attachment; filename="${rec.name.replace(/"/g, '')}"`);
     return reply.send(createReadStream(s.artifacts.absolutePath(rec)));
   });

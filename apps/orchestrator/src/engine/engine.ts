@@ -28,9 +28,9 @@ import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
-import { buildFinalReport } from './report.js';
+import { buildFinalReport, extractOperatorItems } from './report.js';
 import { Publisher } from './publisher.js';
-import { StageRunners, type RunControl, type StageOutcome, type StopReason } from './runners.js';
+import { skipsForLackOfCommands, StageRunners, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
 
@@ -477,9 +477,9 @@ export class TaskEngine {
       const def = this.d.views.stageDef(task, key);
       if (!def) throw new Error(`Workflow snapshot has no stage "${key}"`);
 
-      if (!this.stageGate(task, def)) return;
-
       const repo = this.d.repositories.record(task.repositoryId);
+      if (!skipsForLackOfCommands(def, repo) && !this.stageGate(task, def)) return;
+
       if (def.permissionLevel >= 2) await this.ensureBaseline(task, repo.path);
 
       const stage = this.createStageInstance(this.task(taskId), def);
@@ -734,7 +734,11 @@ export class TaskEngine {
     const stages = this.d.store.listStages(task.id);
     const testsSkipped = stages.some((s) => s.kind === 'tests' && s.status === 'SKIPPED');
     const deployed = stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer') ? 'staging' : 'none';
-    const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed });
+    const operatorItems = extractOperatorItems(
+      await this.d.artifacts.latestText(task.id, 'review'),
+      await this.d.artifacts.latestText(task.id, 'verification'),
+    );
+    const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed, operatorItems });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
     const finished = this.publisher.updateTask(task.id, { status: 'COMPLETED', finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE });
@@ -778,8 +782,21 @@ export class TaskEngine {
     }
     // Tasks parked on an approval keep waiting; make sure their blocker still points at it.
     for (const task of store.listTasks({ statuses: ['WAITING_FOR_USER'], limit: 10_000 })) {
-      if (task.blocker?.kind === 'approval' && task.blocker.approvalId && store.getApproval(task.blocker.approvalId)?.status !== 'pending') {
+      if (task.blocker?.kind !== 'approval' || !task.blocker.approvalId) continue;
+      const approval = store.getApproval(task.blocker.approvalId);
+      if (approval?.status !== 'pending') {
         store.updateTask(task.id, { status: 'QUEUED', blocker: null });
+        continue;
+      }
+      // A stage whose commands were removed while it waited would only be
+      // skipped; asking for approval of it is noise.
+      const def = approval.kind === 'stage_permission' && approval.stageKey ? this.d.views.stageDef(task, approval.stageKey) : null;
+      const repo = def ? store.getRepository(task.repositoryId) : null;
+      if (def && repo && skipsForLackOfCommands(def, repo)) {
+        const cancelled = store.resolveApproval(approval.id, 'cancelled', `${def.name} has no command configured and will be skipped`);
+        this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(cancelled) });
+        store.updateTask(task.id, { status: 'QUEUED', blocker: null });
+        this.publisher.event(task.id, 'APPROVAL_RESOLVED', `Approval withdrawn: ${def.name} has nothing to run`, { approvalId: approval.id });
       }
     }
     return { interruptedTasks: interrupted };

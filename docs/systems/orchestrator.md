@@ -41,7 +41,7 @@ before any row is written.
 | Service | `GET health`, `GET overview`, `POST service/shutdown` |
 | Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` |
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |
-| Artifacts | `GET artifacts/:id/content` (≤2 MB), `GET artifacts/:id/download` |
+| Artifacts | `GET artifacts/:id/content` (≤2 MB), `GET artifacts/:id/download` (text types sent with `charset=utf-8`) |
 | Approvals | `GET approvals?status=`, `POST approvals/:id/{approve,deny}` |
 | Agents | `GET agents`, `POST agents/refresh`, `POST agents/:id/refresh`, `PATCH agents/:id`, `POST/DELETE agents/:id/models` |
 | Workflows | `GET workflows[/:id]`, `POST workflows/validate`, `PUT workflows/:id`, `POST workflows/:id/duplicate`, `DELETE workflows/:id` |

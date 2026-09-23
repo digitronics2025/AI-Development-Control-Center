@@ -1,3 +1,4 @@
+import { taskIdFromBranch } from '@acc/git';
 import type { ChangedFile, FinalStatus, StageInstance, TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
@@ -63,6 +64,8 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);
 
   const taskFiles = files?.filter((f) => f.origin !== 'preexisting') ?? [];
+  const owner = taskIdFromBranch(task.git.baselineBranch);
+  const stackedOn = owner !== task.id ? owner : null;
   const finalStatus: FinalStatus = limitations.length === 0 ? 'READY' : 'NEEDS_USER_ACTION';
 
   const lines = [
@@ -117,7 +120,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '',
     '## Git',
     '',
-    `- Baseline: ${task.git.baselineBranch ?? '—'} @ ${task.git.baselineCommit?.slice(0, 10) ?? '—'}`,
+    `- Baseline: ${task.git.baselineBranch ?? '—'} @ ${task.git.baselineCommit?.slice(0, 10) ?? '—'}${stackedOn ? ` (${stackedOn}'s branch — merge ${stackedOn} first)` : ''}`,
     `- Task branch: ${task.git.taskBranch ?? 'none (worked on the current branch)'}`,
     `- Commits: ${task.git.commits.length ? task.git.commits.map((c) => c.slice(0, 10)).join(', ') : 'none — changes are uncommitted for your review'}`,
     '',

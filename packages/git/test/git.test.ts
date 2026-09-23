@@ -13,6 +13,7 @@ import {
   isGitRepository,
   snapshot,
   taskBranchName,
+  taskIdFromBranch,
 } from '../src/index.js';
 
 let repo: string;
@@ -50,6 +51,11 @@ describe('git helpers', () => {
 
     const branch = await createTaskBranch(repo, taskBranchName('TASK-0001', 'Add feature: sync!'));
     expect(branch).toBe('ai/TASK-0001-add-feature-sync');
+    expect(taskIdFromBranch(branch)).toBe('TASK-0001');
+    expect(taskIdFromBranch('ai/TASK-0002')).toBe('TASK-0002');
+    expect(taskIdFromBranch('main')).toBeNull();
+    expect(taskIdFromBranch('ai/TASK-12x')).toBeNull();
+    expect(taskIdFromBranch(null)).toBeNull();
     expect(await currentBranch(repo)).toBe(branch);
     // Switching branches kept the user's uncommitted work intact.
     expect(readFileSync(path.join(repo, 'a.txt'), 'utf8')).toBe('one\nuser edit\n');

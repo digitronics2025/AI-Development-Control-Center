@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { changesSince, createTaskBranch, diffSince, isGitRepository, snapshot, taskBranchName, type GitSnapshot } from '@acc/git';
+import { changesSince, createTaskBranch, diffSince, isGitRepository, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMPLETE,
@@ -598,6 +598,16 @@ export class TaskEngine {
       { head: snap.head, branch: snap.branch, preexisting },
     );
     if (taskBranch) this.publisher.event(task.id, 'GIT_BRANCH', `Working on branch ${taskBranch}`, { branch: taskBranch });
+    const owner = taskIdFromBranch(snap.branch);
+    const stackedOn = owner !== task.id ? owner : null;
+    if (stackedOn) {
+      this.publisher.event(
+        task.id,
+        'GIT_BRANCH',
+        `Started from ${stackedOn}'s branch ${snap.branch}, not your main line: this task's work includes ${stackedOn}'s unmerged changes. Merge ${stackedOn} first, or merge both in order.`,
+        { branch: snap.branch, stackedOn },
+      );
+    }
   }
 
   /** Decide the next step from a stage outcome. Returns true to keep looping. */

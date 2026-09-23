@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
-import { currentBranch } from '@acc/git';
+import { currentBranch, git } from '@acc/git';
 import { addRepo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 let t: TestApp;
@@ -68,6 +68,17 @@ describe('normal development workflow', () => {
     expect(task.finalStatus).toBe('NEEDS_USER_ACTION');
     const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
     expect(report).toContain('- Needs your decision: Choose whether the service listens on the network.');
+  });
+
+  it('says so when a task starts on another task\'s unmerged branch', async () => {
+    const repoPath = await makeRepo();
+    await git(repoPath, ['switch', '-c', 'ai/TASK-0042-earlier-work']);
+    const id = await createTask(t, await addRepo(t, repoPath), 'Build on it');
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const events = t.services.store.listEvents(id, { limit: 2000 }).map((e) => e.message);
+    expect(events).toContainEqual(expect.stringContaining("Started from TASK-0042's branch ai/TASK-0042-earlier-work"));
+    const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
+    expect(report).toContain("(TASK-0042's branch — merge TASK-0042 first)");
   });
 
   it('protects pre-existing uncommitted work and reports it separately', async () => {

@@ -40,6 +40,9 @@ left uncommitted. Nothing is ever pushed automatically.
 
 - Tasks in the same repository run one at a time; a finished task leaves its
   branch checked out, so the next task's baseline records those files as
-  pre-existing (reported as such). Worktrees are Found-for-Later.
+  pre-existing (reported as such), and a committed task's branch becomes the
+  next task's starting point. When the baseline branch is another task's
+  (`taskIdFromBranch`), a `GIT_BRANCH` event and the report's Git section say
+  so and ask for that task to be merged first. Worktrees are Found-for-Later.
 
 Last verified: 2026-09-23

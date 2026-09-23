@@ -148,6 +148,11 @@ export function taskBranchName(taskId: string, title: string): string {
   return `ai/${taskId}${slug ? `-${slug}` : ''}`;
 }
 
+/** The task a branch made by `taskBranchName` belongs to, or null for any other branch. */
+export function taskIdFromBranch(branch: string | null): string | null {
+  return (branch ? /^ai\/(TASK-\d+)(?:-|$)/.exec(branch)?.[1] : undefined) ?? null;
+}
+
 /**
  * Create and switch to a task branch. `git switch -c` never touches the
  * working tree, so uncommitted user work comes along untouched.

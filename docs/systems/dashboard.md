@@ -35,7 +35,9 @@ removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 Home, Tasks, New Task, Task Detail (Overview/Activity/Changes/Tests/Artifacts/
 Logs + inspector), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail), Settings (8 sections). Routes are
-lazy-loaded; logs are virtualised; diffs load per file.
+lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
+each command's recorded summary — the runner's totals line when it passed,
+the failure line when it failed.
 
 ## Quality gates
 

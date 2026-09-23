@@ -81,6 +81,8 @@ Per repository, four at a time:
 | behind, tracked changes or conflicts | `behind-dirty`, nothing moves |
 | behind, an unfinished task's branch | `skipped` |
 | behind, clean | fast-forward → `fast-forwarded` |
+| fetch fails | `failed` |
+| fetch says "repository not found" **and** another repository with the same `host/owner` fetched in this run | `remote-gone` |
 
 "Unfinished task" = any task in the repository with status QUEUED, RUNNING,
 PAUSED, WAITING_*, INTERRUPTED or FAILED whose `taskBranch ?? baselineBranch`
@@ -93,6 +95,15 @@ moving). It re-checks everything under the repository lock and is refused
 while a task stage writes. Restart recovery settles it from HEAD:
 `HEAD == fastForwardTo` → succeeded, `HEAD == preHead` → failed, else
 uncertain.
+
+**Deleted remotes.** Hosts answer "repository not found" both for a deleted
+repository and for a private one the caller cannot see, so an expired sign-in
+would look like every repository being deleted. `confirmGoneRemotes` (in
+[repository-automation.ts](../../apps/orchestrator/src/services/repository-automation.ts))
+therefore upgrades `failed` to `remote-gone` only when a repository of the
+same account (`remoteOwnerKey`: `host/owner`, never the URL or credentials)
+fetched in the same run. Nothing is removed automatically: the repository
+stays listed as **Remote deleted**, and its local copy is never touched.
 
 Uploads stay manual (Source Control → Sync). Background sync never pushes,
 merges, rebases, stashes or touches uncommitted work.
@@ -117,7 +128,8 @@ reschedule; each synced repository is re-read and pushed as `repository`.
 ## Dashboard
 
 Repositories page: a **Remote** column (Up to date / N to download / N to
-upload / Diverged / No upstream), a summary line with the last run, and
+upload / Diverged / No upstream, or from the last run Unreachable / Remote
+deleted with the reason on hover), a summary line with the last run, and
 **Check now** (disabled when both switches are off). Settings →
 Repositories edits every field above.
 

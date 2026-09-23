@@ -21,6 +21,9 @@ import {
   outgoingPatch,
   pathDiff,
   pushRef,
+  remoteMissing,
+  remoteOwnerKey,
+  remoteUrl,
   revParse,
   splitPatch,
   stagedPatch,
@@ -796,6 +799,8 @@ export class SourceControlService {
   async backgroundSync(repositoryId: string): Promise<RepositorySyncResult> {
     const repo = this.d.repositories.record(repositoryId);
     const at = now();
+    let remoteOwner: string | null = null;
+    let missing = false;
     const result = (outcome: RepositorySyncOutcome, message: string, counts?: { ahead: number; behind: number }): RepositorySyncResult => ({
       repositoryId,
       outcome,
@@ -803,6 +808,8 @@ export class SourceControlService {
       ahead: counts?.ahead ?? null,
       behind: counts?.behind ?? null,
       at,
+      remoteOwner,
+      remoteMissing: missing,
     });
     if (!existsSync(repo.path)) return result('skipped', 'The folder no longer exists.');
     let state: RepoState;
@@ -816,11 +823,16 @@ export class SourceControlService {
     if (!state.hasHead) return result('skipped', `${branch} has no commits yet.`);
     const upstream = await branchUpstream(state.root, branch);
     if (!upstream || !state.branch.upstream) return result('skipped', `${branch} has no upstream to download from.`);
+    const url = await remoteUrl(state.root, upstream.remote);
+    remoteOwner = url ? remoteOwnerKey(url) : null;
 
     try {
       // Serialized with Source Control actions; safe while a task edits files.
       const fetched = await this.d.coordinator.runMutation(repositoryId, 'fetch', () => fetchRemote(state.root, upstream.remote, { unattended: true }));
-      if (fetched.code !== 0) return result('failed', `Could not fetch ${upstream.remote}: ${gitOutput(fetched).split('\n')[0] || 'git fetch failed'}`);
+      if (fetched.code !== 0) {
+        missing = remoteMissing(fetched);
+        return result('failed', `Could not fetch ${upstream.remote}: ${gitOutput(fetched).split('\n')[0] || 'git fetch failed'}`);
+      }
       if (!(await revParse(state.root, '@{upstream}'))) return result('failed', `${state.branch.upstream} no longer exists on ${upstream.remote}.`);
       const counts = await aheadBehind(state.root, 'HEAD', '@{upstream}');
       if (!counts) return result('failed', `Could not compare ${branch} with ${state.branch.upstream}.`);

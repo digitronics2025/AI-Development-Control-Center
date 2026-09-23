@@ -1000,7 +1000,8 @@ Repository list shows:
 - last task,
 - availability,
 - remote position: up to date, commits to download, commits to upload,
-  diverged, or no upstream — always as text with an icon.
+  diverged, no upstream, unreachable, or remote deleted — always as text with
+  an icon; unreachable and remote deleted carry the reason on hover.
 
 Above the list, one quiet line states repository automation: whether new
 repositories are found and downloads run automatically, when it last checked,

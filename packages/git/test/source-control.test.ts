@@ -23,6 +23,8 @@ import {
   parsePorcelainV2,
   pathDiff,
   pushRef,
+  remoteMissing,
+  remoteOwnerKey,
   repositoryStatus,
   splitPatch,
   stagedPatch,
@@ -395,5 +397,24 @@ describe('failure classification', () => {
     expect(c('error: gpg failed to sign the data')).toBe('SIGNING_FAILED');
     expect(c('fatal: Not possible to fast-forward, aborting.')).toBe('DIVERGED');
     expect(c('something odd')).toBe('GIT_FAILED');
+  });
+});
+
+describe('remote identity', () => {
+  it('recognises a remote that says the repository does not exist', () => {
+    expect(remoteMissing({ stdout: '', stderr: "remote: Repository not found.\nfatal: repository 'https://github.com/o/r.git/' not found" })).toBe(true);
+    expect(remoteMissing({ stdout: '', stderr: "fatal: 'C:/gone' does not appear to be a git repository" })).toBe(true);
+    expect(remoteMissing({ stdout: '', stderr: 'fatal: unable to access: Could not resolve host: github.com' })).toBe(false);
+    expect(remoteMissing({ stdout: '', stderr: 'fatal: Authentication failed' })).toBe(false);
+  });
+
+  it('keys a remote by host and owner, never keeping credentials', () => {
+    expect(remoteOwnerKey('https://github.com/Digitronics2025/wholesale-app.git')).toBe('github.com/digitronics2025');
+    expect(remoteOwnerKey('https://user:tok3n@github.com/TenTen-maroc/rihla.git')).toBe('github.com/tenten-maroc');
+    expect(remoteOwnerKey('git@github.com:TenTen-maroc/rihla.git')).toBe('github.com/tenten-maroc');
+    expect(remoteOwnerKey('ssh://git@gitlab.example.com:2222/team/app.git')).toBe('gitlab.example.com/team');
+    expect(remoteOwnerKey('C:\\Users\\me\\remotes\\app.git')).toBe('local:c:/users/me/remotes');
+    expect(remoteOwnerKey('/srv/git/app.git')).toBe('local:/srv/git');
+    expect(remoteOwnerKey('')).toBeNull();
   });
 });

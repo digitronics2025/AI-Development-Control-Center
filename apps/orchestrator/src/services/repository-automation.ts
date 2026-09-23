@@ -28,6 +28,27 @@ export interface RepositoryAutomationDeps {
   homeDir?: string;
 }
 
+const FETCHED: ReadonlySet<RepositorySyncOutcome> = new Set(['up-to-date', 'fast-forwarded', 'behind-dirty', 'ahead', 'diverged']);
+
+/**
+ * A remote answering "repository not found" is deleted only if another
+ * repository of the same account fetched fine in the same run. Hosts answer a
+ * private repository the caller cannot see the same way, so without that
+ * proof (an expired sign-in fails every repository alike) it stays `failed`.
+ */
+export function confirmGoneRemotes(results: RepositorySyncResult[]): RepositorySyncResult[] {
+  const reachable = new Set(results.filter((r) => FETCHED.has(r.outcome) && r.remoteOwner).map((r) => r.remoteOwner));
+  return results.map((r) =>
+    r.outcome === 'failed' && r.remoteMissing && r.remoteOwner && reachable.has(r.remoteOwner)
+      ? {
+          ...r,
+          outcome: 'remote-gone',
+          message: `The online copy no longer exists (other ${r.remoteOwner} repositories download fine), so it was deleted or made private to another account. The copy on this computer is untouched.`,
+        }
+      : r,
+  );
+}
+
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   await Promise.all(
@@ -164,20 +185,25 @@ export class RepositoryAutomation {
 
   /** Background-sync every registered repository; returns how many ended in each outcome. */
   async syncAll(): Promise<Partial<Record<RepositorySyncOutcome, number>>> {
-    const counts: Partial<Record<RepositorySyncOutcome, number>> = {};
     const repositories = this.d.store.listRepositories();
+    const run: RepositorySyncResult[] = [];
     await mapLimit(repositories, SYNC_CONCURRENCY, async (repo) => {
       let result: RepositorySyncResult;
       try {
         result = await this.d.sourceControl.backgroundSync(repo.id);
       } catch (error) {
         if (error instanceof RepositoryError && error.code === 'NOT_FOUND') return; // removed mid-run
-        result = { repositoryId: repo.id, outcome: 'failed', message: (error as Error).message.slice(0, 500), ahead: null, behind: null, at: now() };
+        result = { repositoryId: repo.id, outcome: 'failed', message: (error as Error).message.slice(0, 500), ahead: null, behind: null, at: now(), remoteOwner: null, remoteMissing: false };
       }
-      this.results.set(repo.id, result);
-      counts[result.outcome] = (counts[result.outcome] ?? 0) + 1;
+      run.push(result);
       await this.d.repositories.refresh(repo.id).catch(() => undefined);
     });
+
+    const counts: Partial<Record<RepositorySyncOutcome, number>> = {};
+    for (const result of confirmGoneRemotes(run)) {
+      this.results.set(result.repositoryId, result);
+      counts[result.outcome] = (counts[result.outcome] ?? 0) + 1;
+    }
     return counts;
   }
 

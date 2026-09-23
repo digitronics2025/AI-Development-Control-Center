@@ -435,4 +435,197 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_git_operations_commit ON git_operations(commit_sha) WHERE commit_sha IS NOT NULL;
     `,
   },
+  {
+    version: 4,
+    name: 'usage, cost and capacity ledger',
+    // docs/systems/usage.md. One row per actual provider attempt, append-only:
+    // triggers refuse deletes and any change except costing an attempt whose
+    // cost was Unknown (audited in usage_cost_revisions). Money is integer
+    // nano-dollars. No foreign keys to tasks: financial history outlives them.
+    // Only counts, identifiers, timings and a prompt hash are stored — never
+    // prompts, responses or credentials.
+    sql: `
+      CREATE TABLE usage_events (
+        id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        origin TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        billing TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider_model_id TEXT,
+        provider_request_id TEXT,
+        project_id TEXT,
+        task_id TEXT,
+        run_id TEXT,
+        workflow_id TEXT,
+        workflow_step TEXT,
+        agent_role TEXT,
+        mode TEXT,
+        effort TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        api_duration_ms INTEGER,
+        turns INTEGER,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        total_tokens INTEGER,
+        retry_index INTEGER NOT NULL DEFAULT 0,
+        retry_parent_event_id TEXT,
+        attempt_reason TEXT NOT NULL,
+        fallback_from_model TEXT,
+        fallback_to_model TEXT,
+        provider_cost_nanos INTEGER,
+        calculated_cost_nanos INTEGER,
+        display_cost_nanos INTEGER,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        cost_source TEXT NOT NULL,
+        pricing_version_id TEXT,
+        status TEXT NOT NULL,
+        error_class TEXT,
+        prompt_chars INTEGER,
+        prompt_hash TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_usage_started ON usage_events(started_at);
+      CREATE INDEX idx_usage_task ON usage_events(task_id, started_at) WHERE task_id IS NOT NULL;
+      CREATE INDEX idx_usage_project ON usage_events(project_id, started_at);
+      CREATE INDEX idx_usage_provider ON usage_events(provider, started_at);
+      CREATE INDEX idx_usage_agent_role ON usage_events(agent_role, started_at);
+      CREATE INDEX idx_usage_run ON usage_events(run_id) WHERE run_id IS NOT NULL;
+      CREATE INDEX idx_usage_prompt ON usage_events(prompt_hash, started_at) WHERE prompt_hash IS NOT NULL;
+      CREATE INDEX idx_usage_unknown ON usage_events(cost_source) WHERE cost_source = 'UNKNOWN';
+
+      CREATE TABLE usage_event_lines (
+        event_id TEXT NOT NULL REFERENCES usage_events(id),
+        line_no INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        cache_write_1h_tokens INTEGER,
+        reasoning_tokens INTEGER,
+        provider_cost_nanos INTEGER,
+        calculated_cost_nanos INTEGER,
+        pricing_version_id TEXT,
+        PRIMARY KEY (event_id, line_no)
+      );
+      CREATE INDEX idx_usage_lines_model ON usage_event_lines(model);
+
+      CREATE TABLE usage_cost_revisions (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES usage_events(id),
+        previous_source TEXT NOT NULL,
+        new_source TEXT NOT NULL,
+        calculated_cost_nanos INTEGER,
+        pricing_version_id TEXT,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_usage_revisions_event ON usage_cost_revisions(event_id);
+
+      -- Attempts dispatched but not yet recorded: an attempt still here at
+      -- startup was interrupted and is recorded as such (usage unknown).
+      CREATE TABLE usage_pending (
+        idempotency_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        started_at TEXT NOT NULL
+      );
+
+      CREATE TRIGGER usage_events_append_only BEFORE DELETE ON usage_events
+      BEGIN SELECT RAISE(ABORT, 'usage events are append-only'); END;
+      CREATE TRIGGER usage_events_immutable BEFORE UPDATE OF
+        id, idempotency_key, origin, provider, billing, agent_id, model, provider_model_id, provider_request_id,
+        project_id, task_id, run_id, workflow_id, workflow_step, agent_role, mode, effort,
+        started_at, finished_at, duration_ms, api_duration_ms, turns,
+        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
+        retry_index, retry_parent_event_id, attempt_reason, fallback_from_model, fallback_to_model,
+        provider_cost_nanos, currency, status, error_class, prompt_chars, prompt_hash, metadata_json, created_at
+        ON usage_events
+      BEGIN SELECT RAISE(ABORT, 'usage events are immutable'); END;
+      CREATE TRIGGER usage_events_cost_once BEFORE UPDATE OF calculated_cost_nanos, display_cost_nanos, cost_source, pricing_version_id
+        ON usage_events WHEN OLD.cost_source <> 'UNKNOWN'
+      BEGIN SELECT RAISE(ABORT, 'only an attempt with an unknown cost can be costed later'); END;
+      CREATE TRIGGER usage_lines_append_only BEFORE DELETE ON usage_event_lines
+      BEGIN SELECT RAISE(ABORT, 'usage events are append-only'); END;
+      CREATE TRIGGER usage_lines_immutable BEFORE UPDATE OF
+        event_id, line_no, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, reasoning_tokens, provider_cost_nanos
+        ON usage_event_lines
+      BEGIN SELECT RAISE(ABORT, 'usage events are immutable'); END;
+
+      CREATE TABLE pricing_versions (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        provider_model_id TEXT NOT NULL,
+        input_nanos INTEGER NOT NULL,
+        output_nanos INTEGER NOT NULL,
+        cache_read_nanos INTEGER,
+        cache_write_nanos INTEGER,
+        cache_write_1h_nanos INTEGER,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        effective_from TEXT NOT NULL,
+        effective_to TEXT,
+        source TEXT NOT NULL,
+        verification TEXT NOT NULL,
+        last_verified_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_pricing_model ON pricing_versions(provider, provider_model_id, effective_from);
+
+      CREATE TABLE capacity_snapshots (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        label TEXT NOT NULL,
+        used_percent REAL,
+        remaining_percent REAL,
+        status TEXT NOT NULL,
+        reset_at TEXT,
+        source TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        detail TEXT,
+        event_id TEXT
+      );
+      CREATE INDEX idx_capacity_metric ON capacity_snapshots(agent_id, metric, captured_at);
+
+      CREATE TABLE budgets (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL,
+        scope_id TEXT,
+        period TEXT NOT NULL,
+        amount_nanos INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        warning_threshold REAL NOT NULL,
+        critical_threshold REAL NOT NULL,
+        policy TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      -- One budget per scope and period: two would contradict each other.
+      CREATE UNIQUE INDEX idx_budgets_scope ON budgets(scope_type, COALESCE(scope_id, ''), period);
+
+      -- Anthropic first-party list prices per token in nano-dollars ($1/MTok = 1000).
+      -- Haiku 4.5 matched Claude Code's own costUSD to the nano-dollar on 2026-09-23.
+      INSERT INTO pricing_versions (id, provider, provider_model_id, input_nanos, output_nanos, cache_read_nanos, cache_write_nanos, cache_write_1h_nanos, effective_from, source, verification, last_verified_at, created_at) VALUES
+        ('seed-claude-fable-5-1', 'anthropic', 'claude-fable-5-1', 10000, 50000, 250, 12500, 20000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-fable-5', 'anthropic', 'claude-fable-5', 10000, 50000, 1000, 12500, 20000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-opus-5-5', 'anthropic', 'claude-opus-5-5', 4000, 20000, 200, 5000, 8000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24); cache-write rates derived from the standard multipliers, to confirm at launch', 'unverified', NULL, '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-opus-5', 'anthropic', 'claude-opus-5', 5000, 25000, 500, 6250, 10000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-opus-4-8', 'anthropic', 'claude-opus-4-8', 5000, 25000, 500, 6250, 10000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-opus-4-7', 'anthropic', 'claude-opus-4-7', 5000, 25000, 500, 6250, 10000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-opus-4-6', 'anthropic', 'claude-opus-4-6', 5000, 25000, 500, 6250, 10000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-sonnet-5', 'anthropic', 'claude-sonnet-5', 2000, 10000, 200, 2500, 4000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-sonnet-4-6', 'anthropic', 'claude-sonnet-4-6', 3000, 15000, 300, 3750, 6000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices (Claude API reference, 2026-06-24)', 'documented', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z'),
+        ('seed-claude-haiku-4-5', 'anthropic', 'claude-haiku-4-5', 1000, 5000, 100, 1250, 2000, '2026-01-01T00:00:00.000Z', 'Anthropic API list prices; matched Claude Code costUSD exactly (2026-09-23)', 'verified', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z');
+    `,
+  },
 ];

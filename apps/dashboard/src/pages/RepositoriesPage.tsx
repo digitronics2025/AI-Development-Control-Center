@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -16,7 +16,7 @@ import {
   useFeedback,
   type Column,
 } from '@acc/ui';
-import type { Repository, RepositoryAutomationStatus, Settings } from '@acc/shared';
+import type { Repository, RepositoryAutomationStatus, RepositorySyncResult, Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
@@ -32,9 +32,24 @@ export function GitState({ repo }: { repo: Repository }) {
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 /** Where the branch stands against its upstream, as of the last fetch. */
-export function RemoteState({ repo }: { repo: Repository }) {
+export function RemoteState({ repo, sync }: { repo: Repository; sync?: RepositorySyncResult }) {
   const { upstream, ahead, behind } = repo.status;
   if (!repo.status.isGitRepo) return <span className="text-fg-secondary">—</span>;
+  // The last background check knows what status alone cannot: whether the remote still answers.
+  if (sync?.outcome === 'remote-gone') {
+    return (
+      <span title={sync.message}>
+        <StatusChip size="compact" visual={{ label: 'Remote deleted', tone: 'neutral', icon: Unlink }} />
+      </span>
+    );
+  }
+  if (sync?.outcome === 'failed') {
+    return (
+      <span title={sync.message}>
+        <StatusChip size="compact" visual={{ label: 'Unreachable', tone: 'warning', icon: CircleAlert }} />
+      </span>
+    );
+  }
   if (!upstream || ahead === null || behind === null) return <StatusChip size="compact" visual={{ label: 'No upstream', tone: 'neutral', icon: CloudOff }} />;
   if (ahead > 0 && behind > 0) return <StatusChip size="compact" visual={{ label: `Diverged (${ahead} up, ${behind} down)`, tone: 'warning', icon: GitFork }} />;
   if (behind > 0) return <StatusChip size="compact" visual={{ label: `${plural(behind, 'commit')} to download`, tone: 'info', icon: ArrowDownToLine }} />;
@@ -58,6 +73,7 @@ function AutomationSummary({ status, settings }: { status: RepositoryAutomationS
   if (run?.discovery?.added.length) changes.push(plural(run.discovery.added.length, 'new repository', 'new repositories'));
   if (run?.sync?.['fast-forwarded']) changes.push(`${plural(run.sync['fast-forwarded'], 'repository', 'repositories')} updated`);
   if (run?.sync?.failed) changes.push(`${plural(run.sync.failed, 'repository', 'repositories')} could not be reached`);
+  if (run?.sync?.['remote-gone']) changes.push(`${plural(run.sync['remote-gone'], 'repository', 'repositories')} whose online copy was deleted`);
   return (
     <p className="text-small text-fg-secondary" aria-live="polite">
       Every {plural(intervalMinutes, 'minute')}, {what} automatically; uploads are never automatic.{' '}
@@ -155,6 +171,7 @@ export function RepositoriesPage() {
   const automation = useRepositoryAutomation();
   const runAutomation = useRunRepositoryAutomation();
   const settings = useSettings();
+  const syncResults = new Map((automation.data?.results ?? []).map((r) => [r.repositoryId, r]));
   const automationOff = settings.data ? !settings.data.repositoryAutomation.discover && !settings.data.repositoryAutomation.sync : false;
   const navigate = useNavigate();
   const connection = useConnection();
@@ -198,7 +215,7 @@ export function RepositoriesPage() {
       ),
     },
     { key: 'git', header: 'Working tree', sortValue: (r) => (r.status.dirty ? 1 : 0), cell: (r) => <GitState repo={r} /> },
-    { key: 'remote', header: 'Remote', sortValue: (r) => (r.status.behind ?? -1) * 1000 + (r.status.ahead ?? 0), cell: (r) => <RemoteState repo={r} /> },
+    { key: 'remote', header: 'Remote', sortValue: (r) => (r.status.behind ?? -1) * 1000 + (r.status.ahead ?? 0), cell: (r) => <RemoteState repo={r} sync={syncResults.get(r.id)} /> },
     {
       key: 'tooling',
       header: 'Tooling',

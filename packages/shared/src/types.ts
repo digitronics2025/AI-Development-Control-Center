@@ -284,15 +284,24 @@ export interface RepositoryStatus {
 }
 
 /** What background sync did with one repository (docs/systems/repository-automation.md). */
-export type RepositorySyncOutcome = 'up-to-date' | 'fast-forwarded' | 'behind-dirty' | 'ahead' | 'diverged' | 'skipped' | 'failed';
+export type RepositorySyncOutcome = 'up-to-date' | 'fast-forwarded' | 'behind-dirty' | 'ahead' | 'diverged' | 'skipped' | 'failed' | 'remote-gone';
 
 export interface RepositorySyncResult {
   repositoryId: string;
+  /**
+   * `remote-gone`: the remote says the repository does not exist while another
+   * repository of the same account fetched fine in the same run, so it is not
+   * a sign-in problem. The local copy is untouched.
+   */
   outcome: RepositorySyncOutcome;
   message: string;
   ahead: number | null;
   behind: number | null;
   at: Iso;
+  /** `host/owner` of the upstream remote (never the full URL or credentials); null when unknown. */
+  remoteOwner: string | null;
+  /** The fetch failed because the remote answered that the repository does not exist. */
+  remoteMissing: boolean;
 }
 
 export interface RepositoryDiscoveryReport {

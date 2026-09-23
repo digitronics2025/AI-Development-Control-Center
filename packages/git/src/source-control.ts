@@ -552,3 +552,45 @@ export function classifyGitOutput(result: Pick<GitResult, 'stdout' | 'stderr' | 
   if (/conflict|unmerged/.test(text)) return 'CONFLICTS';
   return 'GIT_FAILED';
 }
+
+/**
+ * The remote answered that the repository does not exist (GitHub/GitLab 404,
+ * or a local path that is no longer a repository). A private repository the
+ * caller cannot see answers the same way, so callers must not treat this
+ * alone as proof of deletion.
+ */
+export function remoteMissing(result: Pick<GitResult, 'stdout' | 'stderr'>): boolean {
+  const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  return /repository not found|repository '[^']*' not found|does not appear to be a git repository|the requested url returned error: 404|project you were looking for could not be found/.test(text);
+}
+
+/**
+ * `host/owner` of a remote URL (https, scp-style or ssh), or the parent folder
+ * of a local path; lowercase and without credentials. Two repositories with the
+ * same key live under the same account, which lets one successful fetch vouch
+ * for the sign-in of the other.
+ */
+export function remoteOwnerKey(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(trimmed);
+  if (withScheme && !/^file:/i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const owner = parsed.pathname.split('/').filter(Boolean)[0];
+      return owner ? `${parsed.hostname}/${owner}`.toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/)([^/\s]+)\//.exec(trimmed);
+  if (scp && !/^[a-z]:[\\/]/i.test(trimmed)) return `${scp[1]}/${scp[2]}`.toLowerCase();
+  const local = trimmed.replace(/^file:\/\//i, '').replace(/[\\/]+$/, '');
+  const parent = local.replace(/[\\/][^\\/]*$/, '');
+  return parent && parent !== local ? `local:${parent.replace(/\\/g, '/')}`.toLowerCase() : null;
+}
+
+export async function remoteUrl(cwd: string, remote: string): Promise<string | null> {
+  const result = await git(cwd, ['remote', 'get-url', remote]);
+  return result.code === 0 ? result.stdout.trim() || null : null;
+}

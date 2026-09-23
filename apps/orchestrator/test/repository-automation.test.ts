@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { git, headCommit } from '@acc/git';
 import type { Repository, RepositoryAutomationSettings } from '@acc/shared';
+import { confirmGoneRemotes } from '../src/services/repository-automation.js';
 import { reconcileGitOperations } from '../src/source-control/reconcile.js';
 import { newId, now } from '../src/store/store.js';
 import { addRepo, createTask, createTestApp, makeRepo, waitForStatus, type TestApp } from './helpers.js';
@@ -229,6 +230,50 @@ describe('background sync', () => {
     t.services.gitOperations.note(op.id, { fastForwardTo: head });
     const report = await reconcileGitOperations({ operations: t.services.gitOperations, repositories: t.services.repositories });
     expect(report.resolved).toEqual([{ id: op.id, kind: 'fast_forward', status: 'succeeded' }]);
+  });
+});
+
+describe('deleted remotes', () => {
+  it('calls a remote deleted only when another repository of the same account still fetches', async () => {
+    const kept = await repoWithRemote();
+    const gone = await repoWithRemote(); // remotes share a parent folder: the same "account"
+    const keptId = await addRepo(t, kept.local);
+    const goneId = await addRepo(t, gone.local);
+    rmSync(gone.remote, { recursive: true, force: true });
+    const before = await headCommit(gone.local);
+
+    await automation({ discover: false, sync: true });
+    const run = await t.services.repositoryAutomation.run('manual');
+    expect(run.sync).toMatchObject({ 'up-to-date': 1, 'remote-gone': 1 });
+    const results = t.services.repositoryAutomation.status().results;
+    expect(results.find((r) => r.repositoryId === keptId)).toMatchObject({ outcome: 'up-to-date' });
+    expect(results.find((r) => r.repositoryId === goneId)).toMatchObject({ outcome: 'remote-gone', remoteMissing: true });
+    expect(await headCommit(gone.local)).toBe(before);
+  });
+
+  it('keeps a lone missing remote as failed: without proof the sign-in works, it may be an access problem', async () => {
+    const gone = await repoWithRemote();
+    const goneId = await addRepo(t, gone.local);
+    rmSync(gone.remote, { recursive: true, force: true });
+    await automation({ discover: false, sync: true });
+    await t.services.repositoryAutomation.run('manual');
+    expect(t.services.repositoryAutomation.status().results.find((r) => r.repositoryId === goneId)).toMatchObject({ outcome: 'failed', remoteMissing: true });
+  });
+
+  it('never vouches across accounts or for failures that are not "not found"', () => {
+    const base = { message: '', ahead: null, behind: null, at: now() };
+    const out = confirmGoneRemotes([
+      { ...base, repositoryId: 'ok', outcome: 'up-to-date', remoteOwner: 'github.com/a', remoteMissing: false },
+      { ...base, repositoryId: 'other-account', outcome: 'failed', remoteOwner: 'github.com/b', remoteMissing: true },
+      { ...base, repositoryId: 'network', outcome: 'failed', remoteOwner: 'github.com/a', remoteMissing: false },
+      { ...base, repositoryId: 'gone', outcome: 'failed', remoteOwner: 'github.com/a', remoteMissing: true },
+    ]);
+    expect(out.map((r) => [r.repositoryId, r.outcome])).toEqual([
+      ['ok', 'up-to-date'],
+      ['other-account', 'failed'],
+      ['network', 'failed'],
+      ['gone', 'remote-gone'],
+    ]);
   });
 });
 

@@ -34,7 +34,7 @@ import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
-import { buildFinalReport, extractOperatorItems } from './report.js';
+import { buildFinalReport, latestOperatorItems } from './report.js';
 import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
@@ -1061,7 +1061,7 @@ export class TaskEngine {
     const stages = this.d.store.listStages(task.id);
     const testsSkipped = stages.some((s) => s.kind === 'tests' && s.status === 'SKIPPED');
     const deployed = stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer') ? 'staging' : 'none';
-    const operatorItems = extractOperatorItems(
+    const operatorItems = latestOperatorItems(
       await this.d.artifacts.latestText(task.id, 'review'),
       await this.d.artifacts.latestText(task.id, 'verification'),
     );

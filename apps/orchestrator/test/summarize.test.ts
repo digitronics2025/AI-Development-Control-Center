@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractOperatorItems } from '../src/engine/report.js';
+import { extractOperatorItems, latestOperatorItems } from '../src/engine/report.js';
 import { parseVerdict, summarize } from '../src/engine/runners.js';
 
 // Shapes taken from real Claude Code stage outputs.
@@ -55,6 +55,16 @@ describe('extractOperatorItems', () => {
     const review = 'NEEDS OPERATOR: Switch bindMode to loopback.';
     expect(extractOperatorItems(review, verification, null)).toEqual(['Switch bindMode to loopback.', 'Provide a ping URL.']);
     expect(extractOperatorItems('nothing to see')).toEqual([]);
+  });
+});
+
+describe('latestOperatorItems', () => {
+  it('takes the verification list when there is one, so a restated concern is not listed twice', () => {
+    const review = 'NEEDS OPERATOR: The messenger path is unit-tested only.';
+    const verification = 'NEEDS OPERATOR: The messenger transport has only been tested with a fake transport.';
+    expect(latestOperatorItems(review, verification)).toEqual(['The messenger transport has only been tested with a fake transport.']);
+    expect(latestOperatorItems(review, 'All criteria met.')).toEqual([]);
+    expect(latestOperatorItems(review, null)).toEqual(['The messenger path is unit-tested only.']);
   });
 });
 

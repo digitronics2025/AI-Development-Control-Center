@@ -30,6 +30,16 @@ export function extractOperatorItems(...outputs: Array<string | null | undefined
   return [...items].slice(0, MAX_OPERATOR_ITEMS);
 }
 
+/**
+ * The operator decisions to report. The verifier reads the review before it
+ * writes, so when a verification exists its list is the current one; taking
+ * both listed the same concern twice in different words. Without a
+ * verification the review's list stands.
+ */
+export function latestOperatorItems(review: string | null | undefined, verification: string | null | undefined): string[] {
+  return verification ? extractOperatorItems(verification) : extractOperatorItems(review);
+}
+
 export interface ReportResult {
   markdown: string;
   finalStatus: FinalStatus;

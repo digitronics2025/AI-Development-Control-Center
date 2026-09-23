@@ -70,7 +70,7 @@ advisory verdict (it does not route); a FAIL makes the report
 status is `READY` only when the last test stage passed (not skipped), the last
 review/verification passed, and no file mixes pre-existing user work with task
 changes; otherwise `NEEDS_USER_ACTION`. Lines starting `NEEDS OPERATOR:` in the
-latest review or verification — things only the operator can settle, which
+latest verification (or, when none ran, the latest review) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 

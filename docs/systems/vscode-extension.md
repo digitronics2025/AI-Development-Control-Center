@@ -2,7 +2,7 @@
 system: vscode-extension
 sources:
   - apps/vscode-extension/**
-verified_at: d0e90d5
+verified_at: 2d516aa
 ---
 
 # VS Code extension

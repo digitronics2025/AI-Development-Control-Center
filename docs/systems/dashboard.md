@@ -4,7 +4,7 @@ sources:
   - apps/dashboard/**
   - packages/ui/**
   - design.md
-verified_at: d0e90d5
+verified_at: 2d516aa
 ---
 
 # Dashboard and design system

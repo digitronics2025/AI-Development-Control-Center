@@ -16,6 +16,7 @@ import { useTaskCommand } from '../../api/hooks';
 import { useConnection } from '../../app/runtime';
 import { AssignmentText, useAgentNames } from '../../components/agents';
 import { DirectiveForm } from './dialogs';
+import { UsagePanel } from './UsagePanel';
 
 export interface InspectorActions {
   openReroute: () => void;
@@ -79,6 +80,8 @@ export function TaskInspector({ task, actions }: { task: TaskDetail; actions: In
           </div>
         ) : null}
       </Panel>
+
+      <UsagePanel task={task} />
 
       <Panel title="Stage controls" variant="inspector" headingLevel={3}>
         <div className="flex flex-wrap gap-2">

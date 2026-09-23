@@ -46,7 +46,10 @@ hub, SQLite persistence and the workflow engine. Entry:
 Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)),
 and the Chairman's `task_contracts`, `chairman_sessions`, `chairman_messages`,
 `chairman_decisions`, `chairman_actions`, `failure_signatures`,
-`task_checkpoints` (migration 2, [chairman.md](chairman.md)). Access goes through
+`task_checkpoints` (migration 2, [chairman.md](chairman.md)), and the usage ledger's
+`usage_events`, `usage_event_lines`, `usage_cost_revisions`, `usage_pending`,
+`pricing_versions`, `capacity_snapshots`, `budgets` (migration 4, append-only by
+trigger, [usage.md](usage.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -66,6 +69,7 @@ before any row is written.
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
 | Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
 | Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
+| Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile; see [usage.md](usage.md#api-apiusage-bearer-token) |
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
@@ -80,7 +84,8 @@ the build folder is empty the page answers 503 with `Retry-After`.
 `repository`, `workflow`, `repositoryAutomation`) plus `sourceControl` (`{repositoryId}` only: refetch that
 repository's Git state; sent by `RepositoryService.invalidate` and every Source
 Control mutation) and the Chairman's `chairman`, `chairman.message`,
-`chairman.decision`, `chairman.action`, `checkpoint`. Log lines (`logs`) go only to clients that sent
+`chairman.decision`, `chairman.action`, `checkpoint`, and `usage` (a recorded or
+re-costed attempt; clients refetch usage views). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log
 batches and refetch. Log lines are batched every 150 ms or 250 lines.
 

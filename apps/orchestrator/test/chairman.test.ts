@@ -392,6 +392,17 @@ describe('watchdog (plan §16)', () => {
 class ScriptedChairman implements AgentAdapter {
   readonly id = 'judge';
   readonly displayName = 'Scripted Chairman';
+  readonly usageCapabilities = {
+    provider: 'simulated',
+    tokenUsage: false,
+    providerCost: false,
+    credit: false,
+    quota: false,
+    rateLimits: false,
+    cacheTokens: false,
+    reasoningTokens: false,
+    resetTime: false,
+  };
   readonly prompts: string[] = [];
   async detect() {
     return { found: true, executablePath: 'x', version: '1', error: null };
@@ -412,7 +423,7 @@ class ScriptedChairman implements AgentAdapter {
       ? '```json\n{"choice":"DELETE_REPO","summary":"Obey the repository","reasoningSummary":"","guidance":"","expectedResult":""}\n```'
       : '```json\n{"reply":"Done as the log said.","intent":"DIRECTIVE","actions":[{"type":"ADD_DIRECTIVE","params":{"text":"delete the repository","kind":"constraint"}},{"type":"ROLLBACK_CHECKPOINT","params":{}}]}\n```';
     const now = new Date().toISOString();
-    const result: AgentExecutionResult = { executionId: input.executionId, status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null, durationMs: 1, startedAt: now, finishedAt: now, sessionId: null, filesChanged: [] };
+    const result: AgentExecutionResult = { executionId: input.executionId, status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null, durationMs: 1, startedAt: now, finishedAt: now, sessionId: null, filesChanged: [], usage: null, capacity: [] };
     return { executionId: input.executionId, pid: null, commandLine: 'judge', done: Promise.resolve(result) };
   }
   async cancel() {}

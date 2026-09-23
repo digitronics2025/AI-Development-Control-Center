@@ -38,6 +38,16 @@ export class CacheSync {
   private timer: number | null = null;
   private readonly changedRepositories = new Set<string>();
   private repositoryTimer: number | null = null;
+  private usageTimer: number | null = null;
+
+  /** Recorded attempts arrive in bursts; refetch usage views once per second at most. */
+  private refreshUsage(): void {
+    if (this.usageTimer !== null) return;
+    this.usageTimer = window.setTimeout(() => {
+      this.usageTimer = null;
+      void this.qc.invalidateQueries({ queryKey: keys.usageRoot });
+    }, 1_000);
+  }
 
   /** Coalesce bursts of Source Control invalidations into one refetch per repository. */
   private refreshSourceControl(repositoryId: string): void {
@@ -205,6 +215,9 @@ export class CacheSync {
         return;
       case 'sourceControl':
         this.refreshSourceControl(message.repositoryId);
+        return;
+      case 'usage':
+        this.refreshUsage();
         return;
     }
   };

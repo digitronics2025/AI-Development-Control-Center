@@ -229,7 +229,7 @@ export class StageRunners {
 
     let handle;
     try {
-      handle = await adapter.execute({
+      handle = await agents.launch(agentId, {
         ...agents.runtimeOptions(agentId),
         executionId,
         cwd: repo.path,
@@ -239,6 +239,15 @@ export class StageRunners {
         permissionLevel: def.permissionLevel,
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
+      }, {
+        origin: 'stage',
+        projectId: task.repositoryId,
+        taskId: task.id,
+        runId: stage.id,
+        workflowId: task.workflowId,
+        workflowStep: def.key,
+        agentRole: def.role,
+        mode: task.mode,
       });
     } catch (error) {
       const errorClass: ErrorClass = error instanceof AgentGuardError ? error.errorClass : 'PROCESS_CRASH';

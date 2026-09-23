@@ -1,9 +1,17 @@
 import {
+  capacityFromFailure,
+  CapacityCollector,
   capture,
   CliAgentAdapter,
+  dollars,
+  epochSecondsToIso,
+  tokenCount,
   type AgentExecutionInput,
   type AgentHealth,
+  type AgentUsageLine,
+  type AgentUsageReport,
   type ParserContext,
+  type ProviderUsageCapabilities,
   type StreamParser,
 } from '@acc/agent-sdk';
 import type { AgentCapabilities, ModelDescriptor, PermissionLevel } from '@acc/shared';
@@ -50,9 +58,146 @@ function summarizeToolInput(input: Record<string, unknown> | undefined): string 
   return flat.length > 300 ? `${flat.slice(0, 297)}...` : flat;
 }
 
+const WINDOW_LABEL: Record<string, string> = {
+  five_hour: '5-hour window',
+  seven_day: 'Weekly window',
+  seven_day_opus: 'Weekly Opus window',
+  seven_day_sonnet: 'Weekly Sonnet window',
+};
+
+/** `five_hour` → "5-hour window"; unknown windows keep a readable form of their key. */
+function windowLabel(key: string): string {
+  return WINDOW_LABEL[key] ?? `${key.replace(/_/g, ' ')} window`;
+}
+
+/**
+ * Capacity readings in a `rate_limit_event`. `unifiedWindows` carries the
+ * subscription's utilisation per window (0–1) and when it resets; the top
+ * level says whether this request was allowed and whether extra usage
+ * (overage) can be bought.
+ */
+export function claudeCapacity(info: Record<string, any>, collector: CapacityCollector): void {
+  const windows = (info.unifiedWindows ?? {}) as Record<string, Record<string, unknown>>;
+  for (const [key, window] of Object.entries(windows)) {
+    const utilization = typeof window?.utilization === 'number' && Number.isFinite(window.utilization) ? window.utilization : null;
+    const usedPercent = utilization === null ? null : Math.min(100, Math.max(0, Math.round(utilization * 1000) / 10));
+    const limited = info.status === 'rejected' && info.rateLimitType === key;
+    collector.add({
+      metric: `window:${key}`,
+      label: windowLabel(key),
+      usedPercent,
+      status:
+        limited || (usedPercent !== null && usedPercent >= 100)
+          ? 'exhausted'
+          : usedPercent === null
+            ? 'unknown'
+            : usedPercent >= 80
+              ? 'warning'
+              : 'ok',
+      resetsAt: epochSecondsToIso(window?.resetsAt),
+      detail: null,
+    });
+  }
+  if (!Object.keys(windows).length && typeof info.rateLimitType === 'string') {
+    // Older CLI versions report only the window that applied to this request.
+    collector.add({
+      metric: `window:${info.rateLimitType}`,
+      label: windowLabel(info.rateLimitType),
+      usedPercent: null,
+      status: info.status === 'rejected' ? 'exhausted' : info.status === 'allowed_warning' ? 'warning' : 'ok',
+      resetsAt: epochSecondsToIso(info.resetsAt),
+      detail: null,
+    });
+  }
+  if (typeof info.overageStatus === 'string') {
+    const reason = typeof info.overageDisabledReason === 'string' ? info.overageDisabledReason.replace(/_/g, ' ') : null;
+    collector.add({
+      metric: 'overage',
+      label: 'Extra usage',
+      usedPercent: null,
+      status:
+        info.overageStatus === 'rejected'
+          ? 'exhausted'
+          : info.overageStatus === 'allowed_warning'
+            ? 'warning'
+            : info.overageStatus === 'allowed'
+              ? 'ok'
+              : 'unknown',
+      resetsAt: null,
+      detail: info.overageStatus === 'rejected' ? `Not available${reason ? `: ${reason}` : ''}` : reason,
+    });
+  }
+}
+
+/**
+ * Usage from Claude Code's `result` event. `modelUsage` is cumulative per
+ * model over every API call of the run (the top-level `usage` covers only
+ * the last turn), so it is the source of truth; `costUSD` is the cost the
+ * CLI computed at list price. The one-hour cache-write share is known only
+ * when a single model ran and the last turn's `cache_creation` covers all of
+ * its writes.
+ */
+export function claudeUsage(event: Record<string, any>, sessionId: string | null, initModel: string | null): AgentUsageReport | null {
+  const perModel = (event.modelUsage ?? {}) as Record<string, Record<string, unknown>>;
+  const last = (event.usage ?? {}) as Record<string, any>;
+  const lines: AgentUsageLine[] = Object.entries(perModel).map(([model, u]) => ({
+    model: typeof u.canonicalModel === 'string' && u.canonicalModel ? u.canonicalModel : model,
+    inputTokens: tokenCount(u.inputTokens),
+    outputTokens: tokenCount(u.outputTokens),
+    cacheReadTokens: tokenCount(u.cacheReadInputTokens),
+    cacheWriteTokens: tokenCount(u.cacheCreationInputTokens),
+    cacheWrite1hTokens: null,
+    reasoningTokens: tokenCount(u.thinkingTokens),
+    reportedCostUsd: dollars(u.costUSD),
+  }));
+  if (lines.length === 1) {
+    const line = lines[0]!;
+    const split = last.cache_creation as Record<string, unknown> | undefined;
+    const oneHour = tokenCount(split?.ephemeral_1h_input_tokens);
+    const fiveMinute = tokenCount(split?.ephemeral_5m_input_tokens);
+    if (line.cacheWriteTokens === 0) line.cacheWrite1hTokens = 0;
+    else if (oneHour !== null && fiveMinute !== null && line.cacheWriteTokens !== null && oneHour + fiveMinute === line.cacheWriteTokens) {
+      line.cacheWrite1hTokens = oneHour;
+    }
+  }
+  if (!lines.length && Object.keys(last).length) {
+    // No per-model breakdown: fall back to the last turn's usage under the init model.
+    const total = tokenCount(last.cache_creation_input_tokens);
+    lines.push({
+      model: initModel ?? 'unknown',
+      inputTokens: tokenCount(last.input_tokens),
+      outputTokens: tokenCount(last.output_tokens),
+      cacheReadTokens: tokenCount(last.cache_read_input_tokens),
+      cacheWriteTokens: total,
+      cacheWrite1hTokens: total === 0 ? 0 : tokenCount(last.cache_creation?.ephemeral_1h_input_tokens),
+      reasoningTokens: tokenCount(last.output_tokens_details?.thinking_tokens),
+      reportedCostUsd: dollars(event.total_cost_usd),
+    });
+  }
+  if (!lines.length) return null;
+  return {
+    providerRequestId: sessionId,
+    resolvedModel: initModel,
+    lines,
+    turns: tokenCount(event.num_turns),
+    apiDurationMs: tokenCount(event.duration_api_ms),
+  };
+}
+
 export class ClaudeCodeAdapter extends CliAgentAdapter {
   readonly id = 'claude';
   readonly displayName = 'Claude Code';
+  readonly usageCapabilities: ProviderUsageCapabilities = {
+    provider: 'anthropic',
+    tokenUsage: true,
+    providerCost: true,
+    credit: false,
+    quota: true,
+    rateLimits: true,
+    cacheTokens: true,
+    reasoningTokens: true,
+    resetTime: true,
+  };
   protected readonly binaryName = 'claude';
 
   protected async readVersion(executable: string, env: NodeJS.ProcessEnv): Promise<string | null> {
@@ -145,6 +290,9 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     let finalMessage: string | null = null;
     let sessionId: string | null = null;
     let usageLimited = false;
+    let initModel: string | null = null;
+    let usage: AgentUsageReport | null = null;
+    const capacity = new CapacityCollector();
     const failureMessages: string[] = [];
     const filesChanged = new Set<string>();
 
@@ -161,6 +309,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           case 'system':
             if (event.subtype === 'init') {
               sessionId = event.session_id ?? null;
+              initModel = typeof event.model === 'string' ? event.model : null;
               emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}`.trim());
               // Runtime tripwire: the CLI itself says where its credentials came from.
               const source = event.apiKeySource;
@@ -171,6 +320,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
             break;
           case 'rate_limit_event': {
             const info = event.rate_limit_info ?? {};
+            claudeCapacity(info, capacity);
             if (info.status === 'rejected') {
               usageLimited = true;
               const reset = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000).toISOString() : 'unknown';
@@ -203,6 +353,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
             break;
           case 'result':
             finalMessage = typeof event.result === 'string' ? event.result : finalMessage;
+            usage = claudeUsage(event, event.session_id ?? sessionId, initModel);
             if (event.is_error) {
               failureMessages.push(String(event.result || event.subtype || 'Claude Code reported an error'));
               if (event.api_error_status === 429) usageLimited = true;
@@ -219,6 +370,12 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
         if (line.trim()) emit('stderr', line);
       },
       finish() {
+        // A usage limit stated only in an error message still counts as a capacity reading.
+        const exhausted = capacity.list().some((c) => c.status === 'exhausted');
+        for (const message of failureMessages) {
+          const signal = capacityFromFailure(message);
+          if (signal && !(signal.metric === 'usage_limit' && exhausted)) capacity.add(signal);
+        }
         return {
           finalMessage,
           failureMessages,
@@ -226,6 +383,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           usageLimited,
           guardViolation: null,
           filesChanged: [...filesChanged],
+          usage,
+          capacity: capacity.list(),
         };
       },
     };

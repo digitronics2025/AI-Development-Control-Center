@@ -21,6 +21,8 @@ const AgentsPage = lazy(() => import('../pages/AgentsPage').then((m) => ({ defau
 const RepositoriesPage = lazy(() => import('../pages/RepositoriesPage').then((m) => ({ default: m.RepositoriesPage })));
 const RepositoryDetailPage = lazy(() => import('../pages/RepositoryDetailPage').then((m) => ({ default: m.RepositoryDetailPage })));
 const SourceControlPage = lazy(() => import('../pages/source-control/SourceControlPage').then((m) => ({ default: m.SourceControlPage })));
+const UsagePage = lazy(() => import('../pages/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
+const UsageTaskPage = lazy(() => import('../pages/usage/UsageTaskPage').then((m) => ({ default: m.UsageTaskPage })));
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 function NotFound() {
@@ -97,6 +99,8 @@ export function AppRoutes() {
       <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
       <Route path="/source-control" element={<SourceControlPage />} />
       <Route path="/source-control/:repositoryId" element={<SourceControlPage />} />
+      <Route path="/usage" element={<UsagePage />} />
+      <Route path="/usage/tasks/:id" element={<UsageTaskPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/settings/:section" element={<SettingsPage />} />
       <Route path="*" element={<NotFound />} />

@@ -120,7 +120,7 @@ export class SourceControlAssist {
       ].join('\n');
       let handle;
       try {
-        handle = await adapter.execute({
+        handle = await this.d.agents.launch(assignment.agentId, {
           ...this.d.agents.runtimeOptions(assignment.agentId),
           executionId: randomUUID(),
           cwd: repo.path,
@@ -129,6 +129,15 @@ export class SourceControlAssist {
           effort: assignment.effort,
           permissionLevel: 1,
           timeoutMs: MESSAGE_TIMEOUT_MS,
+        }, {
+          origin: 'source_control',
+          projectId: repositoryId,
+          taskId: null,
+          runId: null,
+          workflowId: null,
+          workflowStep: 'commit-message',
+          agentRole: 'committer',
+          mode: null,
         });
       } catch (error) {
         const reason = error instanceof AgentGuardError ? error.message : `The agent could not start: ${(error as Error).message}`;

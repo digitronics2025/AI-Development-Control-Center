@@ -23,6 +23,7 @@ import { SourceControlAssist } from './source-control/assist.js';
 import { SourceControlService } from './source-control/service.js';
 import { GitOperationStore } from './store/git-operations.js';
 import { Store } from './store/store.js';
+import { UsageService } from './usage/service.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -45,6 +46,7 @@ export interface AppServices {
   chairman: Chairman;
   chat: ChairmanChat;
   watchdog: Watchdog;
+  usage: UsageService;
   startedAt: string;
   /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
   recover(): Promise<{ interruptedTasks: string[] }>;
@@ -68,7 +70,9 @@ export function createServices(
   const store = new Store(db);
   const bus = new Bus();
   const settings = new SettingsService(store, bus);
-  const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env);
+  const usage = new UsageService({ db, store, bus, dataDir: config.dataDir, simulated: config.simulatedAgents });
+  const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env, usage.recorder);
+  usage.attachAdapters(() => agents.ids().map((id) => agents.adapter(id)));
   const repositories = new RepositoryService(store, bus, settings);
   const workflows = new WorkflowService(store, bus);
   const prompts = new PromptService(store, path.join(config.resourcesDir, 'prompts'));
@@ -111,8 +115,11 @@ export function createServices(
     chairman,
     chat,
     watchdog,
+    usage,
     startedAt: new Date().toISOString(),
     async recover() {
+      // Before anything runs: replay spooled usage and close attempts a stop interrupted.
+      usage.recover();
       const result = engine.recover();
       await chairman.onStartup();
       chat.recoverPending();
@@ -123,6 +130,7 @@ export function createServices(
       await repositoryAutomation.stop();
       await engine.shutdown();
       await chat.idle();
+      usage.close();
       db.close();
     },
   };

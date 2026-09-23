@@ -21,6 +21,12 @@ export const PAGES = [
   { name: 'source-control', path: '/source-control', ready: 'Recent Git operations' },
   { name: 'source-control-history', path: '/source-control?tab=history', ready: 'End of history' },
   { name: 'settings-billing', path: '/settings/billing', ready: 'Billing Mode' },
+  { name: 'usage-overview', path: '/usage', ready: 'Spend in range' },
+  { name: 'usage-models', path: '/usage?tab=models', ready: 'Price list' },
+  { name: 'usage-providers', path: '/usage?tab=providers', ready: 'Re-check readings' },
+  { name: 'usage-budgets', path: '/usage?tab=budgets', ready: 'Add budget' },
+  { name: 'usage-events', path: '/usage?tab=events', ready: 'match' },
+  { name: 'usage-task', path: '/usage/tasks/TASK-0001', ready: 'Cost flow' },
 ] as const;
 
 /** Console errors fail the test; collected from page load onwards. */

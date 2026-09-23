@@ -176,12 +176,15 @@ Agents
 Repositories
 Source Control
 Approvals
+Usage & Costs
 Settings
 ```
 
 Do not add more top-level navigation unless the product gains a genuinely separate domain.
 Source Control is one: repository Git state (staged, unstaged, history, sync) is
 not task state, and it must stay reachable while no task exists (§7.9).
+Usage & Costs is another: spend, tokens, budgets and provider limits span every
+task and outlive them (§7.10).
 
 Secondary content belongs inside the relevant section.
 
@@ -215,9 +218,10 @@ Order:
 6. Repositories
 7. Source Control
 8. Approvals
-9. flexible spacer
-10. Settings
-11. local service status
+9. Usage & Costs
+10. flexible spacer
+11. Settings
+12. local service status
 
 Rules:
 - one icon family only,
@@ -1128,6 +1132,76 @@ branch is its own dialog with the remote named. There is no force option.
 
 ---
 
+# 7.10 Usage & Costs
+
+Purpose: answer "what did we use, what did it cost, what remains, and where is
+it wasted?" Route `/usage`, one header with the date range, then tabs:
+
+```text
+Usage & Costs                 [Today | 7 days | Month | Custom] [Export] [Refresh]
+Tabs: Overview · Tasks · Models · Agents · Providers · Budgets · Events
+```
+
+The range and every filter live in the URL (`?range=7d&tab=models&provider=…`),
+so views are bookmarkable and Back returns to the same view.
+
+## Overview
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Spend       Tokens       Cost / successful task   Budget left │  ← stat tiles (§8.12)
+├──────────────────────────────────────────────────────────────┤
+│ Spend trend (column chart, §8.11)                             │
+├────────────────────────────┬─────────────────────────────────┤
+│ Providers (share meters)   │ Capacity & limits               │
+├────────────────────────────┼─────────────────────────────────┤
+│ Top cost tasks             │ Waste & anomalies               │
+├────────────────────────────┴─────────────────────────────────┤
+│ Health (compact; expanded only when something is wrong)       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Honesty rules (these outrank layout)
+
+- **Unknown is never zero.** An unknown cost renders as the word "Unknown";
+  totals say how many attempts are not included ("3 not priced").
+- **Every cost shows its source** in detail views: a neutral chip
+  `Provider` / `Calculated` / `Unknown`.
+- **Remaining capacity is never one percentage.** Internal budget, provider
+  credit, provider quota windows and rate limits are separate rows, each with a
+  confidence chip (`Live`, `Calculated`, `Estimated`, `Unavailable`) and
+  its time. A stale reading keeps its value and says **Stale** with the reason.
+  A provider that exposes nothing shows `Unavailable`, never a guess.
+- **Subscription runs** carry one quiet line under the KPIs explaining that the
+  cost is the API-price equivalent, not an extra charge.
+- **Simulated data** is labelled with an info banner.
+
+## Task ledger (`/usage/tasks/:id`)
+
+The primary diagnostic screen: header (task, repository, status, duration),
+totals row, a **cost flow** (one row per stage run in workflow order, each with
+agent, model, attempts and cost, as a bar proportional to the stage's share —
+never a decorative diagram), anomalies for the task, then the request ledger
+table (time, stage, agent, model, tokens, cost + source, latency, status, retry
+reason). A row opens the attempt in a drawer (§8.8) with per-model lines,
+pricing version and cost revisions.
+
+## Tables
+
+Models, Agents, Providers and Events use `DataTable` (§5.3) with server-side
+filtering; Events is paginated by cursor ("Load more"). Rates are shown as
+percentages with one decimal, money with `formatUsd`, tokens compacted
+(`12.9K`, `4.2M`) with the exact value in a tooltip.
+
+## Budgets
+
+A list of budgets with a meter each (§8.13), state chip, policy, and actions.
+Creating one uses a dialog with scope, period, amount, thresholds and policy.
+**Stop new runs** is described plainly as a hard stop and is never the
+default; nothing ever downgrades a model silently.
+
+---
+
 # 8. Component Standards
 
 ## 8.1 Buttons
@@ -1254,6 +1328,31 @@ Create your first task to start an AI development workflow.
 ```
 
 No giant illustration is required.
+
+---
+
+## 8.11 Column chart (trend)
+
+One series over time: columns ≤ 24px wide with a 4px rounded top, square at the
+baseline, a 2px gap between neighbours, fill `accent`. Hairline gridlines in
+`border-subtle`, axis text in `text-secondary`. No legend (the title names
+the series). Every column is focusable and shows a tooltip on hover and focus
+with the exact value; a visually hidden table carries the same data for screen
+readers. Periods with unknown cost show a warning mark above the column and
+say so in the tooltip. No dual axes, no 3D, no animation beyond §10.
+
+## 8.12 Stat tile
+
+`label` (sentence case) · `value` (H2 size, tabular numerals) · optional
+`detail` line in `text-secondary` (e.g. "today $0.42 · 12 not priced").
+Tiles sit in one row that wraps; never giant KPI cards (§17).
+
+## 8.13 Meter
+
+A ratio against a limit: 6px track in `bg-muted`, fill `accent`, switching
+to `warning` at the warning threshold and `danger` when critical or
+exceeded, always paired with the text value and a state chip — never color
+alone. Share-of-total meters (provider share) always stay `accent`.
 
 ---
 

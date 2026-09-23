@@ -58,7 +58,9 @@ Logs + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md)),
-Settings (10 sections, including Repositories). Routes are
+Usage & Costs (`/usage`: Overview, Tasks, Models, Agents, Providers, Budgets,
+Attempts; `/usage/tasks/:id` cost ledger; a live Usage panel in the task
+inspector — see [usage.md](usage.md)), Settings (10 sections, including Repositories). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed.

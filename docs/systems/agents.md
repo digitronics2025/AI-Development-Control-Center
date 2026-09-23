@@ -42,6 +42,15 @@ was reported as "finished without producing any output".
 - Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
 - Usage limits: `rate_limit_event` with `status: rejected`, or `api_error_status: 429`.
 
+## Usage reporting
+
+Every result carries `usage` (token lines per model; `null` when the CLI
+reported none) and `capacity` observations, and every adapter declares
+`usageCapabilities`. Claude Code: `result.modelUsage` (cumulative, with
+`costUSD`) and `rate_limit_event` windows; Codex: `turn.completed.usage`
+(cached input is inside `input_tokens`) and no cost. Runs are launched only
+through `AgentRegistry.launch`, which records them — see [usage.md](usage.md).
+
 ## Failure classification ([classify.ts](../../packages/agent-sdk/src/classify.ts))
 
 Structured provider messages are classified before log noise: `USAGE_LIMIT`

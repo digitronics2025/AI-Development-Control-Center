@@ -58,7 +58,7 @@ if (args[0] === 'exec') {
       type: 'item.completed',
       item: { id: 'm', type: 'agent_message', text: `PONG cwd=${process.cwd()} ENV_HAS_OPENAI_KEY=${key} prompt=${prompt.trim().length}${extra}` },
     });
-    out({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
+    out({ type: 'turn.completed', usage: { input_tokens: 1200, cached_input_tokens: 1000, output_tokens: 80, reasoning_output_tokens: 30 } });
     process.exit(0);
   });
 } else {

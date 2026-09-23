@@ -32,6 +32,9 @@ export function primaryActionFor(task: Pick<TaskSummary, 'status' | 'blocker'>):
     case 'WAITING_FOR_USER':
       if (task.blocker?.kind === 'approval') return { kind: 'review-approval', label: 'Review Approval', icon: ShieldCheck };
       if (task.blocker?.kind === 'fix_limit') return { kind: 'more-cycle', label: 'Allow one more fix cycle', icon: RotateCcw };
+      // Chairman blockers: resuming extends a limit, or retries after you dealt with the blocker.
+      if (task.blocker?.kind === 'limit') return { kind: 'resume', label: 'Extend limits and resume', icon: Play };
+      if (task.blocker?.kind === 'hard_blocker') return { kind: 'resume', label: 'Resume', icon: Play };
       return { kind: 'retry', label: 'Retry Stage', icon: RotateCcw };
     case 'FAILED':
       return { kind: 'retry', label: 'Retry Stage', icon: RotateCcw };

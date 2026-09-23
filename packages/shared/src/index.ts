@@ -6,3 +6,4 @@ export * from './labels.js';
 export * from './workflow.js';
 export * from './source-control.js';
 export * from './git-graph.js';
+export * from './chairman.js';

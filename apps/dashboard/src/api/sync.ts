@@ -3,6 +3,7 @@ import type {
   AgentInfo,
   Approval,
   Artifact,
+  ChairmanOverview,
   Directive,
   Execution,
   LogLine,
@@ -167,6 +168,33 @@ export class CacheSync {
         const wf: WorkflowProfile = message.workflow;
         qc.setQueryData<WorkflowProfile[]>(keys.workflows, (old) => upsert(old, wf, (w) => w.id));
         qc.setQueryData(keys.workflow(wf.id), wf);
+        return;
+      }
+      case 'chairman': {
+        const state = message.state;
+        qc.setQueryData<ChairmanOverview>(keys.chairman(state.taskId), (old) => (old ? { ...old, state } : old));
+        return;
+      }
+      case 'chairman.message': {
+        const m = message.message;
+        qc.setQueryData<ChairmanOverview>(keys.chairman(m.taskId), (old) =>
+          old ? { ...old, messages: (upsert(old.messages, m, (x) => x.id) ?? old.messages).sort((a, b) => a.seq - b.seq) } : old,
+        );
+        return;
+      }
+      case 'chairman.decision': {
+        const d = message.decision;
+        qc.setQueryData<ChairmanOverview>(keys.chairman(d.taskId), (old) => (old ? { ...old, decisions: upsert(old.decisions, d, (x) => x.id) ?? old.decisions } : old));
+        return;
+      }
+      case 'chairman.action': {
+        const a = message.action;
+        qc.setQueryData<ChairmanOverview>(keys.chairman(a.taskId), (old) => (old ? { ...old, actions: upsert(old.actions, a, (x) => x.id) ?? old.actions } : old));
+        return;
+      }
+      case 'checkpoint': {
+        const c = message.checkpoint;
+        qc.setQueryData<ChairmanOverview>(keys.chairman(c.taskId), (old) => (old ? { ...old, checkpoints: upsert(old.checkpoints, c, (x) => x.id) ?? old.checkpoints } : old));
         return;
       }
       case 'workflow.deleted':

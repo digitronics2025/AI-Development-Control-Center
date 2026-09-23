@@ -1,4 +1,4 @@
-import { Bot, Copy, FileDiff, FlaskConical, MessageSquarePlus, MoreHorizontal, Pause, Play, RotateCcw, ScrollText, Shuffle, SlidersHorizontal } from 'lucide-react';
+import { Bot, Copy, FileDiff, FlaskConical, Gavel, MessageSquarePlus, MoreHorizontal, Pause, Play, RotateCcw, ScrollText, Shuffle, SlidersHorizontal } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
@@ -26,7 +26,7 @@ import {
 } from '@acc/ui';
 import { MODE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
 import { ApiError, errorMessage } from '../../api/client';
-import { useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
+import { useChairman, useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
 import { useBreadcrumb } from '../../app/breadcrumbs';
 import { usePageCommands } from '../../app/commands';
 import { useConnection } from '../../app/runtime';
@@ -34,6 +34,7 @@ import { useAgentNames } from '../../components/agents';
 import { TaskPrimaryAction } from '../../components/task-actions';
 import { ActivityTab } from './ActivityTab';
 import { ArtifactsTab } from './ArtifactsTab';
+import { ChairmanButton, ChairmanDrawer } from './ChairmanDrawer';
 import { ChangesTab } from './ChangesTab';
 import { AssignmentDialog, CancelTaskDialog, DirectiveDialog, RerouteDialog } from './dialogs';
 import { TaskInspector } from './Inspector';
@@ -66,7 +67,7 @@ function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefin
   }));
 }
 
-function BlockerBanner({ task, onReroute, onDirective }: { task: TaskDetail; onReroute: () => void; onDirective: () => void }) {
+function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: TaskDetail; onReroute: () => void; onDirective: () => void; onChairman: () => void }) {
   const navigate = useNavigate();
   const blocker = task.blocker;
   if (!blocker) return null;
@@ -81,6 +82,8 @@ function BlockerBanner({ task, onReroute, onDirective }: { task: TaskDetail; onR
     interrupted: 'Interrupted by a restart',
     tests_missing: 'No verification commands',
     queued: 'Queued',
+    hard_blocker: 'The Chairman needs you',
+    limit: 'Paused at a limit',
   };
   const tone = blocker.kind === 'queued' ? 'info' : blocker.kind === 'error' && task.status === 'FAILED' ? 'danger' : 'warning';
   return (
@@ -98,6 +101,11 @@ function BlockerBanner({ task, onReroute, onDirective }: { task: TaskDetail; onR
           {blocker.kind === 'auth' || (blocker.kind === 'error' && blocker.errorClass === 'MODEL_UNAVAILABLE') ? (
             <Button size="compact" icon={Bot} onClick={() => navigate('/agents')}>
               Open Agents
+            </Button>
+          ) : null}
+          {blocker.kind === 'hard_blocker' || blocker.kind === 'limit' ? (
+            <Button size="compact" icon={Gavel} onClick={onChairman}>
+              Open Chairman
             </Button>
           ) : null}
           {blocker.kind === 'fix_limit' ? (
@@ -127,6 +135,8 @@ export function TaskDetailPage() {
   const [directiveOpen, setDirectiveOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [assignmentKey, setAssignmentKey] = useState<string | null>(null);
+  const [chairmanOpen, setChairmanOpen] = useState(false);
+  const chairman = useChairman(id);
   const agentName = useAgentNames();
   const command = useTaskCommand(id);
   const connection = useConnection();
@@ -154,6 +164,7 @@ export function TaskDetailPage() {
       list.push({ id: 'task-pause', label: 'Pause current task', group, icon: Pause, onSelect: () => command.mutate({ command: 'pause' }, { onSuccess: () => toast('Pause requested') }) });
     if (['PAUSED', 'INTERRUPTED', 'WAITING_FOR_USAGE_RESET'].includes(data.status))
       list.push({ id: 'task-resume', label: 'Resume current task', group, icon: Play, onSelect: () => command.mutate({ command: 'resume' }, { onSuccess: () => toast('Resume requested') }) });
+    list.push({ id: 'task-chairman', label: 'Open Chairman chat', group, icon: Gavel, onSelect: () => setChairmanOpen(true) });
     list.push({ id: 'task-directive', label: 'Add directive', group, icon: MessageSquarePlus, onSelect: () => setDirectiveOpen(true) });
     list.push({ id: 'task-reroute', label: 'Reroute stage…', group, icon: Shuffle, onSelect: () => setRerouteOpen(true) });
     list.push({ id: 'task-logs', label: 'Open logs', group, icon: ScrollText, onSelect: () => setTab('logs') });
@@ -204,11 +215,17 @@ export function TaskDetailPage() {
             <span>{MODE_LABEL[data.mode]}</span>
             <span title={new Date(data.createdAt).toLocaleString()}>Created {formatRelative(data.createdAt, now)}</span>
             <span className="tabular">{data.finishedAt ? 'Took' : 'Elapsed'} {formatDuration(elapsed)}</span>
-            {data.fixCycles > 0 ? <span className="tabular">Fix cycle {data.fixCycles} of {data.maxFixCycles}</span> : null}
+            {data.fixCycles > 0 ? (
+              <span className="tabular">
+                {data.supervised ? 'Fix attempt' : 'Fix cycle'} {data.fixCycles} of {data.maxFixCycles}
+              </span>
+            ) : null}
+            {data.recoveryCycle > 0 ? <span className="tabular">Recovery cycle {data.recoveryCycle}</span> : null}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {!isMobile ? <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} /> : null}
+          <ChairmanButton overview={chairman.data} onOpen={() => setChairmanOpen(true)} compact={isMobile} />
           {!isWide ? (
             <Button icon={SlidersHorizontal} onClick={() => setInspectorOpen(true)}>
               Details
@@ -231,7 +248,12 @@ export function TaskDetailPage() {
           />
         </div>
       </div>
-      <BlockerBanner task={data} onReroute={() => setRerouteOpen(true)} onDirective={() => setDirectiveOpen(true)} />
+      <BlockerBanner task={data} onReroute={() => setRerouteOpen(true)} onDirective={() => setDirectiveOpen(true)} onChairman={() => setChairmanOpen(true)} />
+      {data.pauseAfterStage && data.status === 'RUNNING' ? (
+        <Banner tone="info" role="status" title="Pausing after this stage">
+          The current stage finishes first; the task pauses before the next one starts.
+        </Banner>
+      ) : null}
       {data.pauseRequested && data.status === 'RUNNING' ? (
         <Banner tone="info" role="status" title="Pausing">
           The current stage is stopping; it will run again when you resume.
@@ -320,6 +342,7 @@ export function TaskDetailPage() {
       <DirectiveDialog task={data} open={directiveOpen} onOpenChange={setDirectiveOpen} />
       <AssignmentDialog key={assignmentKey ?? 'none'} task={data} stageKey={assignmentKey} open={assignmentKey !== null} onOpenChange={(open) => !open && setAssignmentKey(null)} />
       <CancelTaskDialog task={data} open={cancelOpen} onOpenChange={setCancelOpen} />
+      <ChairmanDrawer task={data} overview={chairman} open={chairmanOpen} onOpenChange={setChairmanOpen} />
     </div>
   );
 }

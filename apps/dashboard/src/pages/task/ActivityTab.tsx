@@ -4,7 +4,7 @@ import type { EventType, TaskEvent } from '@acc/shared';
 import { useSettings, useTaskEvents } from '../../api/hooks';
 
 /** Low-level events hidden from the human-readable timeline by default (design.md §7.3 Activity). */
-const TECHNICAL: ReadonlySet<EventType> = new Set(['AGENT_STARTED', 'COMMAND_STARTED', 'COMMAND_FINISHED', 'TEST_STARTED', 'STAGE_STARTED', 'ARTIFACT_CREATED']);
+const TECHNICAL: ReadonlySet<EventType> = new Set(['AGENT_STARTED', 'COMMAND_STARTED', 'COMMAND_FINISHED', 'TEST_STARTED', 'STAGE_STARTED', 'ARTIFACT_CREATED', 'CHECKPOINT_CREATED']);
 
 const TONE: Partial<Record<EventType, string>> = {
   TASK_FAILED: 'text-danger',
@@ -17,6 +17,12 @@ const TONE: Partial<Record<EventType, string>> = {
   APPROVAL_REQUESTED: 'text-warning',
   TASK_WAITING: 'text-warning',
   TASK_INTERRUPTED: 'text-warning',
+  // Chairman interventions stand out from routine progress (design.md §7.3.1).
+  CHAIRMAN_DECISION: 'text-accent',
+  RECOVERY_CYCLE: 'text-accent',
+  TASK_REDIRECTED: 'text-accent',
+  ROLLBACK_COMPLETED: 'text-warning',
+  WATCHDOG: 'text-warning',
 };
 
 function dayKey(iso: string) {

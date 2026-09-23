@@ -36,6 +36,18 @@ The `git` stage kind (Full Autopilot's "Git checkpoint") commits only
 `task`-origin files, with hooks running normally, and reports `both` files it
 left uncommitted. Nothing is ever pushed automatically.
 
+## Checkpoints
+
+`createCheckpoint` builds a commit of the whole working tree (tracked and
+untracked, `.gitignore` respected) in a **private index** (a copy of the real
+one, `GIT_INDEX_FILE`) with `core.autocrlf=false`, and keeps it alive under
+`refs/acc/checkpoints/<task>/<n>` — HEAD, branches, the user's index and files
+are untouched. `restoreCheckpoint` diffs that tree against the current one and
+rewrites only paths the caller allows (the Chairman excludes every file dirty
+at the baseline); files added since are deleted. `deleteRefs` only accepts
+`refs/acc/`. The Chairman refuses a rollback when HEAD moved since the
+checkpoint. Used by [chairman.md](chairman.md#checkpoints).
+
 ## Limitations
 
 - Tasks in the same repository run one at a time; a finished task leaves its

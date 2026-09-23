@@ -846,6 +846,38 @@ Controls:
 
 Cancel remains separated from normal controls.
 
+## 7.3.1 Chairman drawer
+
+The Chairman (the task's supervisor, see `docs/systems/chairman.md`) is reached
+from a **Chairman** button in the task header, beside the primary action:
+
+```text
+[ Pause ] [ Chairman ● ] [ Details ] [ ⋯ ]
+```
+
+- The dot is decorative; the button's accessible name carries the state
+  ("Chairman — Supervising"). While the Chairman evaluates or answers, the dot
+  becomes the activity indicator (§10). Mobile shows the icon only.
+- It opens the standard right **Drawer** (§8.8), 460px on desktop, full height
+  and full width on mobile. It is contextual, never a modal decision.
+- Drawer order: state chips (Chairman status, health) → recovery cycle and
+  usage against limits → "rules only" info banner when no reasoning model is
+  available → current strategy → active directives (each removable) →
+  conversation (`role="log"`, polite live region) → composer in the footer.
+- Conversation items: user messages (right-aligned, muted background),
+  Chairman replies (Markdown, no raw HTML), **decision cards** (accent left
+  border, trigger, "Rules"/"Model" badge, why and expected result) and
+  **action cards** (action label + status chip: Running, Completed, Failed,
+  Rejected — with the result or the reason).
+- The composer has a visible label, Enter sends, Shift+Enter adds a line, and
+  the helper lists the slash shortcuts. Sending is disabled while offline.
+- The list follows new messages only while the reader is at the bottom (§9.3).
+- Chairman interventions (decisions, recovery cycles, redirects, rollbacks,
+  watchdog) appear in Activity with an accent or warning dot; checkpoints are
+  technical events.
+- Blockers set by the Chairman use the existing banner: "The Chairman needs
+  you" (hard blocker) and "Paused at a limit", each with **Open Chairman**.
+
 ---
 
 # 7.4 Approvals

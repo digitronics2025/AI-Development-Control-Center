@@ -41,8 +41,11 @@ hub, SQLite persistence and the workflow engine. Entry:
 `settings`, `repositories`, `agents`, `models`, `workflow_profiles`,
 `workflow_stages`, `prompt_templates`, `tasks`, `task_stages`, `executions`,
 `execution_logs`, `task_events`, `task_directives`, `task_artifacts`,
-`approvals`, `git_snapshots`, `test_runs`, and `git_operations` (Source
-Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)). Access goes through
+`approvals`, `git_snapshots`, `test_runs`, `git_operations` (Source
+Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)),
+and the Chairman's `task_contracts`, `chairman_sessions`, `chairman_messages`,
+`chairman_decisions`, `chairman_actions`, `failure_signatures`,
+`task_checkpoints` (migration 2, [chairman.md](chairman.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -52,6 +55,7 @@ before any row is written.
 |---|---|
 | Service | `GET health`, `GET overview`, `POST service/shutdown` |
 | Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` |
+| Chairman | `GET tasks/:id/chairman`, `GET/POST tasks/:id/chairman/messages`, `POST tasks/:id/chairman/actions` ([chairman.md](chairman.md)) |
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |
 | Artifacts | `GET artifacts/:id/content` (≤2 MB), `GET artifacts/:id/download` (text types sent with `charset=utf-8`) |
 | Approvals | `GET approvals?status=`, `POST approvals/:id/{approve,deny}` |
@@ -71,7 +75,8 @@ strict CSP.
 `approval`, `directive`, `artifact`, `testRun`, `agents`, `settings`,
 `repository`, `workflow`) plus `sourceControl` (`{repositoryId}` only: refetch that
 repository's Git state; sent by `RepositoryService.invalidate` and every Source
-Control mutation). Log lines (`logs`) go only to clients that sent
+Control mutation) and the Chairman's `chairman`, `chairman.message`,
+`chairman.decision`, `chairman.action`, `checkpoint`. Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log
 batches and refetch. Log lines are batched every 150 ms or 250 lines.
 
@@ -82,6 +87,13 @@ is shared by the engine and Source Control: a stage with permission level ≥ 2
 registers as a writer (waiting for any Git mutation in flight), and Source
 Control refuses mutations while a writer is active. Startup runs Source
 Control reconciliation in the background after `listen`.
+
+## Startup
+
+`main.ts` runs `services.recover()` (engine reconciliation, then the
+Chairman resumes interrupted supervised tasks and answers pending chat),
+schedules queued tasks, starts Source Control reconciliation and the
+Chairman's watchdog (15 s).
 
 ## Gotchas
 

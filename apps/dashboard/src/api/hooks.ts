@@ -4,6 +4,10 @@ import type {
   AgentInfo,
   Approval,
   Artifact,
+  ChairmanAction,
+  ChairmanActionInput,
+  ChairmanMessage,
+  ChairmanOverview,
   CreateTaskInput,
   Directive,
   Execution,
@@ -89,6 +93,30 @@ export function useTaskDirectives(id: string) {
 export function useTaskApprovals(id: string) {
   const api = useApi();
   return useQuery({ queryKey: keys.taskApprovals(id), queryFn: ({ signal }) => api.get<Approval[]>(`/api/tasks/${id}/approvals`, signal) });
+}
+
+/** The task's Chairman: state, contract, chat, decisions, actions and checkpoints in one snapshot, kept live over the WebSocket. */
+export function useChairman(id: string, enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.chairman(id), queryFn: ({ signal }) => api.get<ChairmanOverview>(`/api/tasks/${id}/chairman`, signal), enabled });
+}
+
+/** Send a chat message. The client id makes a retried or double-submitted send idempotent. */
+export function useChairmanMessage(taskId: string) {
+  const api = useApi();
+  return useMutation({
+    mutationFn: ({ text, clientMessageId }: { text: string; clientMessageId: string }) => api.post<ChairmanMessage>(`/api/tasks/${taskId}/chairman/messages`, { text, clientMessageId }),
+  });
+}
+
+/** Direct Chairman controls (e.g. removing a directive) through the same gateway as chat. */
+export function useChairmanAction(taskId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, idempotencyKey }: { action: ChairmanActionInput; idempotencyKey: string }) => api.post<ChairmanAction>(`/api/tasks/${taskId}/chairman/actions`, { action, idempotencyKey }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.taskDirectives(taskId) }),
+  });
 }
 
 export function useTaskChanges(id: string, enabled = true) {

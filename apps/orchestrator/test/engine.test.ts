@@ -132,6 +132,8 @@ describe('discuss first', () => {
   });
 });
 
+// Tests below that pass `supervised: false` pin the unsupervised behaviour;
+// the Chairman's handling of the same situations is in chairman.test.ts.
 describe('review and fix loop', () => {
   it('runs a fix cycle when review fails once', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Fix it [sim:review-fail-once]');
@@ -144,7 +146,7 @@ describe('review and fix loop', () => {
   });
 
   it('stops at the fix limit instead of looping forever, and resume grants one more cycle', async () => {
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Never good enough [sim:review-fail-always]', { maxFixCycles: 2 });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Never good enough [sim:review-fail-always]', { maxFixCycles: 2, supervised: false });
     const task = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
     expect(task.status).toBe('WAITING_FOR_USER');
     expect(task.blocker?.kind).toBe('fix_limit');
@@ -163,7 +165,7 @@ describe('review and fix loop', () => {
 
   it('routes failing tests to the fixer and records later commands as not run', async () => {
     const repoPath = await makeRepo({ scripts: { lint: 'node -e "0"', test: 'node -e "console.log(\'2 failed, 3 passed\'); process.exit(1)"', build: 'node -e "0"' } });
-    const id = await createTask(t, await addRepo(t, repoPath), 'Break the tests', { maxFixCycles: 1 });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Break the tests', { maxFixCycles: 1, supervised: false });
     const task = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
     expect(task.status).toBe('WAITING_FOR_USER');
     expect(task.blocker?.kind).toBe('fix_limit');
@@ -178,7 +180,7 @@ describe('review and fix loop', () => {
 
 describe('failure handling', () => {
   it('waits for a usage reset without any fallback, then resumes', async () => {
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Big job [sim:usage-limit]');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Big job [sim:usage-limit]', { supervised: false });
     const task = await waitForStatus(t, id, ['WAITING_FOR_USAGE_RESET', 'COMPLETED', 'FAILED']);
     expect(task.status).toBe('WAITING_FOR_USAGE_RESET');
     expect(task.blocker).toMatchObject({ kind: 'usage', errorClass: 'USAGE_LIMIT' });
@@ -192,7 +194,7 @@ describe('failure handling', () => {
   });
 
   it('retries a crashing stage per its retry policy, then fails with a concrete next action', async () => {
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Crash [sim:fail:investigator]');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Crash [sim:fail:investigator]', { supervised: false });
     const task = await waitForStatus(t, id, ['FAILED', 'COMPLETED']);
     expect(task.status).toBe('FAILED');
     expect(task.blocker).toMatchObject({ kind: 'error', errorClass: 'PROCESS_CRASH', stageKey: 'investigate' });
@@ -349,7 +351,7 @@ describe('restart recovery', () => {
   it('marks work interrupted on shutdown and resumes it after a restart', async () => {
     const repoPath = await makeRepo();
     const dataDir = t.dataDir;
-    const id = await createTask(t, await addRepo(t, repoPath), 'Survive a restart [sim:slow]');
+    const id = await createTask(t, await addRepo(t, repoPath), 'Survive a restart [sim:slow]', { supervised: false });
     await waitFor(() => t.services.store.latestStage(id, 'investigate'), (s) => s?.status === 'RUNNING', 20_000);
     await t.close();
 
@@ -387,7 +389,7 @@ describe('restart recovery', () => {
 
   it('recovers executions left running by a crash', async () => {
     const dataDir = t.dataDir;
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Crash me [sim:slow]');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Crash me [sim:slow]', { supervised: false });
     await waitFor(() => t.services.store.listExecutions(id), (e) => e.some((x) => x.status === 'running'), 20_000);
     // Simulate a crash: stop the loop without the graceful shutdown path touching the database.
     const snapshot = t.services.store.getTask(id)!;

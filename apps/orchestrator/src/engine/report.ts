@@ -12,6 +12,8 @@ export interface ReportInput {
   deployed: 'none' | 'staging';
   /** Items the last review or verification said only the operator can settle. */
   operatorItems?: string[];
+  /** Completion-gate checks that did not pass on a supervised task. */
+  gateLimitations?: string[];
 }
 
 const MAX_OPERATOR_ITEMS = 10;
@@ -62,6 +64,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (lastReview?.verdict === 'FAIL') limitations.push('The last review did not pass.');
   if (lastVerify?.verdict === 'FAIL') limitations.push('The last verification did not pass.');
   for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);
+  for (const item of input.gateLimitations ?? []) if (!limitations.includes(item)) limitations.push(item);
 
   const taskFiles = files?.filter((f) => f.origin !== 'preexisting') ?? [];
   const owner = taskIdFromBranch(task.git.baselineBranch);
@@ -112,7 +115,12 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '',
     `- Review: ${lastReview ? (lastReview.verdict === 'PASS' ? 'passed' : 'issues remain') : 'no review stage'}`,
     ...(lastVerify ? [`- Verification: ${lastVerify.verdict === 'PASS' ? 'passed' : 'failed'}`] : []),
-    `- Fix cycles used: ${task.fixCycles} of ${task.maxFixCycles}`,
+    ...(task.supervised
+      ? [
+          `- Fix attempts: ${stages.filter((s) => s.role === 'fixer').length} across ${task.recoveryCycle + 1} strateg${task.recoveryCycle ? 'ies' : 'y'}`,
+          `- Chairman recovery cycles: ${task.recoveryCycle}`,
+        ]
+      : [`- Fix cycles used: ${task.fixCycles} of ${task.maxFixCycles}`]),
     '',
     '## Cloud',
     '',

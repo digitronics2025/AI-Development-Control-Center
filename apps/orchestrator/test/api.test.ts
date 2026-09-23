@@ -218,7 +218,8 @@ describe('real adapters through the engine (fake CLIs)', () => {
     const claude = (await t.api('GET', '/api/agents')).body.find((a: { id: string }) => a.id === 'claude');
     expect(claude.health.state).toBe('api_billing_blocked');
     const workflowId = await implementOnlyWorkflow();
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Should not run', { workflowId });
+    // Unsupervised: the legacy wait. Supervised tasks reroute instead (chairman.test.ts).
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Should not run', { workflowId, supervised: false });
     const task = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
     expect(task.status).toBe('WAITING_FOR_USER');
     expect(task.blocker).toMatchObject({ kind: 'auth', errorClass: 'AUTH_FAILURE' });
@@ -227,7 +228,7 @@ describe('real adapters through the engine (fake CLIs)', () => {
 
   it('turns a Codex credit exhaustion into WAITING_FOR_USAGE_RESET', async () => {
     await realApp({ FAKE_CODEX_SCENARIO: 'usage' });
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Investigate');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Investigate', { supervised: false });
     const task = await waitForStatus(t, id, ['WAITING_FOR_USAGE_RESET', 'FAILED', 'WAITING_FOR_USER']);
     expect(task.status).toBe('WAITING_FOR_USAGE_RESET');
     expect(task.blocker?.message).toContain('out of credits');

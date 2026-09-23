@@ -12,6 +12,7 @@ import type {
   TestRun,
 } from './types.js';
 import type { Settings, WorkflowProfile } from './schemas.js';
+import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
 
 /**
  * Messages the orchestrator pushes to every connected client. Each carries a
@@ -38,7 +39,12 @@ export type ServerMessage =
   | { type: 'workflow'; workflow: WorkflowProfile }
   | { type: 'workflow.deleted'; workflowId: string }
   /** A repository's Git state may have changed: clients refetch its Source Control snapshot. */
-  | { type: 'sourceControl'; repositoryId: string };
+  | { type: 'sourceControl'; repositoryId: string }
+  | { type: 'chairman'; state: ChairmanState }
+  | { type: 'chairman.message'; message: ChairmanMessage }
+  | { type: 'chairman.decision'; decision: ChairmanDecision }
+  | { type: 'chairman.action'; action: ChairmanAction }
+  | { type: 'checkpoint'; checkpoint: TaskCheckpoint };
 
 export type ServerMessageType = ServerMessage['type'];
 

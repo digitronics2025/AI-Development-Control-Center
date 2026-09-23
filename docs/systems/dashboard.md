@@ -23,6 +23,16 @@ React Router 7, TanStack Query. Shared primitives and tokens:
 `pnpm --filter @acc/dashboard dev` runs Vite on 5173 with `/api` and `/ws`
 proxied to the orchestrator and the token read from the data folder.
 
+## Chairman
+
+The task header's **Chairman** button opens
+[ChairmanDrawer.tsx](../../apps/dashboard/src/pages/task/ChairmanDrawer.tsx)
+(design.md §7.3.1): state and health chips, limits, active directives (remove
+via the actions endpoint), the conversation with decision and action cards,
+and the composer (client message ids make sends idempotent). Data:
+`useChairman` (`/api/tasks/:id/chairman`) patched live by `sync.ts`. Settings →
+Chairman edits `settings.chairman`.
+
 ## State
 
 The orchestrator is the only source of truth. Queries load snapshots;

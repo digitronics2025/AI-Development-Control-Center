@@ -1,16 +1,19 @@
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   changesSince,
   commitPaths,
+  createCheckpoint,
   createTaskBranch,
+  deleteRefs,
   currentBranch,
   diffSince,
   git,
   headCommit,
   isGitRepository,
+  restoreCheckpoint,
   snapshot,
   taskBranchName,
   taskIdFromBranch,
@@ -102,5 +105,49 @@ describe('git helpers', () => {
     expect(files).toEqual([expect.objectContaining({ path: 'x.txt', origin: 'task' })]);
     const branch = await createTaskBranch(empty, 'ai/TASK-0002');
     expect(await currentBranch(empty)).toBe(branch);
+  });
+});
+
+describe('checkpoints', () => {
+  it('records the working tree without touching the index, HEAD or files', async () => {
+    writeFileSync(path.join(repo, 'a.txt'), 'staged\n');
+    await sh(['add', 'a.txt']);
+    writeFileSync(path.join(repo, 'a.txt'), 'staged then edited\n');
+    writeFileSync(path.join(repo, 'new.txt'), 'untracked\n');
+    const head = await headCommit(repo);
+    const statusBefore = await sh(['status', '--porcelain']);
+    const cp = await createCheckpoint(repo, 'refs/acc/checkpoints/TASK-0001/1', 'checkpoint 1');
+    expect(cp.head).toBe(head);
+    expect(await headCommit(repo)).toBe(head);
+    expect(await sh(['status', '--porcelain'])).toBe(statusBefore);
+    expect(await sh(['show', `${cp.commit}:new.txt`])).toBe('untracked');
+    expect(await sh(['show', `${cp.commit}:a.txt`])).toBe('staged then edited');
+    expect((await sh(['rev-parse', 'refs/acc/checkpoints/TASK-0001/1'])).trim()).toBe(cp.commit);
+    await expect(createCheckpoint(repo, 'refs/heads/main', 'nope')).rejects.toThrow('Invalid checkpoint ref');
+  });
+
+  it('restores only the paths it may touch and deletes files added since', async () => {
+    writeFileSync(path.join(repo, 'user.txt'), 'user work\n');
+    writeFileSync(path.join(repo, 'task.txt'), 'task v1\n');
+    const cp = await createCheckpoint(repo, 'refs/acc/checkpoints/TASK-0001/1', 'before fix');
+    writeFileSync(path.join(repo, 'task.txt'), 'task v2 (bad)\n');
+    writeFileSync(path.join(repo, 'extra.txt'), 'added by the bad fix\n');
+    writeFileSync(path.join(repo, 'user.txt'), 'user kept typing\n');
+    const result = await restoreCheckpoint(repo, cp.commit, (p) => p !== 'user.txt');
+    expect(result.restored).toEqual(['task.txt']);
+    expect(result.removed).toEqual(['extra.txt']);
+    expect(result.skipped).toEqual(['user.txt']);
+    expect(readFileSync(path.join(repo, 'task.txt'), 'utf8')).toBe('task v1\n');
+    expect(readFileSync(path.join(repo, 'user.txt'), 'utf8')).toBe('user kept typing\n');
+    expect(existsSync(path.join(repo, 'extra.txt'))).toBe(false);
+    // The user's index was never modified.
+    expect(await sh(['diff', '--cached', '--name-only'])).toBe('');
+  });
+
+  it('deletes only refs under refs/acc/', async () => {
+    await createCheckpoint(repo, 'refs/acc/checkpoints/TASK-0009/1', 'one');
+    await createCheckpoint(repo, 'refs/acc/checkpoints/TASK-0009/2', 'two');
+    expect(await deleteRefs(repo, 'refs/acc/checkpoints/TASK-0009/')).toBe(2);
+    await expect(deleteRefs(repo, 'refs/heads/')).rejects.toThrow('Refusing');
   });
 });

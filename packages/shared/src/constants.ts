@@ -122,6 +122,16 @@ export const EVENT_TYPES = [
   'ARTIFACT_CREATED',
   'TASK_COMPLETED',
   'TASK_FAILED',
+  // Chairman supervision (docs/systems/chairman.md). Only interventions are
+  // logged here; chat traffic lives in its own table.
+  'CHAIRMAN_DECISION',
+  'CHAIRMAN_ACTION',
+  'RECOVERY_CYCLE',
+  'TASK_REDIRECTED',
+  'CHECKPOINT_CREATED',
+  'ROLLBACK_COMPLETED',
+  'DIRECTIVE_REMOVED',
+  'WATCHDOG',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

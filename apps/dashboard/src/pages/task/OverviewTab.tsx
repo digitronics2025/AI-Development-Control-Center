@@ -9,6 +9,7 @@ import {
   Skeleton,
   StageStatusChip,
   StatusChip,
+  cn,
   durationBetween,
   formatDuration,
   shortSha,
@@ -100,7 +101,8 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
                   'No review yet'
                 ),
               },
-              { label: 'Fix cycles', value: <span className="tabular">{task.fixCycles} of {task.maxFixCycles}</span> },
+              { label: task.supervised ? 'Fix attempts' : 'Fix cycles', value: <span className="tabular">{task.fixCycles} of {task.maxFixCycles}{task.supervised ? ' in this strategy' : ''}</span> },
+              { label: 'Recovery cycles', value: <span className="tabular">{task.recoveryCycle}</span>, hidden: !task.supervised },
               { label: 'Mode', value: MODE_LABEL[task.mode] },
               { label: 'Branch', value: task.git.taskBranch ? <code className="font-mono text-code">{task.git.taskBranch}</code> : task.git.baselineBranch ? `${task.git.baselineBranch} (no task branch)` : 'Not recorded yet' },
               { label: 'Baseline', value: task.git.baselineCommit ? <code className="font-mono text-code">{shortSha(task.git.baselineCommit)}</code> : '—', hidden: !task.git.baselineCommit },
@@ -152,10 +154,19 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
         {directives.data?.length ? (
           <ul className="flex flex-col gap-2">
             {directives.data.map((d) => (
-              <li key={d.id} className="flex flex-col gap-0.5 rounded-md border border-border-subtle px-3 py-2">
-                <span className="text-body text-fg wrap-anywhere">{d.text}</span>
+              <li key={d.id} className={cn('flex flex-col gap-0.5 rounded-md border border-border-subtle px-3 py-2', d.state !== 'active' && 'opacity-70')}>
+                <span className={cn('text-body text-fg wrap-anywhere', d.state !== 'active' && 'line-through')}>{d.text}</span>
                 <span className="text-small text-fg-secondary">
-                  {d.status === 'applied' ? `Applied to ${task.workflow.stages.find((s) => s.key === d.appliedStageKey)?.name ?? d.appliedStageKey}` : 'Queued — applies when the next agent stage starts'} · <RelativeTime iso={d.createdAt} />
+                  {d.state === 'removed'
+                    ? 'Removed — later stages no longer receive it'
+                    : d.state === 'superseded'
+                      ? 'Replaced by a newer directive'
+                      : d.kind === 'routing'
+                        ? 'Routing — applied to the stage assignment'
+                        : d.status === 'applied'
+                          ? `Applied to ${task.workflow.stages.find((s) => s.key === d.appliedStageKey)?.name ?? d.appliedStageKey}${d.scope === 'CURRENT_TASK' ? ' and every later stage' : ''}`
+                          : 'Queued — applies when the next agent stage starts'}{' '}
+                  · <RelativeTime iso={d.createdAt} />
                 </span>
               </li>
             ))}

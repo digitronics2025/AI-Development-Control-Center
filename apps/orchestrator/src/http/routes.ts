@@ -9,6 +9,8 @@ import {
   TASK_STATUSES,
   approvalDecisionSchema,
   assignmentChangeSchema,
+  chairmanActionBodySchema,
+  chairmanMessageBodySchema,
   createRepositorySchema,
   createTaskSchema,
   directiveSchema,
@@ -146,6 +148,37 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   command('reroute', (id, body) => engine.reroute(id, rerouteSchema.parse(body)));
   command('assignments', async (id, body) => engine.changeAssignment(id, assignmentChangeSchema.parse(body)));
   command('directives', (id, body) => engine.addDirective(id, directiveSchema.parse(body)));
+
+  // ----- chairman (docs/systems/chairman.md) ---------------------------------
+
+  app.get('/api/tasks/:id/chairman', async (request) => {
+    const { id } = idParam.parse(request.params);
+    engine.task(id);
+    return s.chairman.overview(id);
+  });
+
+  app.get('/api/tasks/:id/chairman/messages', async (request) => {
+    const { id } = idParam.parse(request.params);
+    const q = z.object({ after: z.coerce.number().int().min(0).optional(), limit: z.coerce.number().int().min(1).max(500).default(200) }).parse(request.query);
+    engine.task(id);
+    return s.chairman.store.listMessages(id, q);
+  });
+
+  app.post('/api/tasks/:id/chairman/messages', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const body = chairmanMessageBodySchema.parse(request.body);
+    const { message, duplicate } = s.chat.post(id, body.text, body.clientMessageId);
+    return reply.code(duplicate ? 200 : 202).send(message);
+  });
+
+  // Direct controls from the UI (e.g. removing a directive) use the same gateway as chat.
+  app.post('/api/tasks/:id/chairman/actions', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const body = chairmanActionBodySchema.parse(request.body);
+    const action = await s.chairman.gateway.execute(id, body.action, { initiator: 'user', source: 'api', idempotencyKey: body.idempotencyKey });
+    if (action.status === 'completed') return action;
+    return sendError(reply, 409, action.status === 'rejected' ? 'REJECTED' : 'FAILED', action.reason ?? 'The action did not complete', action);
+  });
 
   app.get('/api/tasks/:id/directives', async (request) => {
     const { id } = idParam.parse(request.params);

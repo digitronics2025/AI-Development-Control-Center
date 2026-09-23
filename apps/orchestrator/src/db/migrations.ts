@@ -268,6 +268,139 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
+    version: 2,
+    name: 'chairman supervisor',
+    // Additive only: existing tasks keep supervised = 0 and behave exactly as
+    // before; existing directives become active, task-wide instructions.
+    sql: `
+      ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN supervised INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN recovery_cycle INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN limits TEXT;
+      ALTER TABLE tasks ADD COLUMN pause_after_stage INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN extra_check_kinds TEXT NOT NULL DEFAULT '[]';
+
+      ALTER TABLE task_directives ADD COLUMN scope TEXT NOT NULL DEFAULT 'CURRENT_TASK';
+      ALTER TABLE task_directives ADD COLUMN kind TEXT NOT NULL DEFAULT 'instruction';
+      ALTER TABLE task_directives ADD COLUMN state TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE task_directives ADD COLUMN normalized_rule TEXT;
+      ALTER TABLE task_directives ADD COLUMN source_message_id TEXT;
+      ALTER TABLE task_directives ADD COLUMN removed_at TEXT;
+      ALTER TABLE task_directives ADD COLUMN superseded_by TEXT;
+
+      CREATE TABLE task_contracts (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        goal TEXT NOT NULL,
+        success_criteria TEXT NOT NULL DEFAULT '[]',
+        scope TEXT NOT NULL DEFAULT '{}',
+        autonomy_mode TEXT NOT NULL,
+        constraints TEXT NOT NULL DEFAULT '[]',
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, version)
+      );
+
+      CREATE TABLE chairman_sessions (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        health TEXT NOT NULL DEFAULT 'UNKNOWN',
+        strategy_summary TEXT,
+        strategy_fingerprints TEXT NOT NULL DEFAULT '[]',
+        last_decision_id TEXT,
+        last_recovery_reason TEXT,
+        degraded_reason TEXT,
+        conversation_summary TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE chairman_messages (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        body TEXT NOT NULL,
+        intent TEXT,
+        status TEXT NOT NULL,
+        client_message_id TEXT,
+        decision_id TEXT,
+        action_id TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (task_id, seq)
+      );
+      CREATE UNIQUE INDEX idx_chairman_messages_client ON chairman_messages(task_id, client_message_id) WHERE client_message_id IS NOT NULL;
+
+      CREATE TABLE chairman_decisions (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        task_version INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        reasoning_summary TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        expected_result TEXT NOT NULL,
+        hard_blocker INTEGER NOT NULL DEFAULT 0,
+        health TEXT NOT NULL,
+        reasoner TEXT NOT NULL,
+        strategy_fingerprint TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_chairman_decisions_task ON chairman_decisions(task_id, created_at);
+
+      CREATE TABLE chairman_actions (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        decision_id TEXT,
+        message_id TEXT,
+        type TEXT NOT NULL,
+        params TEXT NOT NULL DEFAULT '{}',
+        initiator TEXT NOT NULL,
+        source TEXT NOT NULL,
+        task_version INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        result TEXT,
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX idx_chairman_actions_task ON chairman_actions(task_id, created_at);
+      CREATE UNIQUE INDEX idx_chairman_actions_idem ON chairman_actions(task_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+      CREATE TABLE failure_signatures (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        stage_id TEXT,
+        stage_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        category TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        failure_count INTEGER,
+        message TEXT NOT NULL,
+        recovery_cycle INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_failures_task ON failure_signatures(task_id, created_at);
+
+      CREATE TABLE task_checkpoints (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        commit_hash TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        head TEXT,
+        stage_key TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (task_id, seq)
+      );
+    `,
+  },
+  {
     // Version 2 is the Chairman supervisor migration, developed in parallel;
     // the two touch different tables and apply in either order.
     version: 3,

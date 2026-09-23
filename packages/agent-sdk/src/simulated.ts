@@ -23,6 +23,12 @@ import type {
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
  *   [sim:needs-operator]     verifier passes but names an operator decision
+ *   [sim:verify-plan-mismatch] verifier rejects once: the work misses the request
+ *   [sim:chairman-down]      the Chairman's reasoning agent always crashes
+ *   [sim:chairman-bad-json]  the Chairman answers without JSON once
+ *
+ * With role `chairman` it answers the Chairman's recovery and chat prompts
+ * with valid JSON: the first candidate strategy, or a status reply.
  */
 export class SimulatedAgentAdapter implements AgentAdapter {
   readonly displayName: string;
@@ -170,7 +176,36 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             : '## Review\n\nThe diff matches the plan.\n\nVERDICT: PASS';
           break;
         }
+        case 'chairman': {
+          if (has('chairman-down')) {
+            return { ...base, status: 'failed', exitCode: 1, output: '', errorClass: 'PROCESS_CRASH', errorMessage: 'Simulated Chairman outage' };
+          }
+          if (has('chairman-bad-json') && this.once(`${taskId}:chairman-json`)) {
+            output = 'I would re-plan, but I forgot the JSON.';
+            break;
+          }
+          const mode = /^Mode: (\w+)/m.exec(input.prompt)?.[1];
+          if (mode === 'recovery') {
+            const first = /^Candidate ids: ([^,\n]+)/m.exec(input.prompt)?.[1]?.trim() ?? 'none';
+            output = `\`\`\`json\n${JSON.stringify({
+              choice: first,
+              summary: `Simulated Chairman chose ${first}.`,
+              reasoningSummary: 'The same failure repeated, so the previous approach is abandoned.',
+              guidance: 'Simulated Chairman guidance: take a different approach from the previous attempts.',
+              expectedResult: 'The failure no longer occurs.',
+            })}\n\`\`\``;
+          } else {
+            const status = /^Status line: (.+)$/m.exec(input.prompt)?.[1] ?? 'unknown';
+            const intent = /^Parsed intent: (\w+)/m.exec(input.prompt)?.[1] ?? 'QUESTION';
+            output = `\`\`\`json\n${JSON.stringify({ reply: `Simulated Chairman: the task is ${status}.`, intent, actions: [] })}\n\`\`\``;
+          }
+          break;
+        }
         case 'verifier':
+          if (has('verify-plan-mismatch') && this.once(`${taskId}:verify-plan`)) {
+            output = '## Verification\n\n- The change does not address the requirement: the request asked for a heading, not a list entry.\n\nVERDICT: FAIL';
+            break;
+          }
           output = has('needs-operator')
             ? '## Verification\n\nThe code criteria are met.\n\nNEEDS OPERATOR: Choose whether the service listens on the network.\n\nVERDICT: PASS'
             : '## Verification\n\nAll success criteria were checked.\n\nVERDICT: PASS';

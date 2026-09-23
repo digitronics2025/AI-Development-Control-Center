@@ -3,6 +3,9 @@ import { SimulatedAgentAdapter, type AgentAdapter } from '@acc/agent-sdk';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
 import { Bus } from './bus.js';
+import { Chairman } from './chairman/chairman.js';
+import { ChairmanChat } from './chairman/chat.js';
+import { Watchdog } from './chairman/watchdog.js';
 import type { OrchestratorConfig } from './config.js';
 import { migrate, openDatabase, type Db } from './db/database.js';
 import { ContextBuilder } from './engine/context.js';
@@ -37,7 +40,12 @@ export interface AppServices {
   gitOperations: GitOperationStore;
   sourceControl: SourceControlService;
   sourceControlAssist: SourceControlAssist;
+  chairman: Chairman;
+  chat: ChairmanChat;
+  watchdog: Watchdog;
   startedAt: string;
+  /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
+  recover(): Promise<{ interruptedTasks: string[] }>;
   close(): Promise<void>;
 }
 
@@ -75,6 +83,9 @@ export function createServices(
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
+  const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context });
+  const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
+  const watchdog = new Watchdog(engine, store, views, settings, chairman);
 
   return {
     config,
@@ -93,9 +104,20 @@ export function createServices(
     gitOperations,
     sourceControl,
     sourceControlAssist,
+    chairman,
+    chat,
+    watchdog,
     startedAt: new Date().toISOString(),
+    async recover() {
+      const result = engine.recover();
+      await chairman.onStartup();
+      chat.recoverPending();
+      return result;
+    },
     async close() {
+      watchdog.stop();
       await engine.shutdown();
+      await chat.idle();
       db.close();
     },
   };

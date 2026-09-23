@@ -10,6 +10,8 @@ import type {
   CommandKind,
   CommandRisk,
   Directive,
+  DirectiveKind,
+  DirectiveScope,
   ErrorClass,
   EventType,
   Execution,
@@ -33,6 +35,7 @@ import type {
   TaskLastEvent,
   TaskMode,
   TaskOverrides,
+  TaskLimits,
   TaskStatus,
   TestRun,
   TestRunStatus,
@@ -80,6 +83,17 @@ export interface TaskRecord {
   maxFixCycles: number;
   fixCycles: number;
   pauseRequested: boolean;
+  /** Pause at the next stage boundary instead of stopping the running stage. */
+  pauseAfterStage: boolean;
+  /** Chairman supervision is on for this task. */
+  supervised: boolean;
+  recoveryCycle: number;
+  /** Supervised tasks only; null for unsupervised ones. */
+  limits: TaskLimits | null;
+  /** Command kinds the next tests stage runs in addition to its own (one-shot). */
+  extraCheckKinds: CommandKind[];
+  /** Bumped by the store on every material change; never set directly. */
+  version: number;
   blocker: TaskBlocker | null;
   lastEvent: TaskLastEvent | null;
   finalStatus: FinalStatus | null;
@@ -163,6 +177,12 @@ const toTask = (r: Row): TaskRecord => ({
   maxFixCycles: r.max_fix_cycles,
   fixCycles: r.fix_cycles,
   pauseRequested: r.pause_requested === 1,
+  pauseAfterStage: r.pause_after_stage === 1,
+  supervised: r.supervised === 1,
+  recoveryCycle: r.recovery_cycle ?? 0,
+  limits: parse(r.limits, null),
+  extraCheckKinds: parse(r.extra_check_kinds, []),
+  version: r.version ?? 0,
   blocker: parse(r.blocker, null),
   lastEvent: parse(r.last_event, null),
   finalStatus: r.final_status,
@@ -237,6 +257,13 @@ const toDirective = (r: Row): Directive => ({
   createdAt: r.created_at,
   appliedAt: r.applied_at,
   appliedStageKey: r.applied_stage_key,
+  scope: r.scope ?? 'CURRENT_TASK',
+  kind: r.kind ?? 'instruction',
+  state: r.state ?? 'active',
+  rule: parse(r.normalized_rule, null),
+  sourceMessageId: r.source_message_id ?? null,
+  removedAt: r.removed_at ?? null,
+  supersededBy: r.superseded_by ?? null,
 });
 
 const toArtifact = (r: Row): ArtifactRecord => ({
@@ -354,6 +381,11 @@ const TASK_COLUMNS: Partial<Record<keyof TaskRecord, [string, (v: any) => unknow
   maxFixCycles: ['max_fix_cycles', (v) => v],
   fixCycles: ['fix_cycles', (v) => v],
   pauseRequested: ['pause_requested', (v) => (v ? 1 : 0)],
+  pauseAfterStage: ['pause_after_stage', (v) => (v ? 1 : 0)],
+  supervised: ['supervised', (v) => (v ? 1 : 0)],
+  recoveryCycle: ['recovery_cycle', (v) => v],
+  limits: ['limits', (v) => (v ? json(v) : null)],
+  extraCheckKinds: ['extra_check_kinds', json],
   blocker: ['blocker', (v) => (v ? json(v) : null)],
   lastEvent: ['last_event', (v) => (v ? json(v) : null)],
   finalStatus: ['final_status', (v) => v],
@@ -363,6 +395,23 @@ const TASK_COLUMNS: Partial<Record<keyof TaskRecord, [string, (v: any) => unknow
   startedAt: ['started_at', (v) => v],
   finishedAt: ['finished_at', (v) => v],
 };
+
+/**
+ * Fields whose change makes an earlier Chairman decision stale: the gateway
+ * compares the version a decision was made against with the current one.
+ */
+const MATERIAL_FIELDS = new Set<keyof TaskRecord>([
+  'status',
+  'currentStageKey',
+  'currentStageId',
+  'overrides',
+  'fixCycles',
+  'maxFixCycles',
+  'recoveryCycle',
+  'pauseRequested',
+  'pauseAfterStage',
+  'workflow',
+]);
 
 const STAGE_COLUMNS: Partial<Record<keyof StageInstance, string>> = {
   status: 'status',
@@ -595,8 +644,9 @@ export class Store {
       .prepare(
         `INSERT INTO tasks (id, seq, title, description, repository_id, workflow_id, workflow_snapshot, mode, status, current_stage_key,
            current_stage_id, overrides, auto_approve_level, max_fix_cycles, fix_cycles, pause_requested, blocker, last_event, final_status,
-           git, attachments, prompt_versions, created_at, started_at, finished_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           git, attachments, prompt_versions, created_at, started_at, finished_at, updated_at,
+           supervised, recovery_cycle, limits, pause_after_stage, extra_check_kinds, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         t.id,
@@ -625,6 +675,12 @@ export class Store {
         t.startedAt,
         t.finishedAt,
         t.updatedAt,
+        t.supervised ? 1 : 0,
+        t.recoveryCycle,
+        t.limits ? json(t.limits) : null,
+        t.pauseAfterStage ? 1 : 0,
+        json(t.extraCheckKinds),
+        t.version,
       );
   }
 
@@ -636,12 +692,15 @@ export class Store {
   updateTask(id: string, patch: Partial<TaskRecord>): TaskRecord {
     const sets: string[] = [];
     const values: unknown[] = [];
+    let material = false;
     for (const [field, value] of Object.entries(patch)) {
       const column = TASK_COLUMNS[field as keyof TaskRecord];
       if (!column) continue;
       sets.push(`${column[0]} = ?`);
       values.push(column[1](value));
+      if (MATERIAL_FIELDS.has(field as keyof TaskRecord)) material = true;
     }
+    if (material) sets.push('version = version + 1');
     sets.push('updated_at = ?');
     values.push(now());
     this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
@@ -858,8 +917,39 @@ export class Store {
 
   insertDirective(d: Directive): void {
     this.db
-      .prepare('INSERT INTO task_directives (id, task_id, text, status, pause_requested, created_at, applied_at, applied_stage_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(d.id, d.taskId, d.text, d.status, d.pauseRequested ? 1 : 0, d.createdAt, d.appliedAt, d.appliedStageKey);
+      .prepare(
+        `INSERT INTO task_directives (id, task_id, text, status, pause_requested, created_at, applied_at, applied_stage_key,
+           scope, kind, state, normalized_rule, source_message_id, removed_at, superseded_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        d.id,
+        d.taskId,
+        d.text,
+        d.status,
+        d.pauseRequested ? 1 : 0,
+        d.createdAt,
+        d.appliedAt,
+        d.appliedStageKey,
+        d.scope,
+        d.kind,
+        d.state,
+        d.rule ? json(d.rule) : null,
+        d.sourceMessageId,
+        d.removedAt,
+        d.supersededBy,
+      );
+  }
+
+  getDirective(id: string): Directive | null {
+    const row = this.db.prepare('SELECT * FROM task_directives WHERE id = ?').get(id) as Row | undefined;
+    return row ? toDirective(row) : null;
+  }
+
+  /** End a directive's life: it no longer reaches any stage. */
+  retireDirective(id: string, state: 'removed' | 'superseded', supersededBy: string | null = null): Directive {
+    this.db.prepare('UPDATE task_directives SET state = ?, removed_at = ?, superseded_by = ? WHERE id = ?').run(state, now(), supersededBy, id);
+    return this.getDirective(id)!;
   }
 
   listDirectives(taskId: string): Directive[] {
@@ -867,9 +957,11 @@ export class Store {
   }
 
   markDirectivesApplied(taskId: string, stageKey: string): Directive[] {
-    const queued = this.listDirectives(taskId).filter((d) => d.status === 'queued');
+    const queued = this.listDirectives(taskId).filter((d) => d.status === 'queued' && d.state === 'active');
     const ts = now();
-    this.db.prepare("UPDATE task_directives SET status = 'applied', applied_at = ?, applied_stage_key = ? WHERE task_id = ? AND status = 'queued'").run(ts, stageKey, taskId);
+    this.db
+      .prepare("UPDATE task_directives SET status = 'applied', applied_at = ?, applied_stage_key = ? WHERE task_id = ? AND status = 'queued' AND state = 'active'")
+      .run(ts, stageKey, taskId);
     return queued.map((d) => ({ ...d, status: 'applied', appliedAt: ts, appliedStageKey: stageKey }));
   }
 
@@ -1014,4 +1106,4 @@ export class Store {
   }
 }
 
-export type { CommandKind, CommandRisk, StageKind };
+export type { CommandKind, CommandRisk, DirectiveKind, DirectiveScope, StageKind };

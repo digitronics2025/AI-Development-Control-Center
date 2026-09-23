@@ -17,6 +17,7 @@ import type {
   TaskStatus,
   TestRunStatus,
 } from './constants.js';
+import type { DirectiveKind, DirectiveRule, DirectiveScope, DirectiveState } from './chairman.js';
 import type {
   AgentSettings,
   GitMode,
@@ -35,7 +36,8 @@ export interface ResolvedAssignment {
 }
 
 export interface TaskBlocker {
-  kind: 'approval' | 'error' | 'usage' | 'auth' | 'fix_limit' | 'interrupted' | 'tests_missing' | 'queued';
+  /** hard_blocker and limit are set by the Chairman on supervised tasks. */
+  kind: 'approval' | 'error' | 'usage' | 'auth' | 'fix_limit' | 'interrupted' | 'tests_missing' | 'queued' | 'hard_blocker' | 'limit';
   message: string;
   errorClass?: ErrorClass;
   approvalId?: string;
@@ -81,10 +83,18 @@ export interface TaskSummary {
   currentAssignment: ResolvedAssignment | null;
   stageProgress: { total: number; completed: number; currentIndex: number | null };
   fixCycles: number;
+  /** Chairman supervision is on for this task (docs/systems/chairman.md). */
+  supervised: boolean;
+  /** Recovery cycles the Chairman has started; each resets the local fix budget. */
+  recoveryCycle: number;
+  /** Increments on every material state change; stale decisions are rejected against it. */
+  version: number;
   blocker: TaskBlocker | null;
   lastEvent: TaskLastEvent | null;
   finalStatus: FinalStatus | null;
   pauseRequested: boolean;
+  /** Pause at the next stage boundary (the running stage finishes first). */
+  pauseAfterStage: boolean;
   createdAt: Iso;
   startedAt: Iso | null;
   finishedAt: Iso | null;
@@ -169,11 +179,20 @@ export interface Directive {
   id: string;
   taskId: string;
   text: string;
+  /** Delivery: queued until an agent stage has received it. */
   status: 'queued' | 'applied';
   pauseRequested: boolean;
   createdAt: Iso;
   appliedAt: Iso | null;
   appliedStageKey: string | null;
+  scope: DirectiveScope;
+  kind: DirectiveKind;
+  /** Lifecycle: removed and superseded directives no longer reach any stage. */
+  state: DirectiveState;
+  rule: DirectiveRule | null;
+  sourceMessageId: string | null;
+  removedAt: Iso | null;
+  supersededBy: string | null;
 }
 
 export interface Artifact {

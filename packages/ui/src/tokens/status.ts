@@ -1,23 +1,38 @@
 import {
   Activity,
   AlertOctagon,
+  Brain,
   CheckCircle2,
   CircleDashed,
   CircleDot,
   Clock,
+  Eye,
   FilePen,
   Hourglass,
   ListOrdered,
+  Minus,
   PauseCircle,
   PlugZap,
   ShieldQuestion,
   SkipForward,
   Square,
+  TrendingDown,
+  TrendingUp,
   UserRound,
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
-import { STAGE_STATUS_LABEL, TASK_STATUS_LABEL, type StageStatus, type TaskStatus } from '@acc/shared';
+import {
+  CHAIRMAN_HEALTH_LABEL,
+  CHAIRMAN_STATUS_LABEL,
+  STAGE_STATUS_LABEL,
+  TASK_STATUS_LABEL,
+  type ChairmanActionStatus,
+  type ChairmanHealth,
+  type ChairmanStatus,
+  type StageStatus,
+  type TaskStatus,
+} from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
 export type Tone = 'accent' | 'info' | 'success' | 'warning' | 'danger' | 'neutral';
@@ -69,3 +84,27 @@ export const STAGE_STATUS_VISUAL: Record<StageStatus, StatusVisual> = {
 };
 
 export const FAILURE_ICON = AlertOctagon;
+
+/** Chairman supervisor state (design.md §7.3.1). */
+export const CHAIRMAN_STATUS_VISUAL: Record<ChairmanStatus, StatusVisual> = {
+  off: { label: CHAIRMAN_STATUS_LABEL.off, tone: 'neutral', icon: CircleDashed },
+  idle: { label: CHAIRMAN_STATUS_LABEL.idle, tone: 'neutral', icon: CircleDot },
+  supervising: { label: CHAIRMAN_STATUS_LABEL.supervising, tone: 'accent', icon: Eye },
+  evaluating: { label: CHAIRMAN_STATUS_LABEL.evaluating, tone: 'accent', icon: Brain, active: true },
+  degraded: { label: CHAIRMAN_STATUS_LABEL.degraded, tone: 'warning', icon: Eye },
+};
+
+export const CHAIRMAN_HEALTH_VISUAL: Record<ChairmanHealth, StatusVisual> = {
+  PROGRESSING: { label: CHAIRMAN_HEALTH_LABEL.PROGRESSING, tone: 'success', icon: TrendingUp },
+  STABLE: { label: CHAIRMAN_HEALTH_LABEL.STABLE, tone: 'info', icon: Minus },
+  STALLED: { label: CHAIRMAN_HEALTH_LABEL.STALLED, tone: 'warning', icon: Hourglass },
+  REGRESSING: { label: CHAIRMAN_HEALTH_LABEL.REGRESSING, tone: 'danger', icon: TrendingDown },
+  UNKNOWN: { label: CHAIRMAN_HEALTH_LABEL.UNKNOWN, tone: 'neutral', icon: CircleDashed },
+};
+
+export const CHAIRMAN_ACTION_STATUS_VISUAL: Record<ChairmanActionStatus, StatusVisual> = {
+  running: { label: 'Running', tone: 'accent', icon: CircleDot, active: true },
+  completed: { label: 'Completed', tone: 'success', icon: CheckCircle2 },
+  failed: { label: 'Failed', tone: 'danger', icon: XCircle },
+  rejected: { label: 'Rejected', tone: 'warning', icon: AlertOctagon },
+};

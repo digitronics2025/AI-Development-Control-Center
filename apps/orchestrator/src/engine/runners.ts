@@ -8,7 +8,9 @@ import {
   ERROR_CLASS_LABEL,
   ROLE_ACTIVITY,
   type ArtifactType,
+  type CommandKind,
   type ErrorClass,
+  type EventType,
   type ExecutionStatus,
   type Role,
   type StageDefinition,
@@ -27,7 +29,8 @@ import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { testFailureSummary, testPassSummary } from './test-summary.js';
 
-export type StopReason = 'pause' | 'cancel' | 'reroute' | 'shutdown';
+/** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
+export type StopReason = 'pause' | 'cancel' | 'reroute' | 'shutdown' | 'redirect' | 'watchdog';
 
 export type StageOutcome =
   | { kind: 'success'; stageId: string }
@@ -38,11 +41,25 @@ export type StageOutcome =
   | { kind: 'blocked'; stageId: string }
   | { kind: 'stopped'; stageId: string; reason: StopReason };
 
+/** What a `redirect` stop applies once the loop has let go of the task. */
+export interface RedirectPlan {
+  patch: Partial<TaskRecord>;
+  /** Status given to the stage that was running. */
+  stageStatus: 'CANCELLED' | 'PAUSED';
+  summary: string;
+  event: { type: EventType; message: string; data?: Record<string, unknown> };
+  /** Cancel pending approvals (the task is leaving the stage that asked). */
+  withdrawApprovals: boolean;
+  applied: boolean;
+}
+
 /** Per-task control block shared between the engine loop and user commands. */
 export interface RunControl {
   stopReason: StopReason | null;
   cancelCurrent: (() => Promise<void>) | null;
   autoRetries: Map<string, number>;
+  redirect: RedirectPlan | null;
+  watchdogReason: string | null;
 }
 
 const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string }>> = {
@@ -95,10 +112,20 @@ export function summarize(output: string, max = 240): string | null {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
-/** The repository's enabled commands a tests/command stage would run. */
-export function stageCommands(def: StageDefinition, repo: RepositoryRecord) {
-  const kinds = new Set(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS);
+/**
+ * The repository's enabled commands a tests/command stage would run. A tests
+ * stage also runs `extraKinds`: checks the user or the Chairman asked for.
+ */
+export function stageCommands(def: StageDefinition, repo: RepositoryRecord, extraKinds: readonly CommandKind[] = []) {
+  const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extraKinds : [])]);
   return repo.commands.filter((c) => c.enabled && kinds.has(c.kind));
+}
+
+/** Check kinds active directives require (e.g. "run E2E before finishing"). */
+export function requiredKinds(store: Store, taskId: string): CommandKind[] {
+  const kinds = new Set<CommandKind>();
+  for (const d of store.listDirectives(taskId)) if (d.state === 'active' && d.rule?.type === 'require_check') for (const k of d.rule.kinds) kinds.add(k);
+  return [...kinds];
 }
 
 /** An optional command stage with nothing configured is skipped, so it must never ask for approval. */
@@ -284,8 +311,11 @@ export class StageRunners {
 
   async runCommands(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
     const { store, publisher, approvals } = this.d;
-    const kinds = new Set(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS);
-    const commands = stageCommands(def, repo);
+    const extra = [...task.extraCheckKinds, ...requiredKinds(store, task.id)];
+    const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extra : [])]);
+    const commands = stageCommands(def, repo, extra);
+    // One-shot requests are consumed by the stage that runs them.
+    if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
 
     if (commands.length === 0) {
       const wanted = [...kinds].map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ');
@@ -459,6 +489,8 @@ export class StageRunners {
       }
     }
     for (const run of runs.slice(report.filter((l) => /^[✓✕]/.test(l)).length)) report.push(`○ ${run.name.padEnd(16)} not run`);
+    // A stop between two commands is a stop, not a pass with commands missing.
+    if (!failure && control.stopReason) return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
 
     if (def.kind === 'tests') {
       await this.d.artifacts.write(task.id, { name: 'tests.log', type: 'tests-log', content: report.join('\n'), stageId: stage.id, stageKey: def.key });

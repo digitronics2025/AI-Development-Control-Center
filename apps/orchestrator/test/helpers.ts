@@ -38,7 +38,7 @@ export async function createTestApp(options: { adapters?: AgentAdapter[]; dataDi
     version: 'test',
   };
   const services = createServices(config, { adapters: options.adapters ?? simAdapters(), baseEnv: options.baseEnv });
-  services.engine.recover();
+  await services.recover();
   const app = await buildServer(services);
   const api = async (method: string, url: string, body?: unknown, headers: Record<string, string> = {}) => {
     const res = await app.inject({
@@ -69,6 +69,8 @@ export async function createTestApp(options: { adapters?: AgentAdapter[]; dataDi
 
 export interface RepoOptions {
   scripts?: Record<string, string>;
+  /** Extra files committed with the initial commit. */
+  files?: Record<string, string>;
   dirty?: Record<string, string>;
   noPackageJson?: boolean;
 }
@@ -91,6 +93,7 @@ export async function makeRepo(options: RepoOptions = {}): Promise<string> {
       JSON.stringify({ name: 'fixture', private: true, scripts: options.scripts ?? { test: 'node -e "console.log(\'3 passed\')"' } }, null, 2),
     );
   }
+  for (const [file, content] of Object.entries(options.files ?? {})) writeFileSync(path.join(dir, file), content);
   await run(['add', '.']);
   await run(['commit', '-m', 'init']);
   for (const [file, content] of Object.entries(options.dirty ?? {})) writeFileSync(path.join(dir, file), content);

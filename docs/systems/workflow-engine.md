@@ -54,6 +54,14 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
 
+**Supervised tasks** (Autopilot with the Chairman on) differ: a test or
+verdict failure asks the Chairman, which keeps the local fix loop while it
+progresses ("Fix attempt N of M") and otherwise starts a recovery cycle
+instead of `fix_limit`; exhausted retries and provider blocks go to it too.
+They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
+`FAILED`, and `complete` passes the Chairman's completion gate first. See
+[chairman.md](chairman.md).
+
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
 task record. A reviewer/verifier stage with `verdict: false` still records an
@@ -75,6 +83,12 @@ without asking for approval (`skipsForLackOfCommands`).
 - **Reroute** writes a stage override; if that stage is running it is stopped and re-run with the new agent in the same loop (no restart from zero — the prompt carries the previous attempt).
 - **Directives** are persisted immediately and applied when the next agent stage builds its prompt.
 - **Retry** re-queues the chosen stage; pending approvals are withdrawn.
+- **Redirect** (Chairman/chat): `redirect()` stops the running loop, waits for it
+  to exit, then writes the new stage and re-queues — never two loops per task.
+  `pauseAfterStage` pauses at the next boundary. A stop between two commands of
+  a tests stage is a stop, not a pass.
+- Tests stages also run `extra_check_kinds` (one-shot requests) and the kinds
+  active `require_check` directives name.
 
 ## Scheduling
 
@@ -91,7 +105,8 @@ mutations while it runs ([source-control.md](source-control.md)).
 
 On start, executions/stages left `running` are marked interrupted and
 `RUNNING` tasks become `INTERRUPTED` with an explanation; queued tasks keep
-waiting. A task parked on a stage approval for a stage that would now be
+waiting. Supervised tasks interrupted this way are then resumed by the
+Chairman ([chairman.md](chairman.md#restart)). A task parked on a stage approval for a stage that would now be
 skipped (its command was removed) has the approval withdrawn and continues. Graceful shutdown does the same for work in progress.
 
 ## Prompts

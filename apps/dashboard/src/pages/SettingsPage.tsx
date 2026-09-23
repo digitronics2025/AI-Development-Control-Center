@@ -8,6 +8,7 @@ import {
   ConfirmDialog,
   Field,
   FieldGroup,
+  Input,
   KeyValueList,
   PageHeader,
   Panel,
@@ -24,6 +25,7 @@ import {
   PERMISSION_LEVEL_INFO,
   ROLES,
   ROLE_LABEL,
+  type ChairmanSettings,
   type PermissionLevel,
   type Role,
   type Settings,
@@ -40,6 +42,7 @@ const SECTIONS = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'agents', label: 'Agents & Models' },
+  { id: 'chairman', label: 'Chairman' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'billing', label: 'Billing' },
@@ -57,6 +60,31 @@ function Row({ title, description, children }: { title: string; description?: Re
       </div>
       {children}
     </div>
+  );
+}
+
+/** A bounded whole-number field; invalid input keeps the last valid value. */
+function LimitField({ label, helper, value, min, max, onChange }: { label: string; helper: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  const n = Number(text);
+  const invalid = !Number.isInteger(n) || n < min || n > max;
+  return (
+    <Field label={label} inline helper={helper} error={invalid ? `Enter a whole number from ${min} to ${max}.` : null}>
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        value={text}
+        className="w-28"
+        onChange={(e) => {
+          setText(e.target.value);
+          const next = Number(e.target.value);
+          if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+        }}
+      />
+    </Field>
   );
 }
 
@@ -126,6 +154,7 @@ export function SettingsPage() {
 
   if (settings.isLoading || !draft) return <div className="p-6"><Skeleton className="h-96" /></div>;
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft({ ...draft, [key]: value });
+  const setChairman = <K extends keyof ChairmanSettings>(key: K, value: ChairmanSettings[K]) => setDraft({ ...draft, chairman: { ...draft.chairman, [key]: value } });
 
   const save = (patch: Partial<Settings> = draft) =>
     update.mutate(patch, {
@@ -193,6 +222,41 @@ export function SettingsPage() {
           <p className="text-small text-fg-secondary">
             Health, executables and custom model IDs are managed on the <Link to="/agents" className="text-fg underline">Agents</Link> page.
           </p>
+        </div>
+      </Panel>
+    ),
+    chairman: (
+      <Panel
+        title="Chairman"
+        headingLevel={2}
+        description="The supervisor of Autopilot tasks: it recovers from failures, answers in the task's Chairman chat and acts only through checked, logged actions."
+      >
+        <div className="flex flex-col divide-y divide-border-subtle">
+          <Row title="Supervise new Autopilot tasks" description="Existing tasks keep the setting they were created with. Discuss First tasks are never supervised.">
+            <Switch aria-label="Supervise new Autopilot tasks" checked={draft.chairman.enabled} onCheckedChange={(v) => setChairman('enabled', v)} />
+          </Row>
+          <Row title="Use a reasoning model" description="Off: the Chairman uses its rules only. On: a read-only agent interprets failures and chat, choosing only among safe options the rules allow.">
+            <Switch aria-label="Use a reasoning model" checked={draft.chairman.useReasoning} onCheckedChange={(v) => setChairman('useReasoning', v)} />
+          </Row>
+          <div className="flex flex-col gap-2 py-3">
+            <span className="text-body font-semibold text-fg">Chairman agent</span>
+            <AssignmentPicker
+              label="Chairman"
+              disabled={!draft.chairman.useReasoning}
+              value={{ agentId: draft.chairman.agentId, model: draft.chairman.model, effort: draft.chairman.effort }}
+              onChange={(v) => setDraft({ ...draft, chairman: { ...draft.chairman, agentId: v.agentId ?? draft.chairman.agentId, model: v.model ?? 'default', effort: v.effort ?? 'default' } })}
+            />
+          </div>
+          <div className="flex flex-col gap-3 py-3">
+            <span className="text-body font-semibold text-fg">Limits per task</span>
+            <LimitField label="Recovery cycles" helper="New strategies after the fix loop stops working. Resuming a paused task allows one more." min={0} max={20} value={draft.chairman.maxRecoveryCycles} onChange={(v) => setChairman('maxRecoveryCycles', v)} />
+            <LimitField label="Work time (minutes)" helper="Agent and command time before the task pauses for you." min={10} max={10080} value={draft.chairman.maxTaskRuntimeMinutes} onChange={(v) => setChairman('maxTaskRuntimeMinutes', v)} />
+            <LimitField label="Agent runs" helper="Subscriptions report no cost, so runs are the budget." min={5} max={1000} value={draft.chairman.maxAgentRuns} onChange={(v) => setChairman('maxAgentRuns', v)} />
+            <LimitField label="Silent-worker limit (minutes)" helper="A running agent with no output for this long is stopped and recovered." min={2} max={1440} value={draft.chairman.stallMinutes} onChange={(v) => setChairman('stallMinutes', v)} />
+          </div>
+          <Row title="Resume after a restart" description="Supervised tasks interrupted by a restart continue automatically; nothing runs twice.">
+            <Switch aria-label="Resume supervised tasks after a restart" checked={draft.chairman.resumeAfterRestart} onCheckedChange={(v) => setChairman('resumeAfterRestart', v)} />
+          </Row>
         </div>
       </Panel>
     ),

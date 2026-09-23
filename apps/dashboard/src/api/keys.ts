@@ -13,6 +13,7 @@ export const keys = {
   taskDiff: (id: string, path: string | null) => ['task', id, 'diff', path ?? '*'] as const,
   taskDirectives: (id: string) => ['task', id, 'directives'] as const,
   taskApprovals: (id: string) => ['task', id, 'approvals'] as const,
+  chairman: (id: string) => ['task', id, 'chairman'] as const,
   logs: (executionId: string) => ['logs', executionId] as const,
   artifactContent: (id: string) => ['artifact', id] as const,
   approvals: (status: 'pending' | 'all') => ['approvals', status] as const,

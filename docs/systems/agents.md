@@ -5,7 +5,7 @@ sources:
   - packages/agent-claude/**
   - packages/agent-codex/**
   - packages/executor/**
-verified_at: 337fe1a
+verified_at: 892299f
 ---
 
 # Agent adapters
@@ -55,7 +55,9 @@ Structured provider messages are classified before log noise: `USAGE_LIMIT`
 with `ACC_SIMULATED_AGENTS=1` and labelled in the UI. Markers in a task
 description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:usage-limit]`, `[sim:fail:<role>]`, `[sim:slow]`,
-`[sim:needs-operator]` (verifier names an operator decision).
+`[sim:needs-operator]` (verifier names an operator decision),
+`[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`.
+Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 
 ## Observed on the operator's machine (2026-09-23)
 

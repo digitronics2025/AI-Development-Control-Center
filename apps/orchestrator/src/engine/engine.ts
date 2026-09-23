@@ -11,8 +11,12 @@ import {
   TERMINAL_TASK_STATUSES,
   createTaskSchema,
   isReadOnlyWorkflow,
+  type CommandKind,
   type CreateTaskInput,
   type Directive,
+  type DirectiveKind,
+  type DirectiveRule,
+  type DirectiveScope,
   type PartialAssignment,
   type StageDefinition,
   type StageInstance,
@@ -32,7 +36,8 @@ import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
 import { buildFinalReport, extractOperatorItems } from './report.js';
 import { Publisher } from './publisher.js';
-import { skipsForLackOfCommands, StageRunners, type RunControl, type StageOutcome, type StopReason } from './runners.js';
+import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
+import type { SupervisorHooks } from './supervision.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
 
@@ -77,6 +82,7 @@ export class TaskEngine {
   private scheduling = false;
   private rescheduleRequested = false;
   private shuttingDown = false;
+  private supervisor: SupervisorHooks | null = null;
 
   constructor(private readonly d: EngineDeps) {
     this.publisher = new Publisher(d.store, d.bus, d.views);
@@ -92,6 +98,15 @@ export class TaskEngine {
       approvals: this.approvals,
       baseEnv: d.baseEnv ?? process.env,
     });
+  }
+
+  /** The Chairman registers here after construction (it needs the engine too). */
+  attachSupervisor(hooks: SupervisorHooks): void {
+    this.supervisor = hooks;
+  }
+
+  private supervises(task: TaskRecord): boolean {
+    return task.supervised && this.supervisor !== null;
   }
 
   // ===========================================================================
@@ -134,6 +149,7 @@ export class TaskEngine {
     const id = `TASK-${String(seq).padStart(4, '0')}`;
     const title = input.title?.trim() || deriveTitle(input.description);
     const ts = now();
+    const supervised = input.supervised ?? (input.mode === 'autopilot' && settings.chairman.enabled);
     const task: TaskRecord = {
       id,
       seq,
@@ -151,6 +167,14 @@ export class TaskEngine {
       maxFixCycles: input.maxFixCycles ?? workflow.maxFixCycles,
       fixCycles: 0,
       pauseRequested: false,
+      pauseAfterStage: false,
+      supervised,
+      recoveryCycle: 0,
+      limits: supervised
+        ? { maxRecoveryCycles: settings.chairman.maxRecoveryCycles, maxRuntimeMinutes: settings.chairman.maxTaskRuntimeMinutes, maxAgentRuns: settings.chairman.maxAgentRuns }
+        : null,
+      extraCheckKinds: [],
+      version: 0,
       blocker: null,
       lastEvent: null,
       finalStatus: null,
@@ -164,6 +188,7 @@ export class TaskEngine {
     };
     this.d.store.insertTask(task);
     this.d.store.updateRepository(repo.id, { lastTaskId: id });
+    this.supervisor?.onTaskCreated(task);
 
     if (input.attachments?.length) {
       const dir = path.join(this.d.artifacts.taskDir(id), 'attachments');
@@ -222,7 +247,13 @@ export class TaskEngine {
     const task = this.task(id);
     if (!RESUMABLE.includes(task.status)) throw new EngineError(`A ${task.status.toLowerCase()} task cannot be resumed`, 'INVALID_STATE');
     if (task.blocker?.kind === 'approval') throw new EngineError('This task is waiting for an approval. Review it in Approvals.', 'INVALID_STATE');
-    const patch: Partial<TaskRecord> = { status: 'QUEUED', blocker: null, pauseRequested: false };
+    if (this.supervises(task)) this.supervisor!.onResume(task);
+    const patch: Partial<TaskRecord> = { status: 'QUEUED', blocker: null, pauseRequested: false, pauseAfterStage: false };
+    if (task.blocker?.kind === 'limit' && task.limits && this.supervisor) {
+      // Resuming past a limit is an explicit extension, for this task only.
+      patch.limits = this.supervisor.extendedLimits(task);
+      this.publisher.event(id, 'TASK_RESUMED', 'Limits extended by you for this task', { limits: patch.limits });
+    }
     if (task.blocker?.kind === 'fix_limit' && task.blocker.stageKey) {
       // Resuming after the fix limit grants exactly one more cycle.
       const def = this.d.views.stageDef(task, task.blocker.stageKey);
@@ -260,8 +291,9 @@ export class TaskEngine {
       if (stage && !['SUCCESS', 'SKIPPED', 'FAILED'].includes(stage.status)) this.publisher.updateStage(stage.id, { status: 'CANCELLED', finishedAt: now() });
     }
     for (const a of this.d.store.cancelPendingApprovals(id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
-    this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, finishedAt: now() });
+    this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, pauseAfterStage: false, finishedAt: now() });
     this.publisher.event(id, 'TASK_CANCELLED', 'Task cancelled');
+    this.supervisor?.onTerminal(id);
     this.schedule();
   }
 
@@ -328,7 +360,10 @@ export class TaskEngine {
     return this.detail(id);
   }
 
-  async addDirective(id: string, input: { text: string; pause?: boolean }): Promise<Directive> {
+  async addDirective(
+    id: string,
+    input: { text: string; pause?: boolean; scope?: DirectiveScope; kind?: DirectiveKind; rule?: DirectiveRule | null; sourceMessageId?: string | null; supersedes?: string },
+  ): Promise<Directive> {
     const task = this.task(id);
     if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
     const text = redact(input.text.trim());
@@ -336,17 +371,230 @@ export class TaskEngine {
       id: newId(),
       taskId: id,
       text,
-      status: 'queued',
+      // Routing directives take effect as assignments, not prompt text, so they are applied at once.
+      status: input.kind === 'routing' ? 'applied' : 'queued',
       pauseRequested: Boolean(input.pause),
       createdAt: now(),
-      appliedAt: null,
+      appliedAt: input.kind === 'routing' ? now() : null,
       appliedStageKey: null,
+      scope: input.scope ?? 'CURRENT_TASK',
+      kind: input.kind ?? 'instruction',
+      state: 'active',
+      rule: input.rule ?? null,
+      sourceMessageId: input.sourceMessageId ?? null,
+      removedAt: null,
+      supersededBy: null,
     };
     this.d.store.insertDirective(directive);
     this.d.bus.publish({ type: 'directive', directive });
-    this.publisher.event(id, 'USER_DIRECTIVE', `Directive queued: ${text.length > 120 ? `${text.slice(0, 119)}…` : text}`, { directiveId: directive.id });
+    this.publisher.event(id, 'USER_DIRECTIVE', `Directive ${directive.status === 'queued' ? 'queued' : 'added'}: ${text.length > 120 ? `${text.slice(0, 119)}…` : text}`, { directiveId: directive.id, kind: directive.kind });
+    if (input.supersedes) {
+      const old = this.d.store.getDirective(input.supersedes);
+      if (old && old.taskId === id && old.state === 'active') this.d.bus.publish({ type: 'directive', directive: this.d.store.retireDirective(old.id, 'superseded', directive.id) });
+    }
     if (input.pause && task.status === 'RUNNING') await this.pause(id);
     return directive;
+  }
+
+  removeDirective(id: string, directiveId: string): Directive {
+    this.task(id);
+    const directive = this.d.store.getDirective(directiveId);
+    if (!directive || directive.taskId !== id) throw new EngineError('Directive not found', 'NOT_FOUND');
+    if (directive.state !== 'active') throw new EngineError(`That directive was already ${directive.state}`, 'INVALID_STATE');
+    const removed = this.d.store.retireDirective(directiveId, 'removed');
+    this.d.bus.publish({ type: 'directive', directive: removed });
+    this.publisher.event(id, 'DIRECTIVE_REMOVED', `Directive removed: ${removed.text.length > 120 ? `${removed.text.slice(0, 119)}…` : removed.text}`, { directiveId });
+    return removed;
+  }
+
+  /**
+   * Stop the running loop (if any) and apply `plan` once it has let go. Only
+   * one worker can ever mutate a task: the new state is written after the
+   * old loop has fully exited, and the scheduler starts a fresh one.
+   */
+  private async stopAndApply(id: string, plan: Omit<RedirectPlan, 'applied'>): Promise<void> {
+    const full: RedirectPlan = { ...plan, applied: false };
+    const runner = this.runners.get(id);
+    if (runner) {
+      runner.control.redirect = full;
+      runner.control.stopReason = 'redirect';
+      await runner.control.cancelCurrent?.();
+      await runner.done;
+      if (full.applied) return;
+    }
+    const task = this.task(id);
+    if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is already ${task.status.toLowerCase()}`, 'INVALID_STATE');
+    this.applyPlan(task, full, null);
+  }
+
+  private applyPlan(task: TaskRecord, plan: RedirectPlan, stage: StageInstance | null): void {
+    const current = stage ?? (task.currentStageId ? this.d.store.getStage(task.currentStageId) : null);
+    if (current && ['STARTING', 'RUNNING', 'RETRYING', 'WAITING_APPROVAL', 'PAUSED'].includes(current.status)) {
+      this.publisher.updateStage(current.id, { status: plan.stageStatus, summary: plan.summary, finishedAt: now() });
+    }
+    if (plan.withdrawApprovals) for (const a of this.d.store.cancelPendingApprovals(task.id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
+    this.publisher.updateTask(task.id, plan.patch);
+    this.publisher.event(task.id, plan.event.type, plan.event.message, plan.event.data ?? {});
+    plan.applied = true;
+  }
+
+  /** Send the task to `stageKey` (or `complete`), stopping whatever runs now. */
+  async redirect(id: string, stageKey: string, opts: { reason: string; patch?: Partial<TaskRecord> }): Promise<void> {
+    const task = this.task(id);
+    if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
+    if (task.status === 'DRAFT') throw new EngineError('Start the task first', 'INVALID_STATE');
+    const def = stageKey === COMPLETE ? null : this.d.views.stageDef(task, stageKey);
+    if (stageKey !== COMPLETE && !def) throw new EngineError(`Unknown stage "${stageKey}"`, 'INVALID_INPUT');
+    const target = def?.name ?? 'completion';
+    await this.stopAndApply(id, {
+      patch: { status: 'QUEUED', currentStageKey: stageKey, blocker: null, pauseRequested: false, pauseAfterStage: false, finalStatus: null, ...opts.patch },
+      stageStatus: 'CANCELLED',
+      summary: `Stopped: ${opts.reason}`,
+      event: { type: 'TASK_REDIRECTED', message: `Redirected to ${target} · ${opts.reason}`, data: { stageKey } },
+      withdrawApprovals: true,
+    });
+    this.schedule();
+  }
+
+  /**
+   * The same transition from inside the loop (a Chairman recovery decision at
+   * a stage boundary): nothing is running, so the loop just continues there.
+   */
+  redirectInLoop(id: string, stageKey: string, opts: { reason: string; patch?: Partial<TaskRecord> }): void {
+    const task = this.task(id);
+    const def = stageKey === COMPLETE ? null : this.d.views.stageDef(task, stageKey);
+    if (stageKey !== COMPLETE && !def) throw new EngineError(`Unknown stage "${stageKey}"`, 'INVALID_INPUT');
+    this.publisher.updateTask(id, { currentStageKey: stageKey, ...opts.patch });
+    this.publisher.event(id, 'TASK_REDIRECTED', `Redirected to ${def?.name ?? 'completion'} · ${opts.reason}`, { stageKey });
+  }
+
+  /** Apply a task patch from inside the loop (recovery bookkeeping). */
+  applyInLoop(id: string, patch: Partial<TaskRecord>): TaskRecord {
+    return this.publisher.updateTask(id, patch);
+  }
+
+  /** Stop the running worker and leave the task paused for instructions. */
+  async stopActiveStage(id: string, reason: string): Promise<void> {
+    if (!this.runners.has(id)) throw new EngineError('No stage is running', 'INVALID_STATE');
+    await this.stopAndApply(id, {
+      patch: { status: 'PAUSED', pauseRequested: false, pauseAfterStage: false },
+      stageStatus: 'CANCELLED',
+      summary: `Stopped: ${reason}`,
+      event: { type: 'TASK_PAUSED', message: `Stopped the active stage · ${reason}` },
+      withdrawApprovals: false,
+    });
+  }
+
+  /** Pause at the next stage boundary; the running stage finishes first. */
+  pauseAfterStage(id: string): void {
+    const task = this.task(id);
+    if (task.status === 'QUEUED') {
+      this.publisher.updateTask(id, { status: 'PAUSED', blocker: null });
+      this.publisher.event(id, 'TASK_PAUSED', 'Task paused before it started');
+      return;
+    }
+    if (task.status !== 'RUNNING') throw new EngineError(`A ${task.status.toLowerCase()} task cannot be paused`, 'INVALID_STATE');
+    this.publisher.updateTask(id, { pauseAfterStage: true });
+    const def = this.d.views.stageDef(task, task.currentStageKey);
+    this.publisher.event(id, 'TASK_PAUSED', `Will pause after ${def?.name ?? 'the current stage'}`);
+  }
+
+  clearPauseAfterStage(id: string): void {
+    if (this.task(id).pauseAfterStage) this.publisher.updateTask(id, { pauseAfterStage: false });
+  }
+
+  /** Park the task on a blocker only a person can clear (or a limit). */
+  async block(id: string, kind: 'hard_blocker' | 'limit', message: string, opts: { inLoop?: boolean; stageKey?: string } = {}): Promise<void> {
+    const task = this.task(id);
+    const blocker = { kind, message, stageKey: opts.stageKey ?? task.currentStageKey ?? undefined };
+    const eventMessage = kind === 'limit' ? `Paused at a limit: ${message}` : `Hard blocker: ${message}`;
+    if (opts.inLoop || !this.runners.has(id)) {
+      if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
+      this.publisher.updateTask(id, { status: 'WAITING_FOR_USER', blocker, pauseRequested: false, pauseAfterStage: false });
+      this.publisher.event(id, 'TASK_WAITING', eventMessage);
+      return;
+    }
+    await this.stopAndApply(id, {
+      patch: { status: 'WAITING_FOR_USER', blocker, pauseRequested: false, pauseAfterStage: false },
+      stageStatus: 'CANCELLED',
+      summary: eventMessage,
+      event: { type: 'TASK_WAITING', message: eventMessage },
+      withdrawApprovals: true,
+    });
+  }
+
+  /**
+   * Change a stage's agent/model/effort for its next run without interrupting
+   * the current one (a deferred routing directive).
+   */
+  setAssignment(id: string, input: { stageKey: string; agentId?: string; model?: string; effort?: string; applyToRole?: boolean }, reason: string): TaskDetail {
+    const task = this.task(id);
+    if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
+    const def = this.d.views.stageDef(task, input.stageKey);
+    if (!def) throw new EngineError(`Unknown stage "${input.stageKey}"`, 'INVALID_INPUT');
+    if (def.kind !== 'agent') throw new EngineError(`${def.name} is run by the system and has no agent`, 'INVALID_INPUT');
+    if (input.agentId && !this.d.agents.has(input.agentId)) throw new EngineError(`Unknown agent "${input.agentId}"`, 'INVALID_INPUT');
+    const overrides = structuredClone(task.overrides);
+    const previous = overrides.stages[def.key] ?? {};
+    const changedAgent = input.agentId !== undefined && input.agentId !== previous.agentId;
+    const next = {
+      ...previous,
+      ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+      ...(input.model !== undefined ? { model: input.model } : changedAgent ? { model: 'default' } : {}),
+      ...(input.effort !== undefined ? { effort: input.effort } : {}),
+    };
+    overrides.stages[def.key] = next;
+    if (input.applyToRole) overrides.roles[def.role] = next;
+    this.publisher.updateTask(id, { overrides });
+    const resolved = this.d.views.assignmentFor(this.task(id), def);
+    const running = this.runners.has(id) && task.currentStageKey === def.key;
+    this.publisher.event(
+      id,
+      'ASSIGNMENT_CHANGED',
+      `${def.name} will use ${this.d.agents.adapter(resolved.agentId).displayName} · ${resolved.model} · ${resolved.effort}${running ? ' from its next run' : ''} · ${reason}`,
+      { stageKey: def.key, assignment: resolved },
+    );
+    return this.detail(id);
+  }
+
+  /** Ask the next tests stage to also run these command kinds (one-shot). */
+  requestChecks(id: string, kinds: CommandKind[]): void {
+    const task = this.task(id);
+    const next = [...new Set([...task.extraCheckKinds, ...kinds])];
+    this.publisher.updateTask(id, { extraCheckKinds: next });
+  }
+
+  /** Loops currently holding a task, for the watchdog. */
+  activeRuns(): Array<{ taskId: string; control: RunControl }> {
+    return [...this.runners.entries()].map(([taskId, r]) => ({ taskId, control: r.control }));
+  }
+
+  /** Stop a stuck or dead worker; the stage fails with the reason and recovery takes over. */
+  async watchdogStop(id: string, reason: string): Promise<boolean> {
+    const runner = this.runners.get(id);
+    if (!runner || runner.control.stopReason || !runner.control.cancelCurrent) return false;
+    runner.control.stopReason = 'watchdog';
+    runner.control.watchdogReason = reason;
+    await runner.control.cancelCurrent();
+    return true;
+  }
+
+  /** A task the database says is RUNNING with no loop behind it (a ghost). */
+  reconcileGhost(id: string, reason: string): boolean {
+    const task = this.task(id);
+    if (task.status !== 'RUNNING' || this.runners.has(id)) return false;
+    const stage = task.currentStageId ? this.d.store.getStage(task.currentStageId) : null;
+    if (stage && ['STARTING', 'RUNNING', 'RETRYING'].includes(stage.status)) this.publisher.updateStage(stage.id, { status: 'INTERRUPTED', finishedAt: now() });
+    for (const exec of this.d.store.listExecutions(id).filter((e) => e.status === 'running')) {
+      this.d.store.updateExecution(exec.id, { status: 'interrupted', finishedAt: now(), errorMessage: reason });
+    }
+    this.publisher.updateTask(id, {
+      status: 'INTERRUPTED',
+      pauseRequested: false,
+      blocker: { kind: 'interrupted', message: `${reason}. Resume to run ${stage?.name ?? 'it'} again.`, stageKey: stage?.stageKey },
+    });
+    this.publisher.event(id, 'WATCHDOG', `${reason}; marked interrupted`);
+    return true;
   }
 
   async resolveApproval(approvalId: string, decision: 'approve' | 'deny', input: { note?: string; confirmation?: string } = {}): Promise<void> {
@@ -435,7 +683,7 @@ export class TaskEngine {
   }
 
   private launch(task: TaskRecord): void {
-    const control: RunControl = { stopReason: null, cancelCurrent: null, autoRetries: new Map() };
+    const control: RunControl = { stopReason: null, cancelCurrent: null, autoRetries: new Map(), redirect: null, watchdogReason: null };
     const firstStart = !task.startedAt;
     this.publisher.updateTask(task.id, { status: 'RUNNING', blocker: null, startedAt: task.startedAt ?? now() });
     if (firstStart) this.publisher.event(task.id, 'TASK_STARTED', 'Task started');
@@ -474,11 +722,17 @@ export class TaskEngine {
     for (;;) {
       const task = this.task(taskId);
       if (task.status !== 'RUNNING') return;
-      if (control.stopReason === 'cancel' || control.stopReason === 'shutdown') return this.stopped(task, control.stopReason, null);
-      if (task.pauseRequested || control.stopReason === 'pause') return this.stopped(task, 'pause', null);
+      if (control.stopReason === 'cancel' || control.stopReason === 'shutdown' || control.stopReason === 'redirect') return this.stopped(task, control.stopReason, null);
+      if (task.pauseRequested || task.pauseAfterStage || control.stopReason === 'pause') return this.stopped(task, 'pause', null);
 
       const key = task.currentStageKey ?? task.workflow.stages[0]!.key;
-      if (key === COMPLETE) return this.complete(task);
+      if (key === COMPLETE) {
+        if (!this.supervises(task)) return this.complete(task);
+        const gate = await this.supervisor!.beforeComplete(taskId, control);
+        if (gate.kind === 'continue') continue;
+        if (gate.kind === 'stop') return this.afterHook(taskId, control);
+        return this.complete(this.task(taskId), gate.limitations);
+      }
       const def = this.d.views.stageDef(task, key);
       if (!def) throw new Error(`Workflow snapshot has no stage "${key}"`);
 
@@ -493,6 +747,8 @@ export class TaskEngine {
       let outcome: StageOutcome;
       try {
         if (writes) await this.ensureBaseline(task, repo.path);
+        // The Chairman checks limits and takes its checkpoint while the writer lock is held.
+        if (this.supervises(task) && !(await this.supervisor!.beforeStage(this.task(taskId), def, control))) return this.afterHook(taskId, control);
         stage = this.createStageInstance(this.task(taskId), def);
         switch (def.kind) {
           case 'agent':
@@ -512,6 +768,12 @@ export class TaskEngine {
       }
       if (!(await this.handleOutcome(taskId, def, stage, outcome, control))) return;
     }
+  }
+
+  /** A hook returned "stop": honour a pending stop request, else the hook parked the task itself. */
+  private afterHook(taskId: string, control: RunControl): void {
+    const task = this.task(taskId);
+    if (control.stopReason && task.status === 'RUNNING') this.stopped(task, control.stopReason, null);
   }
 
   /** Permission gate before a stage starts. Returns false when the task must wait. */
@@ -630,6 +892,7 @@ export class TaskEngine {
       case 'success':
       case 'skipped': {
         control.autoRetries.delete(def.key);
+        if (this.supervises(task)) this.supervisor!.afterSuccess(taskId, def, stage);
         if (def.role === 'planner' && task.mode === 'discuss' && outcome.kind === 'success') {
           const state = this.approvals.state(task.id, 'plan_review', { stageId: outcome.stageId });
           if (state !== 'approved') {
@@ -654,6 +917,20 @@ export class TaskEngine {
       case 'verdict_fail':
       case 'tests_failed': {
         control.autoRetries.delete(def.key);
+        if (this.supervises(task)) {
+          // Supervised: the Chairman decides between the local fix loop and a recovery cycle.
+          const verdict = await this.supervisor!.onFailure(taskId, def, stage, outcome, control);
+          if (verdict === 'continue') return true;
+          if (verdict === 'stop') {
+            this.afterHook(taskId, control);
+            return false;
+          }
+          const current = this.task(taskId);
+          const attempt = current.fixCycles + 1;
+          this.publisher.updateTask(taskId, { fixCycles: attempt, currentStageKey: def.onFail });
+          this.publisher.event(taskId, 'FIX_CYCLE', `Fix attempt ${attempt} of ${current.maxFixCycles}${current.recoveryCycle ? ` · recovery cycle ${current.recoveryCycle}` : ''}`, { cycle: attempt, recoveryCycle: current.recoveryCycle });
+          return true;
+        }
         if (!def.onFail) {
           const message = outcome.kind === 'tests_failed' ? outcome.message : `${def.name} did not pass`;
           this.publisher.updateTask(task.id, { status: 'FAILED', blocker: { kind: 'error', message, errorClass: outcome.kind === 'tests_failed' ? 'TEST_FAILURE' : undefined, stageKey: def.key } });
@@ -672,10 +949,19 @@ export class TaskEngine {
         return true;
       }
       case 'error':
-        return this.handleError(task, def, outcome, control);
+        return this.handleError(task, def, stage, outcome, control);
       case 'blocked':
         return false;
       case 'stopped':
+        if (outcome.reason === 'watchdog') {
+          // A stuck or dead worker is a failed attempt, not a pause.
+          const message = control.watchdogReason ?? 'Stopped by the watchdog';
+          control.stopReason = null;
+          control.watchdogReason = null;
+          const failed = this.stages.failStage(stage, 'TIMEOUT', message) as Extract<StageOutcome, { kind: 'error' }>;
+          this.publisher.event(taskId, 'WATCHDOG', message, {}, stage.id);
+          return this.handleError(this.task(taskId), def, stage, failed, control);
+        }
         if (outcome.reason === 'reroute') {
           this.publisher.updateStage(stage.id, { status: 'CANCELLED', summary: 'Rerouted to another agent', finishedAt: now() });
           control.stopReason = null;
@@ -686,8 +972,21 @@ export class TaskEngine {
     }
   }
 
-  private handleError(task: TaskRecord, def: StageDefinition, outcome: Extract<StageOutcome, { kind: 'error' }>, control: RunControl): boolean {
+  private async handleError(task: TaskRecord, def: StageDefinition, stage: StageInstance, outcome: Extract<StageOutcome, { kind: 'error' }>, control: RunControl): Promise<boolean> {
     const label = ERROR_CLASS_LABEL[outcome.errorClass];
+    const blocking = ['USAGE_LIMIT', 'AUTH_FAILURE', 'MODEL_UNAVAILABLE', 'PERMISSION_DENIED', 'CONTEXT_FAILURE'].includes(outcome.errorClass);
+    const retriesLeft = !blocking && (control.autoRetries.get(def.key) ?? 0) + 1 < def.retry.maxAttempts;
+    if (this.supervises(task) && !retriesLeft) {
+      const verdict = await this.supervisor!.onError(task.id, def, stage, outcome, control, blocking ? 'blocked' : 'exhausted');
+      if (verdict === 'continue') {
+        control.autoRetries.delete(def.key);
+        return true;
+      }
+      if (verdict === 'stop') {
+        this.afterHook(task.id, control);
+        return false;
+      }
+    }
     const waitFor = (status: TaskStatus, blocker: TaskBlocker, message: string) => {
       this.publisher.updateTask(task.id, { status, blocker });
       this.publisher.event(task.id, 'TASK_WAITING', message);
@@ -725,11 +1024,16 @@ export class TaskEngine {
   /** Apply a stop requested by the user or by shutdown. */
   private stopped(task: TaskRecord, reason: StopReason, stage: StageInstance | null): void {
     if (reason === 'cancel') return; // cancel() finalises statuses itself
+    const control = this.runners.get(task.id)?.control;
+    if (reason === 'redirect' && control?.redirect) {
+      this.applyPlan(task, control.redirect, stage);
+      return;
+    }
     const current = stage ?? (task.currentStageId ? this.d.store.getStage(task.currentStageId) : null);
     const active = current && ['STARTING', 'RUNNING', 'RETRYING'].includes(current.status);
-    if (reason === 'pause') {
+    if (reason === 'pause' || reason === 'redirect') {
       if (active) this.publisher.updateStage(current.id, { status: 'PAUSED', finishedAt: now() });
-      this.publisher.updateTask(task.id, { status: 'PAUSED', pauseRequested: false });
+      this.publisher.updateTask(task.id, { status: 'PAUSED', pauseRequested: false, pauseAfterStage: false });
       this.publisher.event(task.id, 'TASK_PAUSED', active ? `Paused during ${current.name}; it will run again on resume` : 'Task paused');
       return;
     }
@@ -741,7 +1045,7 @@ export class TaskEngine {
     this.publisher.event(task.id, 'TASK_INTERRUPTED', `Interrupted by orchestrator shutdown${current ? ` during ${current.name}` : ''}`);
   }
 
-  private async complete(task: TaskRecord): Promise<void> {
+  private async complete(task: TaskRecord, gateLimitations: string[] = []): Promise<void> {
     const repo = this.d.repositories.record(task.repositoryId);
     const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
     let files = null;
@@ -761,7 +1065,7 @@ export class TaskEngine {
       await this.d.artifacts.latestText(task.id, 'review'),
       await this.d.artifacts.latestText(task.id, 'verification'),
     );
-    const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed, operatorItems });
+    const report = buildFinalReport({ task, repo, stages, testRuns: this.d.store.listTestRuns(task.id), files, testsSkipped, deployed, operatorItems, gateLimitations });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
     const completion = { status: 'COMPLETED' as const, finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE };
@@ -776,6 +1080,7 @@ export class TaskEngine {
     this.publisher.event(task.id, 'TASK_COMPLETED', report.finalStatus === 'READY' ? 'Task completed · ready' : `Task completed · needs your attention: ${report.limitations[0]}`, {
       finalStatus: report.finalStatus,
     });
+    this.supervisor?.onTerminal(task.id);
   }
 
   // ===========================================================================

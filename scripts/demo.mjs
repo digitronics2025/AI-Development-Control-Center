@@ -154,8 +154,9 @@ if (seed) {
   await waitFor(done.id, ['COMPLETED', 'FAILED']);
   await task({ repositoryId: shop.id, description: 'Fix the invoice rounding bug for multi-currency orders. [sim:slow] [sim:review-fail-once]' });
   await task({ repositoryId: billing.id, mode: 'discuss', description: 'Add Stripe webhook retries with idempotency keys.' });
-  await task({ repositoryId: mobile.id, workflowId: 'quick-change', description: 'Migrate the settings screen to the new navigation. [sim:usage-limit]' });
-  await task({ repositoryId: docs.id, workflowId: 'quick-change', maxFixCycles: 1, description: 'Update the changelog page layout.' });
+  // Unsupervised on purpose: these two show the plain usage-limit and fix-limit waits.
+  await task({ repositoryId: mobile.id, workflowId: 'quick-change', supervised: false, description: 'Migrate the settings screen to the new navigation. [sim:usage-limit]' });
+  await task({ repositoryId: docs.id, workflowId: 'quick-change', maxFixCycles: 1, supervised: false, description: 'Update the changelog page layout.' });
   await api('POST', '/api/tasks', { repositoryId: billing.id, workflowId: 'quick-change', mode: 'autopilot', description: 'Rename the PaymentIntent helper for clarity.', start: false });
 }
 

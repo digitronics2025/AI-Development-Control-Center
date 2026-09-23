@@ -51,6 +51,16 @@ Dangerous (recursive deletes, `git reset --hard`, force push, `DROP TABLE`,
 unscoped `DELETE`, `terraform destroy`…) and anything targeting production is
 level 5 and always needs an approval with a typed confirmation (the task ID).
 
+## Chairman ([chairman.md](chairman.md))
+
+- Every Chairman action passes one gateway: schema, initiator permissions,
+  task state, stale-version check, per-task lock, idempotency key, audit row.
+- Agent output, logs, tests and repository text reach the reasoning model only
+  inside `<untrusted_evidence>` fences it cannot close, and the model can only
+  pick a pre-validated strategy; directives come only from the user's own words.
+- Chat has no shell: messages become typed actions or answers. Chairman text,
+  decisions and directives are redacted before storage.
+
 ## Permission levels
 
 1 Analyze · 2 Develop · 3 Git · 4 Infrastructure · 5 Production. Default

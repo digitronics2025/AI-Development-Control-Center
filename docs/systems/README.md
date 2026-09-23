@@ -4,6 +4,7 @@
 |---|---|---|
 | Orchestrator (HTTP, WebSocket, persistence) | [orchestrator.md](orchestrator.md) | `apps/orchestrator` |
 | Workflow engine | [workflow-engine.md](workflow-engine.md) | `apps/orchestrator/src/engine`, `packages/shared/src/workflow.ts`, `workflows/` |
+| Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
 | Agent adapters | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |
 | Security | [security.md](security.md) | `packages/security`, `apps/orchestrator/src/http/security.ts` |
 | Git integration | [git.md](git.md) | `packages/git` |

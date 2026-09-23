@@ -151,6 +151,8 @@ export const createTaskSchema = z.object({
     .max(10)
     .optional(),
   start: z.boolean().default(true),
+  /** Chairman supervision; defaults to on for Autopilot tasks when enabled in Settings. */
+  supervised: z.boolean().optional(),
 });
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
 
@@ -201,6 +203,28 @@ export const agentSettingsSchema = z.object({
 });
 export type AgentSettings = z.infer<typeof agentSettingsSchema>;
 
+/** Chairman supervisor defaults (docs/systems/chairman.md). */
+export const chairmanSettingsSchema = z.object({
+  /** Supervise new Autopilot tasks. Existing tasks keep the mode they were created with. */
+  enabled: z.boolean().default(true),
+  /** Agent that answers chat and chooses recovery strategies; runs read-only. */
+  agentId: agentIdSchema.default('claude'),
+  model: modelIdSchema.default('default'),
+  effort: effortSchema.default('default'),
+  /** Off = deterministic policy only (no model calls). */
+  useReasoning: z.boolean().default(true),
+  maxRecoveryCycles: z.number().int().min(0).max(20).default(3),
+  /** Agent and command time a task may accumulate before it pauses for you. */
+  maxTaskRuntimeMinutes: z.number().int().min(10).max(7 * 24 * 60).default(480),
+  /** Agent runs a task may use; a proxy for cost, since subscriptions report none. */
+  maxAgentRuns: z.number().int().min(5).max(1000).default(60),
+  /** A running execution with no output for this long is stopped and recovered. */
+  stallMinutes: z.number().int().min(2).max(24 * 60).default(30),
+  /** Resume interrupted supervised tasks automatically after a restart. */
+  resumeAfterRestart: z.boolean().default(true),
+});
+export type ChairmanSettings = z.infer<typeof chairmanSettingsSchema>;
+
 export const settingsSchema = z.object({
   billingMode: z.enum(BILLING_MODES).default('subscription'),
   theme: z.enum(THEMES).default('dark'),
@@ -216,6 +240,7 @@ export const settingsSchema = z.object({
     })
     .default({ approvals: true, failures: true, completions: true }),
   developerMode: z.boolean().default(false),
+  chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

@@ -8,7 +8,7 @@ import { reconcileGitOperations } from './source-control/reconcile.js';
 async function main(): Promise<void> {
   const config = loadConfig();
   const services = createServices(config);
-  const recovered = services.engine.recover();
+  const recovered = await services.recover();
   // Filled in once the shutdown routine exists; the HTTP endpoint only exists after listen.
   const lifecycle: { shutdown: (reason: string) => void } = { shutdown: () => undefined };
   const app = await buildServer(services, { logger: true, onShutdownRequest: () => lifecycle.shutdown('shutdown request') });
@@ -35,6 +35,7 @@ async function main(): Promise<void> {
     },
     (error: unknown) => app.log.error(`Source Control recovery failed: ${(error as Error).message}`),
   );
+  services.watchdog.start();
   void services.agents.refresh().then(
     (agents) => app.log.info(`Agents: ${agents.map((a) => `${a.name}=${a.health.state}`).join(', ')}`),
     (error: unknown) => app.log.error(`Agent refresh failed: ${(error as Error).message}`),

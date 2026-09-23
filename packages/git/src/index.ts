@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { runProcess } from '@acc/executor';
 import type { ChangedFile } from '@acc/shared';
 
@@ -21,6 +23,8 @@ export interface GitOptions {
   timeoutMs?: number;
   /** Stop reading (and stop git) once stdout exceeds this many characters. */
   maxOutputBytes?: number;
+  /** Extra environment, e.g. GIT_INDEX_FILE for a private index. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Hook and remote output can be enormous; only this much stderr is kept. */
@@ -54,7 +58,7 @@ export async function git(cwd: string, args: string[], options: GitOptions = {})
     command: 'git',
     args: ['-c', 'core.quotepath=off', ...args],
     cwd,
-    env: { ...process.env, ...GIT_ENV },
+    env: { ...process.env, ...GIT_ENV, ...options.env },
     stdin: options.stdin,
     timeoutMs: options.timeoutMs ?? 60_000,
     // `-z` output is one long NUL-separated record stream; never split it —
@@ -88,7 +92,7 @@ export async function git(cwd: string, args: string[], options: GitOptions = {})
   };
 }
 
-async function gitOk(cwd: string, args: string[], options?: { stdin?: string }): Promise<string> {
+async function gitOk(cwd: string, args: string[], options?: GitOptions): Promise<string> {
   const result = await git(cwd, args, options);
   if (result.code !== 0) throw new GitError(`git ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim()}`, result);
   return result.stdout;
@@ -328,4 +332,119 @@ export async function commitPaths(cwd: string, paths: string[], message: string)
   await gitOk(cwd, ['commit', '-m', message, '--', ...paths]);
   return headCommit(cwd);
 }
+
+// ---------------------------------------------------------------------------
+// Checkpoints (docs/systems/git.md). A checkpoint is a commit object of the
+// whole working tree, built in a private index and kept alive by a hidden
+// ref. The user's index, HEAD, branches and files are never touched by
+// creating one; restoring one rewrites only the paths the caller allows.
+// ---------------------------------------------------------------------------
+
+/** Internal objects need an identity even in repositories without one configured. */
+const CHECKPOINT_IDENTITY: NodeJS.ProcessEnv = {
+  GIT_AUTHOR_NAME: 'AI Development Control Center',
+  GIT_AUTHOR_EMAIL: 'checkpoints@localhost',
+  GIT_COMMITTER_NAME: 'AI Development Control Center',
+  GIT_COMMITTER_EMAIL: 'checkpoints@localhost',
+};
+
+/** Checkpoints must round-trip bytes exactly, whatever core.autocrlf says. */
+const NO_EOL_CONVERSION = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false'];
+
+async function withPrivateIndex<T>(cwd: string, fn: (env: NodeJS.ProcessEnv) => Promise<T>, seedFromRealIndex = true): Promise<T> {
+  const tmp = join(os.tmpdir(), `acc-index-${randomUUID()}`);
+  try {
+    if (seedFromRealIndex) {
+      // Copying the real index keeps its stat cache, so only changed files are re-hashed.
+      const rel = (await gitOk(cwd, ['rev-parse', '--git-path', 'index'])).trim();
+      const real = isAbsolute(rel) ? rel : join(cwd, rel);
+      if (existsSync(real)) await copyFile(real, tmp);
+    }
+    return await fn({ GIT_INDEX_FILE: tmp });
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+
+/** Tree of the working tree as it is now (tracked and untracked, .gitignore respected). */
+export async function workingTreeTree(cwd: string): Promise<string> {
+  return withPrivateIndex(cwd, async (env) => {
+    await gitOk(cwd, [...NO_EOL_CONVERSION, 'add', '-A'], { env });
+    return (await gitOk(cwd, ['write-tree'], { env })).trim();
+  });
+}
+
+export interface CheckpointResult {
+  commit: string;
+  tree: string;
+  head: string | null;
+}
+
+/** Record the working tree under `ref` (e.g. refs/acc/checkpoints/TASK-0001/3). */
+export async function createCheckpoint(cwd: string, ref: string, message: string): Promise<CheckpointResult> {
+  if (!/^refs\/acc\/[A-Za-z0-9._/-]+$/.test(ref) || ref.includes('..')) throw new Error(`Invalid checkpoint ref: ${ref}`);
+  const head = await headCommit(cwd);
+  const tree = await workingTreeTree(cwd);
+  const commit = (await gitOk(cwd, ['commit-tree', tree, ...(head ? ['-p', head] : []), '-m', message], { env: CHECKPOINT_IDENTITY })).trim();
+  await gitOk(cwd, ['update-ref', ref, commit]);
+  return { commit, tree, head };
+}
+
+export interface RestoreResult {
+  /** Paths written back to their checkpoint content. */
+  restored: string[];
+  /** Paths created after the checkpoint and deleted again. */
+  removed: string[];
+  /** Paths that differ but were not touched because the caller does not own them. */
+  skipped: string[];
+}
+
+/**
+ * Put the working tree back to `commit` for every path that changed since it,
+ * except paths `mayTouch` rejects. Nothing outside those paths is modified;
+ * the user's index and HEAD are left alone.
+ */
+export async function restoreCheckpoint(cwd: string, commit: string, mayTouch: (path: string) => boolean): Promise<RestoreResult> {
+  const checkpointTree = (await gitOk(cwd, ['rev-parse', `${commit}^{tree}`])).trim();
+  const currentTree = await workingTreeTree(cwd);
+  const raw = await gitOk(cwd, ['diff-tree', '-r', '--no-renames', '--name-status', '-z', checkpointTree, currentTree]);
+  const parts = raw.split('\0').filter((p) => p !== '');
+  const result: RestoreResult = { restored: [], removed: [], skipped: [] };
+  const toRestore: string[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const code = parts[i]!;
+    const file = parts[i + 1]!;
+    if (!mayTouch(file)) {
+      result.skipped.push(file);
+      continue;
+    }
+    if (code.startsWith('A')) {
+      await rm(join(cwd, file), { force: true });
+      result.removed.push(file);
+    } else {
+      toRestore.push(file);
+    }
+  }
+  if (toRestore.length) {
+    await withPrivateIndex(
+      cwd,
+      async (env) => {
+        await gitOk(cwd, ['read-tree', checkpointTree], { env });
+        await gitOk(cwd, [...NO_EOL_CONVERSION, 'checkout-index', '-f', '-z', '--stdin'], { env, stdin: toRestore.join('\0') + '\0' });
+      },
+      false,
+    );
+    result.restored.push(...toRestore);
+  }
+  return result;
+}
+
+/** Delete hidden checkpoint refs under a prefix (their objects become collectable). */
+export async function deleteRefs(cwd: string, prefix: string): Promise<number> {
+  if (!prefix.startsWith('refs/acc/')) throw new Error(`Refusing to delete refs outside refs/acc/: ${prefix}`);
+  const refs = (await gitOk(cwd, ['for-each-ref', '--format=%(refname)', prefix])).split('\n').filter(Boolean);
+  for (const ref of refs) await gitOk(cwd, ['update-ref', '-d', ref]);
+  return refs.length;
+}
+
 export * from './source-control.js';

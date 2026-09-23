@@ -54,6 +54,9 @@ export interface BuiltPrompt {
  * and test results — instead of the whole repository in every prompt.
  */
 export class ContextBuilder {
+  /** Current Chairman strategy guidance for a task, set once the Chairman exists. */
+  guidance: (taskId: string) => string | null = () => null;
+
   constructor(
     private readonly store: Store,
     private readonly artifacts: ArtifactService,
@@ -103,10 +106,17 @@ export class ContextBuilder {
     return lines.join('\n');
   }
 
-  private directives(task: TaskRecord): string {
+  /**
+   * Active directives only: removed and superseded ones never reach a stage,
+   * routing directives act through assignments, and next-stage-only ones
+   * reach just the stage they were applied to.
+   */
+  private directives(task: TaskRecord, def: StageDefinition, stage: StageInstance): string {
     return this.store
       .listDirectives(task.id)
-      .map((d) => `- [${d.createdAt}] ${d.text}`)
+      .filter((d) => d.state === 'active' && d.kind !== 'routing')
+      .filter((d) => d.scope === 'CURRENT_TASK' || (d.appliedStageKey === def.key && (d.appliedAt ?? '') >= stage.createdAt))
+      .map((d) => `- [${d.createdAt}]${d.kind === 'constraint' ? ' (constraint)' : d.kind === 'requirement' ? ' (completion requirement)' : ''} ${d.text}`)
       .join('\n');
   }
 
@@ -199,7 +209,7 @@ export class ContextBuilder {
       test_results: this.testResults(task),
       diff: clip(diff, MAX_DIFF_CHARS),
       changed_files: changedFiles,
-      directives: this.directives(task),
+      directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
       previous_attempt: this.previousAttempt(task, def, stage),
       verification_commands: repo.commands
@@ -210,6 +220,9 @@ export class ContextBuilder {
       fix_cycle: String(task.fixCycles),
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(repo.path)}\n\n${RUN_CONTEXT}\n\n`;
-    return { prompt: header + renderTemplate(template.body, vars), templateVersion: template.version };
+    const guidance = this.guidance(task.id);
+    // Chairman guidance follows the role template so user-edited templates still receive it.
+    const supervisor = guidance ? `\n\n## Chairman guidance (supervisor of this task)\n\n${guidance}\n` : '';
+    return { prompt: header + renderTemplate(template.body, vars) + supervisor, templateVersion: template.version };
   }
 }

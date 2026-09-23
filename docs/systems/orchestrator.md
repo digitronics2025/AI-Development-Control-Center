@@ -102,6 +102,11 @@ Chairman's watchdog (15 s).
 - Refused WebSocket upgrades must close their raw socket (see
   [security.ts](../../apps/orchestrator/src/http/security.ts)) or shutdown hangs.
 - `forceCloseConnections` is on so shutdown never waits on idle clients.
+- Repository status (`GET repositories`) costs one `git status --porcelain=v2
+  --branch` per repository, cached 5 s and capped at 8 concurrent Git
+  processes in [repositories.ts](../../apps/orchestrator/src/services/repositories.ts).
+  Separate `rev-parse`/`symbolic-ref` calls per repository made a cold list of
+  48 repositories take ~6 s on Windows; keep it to one process.
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 

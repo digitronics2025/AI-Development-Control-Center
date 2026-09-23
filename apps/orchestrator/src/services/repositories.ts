@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { currentBranch, headCommit, isGitRepository, status as gitStatus, topLevel } from '@acc/git';
+import { isGitRepository, repositoryStatus, topLevel } from '@acc/git';
 import type { Repository, RepositoryCommand, RepositoryStatus, UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import { newId, now, type RepositoryRecord, type Store } from '../store/store.js';
@@ -16,6 +16,27 @@ export class RepositoryError extends Error {
 }
 
 const STATUS_TTL_MS = 5000;
+/** Git processes the repository list may run at once; enough to stay fast, bounded as the list grows. */
+const STATUS_CONCURRENCY = 8;
+
+/** Runs at most `limit` jobs at a time; the rest wait in arrival order. */
+class Slots {
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  async run<T>(job: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiting.push(resolve));
+    this.active++;
+    try {
+      return await job();
+    } finally {
+      this.active--;
+      this.waiting.shift()?.();
+    }
+  }
+}
 
 interface Detected {
   tooling: string[];
@@ -81,6 +102,7 @@ export async function detectTooling(root: string): Promise<Detected> {
 
 export class RepositoryService {
   private readonly statusCache = new Map<string, { at: number; status: RepositoryStatus }>();
+  private readonly statusSlots = new Slots(STATUS_CONCURRENCY);
 
   constructor(
     private readonly store: Store,
@@ -94,14 +116,15 @@ export class RepositoryService {
     let result: RepositoryStatus;
     if (!existsSync(rec.path)) {
       result = { available: false, isGitRepo: false, branch: null, head: null, dirty: false, dirtyCount: 0, error: 'Folder not found', checkedAt };
-    } else if (!(await isGitRepository(rec.path))) {
-      result = { available: true, isGitRepo: false, branch: null, head: null, dirty: false, dirtyCount: 0, error: null, checkedAt };
     } else {
       try {
-        const [branch, head, entries] = await Promise.all([currentBranch(rec.path), headCommit(rec.path), gitStatus(rec.path)]);
-        result = { available: true, isGitRepo: true, branch, head, dirty: entries.length > 0, dirtyCount: entries.length, error: null, checkedAt };
+        // One Git process per repository: branch, head and changes all come from a single status call.
+        const { branch, entries } = await this.statusSlots.run(() => repositoryStatus(rec.path));
+        result = { available: true, isGitRepo: true, branch: branch.head, head: branch.oid, dirty: entries.length > 0, dirtyCount: entries.length, error: null, checkedAt };
       } catch (error) {
-        result = { available: true, isGitRepo: true, branch: null, head: null, dirty: false, dirtyCount: 0, error: (error as Error).message, checkedAt };
+        result = (await isGitRepository(rec.path))
+          ? { available: true, isGitRepo: true, branch: null, head: null, dirty: false, dirtyCount: 0, error: (error as Error).message, checkedAt }
+          : { available: true, isGitRepo: false, branch: null, head: null, dirty: false, dirtyCount: 0, error: null, checkedAt };
       }
     }
     this.statusCache.set(rec.id, { at: Date.now(), status: result });

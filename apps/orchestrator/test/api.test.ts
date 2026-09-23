@@ -1,7 +1,10 @@
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
+import { git } from '@acc/git';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
 import type { ServerMessage } from '@acc/shared';
@@ -72,6 +75,21 @@ describe('REST API', () => {
     expect((await t.api('POST', '/api/repositories', { path: repoPath })).status).toBe(409);
     await createTask(t, created.body.id, 'something');
     expect((await t.api('DELETE', `/api/repositories/${created.body.id}`)).status).toBe(409);
+  });
+
+  it('reports repository status from one Git call: head, changes, detached HEAD and plain folders', async () => {
+    const repoPath = await makeRepo({ dirty: { 'README.md': 'changed\n', 'new.txt': 'untracked\n' } });
+    const head = (await git(repoPath, ['rev-parse', 'HEAD'])).stdout.trim();
+    const created = await t.api('POST', '/api/repositories', { path: repoPath });
+    expect(created.body.status).toMatchObject({ available: true, isGitRepo: true, branch: 'main', head, dirty: true, dirtyCount: 2, error: null });
+
+    await git(repoPath, ['checkout', '--detach']);
+    const detached = await t.api('GET', `/api/repositories/${created.body.id}`);
+    expect(detached.body.status).toMatchObject({ isGitRepo: true, branch: null, head });
+
+    const plain = mkdtempSync(path.join(os.tmpdir(), 'acc-plain-'));
+    const folder = await t.api('POST', '/api/repositories', { path: plain });
+    expect(folder.body.status).toMatchObject({ available: true, isGitRepo: false, branch: null, head: null, dirty: false, error: null });
   });
 
   it('lists built-in workflows as read-only and validates custom ones', async () => {

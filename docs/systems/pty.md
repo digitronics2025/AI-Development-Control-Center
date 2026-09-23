@@ -4,7 +4,7 @@ sources:
   - packages/pty/**
   - apps/orchestrator/src/tools/terminals.ts
   - apps/dashboard/src/components/terminal.tsx
-verified_at: 151b09c
+verified_at: 351db1e
 ---
 
 # Interactive terminals

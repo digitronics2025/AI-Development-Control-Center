@@ -7,7 +7,7 @@ sources:
   - apps/orchestrator/src/engine/tooling.ts
   - scripts/windows/privileged-helper.ps1
   - apps/orchestrator/src/tools/privileged.ts
-verified_at: 151b09c
+verified_at: 351db1e
 ---
 
 # Execution policy (Safe · Autopilot · Full Autopilot+)

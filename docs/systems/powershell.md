@@ -4,7 +4,7 @@ sources:
   - packages/executor/src/shells.ts
   - packages/tools/src/packs/shell.ts
   - packages/tools/src/packs/windows.ts
-verified_at: 151b09c
+verified_at: 351db1e
 ---
 
 # Shells: PowerShell, CMD, Bash, WSL

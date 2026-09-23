@@ -67,7 +67,9 @@ before any row is written.
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
-strict CSP.
+strict CSP. `index.html` is re-read whenever its mtime changes and assets are
+looked up per request, so rebuilding the dashboard needs no restart; while
+the build folder is empty the page answers 503 with `Retry-After`.
 
 ## Realtime
 

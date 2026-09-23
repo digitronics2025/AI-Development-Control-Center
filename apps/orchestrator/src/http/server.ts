@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
@@ -66,21 +66,47 @@ export async function buildServer(
 
   const dashboardDir = s.config.dashboardDir;
   if (dashboardDir && existsSync(path.join(dashboardDir, 'index.html'))) {
-    const template = readFileSync(path.join(dashboardDir, 'index.html'), 'utf8');
-    // The token reaches the dashboard only through its own same-origin HTML,
-    // which other websites cannot read.
-    const html = template.replace('</head>', `<meta name="acc-token" content="${escapeAttr(s.config.token)}"></head>`);
-    const sendIndex = (_req: unknown, reply: import('fastify').FastifyReply) =>
-      reply
+    const indexPath = path.join(dashboardDir, 'index.html');
+    // Re-read whenever the file changes: a dashboard rebuild while the
+    // orchestrator runs replaces the hashed entry chunk, and a stale copy
+    // would point the browser at a script that no longer exists.
+    let cached: { mtimeMs: number; html: string } | null = null;
+    const indexHtml = (): string | null => {
+      try {
+        const { mtimeMs } = statSync(indexPath);
+        if (cached?.mtimeMs !== mtimeMs) {
+          // The token reaches the dashboard only through its own same-origin
+          // HTML, which other websites cannot read.
+          const html = readFileSync(indexPath, 'utf8').replace('</head>', `<meta name="acc-token" content="${escapeAttr(s.config.token)}"></head>`);
+          cached = { mtimeMs, html };
+        }
+        return cached.html;
+      } catch {
+        return null; // mid-rebuild: the build tool emptied the folder
+      }
+    };
+    const sendIndex = (_req: unknown, reply: import('fastify').FastifyReply) => {
+      const html = indexHtml();
+      if (html === null) {
+        return reply
+          .code(503)
+          .header('retry-after', '2')
+          .header('content-type', 'text/plain; charset=utf-8')
+          .send('The dashboard is being rebuilt. Reload in a moment.');
+      }
+      return reply
         .header('content-type', 'text/html; charset=utf-8')
         .header('cache-control', 'no-store')
         .header('content-security-policy', DASHBOARD_CSP)
         .header('x-frame-options', 'DENY')
         .send(html);
+    };
     await app.register(fastifyStatic, {
       root: dashboardDir,
       index: false,
-      wildcard: false,
+      // Look files up per request rather than listing them once at start, so
+      // assets from a rebuild are served without a restart.
+      wildcard: true,
       setHeaders: (res, file) => {
         if (file.includes(`${path.sep}assets${path.sep}`)) res.header('cache-control', 'public, max-age=31536000, immutable');
       },

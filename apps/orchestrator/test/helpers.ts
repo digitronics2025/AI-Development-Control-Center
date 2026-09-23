@@ -24,14 +24,16 @@ export function simAdapters(delayMs = 10): AgentAdapter[] {
   return [new SimulatedAgentAdapter('codex', 'Codex (simulated)', delayMs), new SimulatedAgentAdapter('claude', 'Claude Code (simulated)', delayMs)];
 }
 
-export async function createTestApp(options: { adapters?: AgentAdapter[]; dataDir?: string; baseEnv?: NodeJS.ProcessEnv } = {}): Promise<TestApp> {
+export async function createTestApp(
+  options: { adapters?: AgentAdapter[]; dataDir?: string; baseEnv?: NodeJS.ProcessEnv; dashboardDir?: string } = {},
+): Promise<TestApp> {
   const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
   const config: OrchestratorConfig = {
     host: '127.0.0.1',
     port: 0,
     dataDir,
     resourcesDir: ROOT,
-    dashboardDir: null,
+    dashboardDir: options.dashboardDir ?? null,
     token: TOKEN,
     simulatedAgents: true,
     allowedOrigins: [],

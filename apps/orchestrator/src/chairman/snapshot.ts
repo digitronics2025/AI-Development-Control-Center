@@ -46,6 +46,10 @@ export interface ChairmanTaskSnapshot {
   stages: Array<{ key: string; name: string; role: string; kind: string; agentId: string | null }>;
 }
 
+/** Chat replies render as Markdown: blank lines keep each fact on its own paragraph. */
+const PARA = '\n\n';
+const LINE = '\n';
+
 const NOISE = new Set<EventType>(['AGENT_STARTED', 'COMMAND_STARTED', 'COMMAND_FINISHED', 'TEST_STARTED', 'STAGE_STARTED', 'ARTIFACT_CREATED', 'DIRECTIVE_APPLIED']);
 
 export function activeDirectives(directives: Directive[]): Directive[] {
@@ -124,7 +128,7 @@ export class SnapshotService {
     const lines: string[] = [];
     if (topic === 'directives') {
       if (!s.activeDirectives.length) return 'There are no active directives. Anything you tell me that is not a question becomes one.';
-      return ['Active directives:', ...s.activeDirectives.map((d, i) => `${i + 1}. ${d.text} (${d.kind}, ${d.scope === 'CURRENT_TASK' ? 'whole task' : 'next stage only'}, ${d.status})`)].join('\n');
+      return `Active directives:${PARA}${s.activeDirectives.map((d, i) => `${i + 1}. ${d.text} (${d.kind}, ${d.scope === 'CURRENT_TASK' ? 'whole task' : 'next stage only'}, ${d.status})`).join(LINE)}`;
     }
     const status = TASK_STATUS_LABEL[s.status as keyof typeof TASK_STATUS_LABEL] ?? s.status;
     const stage = s.currentStage ? `${s.currentStage.name}${s.currentStage.status ? ` (${s.currentStage.status.toLowerCase().replace(/_/g, ' ')})` : ''}` : 'not started';
@@ -133,20 +137,23 @@ export class SnapshotService {
       else lines.push(`${s.taskId} is ${status.toLowerCase()} at ${stage}: ${s.blocker.message}`);
       const f = s.unresolvedFailures.at(-1);
       if (f) lines.push(`Latest failure (${f.stageKey}): ${f.message}`);
-      return lines.join('\n');
+      return lines.join(PARA);
     }
     lines.push(`${s.taskId} is ${status.toLowerCase()}. Stage: ${stage}.`);
     if (s.currentWorker) lines.push(`${this.agentName(s.currentWorker.agentId)} is working on it.`);
     if (s.supervised) {
       lines.push(`Health: ${CHAIRMAN_HEALTH_LABEL[s.health]}. Fix attempt ${s.retryState.localAttempt} of ${s.retryState.localLimit}${s.retryState.recoveryCycle ? `, recovery cycle ${s.retryState.recoveryCycle}` : ''}.`);
     }
+    // A finished task has no "current" failure or strategy; only its outcome matters.
+    const finished = s.status === 'COMPLETED' || s.status === 'CANCELLED';
+    const sentence = (text: string) => text.replace(/[.\s]+$/, '');
     if (s.blocker && s.blocker.kind !== 'queued') lines.push(`Blocked: ${s.blocker.message}`);
     const f = s.unresolvedFailures.at(-1);
-    if (f) lines.push(`Latest failure (${f.stageKey}): ${f.message}`);
-    if (s.latestVerify) lines.push(`Last verification: ${s.latestVerify.verdict === 'PASS' ? 'passed' : 'rejected'}${s.latestVerify.summary ? ` — ${s.latestVerify.summary}` : ''}.`);
-    else if (s.latestReview) lines.push(`Last review: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${s.latestReview.summary}` : ''}.`);
-    if (s.strategySummary) lines.push(`Current strategy: ${s.strategySummary}`);
+    if (f && !finished) lines.push(`Latest failure (${f.stageKey}): ${f.message}`);
+    if (s.latestVerify) lines.push(`Last verification: ${s.latestVerify.verdict === 'PASS' ? 'passed' : 'rejected'}${s.latestVerify.summary ? ` — ${sentence(s.latestVerify.summary)}` : ''}.`);
+    else if (s.latestReview) lines.push(`Last review: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
+    if (s.strategySummary && !finished) lines.push(`Current strategy: ${s.strategySummary}`);
     if (s.activeDirectives.length) lines.push(`${s.activeDirectives.length} active directive${s.activeDirectives.length === 1 ? '' : 's'}.`);
-    return lines.join('\n');
+    return lines.join(PARA);
   }
 }

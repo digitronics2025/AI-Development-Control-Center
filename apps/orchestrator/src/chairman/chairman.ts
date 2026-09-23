@@ -328,7 +328,7 @@ export class Chairman implements SupervisorHooks {
       source: 'supervisor',
       trigger,
       taskVersion: task.version,
-      summary: redact(summary).slice(0, 600),
+      summary: capitalize(redact(summary)).slice(0, 600),
       reasoningSummary: redact(extra.reasoningSummary ?? '').slice(0, 1500),
       decision: redact(decision).slice(0, 300),
       expectedResult: redact(extra.expectedResult ?? '').slice(0, 600),
@@ -563,6 +563,11 @@ export class Chairman implements SupervisorHooks {
     const decision = this.decide(task, 'watchdog', `${reason}. Resuming the task.`, 'Resume after watchdog');
     await this.gateway.execute(taskId, { type: 'RESUME_TASK', params: {} }, { initiator: 'system', source: 'supervisor', decisionId: decision.id });
   }
+}
+
+/** Trigger labels are lower-case phrases; a decision summary starts a sentence. */
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function guidanceOf(candidate: StrategyCandidate): string {

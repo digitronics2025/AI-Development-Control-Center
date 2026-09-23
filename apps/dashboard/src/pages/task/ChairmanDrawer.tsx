@@ -209,9 +209,18 @@ export function ChairmanDrawer({ task, overview, open, onOpenChange }: { task: T
   useLayoutEffect(() => {
     if (open && atBottom.current) endRef.current?.scrollIntoView({ block: 'end' });
   }, [open, count, pending]);
+  // Opening shows the latest message: once the drawer has laid out, and again after its slide-in.
   useEffect(() => {
-    if (open) atBottom.current = true;
-  }, [open]);
+    if (!open || !loaded) return;
+    atBottom.current = true;
+    const toEnd = () => endRef.current?.scrollIntoView({ block: 'end' });
+    const frame = requestAnimationFrame(toEnd);
+    const settle = window.setTimeout(() => atBottom.current && toEnd(), 260);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settle);
+    };
+  }, [open, loaded]);
 
   const submit = () => {
     const body = text.trim();
@@ -297,7 +306,7 @@ export function ChairmanDrawer({ task, overview, open, onOpenChange }: { task: T
                 {state.degradedReason}
               </Banner>
             ) : null}
-            {state?.strategySummary ? (
+            {state?.strategySummary && !terminal ? (
               <div className="rounded-md border border-border-subtle px-3 py-2">
                 <span className="text-small font-semibold text-fg-secondary">Current strategy</span>
                 <p className="line-clamp-4 text-small text-fg wrap-anywhere">{state.strategySummary}</p>

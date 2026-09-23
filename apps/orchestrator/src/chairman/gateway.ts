@@ -278,7 +278,7 @@ export class ActionGateway {
         if (action.params.interrupt && this.writeStageRunning(task)) {
           const key = task.currentStageKey!;
           await engine.redirect(task.id, key, { reason: 'new constraint from you; re-running under it' });
-          this.d.setGuidance(task.id, `The user added a constraint while this stage was running: "${directive.text}". The previous attempt was stopped; check its partial changes against the constraint and undo anything that violates it.`);
+          this.d.setGuidance(task.id, `The user added a constraint while this stage was running: "${directive.text.replace(/[.!\s]+$/, '')}". The previous attempt was stopped; check its partial changes against the constraint and undo anything that violates it.`);
           return `Directive added; the running stage was stopped and re-runs under it`;
         }
         return directive.kind === 'routing' ? 'Routing directive recorded' : `Directive added${directive.scope === 'NEXT_RELEVANT_STAGE' ? ' for the next agent stage' : ' for the rest of the task'}`;

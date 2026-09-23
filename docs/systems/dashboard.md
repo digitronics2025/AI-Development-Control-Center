@@ -55,7 +55,9 @@ the failure line when it failed.
 every page at 1440/1280/1024/768/390 px in Dark and Light, asserting no
 page-level horizontal scroll, no console errors and zero axe WCAG 2.2 AA
 violations; plus keyboard/dialog/realtime/disconnection flows and the VS Code
-WebView harness.
+WebView harness. A global teardown shuts the demo orchestrator down through
+`/api/service/shutdown`, because on Windows Playwright stops `demo.mjs` but not
+the orchestrator it spawned, which would hold the port for the next run.
 
 ## Gotchas
 

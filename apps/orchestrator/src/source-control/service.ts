@@ -640,8 +640,8 @@ export class SourceControlService {
         paths = [...new Set(request.paths ?? [])];
         for (const p of paths) {
           const entry = state.byPath.get(p);
+          if (entry?.conflicted) throw new SourceControlError('CONFLICTS', `${p} is conflicted. Resolve it in your editor first.`, { path: p });
           if (!entry || !(entry.unstaged || entry.untracked)) throw new SourceControlError('PATH_NOT_CHANGED', `${p} has no unstaged changes.`, { path: p });
-          if (entry.conflicted) throw new SourceControlError('CONFLICTS', `${p} is conflicted. Resolve it in your editor first.`, { path: p });
         }
       }
       const result = await stagePaths(state.root, paths);

@@ -161,6 +161,9 @@ describe('realtime sync', () => {
     );
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Sync me');
     await waitForStatus(t, id, ['COMPLETED']);
+    // The database changes before the broadcast reaches each socket: wait for delivery.
+    const isCompleted = (m: ServerMessage) => m.type === 'task' && m.task.id === id && m.task.status === 'COMPLETED';
+    await waitFor(() => received, (all) => all.every((messages) => messages.some(isCompleted)), 10_000, 'COMPLETED on every socket');
     for (const messages of received) {
       expect(messages[0]!.type).toBe('hello');
       const statuses = messages.filter((m): m is Extract<ServerMessage, { type: 'task' }> => m.type === 'task' && m.task.id === id).map((m) => m.task.status);

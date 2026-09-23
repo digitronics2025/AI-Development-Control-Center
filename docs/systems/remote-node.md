@@ -7,7 +7,7 @@ sources:
   - packages/shared/src/remote-operations.ts
   - apps/dashboard/src/components/remote-access.tsx
   - apps/dashboard/src/api/remote.ts
-verified_at: 243da72
+verified_at: 010ac0f
 ---
 
 # Remote execution node
@@ -67,7 +67,10 @@ On `session.welcome` the node: moves its outbox sequence past the cloud's
 schedules a full resync if the cloud's cursor went backwards, sends
 `node.capabilities` and `node.snapshot` (repositories with fingerprints),
 enqueues a full resync when required, flushes the outbox, replays unreported
-command results, then sends `sync.request` for pending commands.
+command results, then sends `sync.request` for pending commands. If the link
+closes or the service stops while the snapshot is still being built, the
+welcome stops there (nothing reads a closed database; a pending resync stays
+flagged for the next welcome).
 
 ## Commands
 
@@ -137,7 +140,45 @@ replaces the queued one, so the queue is bounded by distinct entities; above
 ≤ 200 events and ≤ 900 KB, at most 4 unacknowledged; `sync.ack` deletes up to
 its sequence. Task details are debounced (2 s) and capped at 900 KB (stages
 trimmed to the last 100). A full resync sends the last 500 tasks, details of
-the latest 100, pending approvals, agents and 30 days of usage.
+the latest 100, pending approvals, agents, repositories and 30 days of usage.
+
+Nothing is queued while remote control is switched off (`enabled = false`), so
+switching it off flags a full resync: when it is switched back on, the welcome
+sends everything again and the cloud copy catches up (found in the production
+cutover drill, where a task finished while off stayed `RUNNING` in the cloud).
+
+## Terminals
+
+[terminal-grants.ts](../../apps/orchestrator/src/remote/terminal-grants.ts).
+Remote terminals need the node's `remote_terminals` permission (typed
+confirmation in Settings) and, on the cloud side, `x-acc-confirm: open-terminal`
+plus a sign-in younger than one hour. A terminal opened by a cloud command gets
+a grant (10 min idle, 30 min maximum); only granted terminals accept cloud
+keystrokes or send output to the cloud. Every line is classified when Enter
+arrives, against this machine's auto-approve level: a line above it, or one that
+always needs approval (dangerous, production), is cancelled with Ctrl+C and a
+viewer-only notice (`terminal.output` with `notice: true`, never typed into the
+shell). Escape sequences and Tab are dropped, because history recall and
+completion would change the line without the classifier seeing it. A Level 5
+line is refused remotely rather than turned into an approval: the approval gate
+is task-bound and a free terminal has no task. Switching remote access or remote
+terminals off revokes every grant.
+
+## Uploads
+
+[uploads.ts](../../apps/orchestrator/src/remote/uploads.ts). Each new artifact
+gets a sync policy once (`defaultArtifactSensitivity` in
+[remote.ts](../../packages/shared/src/remote.ts)): `git-diff`, `staged-diff`,
+`environment`, `task-json` and `tool-output` are `local_only`; others are
+`safe_sync` unless larger than 25 MB. The cloud receives a manifest either way,
+the bytes only for `safe_sync`/`user_shared`. A finished execution's log becomes
+chunks of at most 1 MB of whole lines. Text is scrubbed and redacted again right
+before upload; the SHA-256 of the exact bytes travels with them
+(`PUT /node/v1/artifacts/:id`, `PUT /node/v1/logs/:executionId/:index`) and R2
+verifies it on write. Uploads run in the background while connected; a failure
+backs off from 30 s doubling to 1 h (manifest `failed` after 8 attempts) and
+never changes the task — the local file stays the source of truth. Shutdown
+stops the queue first, and no upload writes after the database closes.
 
 ## Local routes and UI
 
@@ -159,6 +200,9 @@ remote tool calls (the last two need a typed confirmation).
 | `remote_commands_received` | one receipt per command id: status, sanitized outcome, reported time |
 | `remote_artifact_sync` | artifact and log-chunk upload state (`kind`, sensitivity, hash, retries) |
 
+Migration 6 applies over any v5 database; a v5 build opening a v6 file keeps
+working (it ignores the new tables).
+
 ## Gotchas
 
 - Remote permissions live in `remote_config`, not in Settings, so no cloud
@@ -166,6 +210,13 @@ remote tool calls (the last two need a typed confirmation).
 - Unpair keeps the command receipts (the local audit of what the cloud asked).
 - A pause is never version-bound: safety actions must not fail because the task
   progressed.
+- `POST /api/remote/reconnect` does nothing while the link is open or
+  connecting; it only skips the backoff wait when offline.
+- Revocation is decided by the cloud: the Nodes page closes the node's socket
+  with `4003` at once; the admin CLI writes D1 directly, so the hub notices at
+  the node's next heartbeat write (about a minute at most; ~10 s in the
+  production drill). The node then stops retrying and shows `revoked`. Pairing again needs Unpair first and a new code;
+  the node gets a new id.
 
 ## Tests
 
@@ -174,6 +225,10 @@ restart, rotation, reconnect, offline, revocation, local routes),
 `remote-commands.test.ts` (duplicates, expiry, tampering, interruption, lost
 acknowledgement, stale version, typed confirmation, guards, reads) and
 `remote-egress.test.ts` (no secret or path on the wire, offline buffering,
-resend) run against the in-process [fake-relay.ts](../../apps/orchestrator/test/fake-relay.ts).
+resend, upload failures) and `remote-terminal.test.ts` (grants, per-line
+classification, dropped escapes, expiry) run against the in-process
+[fake-relay.ts](../../apps/orchestrator/test/fake-relay.ts). Against the real
+Worker: `apps/cloud-control/test/*.test.ts` (see
+[cloud-control.md](cloud-control.md#tests)).
 
 Last verified: 2026-09-23

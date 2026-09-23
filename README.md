@@ -88,6 +88,17 @@ run each task in its own Git worktree. **Tools** in the sidebar shows what is
 installed, running processes, terminals, MCP servers, credentials and the
 policy. Details: [docs/systems/tool-system.md](docs/systems/tool-system.md).
 
+### From anywhere (cloud control plane)
+
+Pair this machine with the Control Center's Cloudflare control plane
+(**Settings → Remote access**) and use the same dashboard from any browser at
+your control hostname, behind a Cloudflare Access sign-in. Work still runs
+here: the machine dials out, stays on `127.0.0.1`, keeps its token and your
+files, and applies its own approvals and policy to every remote request. While
+it is offline the cloud still shows history. Details:
+[docs/systems/cloud-control.md](docs/systems/cloud-control.md) and
+[docs/systems/remote-node.md](docs/systems/remote-node.md).
+
 ### Try it without spending any subscription usage
 
 ```powershell
@@ -101,6 +112,9 @@ pnpm demo   # simulated agents, sample repositories, tasks in every state
 | `pnpm check` | typecheck, lint and unit/integration tests (engine, API security, adapters with fake CLIs, Git attribution, redaction) |
 | `pnpm e2e` | Playwright against a real orchestrator: every page at 5 viewports × Dark/Light, axe WCAG 2.2 AA, keyboard and realtime flows, VS Code WebView |
 | `pnpm verify:agents` | real CLI detection and subscription check; add `--run` for a one-word prompt through each agent |
+| `pnpm cloud:test` | the cloud Worker in the real Workers runtime with a real orchestrator paired as its node |
+| `pnpm e2e:cloud` | the dashboard in cloud mode through that Worker, both themes, 5 viewports, axe |
+| `pnpm cloud:smoke` | the live production hostnames: health, sign-in required, relay closed to strangers |
 
 ## Repository layout
 
@@ -108,6 +122,7 @@ pnpm demo   # simulated agents, sample repositories, tasks in every state
 apps/orchestrator       Fastify API + WebSocket, SQLite, workflow engine
 apps/dashboard          React dashboard; also builds the VS Code WebView bundle
 apps/vscode-extension   Thin VS Code client
+apps/cloud-control      Cloudflare Worker: control plane, relay, D1/R2 mirror
 packages/shared         Domain types, Zod schemas, workflow validation
 packages/security       Redaction, subscription-only env guard, command classification
 packages/executor       Child processes: streaming, timeouts, tree-kill
@@ -128,7 +143,7 @@ docs/systems/           How each subsystem works
 ## Found for later
 
 Deliberately out of scope (PLAN §40): running several tasks at once in one
-repository (worktree isolation exists; a scheduler for it does not), remote/phone control, more agent adapters (Gemini, OpenCode,
+repository (worktree isolation exists; a scheduler for it does not), phone control, more agent adapters (Gemini, OpenCode,
 Ollama), automatic effort selection, production deploy automation, a signed
 installer. See [docs/systems/README.md](docs/systems/README.md) for known
 limitations per subsystem.

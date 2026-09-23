@@ -91,6 +91,22 @@ WebView harness. A global teardown shuts the demo orchestrator down through
 `/api/service/shutdown`, because on Windows Playwright stops `demo.mjs` but not
 the orchestrator it spawned, which would hold the port for the next run.
 
+## Cloud mode
+
+The same build runs in two modes ([mode.ts](../../apps/dashboard/src/app/mode.ts)):
+**local** when the page carries the `acc-token` meta tag (orchestrator, VS Code
+webview), **cloud** when served by the cloud Worker without it. `ApiConfig.auth`
+is `{kind:'local', token}` or `{kind:'cloud', node()}`; cloud requests send
+`x-acc-node` and an `Idempotency-Key`, and a command still running surfaces as
+`REMOTE_PENDING` (decided by `x-acc-command-status`, not the 202). Cloud mode adds
+the Nodes page (`/nodes`), the top-bar node selector (remembered in
+localStorage), offline and update-required banners, New Task "Run on" /
+"Run when the node is back", and a confirmation before a remote terminal; it
+hides Settings → Remote access and disables attachments. Local mode shows
+Settings → Remote access instead. Tests: `pnpm e2e:cloud`
+([e2e-cloud/](../../apps/dashboard/e2e-cloud/)). See
+[cloud-control.md](cloud-control.md#dashboard-in-cloud-mode).
+
 ## Gotchas
 
 - Context values consumed in effects must have stable identities: an unstable

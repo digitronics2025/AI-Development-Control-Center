@@ -22,6 +22,7 @@
 | MCP (Control Center server, gateway) | [mcp.md](mcp.md) | `packages/mcp`, `apps/orchestrator/src/tools/mcp.ts` |
 | Credential broker | [credential-broker.md](credential-broker.md) | `apps/orchestrator/src/tools/credentials.ts` |
 | Remote execution node (pairing, outbound link, typed commands, egress) | [remote-node.md](remote-node.md) | `apps/orchestrator/src/remote`, `packages/shared/src/remote*.ts` |
+| Cloud control plane (Worker, D1, R2, hub, Access, deploy and recovery) | [cloud-control.md](cloud-control.md) | `apps/cloud-control`, `apps/dashboard/src/app/mode.ts` |
 | Execution policy and privileged helper | [autopilot.md](autopilot.md) | `packages/tools/src/policy.ts`, `scripts/windows/privileged-helper.ps1` |
 
 Last verified: 2026-09-23

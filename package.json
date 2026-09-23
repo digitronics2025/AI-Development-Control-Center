@@ -28,7 +28,8 @@
     "cloud:deploy:staging": "node apps/cloud-control/scripts/deploy.mjs staging",
     "cloud:deploy:production": "node apps/cloud-control/scripts/deploy.mjs production",
     "cloud:smoke": "node apps/cloud-control/scripts/smoke.mjs production",
-    "cloud:admin": "node apps/cloud-control/scripts/admin.mjs"
+    "cloud:admin": "node apps/cloud-control/scripts/admin.mjs",
+    "cloud:access": "node apps/cloud-control/scripts/access-setup.mjs"
   },
   "devDependencies": {
     "@acc/agent-claude": "workspace:*",

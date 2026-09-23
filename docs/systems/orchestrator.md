@@ -118,6 +118,17 @@ and loads stored credentials into the redactor in the background,
 schedules queued tasks, starts Source Control reconciliation (then
 repository automation, once it settles) and the Chairman's watchdog (15 s).
 
+## Remote execution node
+
+Migration 6 (`remote execution node`) adds `remote_config`,
+`remote_sync_state`, `remote_outbox`, `remote_commands_received` and
+`remote_artifact_sync`. `RemoteNodeService` starts at the end of
+`services.recover()` and stops first in `close()`. Local-only routes:
+`GET/PATCH /api/remote`, `POST /api/remote/pair|unpair|rotate|reconnect`
+(refused when a request carries `x-acc-remote-request`). Cloud requests reach the
+normal routes in process (Fastify `inject`), never through the network; the
+listener stays on loopback. Details: [remote-node.md](remote-node.md).
+
 ## Gotchas
 
 - Refused WebSocket upgrades must close their raw socket (see

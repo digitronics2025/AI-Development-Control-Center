@@ -4,7 +4,7 @@ sources:
   - packages/pty/**
   - apps/orchestrator/src/tools/terminals.ts
   - apps/dashboard/src/components/terminal.tsx
-verified_at: 351db1e
+verified_at: 010ac0f
 ---
 
 # Interactive terminals
@@ -52,6 +52,16 @@ package, `allowBuilds` only runs its prebuild check).
 themed from the design tokens, catch-up read then live stream, fit on resize.
 Closing the drawer closes the terminal (also when it closes before the
 terminal finished starting).
+
+## Remote terminals
+
+A terminal opened from the cloud dashboard runs here like any other, but only
+with the node's remote-terminal permission, and every line is classified when
+Enter arrives; refused lines are cancelled and escape sequences and Tab are
+dropped. In cloud mode the terminal drawer first asks for confirmation (naming
+the node, the limits and that nothing typed is stored in the cloud), and
+viewer-only notices from the node are written to the screen without being sent
+to the shell. See [remote-node.md](remote-node.md#terminals).
 
 ## Gotchas
 

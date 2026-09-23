@@ -46,6 +46,14 @@ plain text.
 
 Kinds: `cloudflare`, `github`, `postgres`, `mysql`, `http`, `npm`, `other`.
 
+## Sealing other secrets
+
+`sealValue(plaintext, aad)` / `openValue(sealed, aad)` seal a value with the same
+DPAPI-protected key and a caller-chosen purpose binding (AAD), so a sealed value
+cannot be opened for another purpose. The remote execution node stores its
+private key this way (AAD `remote-node-identity:<nodeId>`); see
+[remote-node.md](remote-node.md#identity-and-pairing).
+
 ## Verified
 
 Integration test: a stored value is absent from API responses and from the

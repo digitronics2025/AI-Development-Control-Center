@@ -101,6 +101,21 @@ needs an approval with a typed confirmation (the task ID).
 auto-approve: up to 3 (global, per repository, per task). Stages above it wait
 for approval.
 
+## Cloud control plane
+
+Two trust boundaries ([cloud-control.md](cloud-control.md)): people reach the
+control hostname only through Cloudflare Access, verified again by the Worker
+(fail closed until configured); machines reach the relay hostname with a P-256
+key and short-lived sessions. The orchestrator never listens for the cloud: it
+dials out, stays on `127.0.0.1`, and the local token never leaves the machine.
+The cloud may only ask for typed catalog operations, each mapped to one fixed
+local route, so the classifier, approvals, tool policy and subscription-only
+guard apply unchanged; the node also refuses anything that would loosen what
+runs without asking (billing, auto-approve, policy, repository commands).
+Everything sent is allowlisted by message type, stripped of path and secret
+fields, path-scrubbed and redacted ([remote-node.md](remote-node.md#egress)).
+Revocation from the cloud or the admin CLI stops the node for good.
+
 ## Gotchas
 
 - Tests build fake credentials at runtime; the operator's commit guard rejects credential-shaped literals.

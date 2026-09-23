@@ -163,6 +163,7 @@ export class RemoteNodeService {
       guard: () => ({
         settings: d.settings.get(),
         repository: (id) => d.store.getRepository(id) ?? null,
+        workflow: (id) => d.store.getWorkflow(id),
       }),
       taskVersion: (taskId) => d.store.getTask(taskId)?.version ?? null,
       approvalView: (approvalId) => {

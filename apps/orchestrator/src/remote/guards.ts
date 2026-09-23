@@ -1,4 +1,4 @@
-import { POLICY_MODES, type PolicyMode, type Repository, type Settings } from '@acc/shared';
+import { POLICY_MODES, type PolicyMode, type Repository, type Settings, type WorkflowProfile } from '@acc/shared';
 
 /**
  * Remote-only restrictions (docs/systems/remote-node.md §Local enforcement).
@@ -11,6 +11,7 @@ import { POLICY_MODES, type PolicyMode, type Repository, type Settings } from '@
 export interface GuardContext {
   settings: Settings;
   repository: (id: string) => Pick<Repository, 'runtime' | 'autoApproveUpToLevel' | 'policyMode'> | null;
+  workflow: (id: string) => Pick<WorkflowProfile, 'stages'> | null;
 }
 
 export type GuardResult = { ok: true } | { ok: false; message: string };
@@ -49,6 +50,21 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       if (typeof b.autoApproveUpToLevel === 'number' && b.autoApproveUpToLevel > currentLevel) return deny('Raising the auto-approve level can only be done on this machine.');
       const currentPolicy = repo.policyMode ?? settings.execution.policyMode;
       if (typeof b.policyMode === 'string' && policyRank(b.policyMode as PolicyMode) > policyRank(currentPolicy)) return deny('A more permissive execution policy can only be chosen on this machine.');
+      return allow;
+    }
+    case 'agent.update':
+      // Choosing which program runs as an agent is choosing what executes on this machine.
+      if ('executablePath' in b) return deny("An agent's program can only be chosen on this machine.");
+      return allow;
+    case 'workflow.save': {
+      const current = ctx.workflow(params.id ?? '');
+      if (!current) return allow;
+      const next = Array.isArray(b.stages) ? b.stages.map(obj) : [];
+      for (const stage of current.stages) {
+        if (!stage.requiresApproval) continue;
+        const kept = next.find((n) => n.key === stage.key);
+        if (kept?.requiresApproval !== true) return deny(`Removing the approval step from "${stage.name}" can only be done on this machine.`);
+      }
       return allow;
     }
     case 'task.create': {

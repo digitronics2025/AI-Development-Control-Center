@@ -152,6 +152,25 @@ describe('remote commands', () => {
     expect(t.services.settings.get().billingMode).toBe('subscription');
   });
 
+  it("refuses to choose an agent's program or drop a workflow's approval step remotely", async () => {
+    const { r, t, nodeId } = await paired();
+    const agentId = t.services.agents.list()[0]!.id;
+    const program = await r.command(nodeId, 'agent.update', { id: agentId }, { executablePath: 'C:/Windows/System32/cmd.exe' });
+    const toggle = await r.command(nodeId, 'agent.update', { id: agentId }, { loadUserConfig: false });
+    const source = t.services.workflows.list().find((w) => w.builtin)!;
+    const custom = t.services.workflows.save('guarded-flow', { ...source, id: 'guarded-flow', name: 'Guarded', stages: source.stages.map((st, i) => (i === 0 ? { ...st, requiresApproval: true } : st)) });
+    const guarded = custom.stages[0]!;
+    const dropped = await r.command(nodeId, 'workflow.save', { id: custom.id }, { ...custom, stages: custom.stages.map((st, i) => (i === 0 ? { ...st, requiresApproval: false } : st)) });
+    const renamed = await r.command(nodeId, 'workflow.save', { id: custom.id }, { ...custom, name: 'Guarded (renamed)' });
+    for (const c of [program, toggle, dropped, renamed]) r.deliver(c);
+    expect((await outcome(r, program.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN' });
+    expect((await outcome(r, toggle.id)).payload).toMatchObject({ outcome: { httpStatus: 200 } });
+    expect((await outcome(r, dropped.id)).payload).toMatchObject({ code: 'REMOTE_FORBIDDEN', message: expect.stringContaining(guarded.name) });
+    expect((await outcome(r, renamed.id)).payload).toMatchObject({ outcome: { httpStatus: 200 } });
+    expect(t.services.agents.list().find((a) => a.id === agentId)!.settings.executablePath).toBeNull();
+    expect(t.services.workflows.get(custom.id).stages[0]!.requiresApproval).toBe(true);
+  });
+
   it('answers typed reads and refuses anything outside the catalog', async () => {
     const { r } = await paired();
     const tasks = await r.rpc('task.list', {}, { limit: '5' });

@@ -102,7 +102,9 @@ mirrored.
 Remote guards ([guards.ts](../../apps/orchestrator/src/remote/guards.ts)) refuse
 what only the machine may decide: billing mode, raising auto-approve levels, a
 more permissive policy (settings, repository, task), editing a repository's
-commands or dev command, and attachments. Lowering is allowed.
+commands or dev command, choosing an agent's program (`executablePath`),
+removing the approval step from a workflow stage that has one, and
+attachments. Lowering is allowed.
 
 ## Reads
 

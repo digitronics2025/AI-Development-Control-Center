@@ -12,6 +12,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   Workflow,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import { Suspense, useMemo, useState, type ReactNode } from 'react';
@@ -49,6 +50,7 @@ const NAV: NavItem[] = [
   { to: '/tasks', label: 'Tasks', icon: ListChecks },
   { to: '/workflows', label: 'Workflows', icon: Workflow },
   { to: '/agents', label: 'Agents', icon: Bot },
+  { to: '/tools', label: 'Tools', icon: Wrench },
   { to: '/repositories', label: 'Repositories', icon: FolderGit2 },
   { to: '/source-control', label: 'Source Control', icon: GitBranch },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck },

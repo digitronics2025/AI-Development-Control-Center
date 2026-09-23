@@ -37,7 +37,7 @@ test.describe('Task Detail (design.md §7.3, §18)', () => {
     await page.goto('/tasks/TASK-0001');
     await expect(page.getByRole('list', { name: 'Workflow stages' })).toBeVisible();
     const tabs = page.getByRole('tablist', { name: 'Task sections' }).getByRole('tab');
-    await expect(tabs).toHaveText([/Overview/, /Activity/, /Changes/, /Tests/, /Artifacts/, /Logs/]);
+    await expect(tabs).toHaveText([/Overview/, /Activity/, /Changes/, /Tests/, /Artifacts/, /Logs/, /Execution/]);
     await expect(page.getByRole('complementary', { name: 'Task inspector' })).toBeVisible();
 
     await page.getByRole('tab', { name: 'Changes' }).click();

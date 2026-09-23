@@ -26,6 +26,13 @@ that, so `CliAgentAdapter.execute` raises the limit to
 When events were split, the `result` event never parsed and a successful run
 was reported as "finished without producing any output".
 
+**Control Center tools.** `AgentExecutionInput.toolBridge` adds the
+Control Center's stdio MCP server to a run; its session token is put in the
+agent's environment only ([mcp.md](mcp.md)). Claude Code gets a temporary
+`--mcp-config` file referencing the variable by name and `mcp__acc` in its
+allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars`. The file is
+removed when the run ends.
+
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
 - Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] -`

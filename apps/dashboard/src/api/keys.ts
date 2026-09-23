@@ -24,6 +24,14 @@ export const keys = {
   workflows: ['workflows'] as const,
   workflow: (id: string) => ['workflow', id] as const,
   settings: ['settings'] as const,
+  /** Tool layer (docs/plans/tool-layer-v2). */
+  tools: ['tools'] as const,
+  capabilities: ['tools', 'capabilities'] as const,
+  taskExecution: (id: string) => ['task', id, 'execution'] as const,
+  processes: ['processes'] as const,
+  terminals: ['terminals'] as const,
+  mcpServers: ['mcp'] as const,
+  credentials: ['credentials'] as const,
   prompts: ['prompts'] as const,
   /** Everything Source Control shows for one repository; one prefix so realtime invalidation reaches it all. */
   sourceControlRoot: (repositoryId: string) => ['source-control', repositoryId] as const,

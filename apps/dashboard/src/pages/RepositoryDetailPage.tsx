@@ -20,15 +20,21 @@ import {
   Skeleton,
   Switch,
   TaskStatusChip,
+  Textarea,
   useFeedback,
 } from '@acc/ui';
 import {
   COMMAND_KINDS,
   COMMAND_KIND_LABEL,
   PERMISSION_LEVEL_INFO,
+  POLICY_MODE_DESCRIPTION,
+  POLICY_MODE_LABEL,
+  POLICY_MODES,
   ROLES,
   ROLE_LABEL,
   type GitMode,
+  type PolicyMode,
+  type RepositoryRuntime,
   type PermissionLevel,
   type RepositoryCommand,
   type RoleAssignments,
@@ -45,6 +51,8 @@ interface Draft {
   defaultWorkflowId: string | null;
   autoApproveUpToLevel: PermissionLevel | null;
   gitMode: GitMode;
+  policyMode: PolicyMode | null;
+  runtime: RepositoryRuntime;
   commands: RepositoryCommand[];
   roleOverrides: RoleAssignments;
 }
@@ -64,6 +72,7 @@ export function RepositoryDetailPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [pathsText, setPathsText] = useState<string | null>(null);
   useBreadcrumb([{ label: 'Repositories', to: '/repositories' }, { label: repo.data?.name ?? id }]);
 
   useEffect(() => {
@@ -72,16 +81,19 @@ export function RepositoryDetailPage() {
         defaultWorkflowId: repo.data.defaultWorkflowId,
         autoApproveUpToLevel: repo.data.autoApproveUpToLevel,
         gitMode: repo.data.gitMode,
+        policyMode: repo.data.policyMode,
+        runtime: structuredClone(repo.data.runtime),
         commands: structuredClone(repo.data.commands),
         roleOverrides: structuredClone(repo.data.roleOverrides),
       });
+      setPathsText(null);
     }
   }, [repo.data?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const original = useMemo(
     () =>
       repo.data
-        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides })
+        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, policyMode: repo.data.policyMode, runtime: repo.data.runtime, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides })
         : '',
     [repo.data],
   );
@@ -160,14 +172,69 @@ export function RepositoryDetailPage() {
               ]}
             />
           </Field>
-          <FieldGroup label="Git behaviour" inline helper={draft.gitMode === 'task-branch' ? 'Each task works on its own branch (ai/TASK-…). Your uncommitted work comes along untouched.' : 'Tasks work on whatever branch is checked out.'}>
+          <Field label="Execution policy" inline helper={draft.policyMode ? POLICY_MODE_DESCRIPTION[draft.policyMode] : 'Uses Tools → Policy.'}>
+            <Select
+              value={draft.policyMode ?? '__global__'}
+              onValueChange={(v) => setDraft({ ...draft, policyMode: v === '__global__' ? null : (v as PolicyMode) })}
+              options={[
+                { value: '__global__', label: `Global default (${POLICY_MODE_LABEL[settings.data?.execution.policyMode ?? 'autopilot']})` },
+                ...POLICY_MODES.map((m) => ({ value: m, label: POLICY_MODE_LABEL[m], description: POLICY_MODE_DESCRIPTION[m] })),
+              ]}
+            />
+          </Field>
+          <FieldGroup
+            label="Git behaviour"
+            inline
+            helper={
+              draft.gitMode === 'task-branch'
+                ? 'Each task works on its own branch (ai/TASK-…). Your uncommitted work comes along untouched.'
+                : draft.gitMode === 'worktree'
+                  ? 'Each task works in its own copy of the repository on its own branch. Your working tree is never touched; merge the branch to take the result.'
+                  : 'Tasks work on whatever branch is checked out.'
+            }
+          >
             <SegmentedControl<GitMode>
               label="Git behaviour"
               value={draft.gitMode}
               onValueChange={(v) => setDraft({ ...draft, gitMode: v })}
               options={[
                 { value: 'task-branch', label: 'Task branch' },
+                { value: 'worktree', label: 'Isolated worktree' },
                 { value: 'current-branch', label: 'Current branch' },
+              ]}
+            />
+          </FieldGroup>
+        </div>
+      </Panel>
+
+      <Panel title="App runtime" headingLevel={3} description="How the App check stage starts this app and which pages it opens in a real browser. Leave the address empty to skip that stage.">
+        <div className="flex flex-col gap-4">
+          <Field label="Start command" optional helper="Runs in the task's working folder as a background process and is stopped afterwards.">
+            <Input value={draft.runtime.devCommand ?? ''} onChange={(e) => setDraft({ ...draft, runtime: { ...draft.runtime, devCommand: e.target.value || null } })} className="font-mono" spellCheck={false} placeholder="pnpm run dev --port 5199 --strictPort" />
+          </Field>
+          <Field label="Address" optional helper="Where the app answers once started.">
+            <Input value={draft.runtime.devUrl ?? ''} onChange={(e) => setDraft({ ...draft, runtime: { ...draft.runtime, devUrl: e.target.value.trim() || null } })} className="font-mono" spellCheck={false} placeholder="http://127.0.0.1:5199" />
+          </Field>
+          <Field label="Pages to check" helper="Paths, one per line.">
+            <Textarea
+              value={pathsText ?? draft.runtime.verifyPaths.join('\n')}
+              rows={3}
+              className="font-mono"
+              spellCheck={false}
+              onChange={(e) => {
+                setPathsText(e.target.value);
+                setDraft({ ...draft, runtime: { ...draft.runtime, verifyPaths: e.target.value.split('\n').map((p) => p.trim()).filter((p) => p.startsWith('/')) } });
+              }}
+            />
+          </Field>
+          <FieldGroup label="Check" inline helper={draft.runtime.verifyMode === 'browser' ? 'Chromium at desktop and phone widths: console errors, failed requests, horizontal scrolling, screenshots.' : 'HTTP status only (APIs and Workers).'}>
+            <SegmentedControl<'browser' | 'http'>
+              label="Check"
+              value={draft.runtime.verifyMode}
+              onValueChange={(verifyMode) => setDraft({ ...draft, runtime: { ...draft.runtime, verifyMode } })}
+              options={[
+                { value: 'browser', label: 'Browser' },
+                { value: 'http', label: 'HTTP' },
               ]}
             />
           </FieldGroup>

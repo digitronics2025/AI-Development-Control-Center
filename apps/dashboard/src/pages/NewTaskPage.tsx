@@ -15,6 +15,7 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  Switch,
   Textarea,
   formatBytes,
   useFeedback,
@@ -23,8 +24,12 @@ import {
 import {
   MODE_HELP,
   PERMISSION_LEVEL_INFO,
+  POLICY_MODE_DESCRIPTION,
+  POLICY_MODE_LABEL,
+  POLICY_MODES,
   ROLE_LABEL,
   resolveAssignment,
+  type PolicyMode,
   type PartialAssignment,
   type PermissionLevel,
   type Role,
@@ -74,6 +79,8 @@ export function NewTaskPage() {
   const [roleOverrides, setRoleOverrides] = useState<Partial<Record<Role, PartialAssignment>>>({});
   const [autoApprove, setAutoApprove] = useState<PermissionLevel | undefined>();
   const [maxFixCycles, setMaxFixCycles] = useState<string>('');
+  const [policyMode, setPolicyMode] = useState<PolicyMode | undefined>();
+  const [worktree, setWorktree] = useState<boolean | undefined>();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -116,6 +123,8 @@ export function NewTaskPage() {
         overrides: { roles: cleanRoles, stages: {} },
         autoApproveUpToLevel: autoApprove,
         maxFixCycles: maxFixCycles ? Number(maxFixCycles) : undefined,
+        policyMode,
+        worktree,
         attachments: attachments.map(({ name, contentBase64 }) => ({ name, contentBase64 })),
         start,
       },
@@ -316,6 +325,20 @@ export function NewTaskPage() {
             <Field label="Maximum fix cycles" error={errors.maxFixCycles} helper={`After this many review/fix loops the task waits for you. Workflow default: ${workflow?.maxFixCycles ?? 3}.`}>
               <Input inputMode="numeric" value={maxFixCycles} placeholder={String(workflow?.maxFixCycles ?? 3)} onChange={(e) => setMaxFixCycles(e.target.value)} className="w-28" />
             </Field>
+            <Field label="Execution policy" helper={POLICY_MODE_DESCRIPTION[policyMode ?? repo?.policyMode ?? settings.data?.execution.policyMode ?? 'autopilot']}>
+              <Select
+                value={policyMode ?? repo?.policyMode ?? settings.data?.execution.policyMode ?? 'autopilot'}
+                onValueChange={(v) => setPolicyMode(v as PolicyMode)}
+                options={POLICY_MODES.map((m) => ({ value: m, label: POLICY_MODE_LABEL[m] }))}
+              />
+            </Field>
+            <div className="flex items-start justify-between gap-4">
+              <span className="flex flex-col">
+                <span className="text-body font-semibold text-fg">Isolate in a worktree</span>
+                <span className="text-small text-fg-secondary">The task works in its own copy on its own branch; your working tree is never touched. Merge the branch afterwards.</span>
+              </span>
+              <Switch aria-label="Isolate in a worktree" checked={worktree ?? repo?.gitMode === 'worktree'} onCheckedChange={setWorktree} />
+            </div>
           </div>
         </Disclosure>
 

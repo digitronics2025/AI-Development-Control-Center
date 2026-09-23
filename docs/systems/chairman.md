@@ -127,7 +127,10 @@ stage, no task-owned file matching a protected pattern. `READY` needs the gate.
 
 ## Checkpoints ([checkpoints.ts](../../apps/orchestrator/src/chairman/checkpoints.ts))
 
-See [git.md](git.md#checkpoints). "Roll back the last change" restores the
+See [checkpoints.md](checkpoints.md) (types `git`, `database`, `deployment`,
+each with metadata; the tool layer and the Execution tab share this service)
+and [git.md](git.md#checkpoints). All of it works on the task's working
+directory — its worktree when isolated. "Roll back the last change" restores the
 checkpoint taken before the latest write stage; a safety checkpoint is taken
 first. Files dirty at the baseline are never touched; across a commit it
 refuses.

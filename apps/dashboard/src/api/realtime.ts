@@ -22,6 +22,8 @@ export class RealtimeClient {
   private state: ConnectionState = { status: 'connecting', everConnected: false, attempts: 0, lastChangeAt: Date.now() };
   private readonly listeners = new Set<Listener>();
   private readonly logRefs = new Map<string, number>();
+  /** Terminal output is delivered to listeners directly, never through the query cache. */
+  private readonly terminalListeners = new Map<string, Set<(data: string, cursor: number) => void>>();
   private retryTimer: number | null = null;
   private stopped = false;
 
@@ -77,6 +79,29 @@ export class RealtimeClient {
     };
   }
 
+  /** Receive a terminal's output while mounted; the subscription is renewed after reconnects. */
+  subscribeTerminal(terminalId: string, listener: (data: string, cursor: number) => void): () => void {
+    const set = this.terminalListeners.get(terminalId) ?? new Set();
+    set.add(listener);
+    this.terminalListeners.set(terminalId, set);
+    if (set.size === 1) this.send({ type: 'subscribeTerminal', terminalId });
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) {
+        this.terminalListeners.delete(terminalId);
+        this.send({ type: 'unsubscribeTerminal', terminalId });
+      }
+    };
+  }
+
+  sendTerminalInput(terminalId: string, data: string): void {
+    this.send({ type: 'terminal.input', terminalId, data });
+  }
+
+  resizeTerminal(terminalId: string, cols: number, rows: number): void {
+    this.send({ type: 'terminal.resize', terminalId, cols, rows });
+  }
+
   private send(message: ClientMessage): void {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
   }
@@ -100,11 +125,17 @@ export class RealtimeClient {
       const isReconnect = this.state.everConnected;
       this.setState({ status: 'open', everConnected: true, attempts: 0 });
       for (const executionId of this.logRefs.keys()) this.send({ type: 'subscribeLogs', executionId });
+      for (const terminalId of this.terminalListeners.keys()) this.send({ type: 'subscribeTerminal', terminalId });
       this.onOpen(isReconnect);
     };
     socket.onmessage = (event) => {
       try {
-        this.onMessage(JSON.parse(String(event.data)) as ServerMessage);
+        const message = JSON.parse(String(event.data)) as ServerMessage;
+        if (message.type === 'terminal.output') {
+          for (const listener of this.terminalListeners.get(message.terminalId) ?? []) listener(message.data, message.cursor);
+          return;
+        }
+        this.onMessage(message);
       } catch {
         /* ignore malformed frames */
       }

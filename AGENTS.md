@@ -24,8 +24,15 @@ change behaviour.
 - The orchestrator is the only source of workflow state. Clients never keep
   their own copy of task state.
 - Never weaken the subscription-only guard, the Host/Origin/token checks, the
-  command classifier or secret redaction without a test proving the new
-  behaviour.
+  command classifier, the tool policy (`packages/tools/src/policy.ts`), path
+  confinement, the credential broker or secret redaction without a test
+  proving the new behaviour.
+- Agent and operator tool calls go through `ToolService.invoke`
+  (`apps/orchestrator/src/tools/service.ts`); a new tool is a provider in
+  `packages/tools/src/packs/` rather than a new API route that spawns
+  processes. See [docs/systems/tool-system.md](docs/systems/tool-system.md).
+- The orchestrator never runs elevated; administrator work goes through the
+  signed, allowlisted `scripts/windows/privileged-helper.ps1`.
 - Test credentials are assembled at runtime; never commit a credential-shaped
   literal (the commit guard blocks it).
 - Frontend: semantic tokens only (the default Tailwind palette is removed),

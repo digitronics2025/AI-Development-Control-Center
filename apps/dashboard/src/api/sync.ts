@@ -14,7 +14,13 @@ import type {
   TaskEvent,
   TestRun,
   WorkflowProfile,
+  ToolView,
+  TaskProcess,
+  TerminalSession,
+  McpServerView,
+  CredentialView,
 } from '@acc/shared';
+import type { TaskExecutionView } from './tools';
 import { keys } from './keys';
 
 function upsert<T>(list: T[] | undefined, item: T, idOf: (x: T) => string | number): T[] | undefined {
@@ -198,6 +204,7 @@ export class CacheSync {
       case 'checkpoint': {
         const c = message.checkpoint;
         qc.setQueryData<ChairmanOverview>(keys.chairman(c.taskId), (old) => (old ? { ...old, checkpoints: upsert(old.checkpoints, c, (x) => x.id) ?? old.checkpoints } : old));
+        qc.setQueryData<TaskExecutionView>(keys.taskExecution(c.taskId), (old) => (old ? { ...old, checkpoints: upsert(old.checkpoints, c, (x) => x.id) ?? old.checkpoints } : old));
         return;
       }
       case 'workflow.deleted':
@@ -206,6 +213,58 @@ export class CacheSync {
       case 'sourceControl':
         this.refreshSourceControl(message.repositoryId);
         return;
+      // ----- tool layer ---------------------------------------------------------------
+      case 'tool': {
+        const tool: ToolView = message.tool;
+        qc.setQueryData<ToolView[]>(keys.tools, (old) => upsert(old, tool, (x) => x.id));
+        return;
+      }
+      case 'toolExecution': {
+        const e = message.execution;
+        if (e.taskId) qc.setQueryData<TaskExecutionView>(keys.taskExecution(e.taskId), (old) => (old ? { ...old, executions: [e, ...old.executions.filter((x) => x.id !== e.id)] } : old));
+        return;
+      }
+      case 'taskProcess': {
+        const p: TaskProcess = message.process;
+        qc.setQueryData<TaskProcess[]>(keys.processes, (old) => upsert(old, p, (x) => x.id));
+        if (p.taskId) qc.setQueryData<TaskExecutionView>(keys.taskExecution(p.taskId), (old) => (old ? { ...old, processes: upsert(old.processes, p, (x) => x.id) ?? old.processes } : old));
+        return;
+      }
+      case 'terminal': {
+        const term: TerminalSession = message.terminal;
+        qc.setQueryData<TerminalSession[]>(keys.terminals, (old) => upsert(old, term, (x) => x.id));
+        return;
+      }
+      case 'terminal.output':
+        return;
+      case 'mcpServer': {
+        const server: McpServerView = message.server;
+        qc.setQueryData<McpServerView[]>(keys.mcpServers, (old) => upsert(old, server, (x) => x.id));
+        void qc.invalidateQueries({ queryKey: keys.tools });
+        return;
+      }
+      case 'mcpServer.deleted':
+        qc.setQueryData<McpServerView[]>(keys.mcpServers, (old) => old?.filter((x) => x.id !== message.serverId));
+        void qc.invalidateQueries({ queryKey: keys.tools });
+        return;
+      case 'credential': {
+        const c: CredentialView = message.credential;
+        qc.setQueryData<CredentialView[]>(keys.credentials, (old) => upsert(old, c, (x) => x.id));
+        return;
+      }
+      case 'credential.deleted':
+        qc.setQueryData<CredentialView[]>(keys.credentials, (old) => old?.filter((x) => x.id !== message.credentialId));
+        return;
+      case 'recovery': {
+        const a = message.attempt;
+        qc.setQueryData<TaskExecutionView>(keys.taskExecution(a.taskId), (old) => (old ? { ...old, recovery: upsert(old.recovery, a, (x) => x.id) ?? old.recovery } : old));
+        return;
+      }
+      case 'escalation': {
+        const esc = message.escalation;
+        if (esc.taskId) qc.setQueryData<TaskExecutionView>(keys.taskExecution(esc.taskId), (old) => (old ? { ...old, escalations: upsert(old.escalations, esc, (x) => x.id) ?? old.escalations } : old));
+        return;
+      }
     }
   };
 }

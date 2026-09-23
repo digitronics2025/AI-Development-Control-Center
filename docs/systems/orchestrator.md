@@ -46,7 +46,11 @@ hub, SQLite persistence and the workflow engine. Entry:
 Control journal, migration 3, [git-operations.ts](../../apps/orchestrator/src/store/git-operations.ts)),
 and the Chairman's `task_contracts`, `chairman_sessions`, `chairman_messages`,
 `chairman_decisions`, `chairman_actions`, `failure_signatures`,
-`task_checkpoints` (migration 2, [chairman.md](chairman.md)). Access goes through
+`task_checkpoints` (migration 2, [chairman.md](chairman.md)), and the tool
+layer's `tools`, `tool_capabilities`, `tool_health`, `tool_executions`,
+`task_processes`, `pty_sessions`, `recovery_attempts`, `mcp_servers`,
+`capability_escalations`, `credential_references` (migration 5,
+[tool-system.md](tool-system.md), [tools/store.ts](../../apps/orchestrator/src/tools/store.ts)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -66,6 +70,8 @@ before any row is written.
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
 | Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
 | Settings | `GET/PATCH settings`, `GET prompts`, `PUT prompts/:role`, `POST prompts/:role/reset` |
+| Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…`, `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
+| Tool sessions | `tool-session/{tools,find,call}` — session token only, never the local API token ([mcp.md](mcp.md)) |
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
@@ -80,7 +86,11 @@ the build folder is empty the page answers 503 with `Retry-After`.
 `repository`, `workflow`, `repositoryAutomation`) plus `sourceControl` (`{repositoryId}` only: refetch that
 repository's Git state; sent by `RepositoryService.invalidate` and every Source
 Control mutation) and the Chairman's `chairman`, `chairman.message`,
-`chairman.decision`, `chairman.action`, `checkpoint`. Log lines (`logs`) go only to clients that sent
+`chairman.decision`, `chairman.action`, `checkpoint`, and the tool layer's
+`tool`, `toolExecution`, `taskProcess`, `terminal`, `mcpServer(.deleted)`,
+`credential(.deleted)`, `recovery`, `escalation`. `terminal.output` goes only
+to clients that sent `subscribeTerminal`, which may then send `terminal.input`
+and `terminal.resize` for it ([pty.md](pty.md)). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log
 batches and refetch. Log lines are batched every 150 ms or 250 lines.
 
@@ -94,8 +104,12 @@ Control reconciliation in the background after `listen`.
 
 ## Startup
 
-`main.ts` runs `services.recover()` (engine reconciliation, then the
-Chairman resumes interrupted supervised tasks and answers pending chat),
+`main.ts` runs `services.recover()` (tool executions left running are marked
+stopped, leftover terminals exited, leftover task processes killed only if
+still the same process; then engine reconciliation, then the Chairman resumes
+interrupted supervised tasks and answers pending chat), gives the tool layer
+its listen URL (agent tool sessions need it), refreshes stale tool detection
+and loads stored credentials into the redactor in the background,
 schedules queued tasks, starts Source Control reconciliation (then
 repository automation, once it settles) and the Chairman's watchdog (15 s).
 

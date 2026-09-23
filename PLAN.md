@@ -1143,6 +1143,9 @@ Benefits:
 
 Do not make worktrees a blocker for the first milestone.
 
+Implemented in the tool layer V2: Git mode *Isolated worktree*
+([docs/systems/checkpoints.md](docs/systems/checkpoints.md#worktrees)).
+
 ---
 
 ## 27. Testing and Verification
@@ -1976,6 +1979,14 @@ Updated 2026-09-23. Subsystem details: [docs/systems/](docs/systems/README.md).
 | 13 Permissions and approvals | Done | Levels 1–5, command classification incl. package scripts, typed confirmation for level 5 |
 | 14 Reliability hardening | Done | Tests for restart, crash, usage limit, auth/billing refusal, missing model, command failure, dirty tree, cancel |
 | 15 Windows packaging | Done | Background launcher, graceful stop endpoint, Start-menu and sign-in shortcuts |
+
+**Universal tool layer (V2).** Plan and decisions:
+[docs/plans/tool-layer-v2/PLAN.md](docs/plans/tool-layer-v2/PLAN.md). Tool
+SDK, registry, router and policy; shells, PTY, filesystem, Git, GitHub,
+runtimes, browser, HTTP, network, Windows, Cloudflare, databases, Docker,
+Android; MCP gateway and server; credential broker; checkpoints; worktree
+isolation; tool-level recovery; the App check; the Tools page and the
+Execution tab. Status per phase is in that plan.
 
 Known external blockers: Codex CLI 0.150.0 rejects the configured default model
 `gpt-6-astra` (needs a newer CLI) and the Codex workspace has no credits.

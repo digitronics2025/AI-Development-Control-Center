@@ -21,6 +21,10 @@ export const PAGES = [
   { name: 'source-control', path: '/source-control', ready: 'Recent Git operations' },
   { name: 'source-control-history', path: '/source-control?tab=history', ready: 'End of history' },
   { name: 'settings-billing', path: '/settings/billing', ready: 'Billing Mode' },
+  { name: 'tools', path: '/tools', ready: 'Check all' },
+  { name: 'tools-policy', path: '/tools/policy', ready: 'Give agents the Control Center tools' },
+  { name: 'tools-credentials', path: '/tools/credentials', ready: 'Values are write-only' },
+  { name: 'task-execution', path: '/tasks/TASK-0001?tab=execution', ready: 'Tool calls' },
 ] as const;
 
 /** Console errors fail the test; collected from page load onwards. */

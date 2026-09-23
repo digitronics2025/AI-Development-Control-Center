@@ -73,6 +73,21 @@ environment files, keys or credential-shaped values are blocked. While a task
 is editing the repository, Git actions wait and everything stays readable.
 Details: [docs/systems/source-control.md](docs/systems/source-control.md).
 
+### Tools
+
+Agents and workflows reach the machine through one tool layer: PowerShell,
+CMD, Git Bash and WSL; files, Git and GitHub; Node and Python; a real
+Chromium for checking pages; HTTP; Cloudflare, databases, Docker, Android and
+Windows tools; interactive terminals; and any MCP server you add. Every call
+goes through the same policy (Safe · Autopilot · Full Autopilot+), is
+classified and recorded, and never sees your secrets in plain text. Full
+Autopilot starts your app after the tests and checks it in a browser at
+desktop and phone width; environment problems (missing dependencies, a busy
+port, a missing browser) are repaired and the check re-run. Repositories can
+run each task in its own Git worktree. **Tools** in the sidebar shows what is
+installed, running processes, terminals, MCP servers, credentials and the
+policy. Details: [docs/systems/tool-system.md](docs/systems/tool-system.md).
+
 ### Try it without spending any subscription usage
 
 ```powershell
@@ -99,7 +114,10 @@ packages/executor       Child processes: streaming, timeouts, tree-kill
 packages/agent-sdk      Adapter contract, failure classification, simulated agent
 packages/agent-codex    Codex CLI adapter
 packages/agent-claude   Claude Code adapter
-packages/git            Baselines, change attribution, diffs, commits
+packages/git            Baselines, change attribution, diffs, commits, worktrees
+packages/tools          Tool SDK, registry, router, policy, recovery, tool packs
+packages/pty            Interactive terminals (ConPTY)
+packages/mcp            MCP gateway and the Control Center's own MCP server
 packages/ui             Design system (tokens, primitives, components)
 workflows/              Built-in workflow profiles (YAML)
 prompts/                Built-in role prompt templates
@@ -109,8 +127,8 @@ docs/systems/           How each subsystem works
 
 ## Found for later
 
-Deliberately out of V1 scope (PLAN §40): Git worktrees for parallel tasks in
-one repository, remote/phone control, more agent adapters (Gemini, OpenCode,
+Deliberately out of scope (PLAN §40): running several tasks at once in one
+repository (worktree isolation exists; a scheduler for it does not), remote/phone control, more agent adapters (Gemini, OpenCode,
 Ollama), automatic effort selection, production deploy automation, a signed
 installer. See [docs/systems/README.md](docs/systems/README.md) for known
 limitations per subsystem.

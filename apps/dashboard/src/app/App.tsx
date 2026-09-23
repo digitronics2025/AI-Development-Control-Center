@@ -18,6 +18,7 @@ const TaskDetailPage = lazy(() => import('../pages/task/TaskDetailPage').then((m
 const ApprovalsPage = lazy(() => import('../pages/ApprovalsPage').then((m) => ({ default: m.ApprovalsPage })));
 const WorkflowsPage = lazy(() => import('../pages/WorkflowsPage').then((m) => ({ default: m.WorkflowsPage })));
 const AgentsPage = lazy(() => import('../pages/AgentsPage').then((m) => ({ default: m.AgentsPage })));
+const ToolsPage = lazy(() => import('../pages/ToolsPage').then((m) => ({ default: m.ToolsPage })));
 const RepositoriesPage = lazy(() => import('../pages/RepositoriesPage').then((m) => ({ default: m.RepositoriesPage })));
 const RepositoryDetailPage = lazy(() => import('../pages/RepositoryDetailPage').then((m) => ({ default: m.RepositoryDetailPage })));
 const SourceControlPage = lazy(() => import('../pages/source-control/SourceControlPage').then((m) => ({ default: m.SourceControlPage })));
@@ -93,6 +94,8 @@ export function AppRoutes() {
       <Route path="/workflows" element={<WorkflowsPage />} />
       <Route path="/workflows/:id" element={<WorkflowsPage />} />
       <Route path="/agents" element={<AgentsPage />} />
+      <Route path="/tools" element={<ToolsPage />} />
+      <Route path="/tools/:tab" element={<ToolsPage />} />
       <Route path="/repositories" element={<RepositoriesPage />} />
       <Route path="/repositories/:id" element={<RepositoryDetailPage />} />
       <Route path="/source-control" element={<SourceControlPage />} />

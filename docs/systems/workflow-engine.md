@@ -21,7 +21,7 @@ the same sequence.
 
 Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
-(agent|tests|command|git), agentId/model/effort (optional pin),
+(agent|tests|command|git|verify), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
 verdict, commandKinds, optional`. Validation
 ([workflow.ts](../../packages/shared/src/workflow.ts)): unique keys,
@@ -33,6 +33,27 @@ A `tests` stage runs the repository's enabled commands of its `commandKinds`,
 by default `lint, typecheck, test, build`. Full Autopilot adds `e2e`, so an
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
+
+A `verify` stage (Full Autopilot's **App check**, after Test) starts the app
+from the repository runtime (Repositories → a repository → App runtime),
+waits until it answers, opens each configured path in Chromium at desktop and
+phone widths (or checks HTTP status for APIs/Workers), fails on console
+errors, page errors, failed same-origin requests or horizontal scrolling,
+saves screenshots and `browser-verification.md`, stops the app, and on
+failure goes to `onFail` like a test failure. It is skipped when no runtime
+address is configured (`skipsForLackOfCommands`).
+
+Test stages repair environment failures before failing
+([recovery.md](recovery.md)). Every stage runs in the task's working
+directory — its worktree when isolated ([checkpoints.md](checkpoints.md#worktrees)).
+Agent stages get a scoped Control Center tool session over MCP
+([mcp.md](mcp.md)); before the first stage the environment is discovered
+([tool-system.md](tool-system.md#environment-discovery)). The execution policy
+([autopilot.md](autopilot.md)) caps the auto-approve level for stage gates and
+command approvals. Background processes stop whenever the loop exits in a
+state other than running or queued; completion and cancellation also close
+terminals, remove the worktree and add "Verification coverage" and
+"Execution" sections to the report.
 
 Assignment precedence: global role default → workflow stage pin → repository
 role override → task role override → task stage override.

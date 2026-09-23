@@ -38,11 +38,12 @@ import { ChairmanButton, ChairmanDrawer } from './ChairmanDrawer';
 import { ChangesTab } from './ChangesTab';
 import { AssignmentDialog, CancelTaskDialog, DirectiveDialog, RerouteDialog } from './dialogs';
 import { TaskInspector } from './Inspector';
+import { ExecutionTab } from './ExecutionTab';
 import { LogsTab } from './LogsTab';
 import { OverviewTab } from './OverviewTab';
 import { TestsTab } from './TestsTab';
 
-const TABS = ['overview', 'activity', 'changes', 'tests', 'artifacts', 'logs'] as const;
+const TABS = ['overview', 'activity', 'changes', 'tests', 'artifacts', 'logs', 'execution'] as const;
 type TabKey = (typeof TABS)[number];
 
 function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefined) => string): TimelineStage[] {
@@ -281,6 +282,7 @@ export function TaskDetailPage() {
               Artifacts
             </Tab>
             <Tab value="logs">Logs</Tab>
+            <Tab value="execution">Execution</Tab>
           </TabList>
           <TabPanel value="overview">
             <OverviewTab task={data} onOpenTab={setTab} />
@@ -299,6 +301,9 @@ export function TaskDetailPage() {
           </TabPanel>
           <TabPanel value="logs">
             <LogsTab task={data} />
+          </TabPanel>
+          <TabPanel value="execution">
+            <ExecutionTab task={data} />
           </TabPanel>
         </Tabs>
       </div>

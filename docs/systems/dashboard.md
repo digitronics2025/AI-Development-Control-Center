@@ -53,15 +53,31 @@ removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 
 ## Pages
 
-Home, Tasks, New Task, Task Detail (Overview/Activity/Changes/Tests/Artifacts/
-Logs + inspector), Source Control (Changes/History, see
+Home, Tasks, New Task (execution policy, isolated worktree), Task Detail
+(Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md)),
+Tools (`/tools/:tab`: Overview, Processes, Terminals, MCP servers,
+Credentials, Policy — see [tool-system.md](tool-system.md)),
 Settings (10 sections, including Repositories). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed.
+
+## Tool layer views
+
+- **Execution tab** ([ExecutionTab.tsx](../../apps/dashboard/src/pages/task/ExecutionTab.tsx)):
+  the task's policy and working directory, tool calls, processes (with
+  **Stop**), recovery attempts, capability escalations and checkpoints (with
+  **Create checkpoint** and **Roll back**), from `/api/tasks/:id/execution`.
+- **Terminal** ([terminal.tsx](../../apps/dashboard/src/components/terminal.tsx)):
+  xterm in a drawer (Execution tab → **Open terminal**, Tools → Terminals).
+  Output arrives only after `subscribeTerminal`; keystrokes and resizes go
+  back over the same WebSocket ([pty.md](pty.md)). xterm ships only in the
+  lazy Task Detail and Tools route chunks.
+- Repository detail edits the repository's policy, Git mode *Isolated
+  worktree* and the **App runtime** used by the App check.
 
 ## Quality gates
 

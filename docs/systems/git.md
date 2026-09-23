@@ -53,6 +53,13 @@ at the baseline); files added since are deleted. `deleteRefs` only accepts
 `refs/acc/`. The Chairman refuses a rollback when HEAD moved since the
 checkpoint. Used by [chairman.md](chairman.md#checkpoints).
 
+## Worktrees
+
+[worktrees.ts](../../packages/git/src/worktrees.ts): `addWorktree`,
+`removeWorktree` (prunes; clears a locked folder on force), `changesInRange` /
+`diffInRange` (task changes after its worktree is gone) and
+`checkpointMetadata`. How tasks use them: [checkpoints.md](checkpoints.md#worktrees).
+
 ## Limitations
 
 - Tasks in the same repository run one at a time; a finished task leaves its
@@ -60,7 +67,7 @@ checkpoint. Used by [chairman.md](chairman.md#checkpoints).
   pre-existing (reported as such), and a committed task's branch becomes the
   next task's starting point. When the baseline branch is another task's
   (`taskIdFromBranch`), a `GIT_BRANCH` event and the report's Git section say
-  so and ask for that task to be merged first. Worktrees are Found-for-Later.
+  so and ask for that task to be merged first. Repositories in Git mode *Isolated worktree* avoid this: each task has its own checkout ([checkpoints.md](checkpoints.md#worktrees)).
 
 ## Repository Source Control
 

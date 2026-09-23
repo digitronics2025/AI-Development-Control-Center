@@ -173,6 +173,7 @@ Home
 Tasks
 Workflows
 Agents
+Tools
 Repositories
 Source Control
 Approvals
@@ -182,6 +183,9 @@ Settings
 Do not add more top-level navigation unless the product gains a genuinely separate domain.
 Source Control is one: repository Git state (staged, unstaged, history, sync) is
 not task state, and it must stay reachable while no task exists (§7.9).
+Tools is another: what this machine can do (installed programs, their health,
+background processes, terminals, MCP servers, credentials and the execution
+policy) exists independently of any task (§7.10).
 
 Secondary content belongs inside the relevant section.
 
@@ -212,12 +216,13 @@ Order:
 3. Tasks
 4. Workflows
 5. Agents
-6. Repositories
-7. Source Control
-8. Approvals
-9. flexible spacer
-10. Settings
-11. local service status
+6. Tools
+7. Repositories
+8. Source Control
+9. Approvals
+10. flexible spacer
+11. Settings
+12. local service status
 
 Rules:
 - one icon family only,
@@ -731,6 +736,7 @@ Order:
 4. Tests
 5. Artifacts
 6. Logs
+7. Execution
 
 Keep this order consistent.
 
@@ -823,6 +829,39 @@ Developer mode:
 - filter/search.
 
 Do not use terminal green-on-black styling for the entire screen.
+
+### Execution
+
+Answers "what did the Control Center actually run for this task?" — tool calls,
+background processes, automatic repairs, capability escalations, checkpoints
+and verification evidence. It is a record, not a control surface, with three
+exceptions: **Stop** on a running background process, **Create checkpoint**,
+and **Roll back** (danger styling, confirmation dialog that names the
+checkpoint and says your own pre-existing work is left untouched).
+
+```text
+Policy: Autopilot · Worktree: worktrees/app/TASK-0012             [Open terminal]
+Background processes   app under test  :5199  Healthy   [Stop]
+Automatic repairs      Missing dependency → install (succeeded)
+Tool calls             09:44 browser.check_page  Playwright  ✓ 2 widths clean
+                       09:45 fs.delete           refused: needs approval (L5)
+Checkpoints            3 · Before Implement                    [Roll back]
+```
+
+- Tool calls are a dense list, newest first: time, capability (monospace),
+  provider, decision/status chip (icon + text), one-line summary. Refused and
+  escalated calls stay visible — they are the audit trail.
+- Screenshots from verification open in the Artifacts tab; the row links there.
+- Below 900px each section stacks; the tool-call list becomes rows of
+  capability + chip over the summary.
+
+### Terminal drawer
+
+"Open terminal" opens a right drawer (wide: min(960px, 100vw)) with an xterm
+terminal in the task's working directory (its worktree when isolated). The
+drawer header names the shell and folder, and says plainly that commands typed
+here run as you. Closing the drawer closes the terminal. Terminal text uses the
+code font and the log surface tokens; the cursor and selection use `--accent`.
 
 ## Task inspector
 
@@ -1125,6 +1164,60 @@ Sync opens a dialog that states the plan before anything runs — e.g.
 **Sync now** label. Its result is shown inline: pushed, fast-forwarded, up to
 date, or stopped (diverged / uncommitted changes) with the reason. Publish
 branch is its own dialog with the remote named. There is no force option.
+
+---
+
+# 7.10 Tools
+
+Purpose: answer "what can the Control Center do on this machine right now, and
+what is it allowed to do on its own?"
+
+## Header
+
+```text
+Tools                                              [Check all]
+28 of 34 ready · 2 need sign-in · 4 not installed · policy: Autopilot
+```
+
+## Tabs
+
+Overview · Processes · Terminals · MCP servers · Credentials · Policy.
+
+## Overview
+
+A table (stacked below 900px): name, category, status chip (Ready / Not
+installed / Sign-in required / Error / Not checked — icon + text), version,
+path (monospace, truncated with a tooltip), capabilities count, last checked.
+Row actions: **Check** (secondary) and, for tools with accounts, **Check
+sign-in**. "Not installed" never uses danger styling: a missing optional tool
+is information, not a fault. A row expands to list its capabilities with
+their permission badges.
+
+## Processes / Terminals
+
+Processes: every background process the Control Center started, with task,
+port, status and **Stop**. Terminals: running terminals with task/repository
+and **Open**; **New terminal** asks for a repository.
+
+## MCP servers
+
+A list with health chip, transport, tool count and **Check**; **Add server**
+opens a dialog (name, stdio command + arguments or HTTP URL, permission level,
+environment variables mapped to stored credentials — never raw values).
+
+## Credentials
+
+Names, kind, environment variable, scope and fingerprint only. Values are
+write-only: the add/replace dialog uses a password field and the value is
+never shown again. Delete uses a confirmation dialog.
+
+## Policy
+
+The execution policy as a segmented control — **Safe · Autopilot · Full
+Autopilot+** — each option with its one-sentence description; Autopilot is
+marked as the recommended default. Below it: switches for giving agents the
+tools, terminals, automatic repairs and environment discovery. Level 5 and
+destructive actions always ask; the page says so and offers no switch for it.
 
 ---
 
@@ -1482,6 +1575,7 @@ Preferred:
 - **Radix UI primitives** — accessible behavior for complex primitives where native HTML is insufficient
 - **TanStack Table** — only where tables need sorting/filtering/large-data behavior
 - **React Hook Form + Zod** — complex forms when justified
+- **xterm.js (`@xterm/xterm`, `@xterm/addon-fit`)** — the terminal drawer only (§7.3); it is the terminal VS Code itself uses, themed from the tokens
 
 Do not add a heavyweight competing component framework such as Material UI, Ant Design, or another full design system unless this document is deliberately replaced.
 

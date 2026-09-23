@@ -44,12 +44,30 @@ block commits and pushes ([source-control.md](source-control.md)).
 
 ## Command classification ([commands.ts](../../packages/security/src/commands.ts))
 
-Repository commands are classified before running; `npm/pnpm/yarn run X` is
-expanded to the script body (including pre/post and nested scripts,
-[script-resolve.ts](../../apps/orchestrator/src/engine/script-resolve.ts)).
-Dangerous (recursive deletes, `git reset --hard`, force push, `DROP TABLE`,
-unscoped `DELETE`, `terraform destroy`…) and anything targeting production is
-level 5 and always needs an approval with a typed confirmation (the task ID).
+Repository commands, agent tool calls and agent terminal input are classified
+before running; `npm/pnpm/yarn run X` is expanded to the script body
+(including pre/post and nested scripts, [package-scripts.ts](../../packages/tools/src/package-scripts.ts)).
+The classifier is shell-aware ([shell-parse.ts](../../packages/security/src/shell-parse.ts)):
+it splits on `; && || | & newline` outside quotes, unwraps `cmd /c`,
+`powershell -Command`, `bash -c` and `wsl`, decodes `-EncodedCommand` and
+judges the decoded script, and expands PowerShell aliases (`iex`, `iwr`,
+`ri`, `rm`, `kill`, `saps`…). It returns `effects` (filesystem, git, network,
+credentials, privilege, database, infrastructure, production, process,
+persistence, code-execution) and `readOnly`; a read-only command (git
+status/diff/log, `Get-ChildItem`, `Get-NetTCPConnection`, `--version`…, no
+redirection, substitution or method calls) is Level 1.
+
+Dangerous (Level 5): recursive deletes in any shell, disk formatting,
+destroying backups, history rewrites (`reset --hard`, force push, rebase,
+`commit --amend`, `branch -D`), `DROP`/`TRUNCATE`/unscoped `DELETE`,
+infrastructure destruction, download-and-execute (`iwr … | iex`,
+`curl … | sh`), elevation (`Start-Process -Verb RunAs`, `sudo`, `runas`),
+Defender tampering, shutdown/boot changes, deleting services or registry data,
+and anything targeting production. Level 4: registry writes,
+`Set-ExecutionPolicy`, scheduled/startup jobs, service start/stop, firewall,
+system package installs, `Invoke-Expression`/dynamic code, remote commands,
+stopping processes by name, reading stored credentials, deploys. Level 5 always
+needs an approval with a typed confirmation (the task ID).
 
 ## Chairman ([chairman.md](chairman.md))
 
@@ -60,6 +78,22 @@ level 5 and always needs an approval with a typed confirmation (the task ID).
   pick a pre-validated strategy; directives come only from the user's own words.
 - Chat has no shell: messages become typed actions or answers. Chairman text,
   decisions and directives are redacted before storage.
+
+## Tool layer
+
+- Tool sessions ([mcp.md](mcp.md)) use their own random, in-memory,
+  per-execution tokens; `/api/tool-session/*` accepts only those (the local
+  API token is refused there) and they open no other route. Host and Origin
+  checks apply as everywhere.
+- Every path a tool touches is confined to the task's roots after resolving
+  links ([paths.ts](../../packages/tools/src/paths.ts)); files holding the
+  user's pre-existing work are refused for writes, commits and restores.
+- Credentials: [credential-broker.md](credential-broker.md). Policy and the
+  privileged helper: [autopilot.md](autopilot.md). Terminals are loopback only
+  ([pty.md](pty.md)).
+- Redaction also covers values the broker hands out
+  (`registerSecretValues`), and variables the broker manages are stripped from
+  every inherited environment along with `ACC_TOOL_SESSION`.
 
 ## Permission levels
 

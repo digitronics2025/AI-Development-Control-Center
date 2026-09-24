@@ -35,7 +35,9 @@ test('1–2: the cloud dashboard opens without any local token and shows the pai
   await expect(page.getByRole('heading', { level: 1, name: 'Nodes' })).toBeVisible();
   const row = page.getByRole('table', { name: 'Paired nodes' }).getByRole('row').filter({ hasText: 'E2E node' });
   await expect(row).toContainText('Online');
-  await expect(row).toContainText('5');
+  // The Repositories cell, not the whole row: the row also carries the build version, whose
+  // commit hash can contain any digit. scripts/demo.mjs seeds 8 repositories.
+  await expect(row.getByRole('cell').nth(3)).toHaveText('8');
   // The local-only settings section does not exist here.
   await page.goto('/settings');
   await expect(page.getByRole('link', { name: 'Remote access' })).toHaveCount(0);

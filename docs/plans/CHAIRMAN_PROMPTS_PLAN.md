@@ -1,6 +1,6 @@
 # Chairman prompts v2 — plan
 
-Status: proposed · 2026-09-24 · no schema change
+Status: done · 2026-09-24 · on origin/main as 067b82a; live rollout rides the audit session's coordinated release · no schema change
 
 ## 1. Goal
 

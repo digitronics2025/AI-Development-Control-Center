@@ -2,7 +2,7 @@
 title: Stage agents can use the operator's skills without ever exceeding their stage level
 source: conversation 2026-09-24 — AGENT_SKILLS_PLAN.md
 created: 2026-09-24
-status: in-progress
+status: done
 ---
 
 # Stage agents can use the operator's skills without ever exceeding their stage level
@@ -322,7 +322,7 @@ None. There is no migration, deploy, deletion or history rewrite. The push to
 - [x] T2. Similar-issue sweep — done when: every other place that builds Claude/Codex argv or tool allowlists was searched for the open-tool-set pattern — check: `manual: list what was searched and what was found`
 - [x] T3. Gates green — done when: `pnpm check` and `pnpm build && pnpm e2e` pass, or a failure is shown to be another session's — check: the commands
 - [x] T4. Docs synced — done when: agents.md, mcp.md and this plan reflect the change — check: `git diff --stat docs/`
-- [ ] T5. Committed path-scoped and pushed — done when: the push succeeded and the commit holds only this work — check: `git log origin/main..HEAD --oneline`
+- [x] T5. Committed path-scoped and pushed — done when: the push succeeded and the commit holds only this work — check: `git log origin/main..HEAD --oneline`
 - [x] T6. Confirmed live where the push deploys — done when: no deploy on push for this repo (cloud deploy is workflow_dispatch only; the orchestrator is local and was restarted in step 11) — check: `manual: .github/workflows/deploy-cloud.yml trigger`
 - [x] T7. A claim registered for this change — done when: a claim is registered or this step says "no observable outcome" with the reason — check: `manual: name the claim or say why none`
 
@@ -349,3 +349,4 @@ None. There is no migration, deploy, deletion or history rewrite. The push to
 - 2026-09-24 12:58 — T4 — the docs hook flagged operations.md (describes verify-agents.ts): added `--skills` there. Other flagged docs (autopilot, checkpoints, recovery, workflow-engine, repository-automation, dashboard) cover other parts of the touched files — nothing in them describes skills, the tool set or the switch's wording
 - 2026-09-24 13:40 — T5 — origin/main had moved 3 commits (6912045, 5e05d5b, 817d79f: crash classification, capacityBlock, bisect; no migrations). Rebased onto them; one conflict in `tests/fixtures/fake-claude.mjs` (their `crash` scenario next to this `skill` one) — both kept, header lists both. Gates re-run on the merged tree: `pnpm check` green (594/594, typecheck, lint, docs guard), `pnpm build && pnpm e2e` 85 passed. agents.md's failure-classification section now names the "unknown option" line
 - 2026-09-24 13:40 — live orchestrator — the first restart (step 7) ran a dist built from the pre-rebase base, i.e. briefly without 6912045/817d79f's fixes; rebuilt from the merged tree and restarted again (pid 28740, no unfinished tasks, no migrations); the live bundle contains `ToolSearch`, `describeExit` and the anchored `unknown option` rule
+- 2026-09-24 13:50 — T5 — a 4th upstream commit (8e97fb2, dashboard theme switching; no file in common) landed during the push; rebased again, typecheck green, pushed 8e97fb2..bcce09f. The live orchestrator runs the build from before 8e97fb2 (that change is the other session's to release)

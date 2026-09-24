@@ -248,7 +248,7 @@ sealed on MyVault's own Worker.
 | Generated secret delivered | `deposited` (saved for MyVault, deployable) until the receipt says MyVault saved it (`synced`) or could not (`pending_push` again). A snapshot never marks a `deposited` link missing. |
 | MyVault copy of a generated secret edited | `conflict`; neither side changes. The operator chooses **Keep the Control Center value** (next push may replace exactly that edited copy) or **Use the MyVault value** (`pending_pull`, taken on the next snapshot). |
 | Item deleted or unshared in MyVault | `missing` — only after a complete, in-order snapshot; an interrupted one marks nothing. The local credential stays. A push to an unshared item is answered `detached`. |
-| Local delete | Deletes here only; the MyVault item stays. |
+| Local delete | Deletes here only; the MyVault item stays. Its link and deliveries go with it (cascade); the redactor keeps masking the old value, since text written before the delete may still carry it. |
 
 The Credentials tab ([CredentialsTab.tsx](../../apps/dashboard/src/pages/tools/CredentialsTab.tsx))
 shows source, repository scope, MyVault state, a recovery banner ("Connect

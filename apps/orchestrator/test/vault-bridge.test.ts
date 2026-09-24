@@ -532,6 +532,34 @@ describe('credential.generate through the tool layer', () => {
     const bad = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'credential.generate', input: { name: 'has spaces' } });
     expect(bad.body.result.error.code).toBe('INVALID_INPUT');
   });
+
+  it('DELETE /api/credentials/:id removes the value, its MyVault link and its deliveries, and nothing hands it out again (audit F-23)', async () => {
+    const value = secret('deploy');
+    const created = await t.api('POST', '/api/credentials', { name: 'DEPLOY_HOOK', kind: 'other', envVar: 'DEPLOY_HOOK_TOKEN', value });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    expect(await t.services.credentials.value('DEPLOY_HOOK', repoId)).toBe(value);
+    expect(await t.services.credentials.envForMapping({ HOOK: 'DEPLOY_HOOK' }, repoId)).toEqual({ HOOK: value });
+    // A generated secret has a MyVault link row; both kinds of row must go with the credential.
+    const generated = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'credential.generate', input: { name: 'DELETE_ME_KEY' } });
+    const generatedId = t.services.credentials.list().find((c) => c.name === 'DELETE_ME_KEY')!.id;
+    expect(generated.body.result.ok).toBe(true);
+    const rows = (cid: string) =>
+      (t.services.db.prepare('SELECT COUNT(*) AS n FROM credential_vault_links WHERE credential_id = ?').get(cid) as { n: number }).n +
+      (t.services.db.prepare('SELECT COUNT(*) AS n FROM vault_deposits WHERE credential_id = ?').get(cid) as { n: number }).n;
+    expect(rows(generatedId)).toBeGreaterThan(0);
+
+    expect((await t.api('DELETE', `/api/credentials/${id}`)).status).toBe(200);
+    expect((await t.api('DELETE', `/api/credentials/${generatedId}`)).status).toBe(200);
+    expect(await t.services.credentials.value('DEPLOY_HOOK', repoId, { includeUnsynced: true })).toBeNull();
+    expect(await t.services.credentials.envForMapping({ HOOK: 'DEPLOY_HOOK' }, repoId)).toEqual({});
+    expect(rows(id) + rows(generatedId)).toBe(0);
+    expect((await t.api('GET', '/api/credentials')).body.map((c: { id: string }) => c.id)).not.toEqual(expect.arrayContaining([id]));
+    expect((await t.api('DELETE', `/api/credentials/${id}`)).status).toBe(404);
+    // The redactor keeps masking a deleted value: text written before the delete may still carry it.
+    expect(redact(`leaked ${value}`)).not.toContain(value);
+    expect((t.services.db.prepare("SELECT operation FROM credential_events WHERE credential_id = ? ORDER BY id").all(id) as Array<{ operation: string }>).map((e) => e.operation)).toContain('delete');
+  });
 });
 
 describe('project-local tools', () => {

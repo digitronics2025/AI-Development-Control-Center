@@ -1,5 +1,6 @@
 import { androidProviders } from './packs/android.js';
 import { browserProvider } from './packs/browser.js';
+import { browserPageOperations } from './packs/browser-session.js';
 import { cloudflareProvider } from './packs/cloudflare.js';
 import { credentialProvider } from './packs/credential-broker.js';
 import { databaseProviders } from './packs/database.js';
@@ -13,6 +14,7 @@ import { networkProviders } from './packs/network.js';
 import { runtimeProviders } from './packs/runtime.js';
 import { shellProviders } from './packs/shell.js';
 import { verifyProvider } from './packs/verify.js';
+import { webProvider } from './packs/web.js';
 import { windowsProvider } from './packs/windows.js';
 import type { ToolProvider } from './sdk.js';
 
@@ -33,6 +35,7 @@ export { classifyScript } from './packs/shell.js';
 export { packageManager, declaredDependencies } from './packs/runtime.js';
 export { waitForHttp, isLoopbackUrl, classifyRequest } from './packs/http.js';
 export { checkPage, findBrowser, VIEWPORTS } from './packs/browser.js';
+export { closeBrowserPages, closeAllBrowserPages, openBrowserPages } from './packs/browser-session.js';
 export { verifyWeb, webVerifyInput, type WebVerifyInput } from './packs/verify.js';
 export { tcpConnect } from './packs/network.js';
 export { globToRegExp } from './packs/filesystem.js';
@@ -45,8 +48,9 @@ export function builtinProviders(): ToolProvider[] {
     gitProvider(),
     githubProvider(),
     ...runtimeProviders(),
-    browserProvider(),
+    browserProvider(browserPageOperations()),
     ...httpProviders(),
+    webProvider(),
     ...networkProviders(),
     windowsProvider(),
     cloudflareProvider(),

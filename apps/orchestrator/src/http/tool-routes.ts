@@ -21,6 +21,8 @@ import { taskWorkdir } from '../engine/workdir.js';
 import { ToolService, type ToolScope, type ToolSession } from '../tools/service.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
+/** A model looks at a few pictures per call at most; more would crowd out the text. */
+const MAX_IMAGES_PER_CALL = 3;
 /** Query-string boolean: only the word `true` is true (z.coerce.boolean would read "false" as true). */
 const flag = z.enum(['true', 'false']).optional().transform((v) => v === 'true');
 
@@ -250,6 +252,8 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
     if (!session) return reply;
     const body = toolCallSchema.parse(request.body);
     const outcome = await tools.invoke({ capability: body.capability, input: body.input, origin: session.kind === 'agent' ? 'agent' : 'operator', scope: session.scope });
-    return { ok: outcome.result.ok, summary: outcome.result.summary, decision: outcome.decision, executionId: outcome.execution.id, text: redact(ToolService.formatForModel(outcome)) };
+    // Pictures the call made for the model (a screenshot it asked to see) travel with the answer only; they are never stored.
+    const images = (outcome.result.images ?? []).slice(0, MAX_IMAGES_PER_CALL).map((i) => ({ name: i.name, mime: i.mime, data: i.data.toString('base64') }));
+    return { ok: outcome.result.ok, summary: outcome.result.summary, decision: outcome.decision, executionId: outcome.execution.id, text: redact(ToolService.formatForModel(outcome)), images };
   });
 }

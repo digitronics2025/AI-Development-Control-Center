@@ -11,12 +11,14 @@ export interface CapabilityProfile {
   id: ProfileId;
   title: string;
   description: string;
-  /** Capability patterns: exact ids or `area.*`. */
+  /** Capability patterns: exact ids or `area.*`. Order matters: the profile's speciality comes first, and a list over the cap keeps the front. */
   include: string[];
 }
 
 const CORE = ['fs.*', 'git.status', 'git.diff', 'git.log', 'git.show', 'git.branch_list', 'environment.*', 'checkpoint.list', 'tools.*'];
-const INSPECT = ['network.*', 'windows.processes', 'windows.port_owner', 'windows.system_info', 'windows.services', 'process.list', 'process.logs', 'http.*'];
+const INSPECT = ['network.*', 'windows.processes', 'windows.port_owner', 'windows.system_info', 'windows.services', 'process.list', 'process.logs', 'http.*', 'web.*'];
+/** Looking at pages without changing them: open, look, read logs, close. */
+const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close'];
 const DEVELOP = ['shell.*', 'process.*', 'terminal.*', 'node.*', 'checkpoint.*', 'git.*', 'editor.*'];
 
 export const PROFILES: Record<ProfileId, CapabilityProfile> = {
@@ -24,37 +26,37 @@ export const PROFILES: Record<ProfileId, CapabilityProfile> = {
     id: 'analysis',
     title: 'Analysis',
     description: 'Read the repository and inspect the environment; nothing that changes state.',
-    include: [...CORE, ...INSPECT, 'github.pr_list', 'github.pr_view', 'github.issue_list', 'github.issue_view', 'github.run_list', 'browser.check_page', 'browser.screenshot'],
+    include: [...CORE, ...INSPECT, 'github.pr_list', 'github.pr_view', 'github.issue_list', 'github.issue_view', 'github.run_list', ...LOOK],
   },
   general: {
     id: 'general',
     title: 'General development',
     description: 'Files, Git, shells and local processes for any repository.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'github.*', 'python.*'],
+    include: [...CORE, ...INSPECT, ...DEVELOP, ...LOOK, 'github.*', 'python.*'],
   },
   'web-development': {
     id: 'web-development',
     title: 'Web development',
     description: 'Node tooling, local servers, browser checks and HTTP tests.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'browser.*', 'verify.*', 'github.*'],
+    include: ['browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   'cloudflare-worker': {
     id: 'cloudflare-worker',
     title: 'Cloudflare Worker',
     description: 'Node tooling plus Wrangler, D1, R2 and HTTP checks.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'cloudflare.*', 'credential.generate', 'database.*', 'browser.*', 'verify.*', 'github.*'],
+    include: ['cloudflare.*', 'credential.generate', 'database.*', 'browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   'android-development': {
     id: 'android-development',
     title: 'Android development',
     description: 'Gradle, ADB, logcat and device screenshots.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'android.*', 'github.*'],
+    include: ['android.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   python: {
     id: 'python',
     title: 'Python',
     description: 'Python and pip/uv tooling with the usual file and Git tools.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, 'python.*', 'database.*', 'github.*'],
+    include: ['python.*', 'database.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   operator: {
     id: 'operator',
@@ -75,6 +77,18 @@ export function profileIncludes(profile: CapabilityProfile | ProfileId, capabili
   // MCP capabilities are opted in per server, never by a wildcard profile entry other than operator.
   if (capability.startsWith('mcp.') && p.id !== 'operator') return p.include.some((pattern) => pattern.startsWith('mcp.') && matchesPattern(capability, pattern));
   return p.include.some((pattern) => matchesPattern(capability, pattern));
+}
+
+/**
+ * Where a capability sits in a profile's listing order: the index of the first
+ * pattern that includes it, or the end of the list when it is not included
+ * (an escalated capability). Lower comes first.
+ */
+export function profileRank(profile: CapabilityProfile | ProfileId, capability: string): number {
+  const p = typeof profile === 'string' ? PROFILES[profile] : profile;
+  if (!profileIncludes(p, capability)) return p.include.length;
+  const i = p.include.findIndex((pattern) => matchesPattern(capability, pattern));
+  return i === -1 ? p.include.length : i;
 }
 
 /**

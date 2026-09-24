@@ -10,6 +10,7 @@ import {
   policyCeiling,
   PROFILES,
   profileIncludes,
+  profileRank,
   ToolHealthCache,
   ToolRegistry,
   ToolRouter,
@@ -552,7 +553,11 @@ export class ToolService {
     const { scope } = session;
     const ceiling = policyCeiling(scope.mode, scope.autoApproveUpToLevel);
     const out: Array<{ name: string; capability: string; title: string; description: string; inputSchema: Record<string, unknown>; level: number }> = [];
-    for (const cap of this.registry.capabilities()) {
+    // The profile's speciality first, then lower levels: over the cap, what is left out is general Git,
+    // GitHub and editor tools the agent already runs natively; everything stays callable through acc_call_capability.
+    const profile = PROFILES[scope.profile];
+    const ordered = [...this.registry.capabilities()].sort((a, b) => profileRank(profile, a.id) - profileRank(profile, b.id) || a.level - b.level || a.id.localeCompare(b.id));
+    for (const cap of ordered) {
       const listed = profileIncludes(PROFILES[scope.profile], cap.id) || scope.escalated.has(cap.id);
       if (!listed || cap.level > Math.min(scope.stageLevel, ceiling)) continue;
       if (session.kind === 'agent' && NATIVE_OVERLAP.test(cap.id)) continue;

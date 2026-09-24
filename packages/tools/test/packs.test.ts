@@ -264,3 +264,25 @@ describe('credential and secret packs without a broker', () => {
     expect(asked).toBe(false);
   });
 });
+
+describe('cloudflare past logs', () => {
+  it('reads defaults from the Wrangler config and prints one line per event', async () => {
+    const { wranglerConfigValue, logLine } = await import('../src/packs/cloudflare.js');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-wrangler-'));
+    writeFileSync(path.join(dir, 'wrangler.toml'), 'name = "shop-api"\naccount_id = "0123456789abcdef0123456789abcdef"\n');
+    expect(wranglerConfigValue(dir, 'name')).toBe('shop-api');
+    expect(wranglerConfigValue(dir, 'account_id')).toBe('0123456789abcdef0123456789abcdef');
+    const json = mkdtempSync(path.join(os.tmpdir(), 'acc-wrangler-'));
+    writeFileSync(path.join(json, 'wrangler.jsonc'), '{\n  // comment\n  "name": "shop-web"\n}\n');
+    expect(wranglerConfigValue(json, 'name')).toBe('shop-web');
+    expect(wranglerConfigValue(temp, 'name')).toBeNull();
+    expect(logLine({ timestamp: Date.UTC(2026, 8, 24, 13, 8), $metadata: { service: 'shop-api', level: 'error', trigger: 'GET /orders', error: 'boom\n  at x' }, $workers: { event: { response: { status: 500 } } } })).toBe('2026-09-24T13:08:00Z [error] shop-api GET /orders → 500 :: boom at x');
+    expect(logLine({ source: { message: 'hello' } })).toBe('? [info] ? :: hello');
+  });
+
+  it('asks for a token instead of failing obscurely', async () => {
+    const op = registry.provider('wrangler')!.operations.find((o) => o.id === 'cloudflare.logs_query')!;
+    const r = await op.run(op.input.parse({}), ctx(repo, { env: {} }));
+    expect(r.error?.code).toBe('AUTH_REQUIRED');
+  });
+});

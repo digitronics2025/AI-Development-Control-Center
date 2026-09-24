@@ -31,12 +31,13 @@ provides one, decides whether the call may run, runs it and records it.
 
 Built-in packs live in [packs/](../../packages/tools/src/packs): shell,
 filesystem, git, github, runtime (Node/pnpm/npm/Python/uv/Java), browser
-(Playwright), http (+curl), network, windows, cloudflare, database (SQLite,
+(Playwright, including pages an agent keeps open —
+[browser-and-web.md](browser-and-web.md)), http (+curl), web (search, read), network, windows, cloudflare, database (SQLite,
 psql, mysql), docker, android (adb, Gradle), hosted (processes, terminals,
 checkpoints, privileged helper, VS Code), verify, credential-broker
 (`credential.generate`). The orchestrator adds
 `environment` and one `mcp:<id>` provider per healthy MCP server
-([mcp.md](mcp.md)). About 110 capabilities in total.
+([mcp.md](mcp.md)). About 136 built-in capabilities in total.
 
 ## Registry, router, health
 
@@ -84,7 +85,10 @@ memory. Agent sessions are opened per agent execution and closed when it ends
 local API token is refused there, and a session token opens nothing else).
 An agent's tool list is its profile within its level, minus capabilities it
 already has natively (`fs.*`, `shell.*`, basic `git.*`), capped at 60; the
-rest stays callable through `acc_call_capability`.
+rest stays callable through `acc_call_capability`. Over the cap the list keeps
+the front of the profile's `include` order (`profileRank`: its speciality such
+as `cloudflare.*` first, general Git/GitHub/editor tools last), then lower
+levels first.
 
 ## Profiles ([profiles.ts](../../packages/tools/src/profiles.ts))
 

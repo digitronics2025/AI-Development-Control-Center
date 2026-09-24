@@ -27,9 +27,15 @@ export interface SessionTool {
   level: number;
 }
 
+export interface BridgeImage {
+  mime: string;
+  /** Base64. */
+  data: string;
+}
+
 export interface BridgeClient {
   list(): Promise<{ tools: SessionTool[]; session: Record<string, unknown> }>;
-  call(capability: string, input: unknown): Promise<{ ok: boolean; text: string }>;
+  call(capability: string, input: unknown): Promise<{ ok: boolean; text: string; images?: BridgeImage[] }>;
   find(query: string): Promise<{ text: string }>;
 }
 
@@ -53,7 +59,8 @@ export function httpBridgeClient(baseUrl: string, token: string): BridgeClient {
     list: async () => (await request('GET', 'tools')) as { tools: SessionTool[]; session: Record<string, unknown> },
     call: async (capability, input) => {
       const r = await request('POST', 'call', { capability, input });
-      return { ok: Boolean(r.ok), text: String(r.text ?? r.summary ?? '') };
+      const images = Array.isArray(r.images) ? (r.images as Array<Record<string, unknown>>).filter((i) => typeof i.data === 'string' && /^image\/(png|jpeg)$/.test(String(i.mime))).map((i) => ({ mime: String(i.mime), data: String(i.data) })) : [];
+      return { ok: Boolean(r.ok), text: String(r.text ?? r.summary ?? ''), images };
     },
     find: async (query) => ({ text: String((await request('POST', 'find', { query })).text ?? '') }),
   };
@@ -97,7 +104,9 @@ export function createBridgeServer(client: BridgeClient, version = '0.1.0'): Ser
       const capability = request.params.name === 'acc_call_capability' ? String(args.capability ?? '') : (byName.get(request.params.name) ?? request.params.name.replace(/__/g, '.'));
       const input = request.params.name === 'acc_call_capability' ? (args.input ?? {}) : args;
       const r = await client.call(capability, input);
-      return { content: [{ type: 'text', text: r.text }], isError: !r.ok };
+      // A screenshot the tool took is shown to the model as a picture, not described.
+      const pictures = (r.images ?? []).map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mime }));
+      return { content: [{ type: 'text' as const, text: r.text }, ...pictures], isError: !r.ok };
     } catch (error) {
       return { content: [{ type: 'text', text: `Control Center error: ${(error as Error).message}` }], isError: true };
     }

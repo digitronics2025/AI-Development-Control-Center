@@ -17,7 +17,9 @@ Two directions, one package ([`@acc/mcp`](../../packages/mcp/src)).
 [bridge.ts](../../packages/mcp/src/bridge.ts) is a stdio MCP server bundled as
 `apps/orchestrator/dist/acc-mcp.js`. It holds no policy and no secrets: it
 lists and calls tools through `/api/tool-session/*` with a session token
-([tool-system.md](tool-system.md#sessions)).
+([tool-system.md](tool-system.md#sessions)). A call's answer is its text plus, when the
+tool took a screenshot, up to three MCP `image` blocks the model looks at
+([browser-and-web.md](browser-and-web.md#pictures-the-model-sees)).
 
 **Agent stages.** When Settings → Execution → *Give agents the Control Center
 tools* is on and the bridge is built, each agent execution gets a session

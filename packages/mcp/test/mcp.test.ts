@@ -72,4 +72,24 @@ describe('Control Center MCP bridge', () => {
     expect((found.content as Array<{ text: string }>)[0]!.text).toBe('found logcat');
     await client.close();
   });
+
+  it('shows a screenshot a tool took to the model as a picture', async () => {
+    const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+    const fake: BridgeClient = {
+      list: async () => ({ session: {}, tools: [] }),
+      call: async () => ({ ok: true, text: 'Opened pg-1', images: [{ mime: 'image/png', data: png }] }),
+      find: async () => ({ text: '' }),
+    };
+    const server = createBridgeServer(fake);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '1' });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    await client.listTools();
+    const r = await client.callTool({ name: 'acc_call_capability', arguments: { capability: 'browser.open', input: { url: 'http://localhost:5173' } } });
+    expect(r.content).toEqual([
+      { type: 'text', text: 'Opened pg-1' },
+      { type: 'image', data: png, mimeType: 'image/png' },
+    ]);
+    await client.close();
+  });
 });

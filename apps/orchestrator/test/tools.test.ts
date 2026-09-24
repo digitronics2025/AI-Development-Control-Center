@@ -81,6 +81,19 @@ describe('operator tool calls and policy', () => {
     expect((await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).status).toBe(401);
   });
 
+  it('lists a Cloudflare stage its speciality first, leaving out only what the agent does natively', async () => {
+    const session = t.services.tools.openSession(
+      { taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'cloudflare-worker', protectedPaths: [] },
+      'agent',
+    );
+    const list = await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token));
+    const listed = list.body.tools.map((x: { capability: string }) => x.capability) as string[];
+    expect(listed.length).toBeLessThanOrEqual(60);
+    expect(listed[0]).toMatch(/^cloudflare\./);
+    for (const cap of ['cloudflare.logs_query', 'cloudflare.d1_query', 'browser.open', 'browser.act', 'verify.web', 'process.start', 'web.search', 'web.read']) expect(listed, cap).toContain(cap);
+    t.services.tools.closeSession(session.id);
+  });
+
   it('keeps session tokens and the API token apart', async () => {
     const opened = await t.api('POST', '/api/tool-sessions', { repository: repoPath });
     expect(opened.status).toBe(201);

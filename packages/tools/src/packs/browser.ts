@@ -5,7 +5,7 @@ import { redact } from '@acc/security';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { z } from 'zod';
 import { resolveInside } from '../paths.js';
-import { missing, operation, type OperationContext, type OperationResult, type ToolDetection, type ToolProvider } from '../sdk.js';
+import { missing, operation, type OperationContext, type OperationResult, type ResultImage, type ToolDetection, type ToolOperation, type ToolProvider } from '../sdk.js';
 
 /**
  * Browser automation with Playwright (V2 plan §20–21). Deterministic checks
@@ -49,20 +49,20 @@ export async function findBrowser(): Promise<BrowserChoice | null> {
   return system ? { executablePath: system, label: /msedge/i.test(system) ? 'Microsoft Edge' : 'Google Chrome' } : null;
 }
 
-async function launch(): Promise<Browser> {
+export async function launch(options: { headless?: boolean } = {}): Promise<Browser> {
   const choice = await findBrowser();
   if (!choice) throw new Error('No browser available: run `npx playwright install chromium`');
   const { chromium } = await import('playwright-core');
-  return chromium.launch({ headless: true, executablePath: choice.executablePath ?? undefined, args: ['--no-first-run', '--no-default-browser-check'] });
+  return chromium.launch({ headless: options.headless ?? true, executablePath: choice.executablePath ?? undefined, args: ['--no-first-run', '--no-default-browser-check'] });
 }
 
-const httpUrl = z
+export const httpUrl = z
   .string()
   .url()
   .max(2000)
   .refine((u) => /^https?:\/\//i.test(u), 'Only http(s) URLs');
 
-function isLoopback(url: string): boolean {
+export function isLoopback(url: string): boolean {
   try {
     const host = new URL(url).hostname;
     return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
@@ -84,7 +84,7 @@ interface PageObservation {
   screenshot: { id: string; name: string } | null;
 }
 
-function observe(page: Page, origin: string, sameOriginOnly: boolean) {
+export function observe(page: Page, origin: string, sameOriginOnly: boolean) {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedRequests: PageObservation['failedRequests'] = [];
@@ -104,18 +104,35 @@ function observe(page: Page, origin: string, sameOriginOnly: boolean) {
   return { consoleErrors, pageErrors, failedRequests };
 }
 
-async function saveScreenshot(ctx: OperationContext, page: Page, name: string): Promise<{ id: string; name: string } | null> {
-  const png = await page.screenshot({ fullPage: false, type: 'png' });
-  if (ctx.artifacts) return ctx.artifacts.write({ name, type: 'screenshot', content: png, mime: 'image/png' });
+/** Largest picture handed to a model; bigger ones are still saved, just not shown. */
+const MAX_MODEL_IMAGE_BYTES = 3 * 1024 * 1024;
+
+export interface Capture {
+  /** Where the file was kept: a task artifact, or a scratch file outside a task. */
+  saved: { id: string; name: string } | null;
+  /** The same picture for the model, or null when it is too large to send. */
+  image: ResultImage | null;
+}
+
+export async function captureScreenshot(ctx: OperationContext, page: Page, name: string, fullPage = false): Promise<Capture> {
+  const png = await page.screenshot({ fullPage, type: 'png' });
+  const image: ResultImage | null = png.length <= MAX_MODEL_IMAGE_BYTES ? { name, mime: 'image/png', data: png } : null;
+  if (ctx.artifacts) return { saved: await ctx.artifacts.write({ name, type: 'screenshot', content: png, mime: 'image/png' }), image };
   const dir = path.join(ctx.tempDir, 'screenshots');
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, name);
   const { writeFile } = await import('node:fs/promises');
   await writeFile(file, png);
-  return { id: file, name };
+  return { saved: { id: file, name }, image };
 }
 
-async function checkAt(ctx: OperationContext, browser: Browser, input: { url: string; waitUntil: 'load' | 'domcontentloaded' | 'networkidle'; settleMs: number; sameOriginOnly: boolean; screenshot: boolean; timeoutSec: number }, viewport: ViewportName): Promise<PageObservation> {
+async function saveScreenshot(ctx: OperationContext, page: Page, name: string, images?: ResultImage[]): Promise<{ id: string; name: string } | null> {
+  const shot = await captureScreenshot(ctx, page, name);
+  if (images && shot.image) images.push(shot.image);
+  return shot.saved;
+}
+
+async function checkAt(ctx: OperationContext, browser: Browser, input: { url: string; waitUntil: 'load' | 'domcontentloaded' | 'networkidle'; settleMs: number; sameOriginOnly: boolean; screenshot: boolean; timeoutSec: number }, viewport: ViewportName, images?: ResultImage[]): Promise<PageObservation> {
   const vp = VIEWPORTS[viewport];
   const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, isMobile: vp.isMobile, hasTouch: vp.isMobile, deviceScaleFactor: 1 });
   try {
@@ -140,7 +157,7 @@ async function checkAt(ctx: OperationContext, browser: Browser, input: { url: st
     const horizontalOverflow = await page.evaluate(() => (globalThis as any).document.documentElement.scrollWidth > (globalThis as any).innerWidth + 1).catch(() => false);
     const title = await page.title().catch(() => '');
     const safeName = new URL(input.url).pathname.replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '') || 'root';
-    const screenshot = input.screenshot ? await saveScreenshot(ctx, page, `${safeName}-${viewport}.png`).catch(() => null) : null;
+    const screenshot = input.screenshot ? await saveScreenshot(ctx, page, `${safeName}-${viewport}.png`, images).catch(() => null) : null;
     return { viewport, url: input.url, status, title: redact(title), ...seen, timing, horizontalOverflow, screenshot };
   } finally {
     await context.close();
@@ -161,7 +178,8 @@ export interface CheckPageInput {
 export async function checkPage(ctx: OperationContext, input: CheckPageInput): Promise<OperationResult> {
   return withBrowser(async (browser) => {
     const pages: PageObservation[] = [];
-    for (const viewport of input.viewports) pages.push(await checkAt(ctx, browser, input, viewport));
+    const images: ResultImage[] = [];
+    for (const viewport of input.viewports) pages.push(await checkAt(ctx, browser, input, viewport, images));
     const problems = pages.flatMap((p) => [
       ...(p.status !== null && p.status >= 400 ? [`${p.viewport}: HTTP ${p.status}`] : []),
       ...(p.status === null && p.pageErrors.length === 0 ? [`${p.viewport}: no response`] : []),
@@ -178,6 +196,7 @@ export async function checkPage(ctx: OperationContext, input: CheckPageInput): P
       evidence,
       artifacts: pages.flatMap((p) => (p.screenshot ? [p.screenshot] : [])),
       networkTargets: [new URL(input.url).host],
+      ...(images.length ? { images } : {}),
       ...(problems.length ? { error: { code: 'FAILED' as const, message: problems.slice(0, 5).join('; ') } } : {}),
     };
   });
@@ -200,7 +219,7 @@ const flowStep = z.discriminatedUnion('action', [
 ]);
 type FlowStep = z.infer<typeof flowStep>;
 
-async function runStep(ctx: OperationContext, page: Page, step: FlowStep, log: string[], artifacts: Array<{ id: string; name: string }>): Promise<void> {
+async function runStep(ctx: OperationContext, page: Page, step: FlowStep, log: string[], artifacts: Array<{ id: string; name: string }>, images: ResultImage[]): Promise<void> {
   switch (step.action) {
     case 'goto':
       await page.goto(step.url, { waitUntil: 'load' });
@@ -257,7 +276,7 @@ async function runStep(ctx: OperationContext, page: Page, step: FlowStep, log: s
       return;
     }
     case 'screenshot': {
-      const shot = await saveScreenshot(ctx, page, `${step.name}.png`);
+      const shot = await saveScreenshot(ctx, page, `${step.name}.png`, images);
       if (shot) artifacts.push(shot);
       log.push(`screenshot ${step.name}`);
       return;
@@ -273,9 +292,9 @@ async function runStep(ctx: OperationContext, page: Page, step: FlowStep, log: s
   }
 }
 
-const sessionName = z.string().min(1).max(60).regex(/^[\w-]+$/);
+export const sessionName = z.string().min(1).max(60).regex(/^[\w-]+$/);
 
-function sessionFile(ctx: OperationContext, name: string): string {
+export function sessionFile(ctx: OperationContext, name: string): string {
   return path.join(ctx.stateDir, 'browser-sessions', `${name}.json`);
 }
 
@@ -288,11 +307,12 @@ async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> 
   }
 }
 
-export function browserProvider(): ToolProvider {
+/** `extra`: more operations on the same browser (the interactive pages in browser-session.ts). */
+export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
   return {
     id: 'playwright',
     name: 'Playwright',
-    description: 'Headless Chromium for page checks, flows, screenshots and accessibility scans.',
+    description: 'Headless Chromium for page checks, flows, screenshots, accessibility scans, pages an agent keeps open and drives step by step, and reading web pages.',
     category: 'browser',
     async detect(): Promise<ToolDetection> {
       let version: string | null;
@@ -326,13 +346,14 @@ export function browserProvider(): ToolProvider {
       operation({
         id: 'browser.screenshot',
         title: 'Screenshot a page',
-        description: 'Capture a page at a viewport.',
+        description: 'Capture a page at a viewport; the picture is returned for you to look at.',
         input: z.object({ url: httpUrl, viewport: z.enum(['desktop', 'phone', 'tablet']).default('desktop'), timeoutSec: z.number().int().min(5).max(120).default(30) }),
         level: 1,
         async run(input, ctx) {
           return withBrowser(async (browser) => {
-            const o = await checkAt(ctx, browser, { url: input.url, waitUntil: 'load', settleMs: 500, sameOriginOnly: true, screenshot: true, timeoutSec: input.timeoutSec }, input.viewport);
-            return { ok: Boolean(o.screenshot), summary: o.screenshot ? `Saved ${o.screenshot.name}` : 'Screenshot failed', artifacts: o.screenshot ? [o.screenshot] : [], output: { status: o.status, title: o.title } };
+            const images: ResultImage[] = [];
+            const o = await checkAt(ctx, browser, { url: input.url, waitUntil: 'load', settleMs: 500, sameOriginOnly: true, screenshot: true, timeoutSec: input.timeoutSec }, input.viewport, images);
+            return { ok: Boolean(o.screenshot), summary: o.screenshot ? `Saved ${o.screenshot.name}` : 'Screenshot failed', artifacts: o.screenshot ? [o.screenshot] : [], output: { status: o.status, title: o.title }, ...(images.length ? { images } : {}) };
           });
         },
       }),
@@ -364,6 +385,7 @@ export function browserProvider(): ToolProvider {
             context.setDefaultTimeout(Math.min(30_000, input.timeoutSec * 1000));
             const log: string[] = [];
             const artifacts: Array<{ id: string; name: string }> = [];
+            const images: ResultImage[] = [];
             try {
               const page = await context.newPage();
               const seen = observe(page, new URL(input.url).origin, true);
@@ -371,10 +393,10 @@ export function browserProvider(): ToolProvider {
               let failedAt: string | null = null;
               for (const [i, step] of input.steps.entries()) {
                 try {
-                  await runStep(ctx, page, step, log, artifacts);
+                  await runStep(ctx, page, step, log, artifacts, images);
                 } catch (error) {
                   failedAt = `step ${i + 1} (${step.action}): ${redact((error as Error).message).split('\n')[0]}`;
-                  artifacts.push(...[await saveScreenshot(ctx, page, `flow-failure-step-${i + 1}.png`).catch(() => null)].filter((a): a is { id: string; name: string } => a !== null));
+                  artifacts.push(...[await saveScreenshot(ctx, page, `flow-failure-step-${i + 1}.png`, images).catch(() => null)].filter((a): a is { id: string; name: string } => a !== null));
                   break;
                 }
               }
@@ -391,6 +413,7 @@ export function browserProvider(): ToolProvider {
                 output: { steps: log, problems, failedRequests: seen.failedRequests, finalUrl: redact(page.url()) },
                 evidence: [`flow on ${input.url}: ${log.length}/${input.steps.length} steps${failedAt ? ` · failed at ${failedAt}` : ' passed'}`],
                 artifacts,
+                ...(images.length ? { images: images.slice(-3) } : {}),
                 ...(ok ? {} : { error: { code: 'FAILED' as const, message: failedAt ?? problems[0] ?? 'Page error' } }),
               };
             } finally {
@@ -454,7 +477,7 @@ export function browserProvider(): ToolProvider {
           });
         },
       }),
+      ...extra,
     ],
   };
 }
-

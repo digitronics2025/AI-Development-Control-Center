@@ -7,6 +7,7 @@ import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type Eve
 import {
   assessVerification,
   classifyFailure,
+  closeBrowserPages,
   collectEnvironment,
   declaredDependencies,
   environmentMarkdown,
@@ -395,6 +396,8 @@ export class EngineTooling {
   async cleanup(task: TaskRecord, repo: RepositoryRecord | null, reason: string): Promise<string[]> {
     const lines: string[] = [];
     this.d.tools.closeSessionsForTask(task.id);
+    const pagesClosed = await closeBrowserPages(task.id).catch(() => 0);
+    if (pagesClosed) lines.push(`Closed ${pagesClosed} browser page(s) the task left open`);
     const stopped = await this.d.processes.stopForTask(task.id, reason);
     if (stopped) {
       lines.push(`Stopped ${stopped} background process(es) the task started`);
@@ -410,6 +413,7 @@ export class EngineTooling {
   }
 
   async stopProcesses(taskId: string, reason: string): Promise<void> {
+    await closeBrowserPages(taskId).catch(() => 0);
     const stopped = await this.d.processes.stopForTask(taskId, reason).catch(() => 0);
     await this.d.terminals.closeForTask(taskId).catch(() => undefined);
     if (stopped) this.event(taskId, 'PROCESS_STOPPED', `Stopped ${stopped} background process(es): ${reason}`, {});

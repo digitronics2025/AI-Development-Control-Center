@@ -11,6 +11,8 @@ import {
   policyCeiling,
   profileForRepository,
   profileIncludes,
+  profileRank,
+  PROFILES,
   projectType,
   ToolRegistry,
   ToolRouter,
@@ -108,6 +110,24 @@ describe('profiles', () => {
     expect(profileIncludes('analysis', 'fs.write')).toBe(true); // level, not profile, stops writes in Analyze stages
     expect(profileIncludes('general', 'mcp.github.create_issue')).toBe(false);
     expect(profileIncludes('operator', 'mcp.github.create_issue')).toBe(true);
+  });
+
+  it('lets every stage look at pages and read the web, and only building stages act on pages', () => {
+    for (const id of ['analysis', 'general', 'web-development', 'cloudflare-worker'] as const) {
+      for (const cap of ['browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'web.search', 'web.read']) expect(profileIncludes(id, cap), `${id} ${cap}`).toBe(true);
+    }
+    expect(profileIncludes('analysis', 'browser.act')).toBe(false);
+    expect(profileIncludes('analysis', 'browser.evaluate')).toBe(false);
+    expect(profileIncludes('web-development', 'browser.act')).toBe(true);
+    expect(profileIncludes('python', 'web.search')).toBe(true);
+  });
+
+  it('ranks a profile’s speciality before general tools, and escalations last', () => {
+    expect(profileRank('cloudflare-worker', 'cloudflare.logs_query')).toBe(0);
+    expect(profileRank('cloudflare-worker', 'browser.open')).toBeLessThan(profileRank('cloudflare-worker', 'process.start'));
+    expect(profileRank('cloudflare-worker', 'process.start')).toBeLessThan(profileRank('cloudflare-worker', 'github.pr_create'));
+    expect(profileRank('web-development', 'android.install_apk')).toBe(PROFILES['web-development'].include.length);
+    expect(profileRank('operator', 'git.push')).toBe(0);
   });
 });
 

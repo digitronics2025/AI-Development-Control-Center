@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '@acc/executor';
 import { redact } from '@acc/security';
@@ -82,6 +82,51 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+const CF_API = 'https://api.cloudflare.com/client/v4';
+
+/** A value from the repository's Wrangler config (`name`, `account_id`), for defaults only. */
+export function wranglerConfigValue(cwd: string, key: 'name' | 'account_id'): string | null {
+  for (const file of ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml']) {
+    let text: string;
+    try {
+      text = readFileSync(path.join(cwd, file), 'utf8');
+    } catch {
+      continue;
+    }
+    const m = file.endsWith('.toml') ? new RegExp(`^\\s*${key}\\s*=\\s*"([^"]+)"`, 'm').exec(text) : new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`).exec(text);
+    if (m) return m[1]!;
+  }
+  return null;
+}
+
+async function cfApi(ctx: OperationContext, token: string, route: string, body?: unknown): Promise<{ ok: boolean; status: number; json: any }> {
+  const res = await fetch(`${CF_API}${route}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(60_000)]),
+  });
+  const json = (await res.json().catch(() => ({}))) as { success?: boolean };
+  return { ok: res.ok && json.success !== false, status: res.status, json };
+}
+
+interface LogEvent {
+  timestamp?: number;
+  source?: { level?: string; message?: unknown } | string;
+  $metadata?: { service?: string; level?: string; message?: string; error?: string; trigger?: string };
+  $workers?: { scriptName?: string; event?: { response?: { status?: number } } };
+}
+
+/** One readable line per stored log event: time, level, Worker, trigger, message. */
+export function logLine(e: LogEvent): string {
+  const m = e.$metadata ?? {};
+  const when = e.timestamp ? new Date(e.timestamp).toISOString().replace('.000Z', 'Z') : '?';
+  const source = typeof e.source === 'object' && e.source ? e.source.message : e.source;
+  const text = String(m.error ?? m.message ?? (typeof source === 'string' ? source : JSON.stringify(source ?? ''))).replace(/\s+/g, ' ').slice(0, 400);
+  const status = e.$workers?.event?.response?.status;
+  return `${when} [${m.level ?? 'info'}] ${m.service ?? e.$workers?.scriptName ?? '?'}${m.trigger ? ` ${m.trigger}` : ''}${status ? ` → ${status}` : ''} :: ${text}`;
 }
 
 export function cloudflareProvider(): ToolProvider {
@@ -226,6 +271,65 @@ export function cloudflareProvider(): ToolProvider {
           const r = await wrangler(ctx, ['tail', '--format', 'json', ...envFlags(input.environment)], input.durationSec * 1000);
           const events = r.stdout.split('\n').map((l) => parseJson(l)).filter(Boolean);
           return { ok: true, summary: `${events.length} log event(s) in ${input.durationSec}s`, output: { events: events.slice(-200) }, stderr: clip(r.stderr, 4000) };
+        },
+      }),
+      operation({
+        id: 'cloudflare.logs_query',
+        title: 'Search past Worker logs',
+        description:
+          'Search a Worker’s stored logs (Workers Observability) over the last minutes, hours or days: errors, console output, requests. `sinceMinutes` sets how far back (default 60; 1440 = a day, 10080 = a week); `worker` defaults to the repository’s Wrangler name; `search` finds text anywhere in an event; `onlyErrors` keeps errors. The summary states the window searched. Use it to find why production failed earlier; cloudflare.tail only shows what happens now.',
+        input: z.object({
+          worker: z.string().min(1).max(100).regex(/^[\w-]+$/).optional(),
+          allWorkers: z.boolean().default(false),
+          sinceMinutes: z.number().int().min(1).max(7 * 24 * 60).default(60),
+          search: z.string().min(1).max(200).optional(),
+          onlyErrors: z.boolean().default(false),
+          limit: z.number().int().min(1).max(200).default(50),
+          accountId: z.string().regex(/^[0-9a-f]{32}$/).optional(),
+        }),
+        level: 2,
+        classify: () => ({ reasons: ['Reads Worker logs stored by Cloudflare'], effects: ['network'] }),
+        credentials: CREDENTIALS,
+        async run(input, ctx) {
+          const token = ctx.env.CLOUDFLARE_API_TOKEN;
+          if (!token) return failure('AUTH_REQUIRED', 'No Cloudflare API token: store one with Workers Observability read access in Tools → Credentials (kind cloudflare)');
+          let account = input.accountId ?? ctx.env.CLOUDFLARE_ACCOUNT_ID ?? wranglerConfigValue(ctx.cwd, 'account_id');
+          if (!account) {
+            const r = await cfApi(ctx, token, '/accounts?per_page=50');
+            if (!r.ok) return failure(r.status === 401 || r.status === 403 ? 'AUTH_REQUIRED' : 'FAILED', `Cloudflare refused the account list (HTTP ${r.status})`);
+            const accounts = (r.json?.result ?? []) as Array<{ id: string; name: string }>;
+            if (accounts.length !== 1) return failure('INVALID_INPUT', `Which account? Pass accountId: ${accounts.map((a) => `${a.id} (${redact(a.name)})`).join(', ') || 'none visible to this token'}`);
+            account = accounts[0]!.id;
+          }
+          const worker = input.allWorkers ? null : (input.worker ?? wranglerConfigValue(ctx.cwd, 'name'));
+          const to = Date.now();
+          const filters = [
+            ...(worker ? [{ key: '$metadata.service', operation: 'eq', type: 'string', value: worker }] : []),
+            ...(input.onlyErrors ? [{ key: '$metadata.level', operation: 'eq', type: 'string', value: 'error' }] : []),
+          ];
+          const r = await cfApi(ctx, token, `/accounts/${account}/workers/observability/telemetry/query`, {
+            queryId: `acc-${ctx.executionId}`.slice(0, 60),
+            timeframe: { from: to - input.sinceMinutes * 60_000, to },
+            view: 'events',
+            limit: input.limit,
+            parameters: { filters, filterCombination: 'and', ...(input.search ? { needle: { value: input.search, isRegex: false, matchCase: false } } : {}) },
+          });
+          if (!r.ok) {
+            const why = redact(((r.json?.errors ?? []) as Array<{ message: string }>).map((e) => e.message).join('; ') || `HTTP ${r.status}`);
+            return failure(r.status === 401 || r.status === 403 ? 'AUTH_REQUIRED' : 'FAILED', `Cloudflare refused the log search: ${why}${r.status === 403 ? ' (the token needs Workers Observability read)' : ''}`);
+          }
+          const events = ((r.json?.result?.events?.events ?? []) as LogEvent[]).sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+          const errors = events.filter((e) => e.$metadata?.level === 'error').length;
+          const span = input.sinceMinutes >= 120 ? `${Math.round(input.sinceMinutes / 60)} h` : `${input.sinceMinutes} min`;
+          const scope = `${worker ?? 'all Workers'}, last ${span}${input.search ? `, matching "${redact(input.search)}"` : ''}${input.onlyErrors ? ', errors only' : ''}`;
+          return {
+            ok: true,
+            summary: `${events.length} log event(s), ${errors} error(s) — ${scope}`,
+            stdout: events.map((e) => redact(logLine(e))).join('\n') || '(no matching events)',
+            output: { worker, account, count: events.length, errors },
+            evidence: [`logs ${scope}: ${events.length} event(s), ${errors} error(s)`],
+            networkTargets: ['api.cloudflare.com'],
+          };
         },
       }),
       operation({

@@ -188,6 +188,12 @@ export const TOOL_ERROR_CODES = [
 ] as const;
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number];
 
+export interface ResultImage {
+  name: string;
+  mime: 'image/png' | 'image/jpeg';
+  data: Buffer;
+}
+
 export interface OperationResult<O = unknown> {
   ok: boolean;
   /** One line for timelines and the model. */
@@ -201,6 +207,8 @@ export interface OperationResult<O = unknown> {
   networkTargets?: string[];
   /** Lines that count as verification evidence (what was observed, not claimed). */
   evidence?: string[];
+  /** Pictures for the model to look at (a screenshot it asked for). Returned to the caller only, never stored. */
+  images?: ResultImage[];
   error?: { code: ToolErrorCode; message: string };
 }
 

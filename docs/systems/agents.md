@@ -161,6 +161,7 @@ with `ACC_SIMULATED_AGENTS=1` and labelled in the UI. Markers in a task
 description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:usage-limit]`, `[sim:fail:<role>]`, `[sim:slow]`,
 `[sim:needs-operator]` (verifier names an operator decision),
+`[sim:needs-decision]` (implementer stops with `BLOCKED ON OPERATOR:` until a directive says `ANSWER:`),
 `[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 

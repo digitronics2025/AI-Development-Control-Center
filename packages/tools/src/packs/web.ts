@@ -1,5 +1,6 @@
 import { redact } from '@acc/security';
 import { z } from 'zod';
+import { guardedFetch, readCapped, RedirectRefused } from '../net-guard.js';
 import { failure, operation, type OperationResult, type ToolProvider } from '../sdk.js';
 import { httpUrl, isLoopback } from './browser.js';
 
@@ -90,7 +91,7 @@ async function search(input: { query: string; max: number; site?: string; region
   } catch (error) {
     return failure('UNAVAILABLE', `Search could not reach DuckDuckGo: ${(error as Error & { cause?: Error }).cause?.message ?? (error as Error).message}`);
   }
-  const html = await res.text();
+  const html = (await readCapped(res, 4 * 1024 * 1024)).buffer.toString('utf8');
   if (!res.ok) return failure('UNAVAILABLE', `DuckDuckGo answered HTTP ${res.status}; try again in a minute`);
   const hits = parseSearchResults(html).slice(0, input.max);
   if (!hits.length) {
@@ -147,18 +148,21 @@ export function webProvider(): ToolProvider {
         classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
         async run(input, ctx) {
           let res: Response;
+          let answeredBy: string;
           try {
-            res = await fetch(input.url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,text/plain;q=0.9,*/*;q=0.5' }, redirect: 'follow', signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(input.timeoutSec * 1000)]) });
+            // Each redirect hop is judged: never into the Control Center or from the internet into this machine (audit F-31).
+            ({ res, url: answeredBy } = await guardedFetch(input.url, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,text/plain;q=0.9,*/*;q=0.5' }, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(input.timeoutSec * 1000)]) }, { crossOrigin: 'follow' }));
           } catch (error) {
+            if (error instanceof RedirectRefused) return failure('DENIED', `${redact(input.url)}: ${error.message}`);
             return failure('FAILED', `Could not fetch ${redact(input.url)}: ${(error as Error & { cause?: Error }).cause?.message ?? (error as Error).message}`);
           }
           const type = res.headers.get('content-type') ?? '';
-          const raw = await res.text();
+          const raw = (await readCapped(res, 8 * 1024 * 1024)).buffer.toString('utf8');
           const { title, text } = /html|xml/i.test(type) ? htmlToText(raw) : { title: '', text: raw.trim() };
           const clean = redact(text);
           const body = clean.length > input.maxChars ? `${clean.slice(0, input.maxChars)}\n… (cut at ${input.maxChars} of ${clean.length} characters; raise maxChars to read more)` : clean;
           const links = input.links && /html/i.test(type) ? [...raw.matchAll(/<a\s[^>]*href="(https?:[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => ({ href: decodeEntities(m[1]!), text: stripTags(m[2]!).slice(0, 120) })).filter((l, i, all) => l.text && all.findIndex((o) => o.href === l.href) === i).slice(0, 60) : [];
-          const finalUrl = redact(res.url || input.url);
+          const finalUrl = redact(answeredBy || input.url);
           return {
             ok: res.ok,
             summary: `${res.ok ? 'Read' : `HTTP ${res.status} from`} ${finalUrl}${title ? ` — ${redact(title)}` : ''} (${clean.length} characters)`,

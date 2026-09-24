@@ -44,12 +44,43 @@ function backupDir(ctx: OperationContext): string {
   return path.join(ctx.stateDir, 'backups', 'sqlite');
 }
 
+/**
+ * A Postgres connection string as libpq environment variables, so the password
+ * never appears on psql's command line, where the process table and any
+ * process listing show it (audit F-16). Returns the non-secret remainder to
+ * pass as `-d` when the string is in key=value form.
+ */
+export function postgresEnv(connection: string): { env: Record<string, string>; dbname: string | null } {
+  const env: Record<string, string> = {};
+  if (/^postgres(?:ql)?:\/\//i.test(connection)) {
+    const url = new URL(connection);
+    const decode = (v: string) => decodeURIComponent(v);
+    if (url.hostname) env.PGHOST = decode(url.hostname.replace(/^\[|\]$/g, ''));
+    if (url.port) env.PGPORT = url.port;
+    if (url.username) env.PGUSER = decode(url.username);
+    if (url.password) env.PGPASSWORD = decode(url.password);
+    const db = decode(url.pathname.replace(/^\//, ''));
+    if (db) env.PGDATABASE = db;
+    const params: Record<string, string> = { host: 'PGHOST', port: 'PGPORT', user: 'PGUSER', password: 'PGPASSWORD', dbname: 'PGDATABASE', sslmode: 'PGSSLMODE', sslrootcert: 'PGSSLROOTCERT', application_name: 'PGAPPNAME', options: 'PGOPTIONS', connect_timeout: 'PGCONNECT_TIMEOUT', target_session_attrs: 'PGTARGETSESSIONATTRS' };
+    for (const [key, value] of url.searchParams) if (params[key]) env[params[key]!] = value;
+    return { env, dbname: null };
+  }
+  // key=value form: take the password out; the rest names no secret.
+  const withoutPassword = connection.replace(/(?:^|\s)password\s*=\s*('(?:[^'\\]|\\.)*'|\S+)/i, (_m, value: string) => {
+    env.PGPASSWORD = value.startsWith("'") ? value.slice(1, -1).replace(/\\(.)/g, '$1') : value;
+    return '';
+  });
+  return { env, dbname: withoutPassword.trim() || null };
+}
+
 async function cliQuery(ctx: OperationContext, kind: 'postgres' | 'mysql', sql: string, readOnly: boolean): Promise<OperationResult> {
   const env = { ...ctx.env, ...(await ctx.credentials?.envFor([kind])) };
   if (kind === 'postgres') {
     if (!env.DATABASE_URL) return failure('AUTH_REQUIRED', 'Store a Postgres connection string as a `postgres` credential (Tools → Credentials)');
     const script = `${readOnly ? 'SET default_transaction_read_only = on;\n' : ''}${sql}`;
-    const r = await run(ctx.detection('psql')?.path ?? 'psql', ['--no-psqlrc', '-X', '-v', 'ON_ERROR_STOP=1', '--csv', '-d', env.DATABASE_URL], { cwd: ctx.cwd, env, stdin: script, timeoutMs: 120_000 });
+    const pg = postgresEnv(env.DATABASE_URL);
+    const { DATABASE_URL: _connection, ...rest } = env;
+    const r = await run(ctx.detection('psql')?.path ?? 'psql', ['--no-psqlrc', '-X', '-v', 'ON_ERROR_STOP=1', '--csv', ...(pg.dbname ? ['-d', pg.dbname] : [])], { cwd: ctx.cwd, env: { ...rest, ...pg.env }, stdin: script, timeoutMs: 120_000 });
     if (r.spawnError) return failure('NOT_INSTALLED', 'psql is not installed');
     return r.code === 0 ? { ok: true, summary: `${Math.max(0, r.stdout.split('\n').length - 1)} row(s)`, stdout: redact(r.stdout).slice(0, 64_000) } : failure('FAILED', redact(r.stderr).slice(0, 500));
   }

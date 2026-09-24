@@ -29,6 +29,7 @@ export * from './verification.js';
 export * from './environment.js';
 export * from './health.js';
 export * from './paths.js';
+export * from './net-guard.js';
 export * from './sql.js';
 export { expandPackageScripts } from './package-scripts.js';
 export { clip, detectExecutable, firstVersion, localBin, run as runCommand } from './detect.js';

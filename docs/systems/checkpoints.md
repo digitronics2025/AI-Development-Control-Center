@@ -60,4 +60,10 @@ Repository Git mode **Isolated worktree** (or `worktree: true` on a task):
 A repository with no commits cannot have a worktree; the task falls back to a
 task branch and says so.
 
-Last verified: 2026-09-23
+A task across repositories has one worktree per repository inside
+`<data>/workspaces/<task>/<folder>`, all created before its first stage; a
+failure removes what that attempt made and parks the task. Its checkpoints
+hold one ref per repository (`task_checkpoints.parts`) and restore all or
+nothing ([multi-repository-tasks.md](multi-repository-tasks.md)).
+
+Last verified: 2026-09-24

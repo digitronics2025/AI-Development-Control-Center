@@ -68,6 +68,10 @@ checkpoint. Used by [chairman.md](chairman.md#checkpoints).
   next task's starting point. When the baseline branch is another task's
   (`taskIdFromBranch`), a `GIT_BRANCH` event and the report's Git section say
   so and ask for that task to be merged first. Repositories in Git mode *Isolated worktree* avoid this: each task has its own checkout ([checkpoints.md](checkpoints.md#worktrees)).
+- `deleteBranchIfAt(repo, branch, commit)` deletes a branch only while it still
+  points at `commit` (`update-ref -d`, compare-and-delete); `diffSince` takes a
+  `prefix` so one patch can cover several repositories
+  ([multi-repository-tasks.md](multi-repository-tasks.md)).
 
 ## Repository Source Control
 
@@ -80,4 +84,4 @@ and are documented in [source-control.md](source-control.md). `git()` takes
 `UNATTENDED_REMOTE_ENV` (`GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`)
 so background fetches fail instead of opening a credential window.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

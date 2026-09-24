@@ -250,7 +250,10 @@ and [git.md](git.md#checkpoints). All of it works on the task's working
 directory — its worktree when isolated. "Roll back the last change" restores the
 checkpoint taken before the latest write stage; a safety checkpoint is taken
 first. Files dirty at the baseline are never touched; across a commit it
-refuses.
+refuses. A task across repositories checkpoints and restores every repository
+together; evidence labels each repository's paths `<repo:folder>`, and the
+completion gate reads every repository's changes and check kinds
+([multi-repository-tasks.md](multi-repository-tasks.md)).
 
 ## Watchdog ([watchdog.ts](../../apps/orchestrator/src/chairman/watchdog.ts))
 

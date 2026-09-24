@@ -719,7 +719,7 @@ Persist at minimum:
 
 - title
 - description
-- repository
+- repository (and any linked repositories — a task may work across up to eight, each in its own worktree; [docs/systems/multi-repository-tasks.md](docs/systems/multi-repository-tasks.md))
 - workflow profile/version
 - mode
 - current stage
@@ -1151,7 +1151,9 @@ Benefits:
 Do not make worktrees a blocker for the first milestone.
 
 Implemented in the tool layer V2: Git mode *Isolated worktree*
-([docs/systems/checkpoints.md](docs/systems/checkpoints.md#worktrees)).
+([docs/systems/checkpoints.md](docs/systems/checkpoints.md#worktrees)). A task
+across repositories runs in one worktree per repository, side by side in a
+task workspace ([docs/systems/multi-repository-tasks.md](docs/systems/multi-repository-tasks.md)).
 
 ---
 

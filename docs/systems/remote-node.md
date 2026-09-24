@@ -108,8 +108,8 @@ what only the machine may decide: billing mode, raising auto-approve levels, a
 more permissive policy (settings, repository, task), editing a repository's
 commands or dev command, choosing an agent's program (`executablePath`),
 removing the approval step from a workflow stage that has one, adding a
-repository-discovery folder or un-ignoring a removed repository, and
-attachments. Lowering is allowed. Settings are judged as they would be saved
+repository-discovery folder or un-ignoring a removed repository,
+attachments, and a task across several repositories (`linkedRepositoryIds`). Lowering is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
 and a repository override set to `null` is judged by the Settings value it falls
 back to.
@@ -132,8 +132,8 @@ mirrored event, live message, command result and read:
    (stage, execution, logs for subscribed executions, chairman, tools …).
    Anything else — including `hello`, `remote.status` and terminal output of a
    terminal the cloud was not granted — never leaves.
-2. Field rules: repository `path` → `''`, `worktreePath`/`executablePath`/
-   `workdir` → `null`, attachment paths and health `dataDir/host/port` dropped;
+2. Field rules: repository `path` → `''`, `worktreePath`/`workspacePath`/
+   `executablePath`/`workdir` → `null`, attachment paths and health `dataDir/host/port` dropped;
    keys named `env`, `token`, `apiKey`, `secret`, `password`, `authorization`,
    `cookie`, `ciphertext`, `privateKey`… dropped at any depth.
 3. Deep scrub (roots in either Windows or POSIX form, whatever the host):

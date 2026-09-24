@@ -81,7 +81,10 @@ Level 2, in the `cloudflare-worker` profile. `randomBytes` in the orchestrator:
 first; the credential and a `pending_push` link are written in one
 transaction; the result is metadata (name, id, fingerprint, scope, sync state).
 Scope is the calling repository only (an agent's task repository, or the
-repository an operator chose). **Idempotent by name**: a second call returns the
+repository an operator chose). In a task across repositories that is the
+repository whose folder the call names (`cwd`); at the workspace root it is
+refused, and only credentials scoped to every repository are usable there
+([multi-repository-tasks.md](multi-repository-tasks.md#tool-calls)). **Idempotent by name**: a second call returns the
 same secret with `created: false` — a failed sync or deploy never regenerates.
 
 Only application secrets are generated: kind `other` or `http` (a random value

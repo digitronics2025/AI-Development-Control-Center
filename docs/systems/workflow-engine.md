@@ -143,6 +143,9 @@ At most one task works in a repository: a queued task waits while another task
 there is running or has started changing files (has a Git baseline) and is not
 finished. The blocker says which task holds it. Read-only workflows (every
 stage an `agent` at Level 1, e.g. `staged-review`) neither wait nor hold.
+A task across repositories holds all of them and waits for any task sharing
+one; its tests, App check, Git checkpoint, completion and cancel run per
+repository ([multi-repository-tasks.md](multi-repository-tasks.md)).
 A stage with permission level ≥ 2 registers as a writer with the shared
 [RepositoryCoordinator](../../apps/orchestrator/src/services/repository-coordinator.ts):
 it waits for a Source Control mutation in flight, and Source Control refuses

@@ -60,7 +60,9 @@ a reviewed program list only, [learning.md](learning.md#programs)). The orchestr
 
 ## The execution door ([service.ts](../../apps/orchestrator/src/tools/service.ts))
 
-`ToolService.invoke()` is the only way anything runs a tool:
+`ToolService.invoke()` is the only way anything runs a tool (in a task across
+repositories it first narrows the call to the repository its `cwd`/`directory`
+names — roots and credentials included, [multi-repository-tasks.md](multi-repository-tasks.md#tool-calls)):
 
 1. route → 2. validate input → 3. classify (`classify()` may raise or lower
 the level: a recursive delete is Level 5, a read-only shell script Level 1) →

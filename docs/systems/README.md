@@ -19,6 +19,7 @@
 | Tool system (registry, router, execution door, sessions, processes) | [tool-system.md](tool-system.md) | `packages/tools`, `apps/orchestrator/src/tools` |
 | Shells (PowerShell, CMD, Bash, WSL) | [powershell.md](powershell.md) | `packages/executor/src/shells.ts`, `packages/tools/src/packs/shell.ts` |
 | Interactive terminals | [pty.md](pty.md) | `packages/pty`, `apps/orchestrator/src/tools/terminals.ts` |
+| Tasks across repositories (task workspace, linked repositories, per-repository stages) | [multi-repository-tasks.md](multi-repository-tasks.md) | `apps/orchestrator/src/engine/task-repositories.ts`, `apps/orchestrator/src/engine` |
 | Checkpoints and worktrees | [checkpoints.md](checkpoints.md) | `apps/orchestrator/src/chairman/checkpoints.ts`, `packages/git/src/worktrees.ts` |
 | Tool-level recovery | [recovery.md](recovery.md) | `packages/tools/src/recovery.ts`, `apps/orchestrator/src/engine/runners.ts` |
 | MCP (Control Center server, gateway) | [mcp.md](mcp.md) | `packages/mcp`, `apps/orchestrator/src/tools/mcp.ts` |

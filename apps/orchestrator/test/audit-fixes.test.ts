@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setSelfReferences } from '@acc/security';
 import type { ToolScope } from '../src/tools/service.js';
-import { createTestApp, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 /**
  * Regression tests for the 2026-09-24 pre-release audit
@@ -114,4 +114,33 @@ describe('F-06: READY needs a passing test run after the last change', async () 
     const r = report([stage('impl', 'implementer', 'agent', 'SUCCESS', 1), stage('t1', 'tester', 'tests', 'SUCCESS', 2)], [run('t1', 'not_run')]);
     expect(r.finalStatus).toBe('NEEDS_USER_ACTION');
   });
+});
+
+describe('F-09: an approval for a stage the workflow always asks about covers one attempt', () => {
+  it('asks again when the approved staging deploy runs a second time', async () => {
+    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "0"' } }));
+    const repo = (await t.api('GET', `/api/repositories/${repoId}`)).body;
+    await t.api('PATCH', `/api/repositories/${repoId}`, {
+      commands: [
+        ...repo.commands,
+        { id: 'staging', name: 'staging deploy', command: 'node -e "console.log(1)"', kind: 'deploy-staging', enabled: true, timeoutSec: 60 },
+        { id: 'smoke', name: 'smoke', command: 'node -e "process.exit(1)"', kind: 'smoke', enabled: true, timeoutSec: 60 },
+      ],
+    });
+    const id = await createTask(t, repoId, 'Ship it twice', { workflowId: 'full-autopilot' });
+    await waitForStatus(t, id, ['WAITING_FOR_USER']);
+    const pendingFor = async () => (await t.api('GET', '/api/approvals?status=pending')).body.filter((a: { taskId: string }) => a.taskId === id);
+    const [first] = await pendingFor();
+    expect(first).toMatchObject({ kind: 'stage_permission', stageKey: 'staging' });
+    await t.api('POST', `/api/approvals/${first.id}/approve`, {});
+    await waitFor(() => t.services.store.latestStage(id, 'staging'), (s) => s?.status === 'SUCCESS', 60_000);
+    // The smoke test fails and the task stops; running staging again is a second deploy and must
+    // wait for a second yes.
+    await waitForStatus(t, id, ['FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect((await t.api('POST', `/api/tasks/${id}/retry`, { stageKey: 'staging' })).status).toBeLessThan(300);
+    const again = await waitFor(pendingFor, (list) => list.some((a: { id: string; stageKey: string }) => a.id !== first.id && a.stageKey === 'staging'), 60_000);
+    expect(again.length).toBe(1);
+    expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'staging' && s.status === 'SUCCESS')).toHaveLength(1);
+    await t.api('POST', `/api/tasks/${id}/cancel`);
+  }, 120_000);
 });

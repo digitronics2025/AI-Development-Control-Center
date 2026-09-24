@@ -5,7 +5,7 @@ import type { ApiClient, Discovery } from './connection';
 
 type HostMessage =
   | { type: 'openFile'; repositoryPath: string; path: string }
-  | { type: 'openDiff'; taskId: string; path: string }
+  | { type: 'openDiff'; taskId: string; path: string; repositoryId?: string }
   | { type: 'openSourceControlDiff'; repositoryId: string; path: string; mode: 'staged' | 'unstaged' }
   | { type: 'openCommitDiff'; repositoryId: string; sha: string; path: string }
   | { type: 'revealRepository'; repositoryPath: string }
@@ -62,7 +62,8 @@ export async function handleHostMessage(webview: vscode.Webview, api: ApiClient,
       return;
     }
     case 'openDiff': {
-      const { diff } = await api.request<{ diff: string }>('GET', `/api/tasks/${encodeURIComponent(message.taskId)}/diff?path=${encodeURIComponent(message.path)}`);
+      const repository = message.repositoryId ? `&repositoryId=${encodeURIComponent(message.repositoryId)}` : '';
+      const { diff } = await api.request<{ diff: string }>('GET', `/api/tasks/${encodeURIComponent(message.taskId)}/diff?path=${encodeURIComponent(message.path)}${repository}`);
       await untitled(diff || 'No changes in this file.', 'diff');
       return;
     }

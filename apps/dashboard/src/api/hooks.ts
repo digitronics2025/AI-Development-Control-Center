@@ -127,11 +127,12 @@ export function useTaskChanges(id: string, enabled = true) {
 }
 
 /** Diffs are loaded lazily per file (design.md §21). */
-export function useTaskDiff(id: string, path: string | null) {
+export function useTaskDiff(id: string, path: string | null, repositoryId: string | null = null) {
   const api = useApi();
+  const query = new URLSearchParams({ ...(path ? { path } : {}), ...(repositoryId ? { repositoryId } : {}) }).toString();
   return useQuery({
-    queryKey: keys.taskDiff(id, path),
-    queryFn: ({ signal }) => api.get<{ diff: string; truncated: boolean }>(`/api/tasks/${id}/diff${path ? `?path=${encodeURIComponent(path)}` : ''}`, signal),
+    queryKey: keys.taskDiff(id, path, repositoryId),
+    queryFn: ({ signal }) => api.get<{ diff: string; truncated: boolean }>(`/api/tasks/${id}/diff${query ? `?${query}` : ''}`, signal),
     enabled: path !== null,
     staleTime: 5_000,
   });

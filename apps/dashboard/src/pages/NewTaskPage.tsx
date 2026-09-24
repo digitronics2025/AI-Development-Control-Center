@@ -23,6 +23,7 @@ import {
   useHotkey,
 } from '@acc/ui';
 import {
+  MAX_LINKED_REPOSITORIES,
   MODE_HELP,
   PERMISSION_LEVEL_INFO,
   POLICY_MODE_DESCRIPTION,
@@ -90,11 +91,21 @@ export function NewTaskPage() {
   const [maxFixCycles, setMaxFixCycles] = useState<string>('');
   const [policyMode, setPolicyMode] = useState<PolicyMode | undefined>();
   const [worktree, setWorktree] = useState<boolean | undefined>();
+  /** Other repositories the task also works in (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+  const [linkedIds, setLinkedIds] = useState<string[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const repo = repositories.data?.find((r) => r.id === repositoryId);
+  const linkedRepos = linkedIds.map((id) => repositories.data?.find((r) => r.id === id)).filter((r) => r !== undefined);
+  const across = linkedRepos.length > 0;
+  // Across repositories the task takes the most restrictive of their defaults, as the orchestrator does.
+  const selectedRepos = [repo, ...linkedRepos].filter((r) => r !== undefined);
+  const defaultAutoApprove = (selectedRepos.length ? Math.min(...selectedRepos.map((r) => r.autoApproveUpToLevel ?? settings.data?.autoApproveUpToLevel ?? 3)) : (settings.data?.autoApproveUpToLevel ?? 3)) as PermissionLevel;
+  const defaultPolicy: PolicyMode = selectedRepos.length
+    ? POLICY_MODES[Math.min(...selectedRepos.map((r) => POLICY_MODES.indexOf(r.policyMode ?? settings.data?.execution.policyMode ?? 'autopilot')))]!
+    : (settings.data?.execution.policyMode ?? 'autopilot');
   const skillPicker = useSkillPicker(repositoryId, description);
   const effectiveWorkflowId = workflowId ?? repo?.defaultWorkflowId ?? settings.data?.defaultWorkflowId ?? 'normal-development';
   const effectiveMode = mode ?? settings.data?.defaultMode ?? 'discuss';
@@ -128,13 +139,14 @@ export function NewTaskPage() {
         title: title.trim() || undefined,
         description: description.trim(),
         repositoryId: repositoryId!,
+        linkedRepositoryIds: across ? linkedIds : undefined,
         workflowId: effectiveWorkflowId,
         mode: effectiveMode,
         overrides: { roles: cleanRoles, stages: {} },
         autoApproveUpToLevel: autoApprove,
         maxFixCycles: maxFixCycles ? Number(maxFixCycles) : undefined,
         policyMode,
-        worktree,
+        worktree: across ? undefined : worktree,
         attachments: attachments.map(({ name, contentBase64 }) => ({ name, contentBase64 })),
         start,
         routing: cloud ? { ...(runOn === 'auto' && nodeId ? { 'x-acc-node': 'auto', 'x-acc-source-node': nodeId } : {}), ...(queue && !connection.online ? { 'x-acc-queue': '1' } : {}) } : undefined,
@@ -234,6 +246,7 @@ export function NewTaskPage() {
             value={repositoryId}
             onValueChange={(v) => {
               setRepositoryId(v);
+              setLinkedIds((ids) => ids.filter((id) => id !== v));
               setErrors((e) => ({ ...e, repository: '' }));
             }}
             placeholder="Choose a repository"
@@ -246,6 +259,52 @@ export function NewTaskPage() {
             }
           />
         </Field>
+
+        {!cloud && (repositories.data?.length ?? 0) > 1 ? (
+          <Field
+            label="Also work in"
+            optional
+            helper={
+              across
+                ? 'Each repository gets its own isolated copy on a task branch, side by side; the agents change them together. Your folders are not touched.'
+                : 'Add other repositories this change spans, such as a client and its API.'
+            }
+          >
+            <div className="flex flex-col gap-2">
+              {linkedIds.length < MAX_LINKED_REPOSITORIES ? (
+                <Combobox
+                  value={undefined}
+                  onValueChange={(v) => {
+                    if (v && v !== repositoryId && !linkedIds.includes(v)) setLinkedIds((ids) => [...ids, v]);
+                  }}
+                  placeholder="Add a repository"
+                  searchPlaceholder="Search repositories"
+                  options={(repositories.data ?? []).filter((r) => r.id !== repositoryId && !linkedIds.includes(r.id)).map((r) => ({ value: r.id, label: r.name, description: r.path }))}
+                />
+              ) : null}
+              {linkedRepos.length ? (
+                <ul aria-label="Also work in" className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+                  {linkedRepos.map((r) => (
+                    <li key={r.id} className="flex items-center gap-2 px-3 py-1.5">
+                      <FolderGit2 size={14} className="text-fg-secondary" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-body text-fg" title={r.path}>
+                        {r.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setLinkedIds((ids) => ids.filter((id) => id !== r.id))}
+                        aria-label={`Remove ${r.name}`}
+                        className="rounded-sm p-1 text-fg-secondary hover:text-fg focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+                      >
+                        <X size={14} aria-hidden />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          </Field>
+        ) : null}
 
         <Field
           label="Description"
@@ -365,7 +424,7 @@ export function NewTaskPage() {
             </FieldGroup>
             <Field label="Auto-approve up to" helper="Stages above this permission level wait for your approval. Dangerous commands always do.">
               <Select
-                value={String(autoApprove ?? repo?.autoApproveUpToLevel ?? settings.data?.autoApproveUpToLevel ?? 3)}
+                value={String(autoApprove ?? defaultAutoApprove)}
                 onValueChange={(v) => setAutoApprove(Number(v) as PermissionLevel)}
                 options={([1, 2, 3, 4, 5] as const).map((l) => ({ value: String(l), label: `Level ${l} — ${PERMISSION_LEVEL_INFO[l].name}`, description: PERMISSION_LEVEL_INFO[l].description }))}
               />
@@ -373,9 +432,9 @@ export function NewTaskPage() {
             <Field label="Maximum fix cycles" error={errors.maxFixCycles} helper={`After this many review/fix loops the task waits for you. Workflow default: ${workflow?.maxFixCycles ?? 3}.`}>
               <Input inputMode="numeric" value={maxFixCycles} placeholder={String(workflow?.maxFixCycles ?? 3)} onChange={(e) => setMaxFixCycles(e.target.value)} className="w-28" />
             </Field>
-            <Field label="Execution policy" helper={POLICY_MODE_DESCRIPTION[policyMode ?? repo?.policyMode ?? settings.data?.execution.policyMode ?? 'autopilot']}>
+            <Field label="Execution policy" helper={POLICY_MODE_DESCRIPTION[policyMode ?? defaultPolicy]}>
               <Select
-                value={policyMode ?? repo?.policyMode ?? settings.data?.execution.policyMode ?? 'autopilot'}
+                value={policyMode ?? defaultPolicy}
                 onValueChange={(v) => setPolicyMode(v as PolicyMode)}
                 options={POLICY_MODES.map((m) => ({ value: m, label: POLICY_MODE_LABEL[m] }))}
               />
@@ -383,9 +442,13 @@ export function NewTaskPage() {
             <div className="flex items-start justify-between gap-4">
               <span className="flex flex-col">
                 <span className="text-body font-semibold text-fg">Isolate in a worktree</span>
-                <span className="text-small text-fg-secondary">The task works in its own copy on its own branch; your working tree is never touched. Merge the branch afterwards.</span>
+                <span className="text-small text-fg-secondary">
+                  {across
+                    ? 'Always on for a task across repositories: each works in its own copy; your folders are not touched.'
+                    : 'The task works in its own copy on its own branch; your working tree is never touched. Merge the branch afterwards.'}
+                </span>
               </span>
-              <Switch aria-label="Isolate in a worktree" checked={worktree ?? repo?.gitMode === 'worktree'} onCheckedChange={setWorktree} />
+              <Switch aria-label="Isolate in a worktree" checked={across || (worktree ?? repo?.gitMode === 'worktree')} onCheckedChange={setWorktree} disabled={across} />
             </div>
           </div>
         </Disclosure>

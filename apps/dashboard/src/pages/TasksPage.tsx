@@ -21,7 +21,7 @@ import { useRepositories, useTasks } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection } from '../app/runtime';
 import { AssignmentText } from '../components/agents';
-import { railFromSummary } from '../components/task-row';
+import { railFromSummary, repositoryLabel, repositoryNames } from '../components/task-row';
 
 const FILTERS = {
   all: undefined,
@@ -49,7 +49,7 @@ const columns: Column<TaskSummary>[] = [
     ),
     className: 'max-w-[360px]',
   },
-  { key: 'repo', header: 'Repository', sortValue: (t) => t.repositoryName, cell: (t) => <span className="text-fg-secondary">{t.repositoryName}</span> },
+  { key: 'repo', header: 'Repository', sortValue: (t) => t.repositoryName, cell: (t) => <span className="text-fg-secondary" title={repositoryNames(t)}>{repositoryLabel(t)}</span> },
   { key: 'status', header: 'Status', sortValue: (t) => t.status, cell: (t) => <TaskStatusChip status={t.status} size="compact" /> },
   {
     key: 'stage',

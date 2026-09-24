@@ -39,6 +39,7 @@ import { ArtifactsTab } from './ArtifactsTab';
 import { ChairmanButton, ChairmanDrawer } from './ChairmanDrawer';
 import { ChangesTab } from './ChangesTab';
 import { AssignmentDialog, CancelTaskDialog, DirectiveDialog, RerouteDialog } from './dialogs';
+import { repositoryNames } from '../../components/task-row';
 import { TaskInspector } from './Inspector';
 import { ExecutionTab } from './ExecutionTab';
 import { LogsTab } from './LogsTab';
@@ -211,7 +212,7 @@ export function TaskDetailPage() {
           <div className="flex flex-wrap items-center gap-2 text-small text-fg-secondary">
             <span className="tabular font-mono">{data.id}</span>
             <span aria-hidden>·</span>
-            <span>{data.repositoryName}</span>
+            <span>{repositoryNames(data)}</span>
             {origin ? <Badge title={`Sent from ${origin.name} with page evidence attached`}>From {CONNECTED_APP_LABEL[origin.kind]}</Badge> : null}
           </div>
           <h1 className="text-h1 text-fg wrap-anywhere">{data.title}</h1>

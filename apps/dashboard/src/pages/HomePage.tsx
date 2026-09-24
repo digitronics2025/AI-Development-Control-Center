@@ -18,7 +18,7 @@ import type { AgentInfo, TaskSummary } from '@acc/shared';
 import { useAgents, useApprovals, useHealth, useOverview, useRepositories } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection } from '../app/runtime';
-import { ActiveTaskRow } from '../components/task-row';
+import { ActiveTaskRow, repositoryLabel, repositoryNames } from '../components/task-row';
 
 function Metric({ label, value, tone }: { label: string; value: number | undefined; tone?: 'warning' | 'danger' }) {
   return (
@@ -76,7 +76,7 @@ const recentColumns: Column<TaskSummary>[] = [
       </div>
     ),
   },
-  { key: 'repo', header: 'Repository', cell: (t) => <span className="text-fg-secondary">{t.repositoryName}</span> },
+  { key: 'repo', header: 'Repository', cell: (t) => <span className="text-fg-secondary" title={repositoryNames(t)}>{repositoryLabel(t)}</span> },
   { key: 'status', header: 'Status', cell: (t) => <TaskStatusChip status={t.status} size="compact" /> },
   { key: 'updated', header: 'Updated', cell: (t) => <RelativeTime iso={t.updatedAt} className="text-fg-secondary" />, sortValue: (t) => t.updatedAt },
 ];

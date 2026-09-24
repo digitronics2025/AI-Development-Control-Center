@@ -6,6 +6,17 @@ import { AssignmentText } from './agents';
 import { TaskPrimaryAction } from './task-actions';
 
 /** Rail segments from a summary alone (no per-stage data needed for list rows). */
+/** "api" for a task in one repository, "api + 2" for a task across three (the primary first). */
+export function repositoryLabel(task: Pick<TaskSummary, 'repositoryName' | 'repositories'>): string {
+  const count = task.repositories?.length ?? 1;
+  return count > 1 ? `${task.repositoryName} + ${count - 1}` : task.repositoryName;
+}
+
+/** Every repository of a task, for titles and headers. */
+export function repositoryNames(task: Pick<TaskSummary, 'repositoryName' | 'repositories'>): string {
+  return task.repositories?.length ? task.repositories.map((r) => r.name).join(', ') : task.repositoryName;
+}
+
 export function railFromSummary(task: TaskSummary) {
   const { total, completed, currentIndex } = task.stageProgress;
   return Array.from({ length: total }, (_, i) => {
@@ -62,8 +73,8 @@ export function ActiveTaskRow({ task }: { task: TaskSummary }) {
         >
           {task.title}
         </Link>
-        <span className="truncate text-small text-fg-secondary">
-          {task.repositoryName} · {task.workflowName}
+        <span className="truncate text-small text-fg-secondary" title={repositoryNames(task)}>
+          {repositoryLabel(task)} · {task.workflowName}
         </span>
       </div>
       <div className="flex min-w-0 flex-col gap-1.5">

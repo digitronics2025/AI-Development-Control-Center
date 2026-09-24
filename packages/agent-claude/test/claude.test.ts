@@ -98,6 +98,14 @@ describe('ClaudeCodeAdapter', () => {
     expect(after(bridged, '--allowedTools').split(',')).toContain('mcp__acc');
     expect(bridged).toContain('--mcp-config');
     expect(bridged).toContain('--strict-mcp-config');
+
+    // Learned skills (docs/systems/learning.md): each managed plugin folder, and nothing else changes.
+    const learned = await argsOf({ permissionLevel: 2, pluginDirs: ['C:/data/learning/plugins/global', 'C:/data/learning/plugins/repo-r1'] });
+    expect(learned.filter((a) => a === '--plugin-dir')).toHaveLength(2);
+    expect(after(learned, '--plugin-dir')).toBe('C:/data/learning/plugins/global');
+    expect(learned.at(-1)).toBe('C:/data/learning/plugins/repo-r1');
+    expect(after(learned, '--tools')).toBe(claudeToolPolicy(2).tools.join(','));
+    expect(user).not.toContain('--plugin-dir');
   });
 
   it('names every skill used or refused, never its arguments', async () => {

@@ -283,6 +283,9 @@ export class CacheSync {
       case 'usage':
         this.refreshUsage();
         return;
+      case 'learning':
+        void this.qc.invalidateQueries({ queryKey: keys.learningRoot });
+        return;
     }
   };
 }

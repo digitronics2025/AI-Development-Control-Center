@@ -73,6 +73,11 @@ tool that *exists*. With `Skill` allowed on Claude Code's open tool set, a
 skill at L2 could run `WebFetch` and personal MCP tools, which bypasses
 `ToolService.invoke`. `--tools` + `--strict-mcp-config` remove them.
 
+**Learned skills** ([learning.md](learning.md#skills)): `AgentExecutionInput.pluginDirs`
+becomes one `--plugin-dir` per folder for Claude Code — the Control Center's
+own plugins in its data folder, for that run only. Codex ignores it; the
+prompt names the SKILL.md files instead.
+
 Stage logs name skills: `[tool] Skill fix-bug`, `permission denied: Skill
 ship-it`, and the init line ends `· N skills`; skill `args` are never logged.
 Every prompt carries a short "Skills" section

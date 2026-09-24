@@ -10,6 +10,7 @@ import { githubProvider } from './packs/github.js';
 import { gitProvider } from './packs/git.js';
 import { hostedProviders } from './packs/hosted.js';
 import { httpProviders } from './packs/http.js';
+import { installerProvider } from './packs/installer.js';
 import { networkProviders } from './packs/network.js';
 import { runtimeProviders } from './packs/runtime.js';
 import { shellProviders } from './packs/shell.js';
@@ -39,6 +40,7 @@ export { closeBrowserPages, closeAllBrowserPages, openBrowserPages } from './pac
 export { verifyWeb, webVerifyInput, type WebVerifyInput } from './packs/verify.js';
 export { tcpConnect } from './packs/network.js';
 export { globToRegExp } from './packs/filesystem.js';
+export { refreshedPath, locateInstalled } from './packs/installer.js';
 
 /** Every built-in provider (V2 plan §6). MCP servers are added at runtime by the gateway. */
 export function builtinProviders(): ToolProvider[] {
@@ -60,5 +62,6 @@ export function builtinProviders(): ToolProvider[] {
     ...androidProviders(),
     ...hostedProviders(),
     verifyProvider(),
+    installerProvider(),
   ];
 }

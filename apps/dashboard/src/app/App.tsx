@@ -23,6 +23,7 @@ const RepositoriesPage = lazy(() => import('../pages/RepositoriesPage').then((m)
 const RepositoryDetailPage = lazy(() => import('../pages/RepositoryDetailPage').then((m) => ({ default: m.RepositoryDetailPage })));
 const SourceControlPage = lazy(() => import('../pages/source-control/SourceControlPage').then((m) => ({ default: m.SourceControlPage })));
 const UsagePage = lazy(() => import('../pages/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
+const LearningPage = lazy(() => import('../pages/learning/LearningPage').then((m) => ({ default: m.LearningPage })));
 const UsageTaskPage = lazy(() => import('../pages/usage/UsageTaskPage').then((m) => ({ default: m.UsageTaskPage })));
 const NodesPage = lazy(() => import('../pages/NodesPage').then((m) => ({ default: m.NodesPage })));
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
@@ -110,6 +111,7 @@ export function AppRoutes() {
       <Route path="/source-control/:repositoryId" element={<SourceControlPage />} />
       <Route path="/usage" element={<UsagePage />} />
       <Route path="/usage/tasks/:id" element={<UsageTaskPage />} />
+      {mode === 'local' ? <Route path="/learning" element={<LearningPage />} /> : null}
       {mode === 'cloud' ? <Route path="/nodes" element={<NodesPage />} /> : null}
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/settings/:section" element={<SettingsPage />} />

@@ -262,6 +262,7 @@ export class StageRunners {
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
+        pluginDirs: await this.d.context.pluginDirs(task).catch(() => []),
       }, {
         origin: 'stage',
         projectId: task.repositoryId,

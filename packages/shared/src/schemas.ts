@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { executionSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
+import { learningSettingsSchema } from './learning.js';
 import {
   BILLING_MODES,
   COMMAND_KINDS,
@@ -282,6 +283,8 @@ export const settingsSchema = z.object({
   chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
   repositoryAutomation: repositoryAutomationSettingsSchema.default(repositoryAutomationSettingsSchema.parse({})),
   execution: executionSettingsSchema.default(executionSettingsSchema.parse({})),
+  /** The learning loop (docs/systems/learning.md). */
+  learning: learningSettingsSchema.default(learningSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

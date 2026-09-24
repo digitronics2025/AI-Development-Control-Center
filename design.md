@@ -178,6 +178,7 @@ Repositories
 Source Control
 Approvals
 Usage & Costs
+Learning
 Settings
 ```
 
@@ -189,6 +190,10 @@ background processes, terminals, MCP servers, credentials and the execution
 policy) exists independently of any task (§7.11).
 Usage & Costs is another: spend, tokens, budgets and provider limits span every
 task and outlive them (§7.10).
+Learning is another, and exists **only on the machine itself** (local dashboard
+and VS Code): what the Chairman learned from finished tasks and changed on its
+own spans every task and outlives them (§7.13). The cloud dashboard never shows
+it.
 Nodes is the last, and exists **only in the cloud dashboard**: the machines that
 run the work, their pairing, keys and presence (§7.12). The local dashboard and
 VS Code never show it — a machine manages its own link under Settings → Remote
@@ -228,10 +233,11 @@ Order:
 8. Source Control
 9. Approvals
 10. Usage & Costs
-11. Nodes (cloud dashboard only)
-12. flexible spacer
-13. Settings
-14. service status (local: the orchestrator; cloud: the selected node)
+11. Learning (local dashboard and VS Code only)
+12. Nodes (cloud dashboard only)
+13. flexible spacer
+14. Settings
+15. service status (local: the orchestrator; cloud: the selected node)
 
 Rules:
 - one icon family only,
@@ -1088,6 +1094,7 @@ General
 Appearance
 Agents & Models
 Chairman
+Learning
 Repositories
 Workflows
 Permissions
@@ -1096,6 +1103,12 @@ Notifications
 Remote access
 Advanced
 ```
+
+Learning holds the learning loop (§7.13): review finished tasks on/off; **When
+a change is worth making** as a segmented control — *Make it on its own*
+(default) · *Ask me first* — with one sentence under it saying what each
+means; the Chairman agent for reviews on/off; changes per day; trial length.
+Like Remote access it is never shown in the cloud dashboard.
 
 Remote access exists only on the machine itself (local dashboard and VS Code),
 never in the cloud dashboard: it pairs the machine with the cloud control plane
@@ -1357,6 +1370,55 @@ again.
 An offline node keeps its row and its history; pages that need it show the
 cloud connection banner (§9.4) instead of stale success. Degraded (no heartbeat
 for two minutes) uses the warning tone, not an error.
+
+---
+
+# 7.13 Learning (local dashboard and VS Code only)
+
+Purpose: answer "what has the Chairman learned from finished tasks, what did it
+change on its own, and did it help?" (docs/systems/learning.md).
+
+## Header
+
+Title **Learning**, one sentence saying that every change is tried on the next
+tasks and kept only if the problem stops coming back. Action: **Refresh**
+(secondary). No primary action: the page reports, the Chairman acts.
+
+Info banners (never warning or danger tone — nothing is wrong): learning turned
+off (with a link to Settings → Chairman), *Ask me first* mode, and reviews
+running on rules only because the Chairman agent is unavailable.
+
+## Summary
+
+Four stat tiles (§8.12): Live improvements · Needs you · Watching · Tasks
+reviewed (detail: changes made today of the daily limit).
+
+## Tabs
+
+Improvements · Findings · Reviews · Activity (the Findings tab label carries
+"(N need you)" when N > 0).
+
+- **Improvements**: one row per change — title, kind, where it applies
+  (a repository or every repository), when; status chip (On trial, Kept, Did
+  not help — undone, Undone, Failed — icon + text); the trial line ("Tried on 1
+  of 3 tasks · came back no times") and the reason. **Undo** (secondary) on
+  live rows only, behind a confirmation that says what undo does for that kind
+  (a skill is deleted; an installed program stays installed) and that the
+  Chairman will not make that change again by itself.
+- **Findings**: grouped in this order — Needs you, Watching, Could not act,
+  Acted on, Dismissed — each group a heading with its count. A row: title,
+  kind, where, how many tasks showed it, last seen; status chip; the status
+  reason in normal text (it is the answer to "why not yet?"); "Proposed: …";
+  the detail. Actions: **Do it now** (secondary — the operator's decision,
+  skipping the evidence threshold and daily limit, never the safety scan or
+  the reviewed program list) and **Dismiss** (ghost).
+- **Reviews**: a table (stacked below 900px): task (link), result chip
+  (Queued, Reviewing, Reviewed, Clean run, Review failed), reviewed by
+  (Chairman agent / Rules), signals, findings, summary, when.
+- **Activity**: the log, newest first, message and relative time.
+
+Empty states say what will appear and when (§8.10); a clean run is never
+presented as a failure.
 
 ---
 

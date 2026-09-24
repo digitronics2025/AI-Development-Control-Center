@@ -998,4 +998,87 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_vault_deposits_credential ON vault_deposits(credential_id);
     `,
   },
+  {
+    // Learning loop (docs/plans/learning-loop.md): one review per finished
+    // task, findings aggregated across tasks by fingerprint, the improvements
+    // the Chairman adopted on its own (with their trial counts), and a short
+    // activity log. Structured summaries only: no prompts, logs or file contents.
+    version: 11,
+    name: 'learning loop',
+    sql: `
+      CREATE TABLE learning_reviews (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        repository_id TEXT,
+        status TEXT NOT NULL,
+        reviewer TEXT,
+        signals TEXT NOT NULL DEFAULT '[]',
+        finding_ids TEXT NOT NULL DEFAULT '[]',
+        summary TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX idx_learning_reviews_status ON learning_reviews(status, created_at);
+      CREATE TABLE learning_findings (
+        id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        repository_id TEXT,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        proposal TEXT,
+        confidence TEXT NOT NULL,
+        observed INTEGER NOT NULL DEFAULT 0,
+        occurrences INTEGER NOT NULL DEFAULT 0,
+        task_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        status_reason TEXT,
+        improvement_id TEXT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_learning_findings_status ON learning_findings(status, last_seen_at);
+      CREATE TABLE learning_observations (
+        finding_id TEXT NOT NULL REFERENCES learning_findings(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL,
+        signal_ids TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (finding_id, task_id)
+      );
+      CREATE TABLE learning_improvements (
+        id TEXT PRIMARY KEY,
+        finding_id TEXT REFERENCES learning_findings(id) ON DELETE SET NULL,
+        fingerprint TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        repository_id TEXT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL,
+        content_hash TEXT,
+        status TEXT NOT NULL,
+        trial_target INTEGER NOT NULL,
+        trial_seen INTEGER NOT NULL DEFAULT 0,
+        trial_recurrences INTEGER NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        reverted_at TEXT,
+        reverted_by TEXT
+      );
+      CREATE INDEX idx_learning_improvements_status ON learning_improvements(status, repository_id);
+      CREATE INDEX idx_learning_improvements_fingerprint ON learning_improvements(fingerprint);
+      CREATE TABLE learning_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        task_id TEXT,
+        finding_id TEXT,
+        improvement_id TEXT,
+        message TEXT NOT NULL
+      );
+    `,
+  },
 ];

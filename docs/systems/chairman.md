@@ -264,6 +264,12 @@ tasks close theirs; nothing is re-run to find out), then every supervised task
 (setting *Resume after a restart*), and unanswered chat messages are answered —
 never re-executed if they already produced an action.
 
+## Learning
+
+After a task completes, the same reasoning agent reviews it for lasting
+improvements (`Reasoner.review`, usage step `learning`); the system-wide desk
+that adopts them is [learning.md](learning.md).
+
 ## Tables (migrations 2 and 8)
 
 `task_contracts` (versioned goal/criteria/constraints), `chairman_sessions`,

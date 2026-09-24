@@ -12,6 +12,7 @@ import { migrate, openDatabase, type Db } from './db/database.js';
 import { ContextBuilder } from './engine/context.js';
 import { TaskEngine } from './engine/engine.js';
 import { TaskViews } from './engine/views.js';
+import { LearningService } from './learning/service.js';
 import { SkillCatalog } from './services/skills.js';
 import { AgentRegistry } from './services/agents.js';
 import { ArtifactService } from './services/artifacts.js';
@@ -75,6 +76,8 @@ export interface AppServices {
   usage: UsageService;
   /** This machine as a cloud execution node (docs/systems/remote-node.md); idle until paired. */
   remote: RemoteNodeService;
+  /** The learning loop: reviews finished tasks and adopts improvements (docs/systems/learning.md). */
+  learning: LearningService;
   startedAt: string;
   /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
   recover(): Promise<{ interruptedTasks: string[] }>;
@@ -135,6 +138,9 @@ export function createServices(
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
+  const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
+  context.lessons = (task, def, stage) => learning.promptSection(task, def, stage);
+  context.pluginDirs = (task) => learning.pluginDirs(task);
   tools.registerProvider(environmentProvider({ store, repositories, tooling }));
   tools.attach({
     events: (taskId, type, message, data, stageId) => engine.publisher.event(taskId, type, message, data ?? {}, stageId ?? null),
@@ -190,6 +196,7 @@ export function createServices(
     privileged,
     usage,
     remote,
+    learning,
     startedAt: new Date().toISOString(),
     async recover() {
       // Before anything runs: replay spooled usage and close attempts a stop interrupted.
@@ -200,12 +207,15 @@ export function createServices(
       const result = engine.recover();
       await chairman.onStartup();
       chat.recoverPending();
+      // Reviews a restart interrupted resume, and completed tasks are reviewed from now on.
+      learning.start();
       // Only once local state is settled: the cloud then receives the corrected picture.
       remote.start();
       return result;
     },
     async close() {
       await remote.stop();
+      await learning.stop();
       vaultBridge.closeAll();
       watchdog.stop();
       await repositoryAutomation.stop();

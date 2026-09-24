@@ -26,6 +26,7 @@ import {
   ROLES,
   ROLE_LABEL,
   type ChairmanSettings,
+  type LearningSettings,
   type PermissionLevel,
   type RepositoryAutomationSettings,
   type Role,
@@ -45,6 +46,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'agents', label: 'Agents & Models' },
   { id: 'chairman', label: 'Chairman' },
+  { id: 'learning', label: 'Learning' },
   { id: 'repositories', label: 'Repositories' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'permissions', label: 'Permissions' },
@@ -179,8 +181,9 @@ export function SettingsPage() {
   const health = useHealth();
   const connection = useConnection();
   const { host, mode } = useRuntime();
-  // Remote access belongs to the machine itself: never offered from the cloud dashboard.
-  const sections = SECTIONS.filter((s) => s.id !== 'remote' || mode === 'local');
+  // Remote access belongs to the machine itself, and learning stays on it: neither is offered from the cloud dashboard.
+  const localOnly = (id: SectionId) => id === 'remote' || id === 'learning';
+  const sections = SECTIONS.filter((s) => !localOnly(s.id) || mode === 'local');
   const { toast } = useFeedback();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [apiConfirmOpen, setApiConfirmOpen] = useState(false);
@@ -192,12 +195,13 @@ export function SettingsPage() {
   }, [settings.data]);
   const dirty = useMemo(() => Boolean(draft && settings.data && JSON.stringify(draft) !== JSON.stringify(settings.data)), [draft, settings.data]);
 
-  const active: SectionId = activeRequested === 'remote' && mode !== 'local' ? 'general' : activeRequested;
+  const active: SectionId = localOnly(activeRequested) && mode !== 'local' ? 'general' : activeRequested;
   if (settings.isLoading || !draft) return <div className="p-6"><Skeleton className="h-96" /></div>;
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft({ ...draft, [key]: value });
   const setAutomation = <K extends keyof RepositoryAutomationSettings>(key: K, value: RepositoryAutomationSettings[K]) =>
     setDraft({ ...draft, repositoryAutomation: { ...draft.repositoryAutomation, [key]: value } });
   const setChairman = <K extends keyof ChairmanSettings>(key: K, value: ChairmanSettings[K]) => setDraft({ ...draft, chairman: { ...draft.chairman, [key]: value } });
+  const setLearning = <K extends keyof LearningSettings>(key: K, value: LearningSettings[K]) => setDraft({ ...draft, learning: { ...draft.learning, [key]: value } });
 
   const save = (patch: Partial<Settings> = draft) =>
     update.mutate(patch, {
@@ -300,6 +304,47 @@ export function SettingsPage() {
           <Row title="Resume after a restart" description="Supervised tasks interrupted by a restart continue automatically; nothing runs twice.">
             <Switch aria-label="Resume supervised tasks after a restart" checked={draft.chairman.resumeAfterRestart} onCheckedChange={(v) => setChairman('resumeAfterRestart', v)} />
           </Row>
+        </div>
+      </Panel>
+    ),
+    learning: (
+      <Panel
+        title="Learning"
+        headingLevel={2}
+        description={
+          <>
+            After each finished task the Chairman looks at what slowed it down and improves how later tasks run. Every change is tried on the next tasks and undone if the problem keeps coming back. See what it did on the <Link to="/learning" className="text-accent underline underline-offset-2">Learning page</Link>.
+          </>
+        }
+      >
+        <div className="flex flex-col divide-y divide-border-subtle">
+          <Row title="Review finished tasks" description="A task that ran without friction is recorded as a clean run and costs nothing.">
+            <Switch aria-label="Review finished tasks" checked={draft.learning.enabled} onCheckedChange={(v) => setLearning('enabled', v)} />
+          </Row>
+          <div className="flex flex-col gap-2 py-3">
+            <span className="text-body font-semibold text-fg">When a change is worth making</span>
+            <SegmentedControl<LearningSettings['autonomy']>
+              label="When a change is worth making"
+              value={draft.learning.autonomy}
+              onValueChange={(v) => setLearning('autonomy', v)}
+              options={[
+                { value: 'act', label: 'Make it on its own' },
+                { value: 'propose', label: 'Ask me first' },
+              ]}
+            />
+            <span className="max-w-prose text-small text-fg-secondary">
+              {draft.learning.autonomy === 'act'
+                ? 'It acts once a problem shows up in two tasks (a missing program: at once). Programs come only from a reviewed list and follow the execution policy; under Safe it asks.'
+                : 'Changes wait under Learning → Needs you until you choose Do it now.'}
+            </span>
+          </div>
+          <Row title="Use the Chairman agent for reviews" description="Off: the rules still find missing programs, but lessons and skills need the agent. Uses the Chairman agent chosen above, read-only.">
+            <Switch aria-label="Use the Chairman agent for reviews" checked={draft.learning.reviewWithModel} onCheckedChange={(v) => setLearning('reviewWithModel', v)} />
+          </Row>
+          <div className="flex flex-col gap-3 py-3">
+            <LimitField label="Changes per day" helper="The most improvements the Chairman makes on its own in one day." min={0} max={20} value={draft.learning.maxActionsPerDay} onChange={(v) => setLearning('maxActionsPerDay', v)} />
+            <LimitField label="Trial length (tasks)" helper="Later tasks each change is tried on before it is kept or undone." min={1} max={20} value={draft.learning.trialTasks} onChange={(v) => setLearning('trialTasks', v)} />
+          </div>
         </div>
       </Panel>
     ),

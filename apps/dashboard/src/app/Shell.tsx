@@ -4,6 +4,7 @@ import {
   Coins,
   ChevronsRight,
   FolderGit2,
+  GraduationCap,
   GitBranch,
   House,
   ListChecks,
@@ -160,6 +161,7 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
       {NAV.map((item) => (
         <NavEntry key={item.to} item={item} collapsed={collapsed} badge={item.to === '/approvals' ? pending : undefined} onNavigate={onNavigate} />
       ))}
+      {mode === 'local' ? <NavEntry item={{ to: '/learning', label: 'Learning', icon: GraduationCap }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       {mode === 'cloud' ? <NavEntry item={{ to: '/nodes', label: 'Nodes', icon: Server }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       <div className="flex-1" />
       <NavEntry item={{ to: '/settings', label: 'Settings', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onNavigate} />
@@ -349,6 +351,7 @@ function GlobalCommands() {
       { id: 'go-workflows', label: 'Go to Workflows', group: 'Go to', icon: Workflow, onSelect: () => navigate('/workflows') },
       { id: 'go-approvals', label: 'Go to Approvals', group: 'Go to', icon: ShieldCheck, onSelect: () => navigate('/approvals') },
       { id: 'go-usage', label: 'Go to Usage & Costs', group: 'Go to', icon: Coins, onSelect: () => navigate('/usage') },
+      ...(mode === 'local' ? [{ id: 'go-learning', label: 'Go to Learning', group: 'Go to', icon: GraduationCap, onSelect: () => navigate('/learning') }] : []),
       { id: 'go-home', label: 'Go to Home', group: 'Go to', icon: House, onSelect: () => navigate('/') },
       ...(mode === 'cloud' ? [{ id: 'go-nodes', label: 'Go to Nodes', group: 'Go to', icon: Server, onSelect: () => navigate('/nodes') }] : []),
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },

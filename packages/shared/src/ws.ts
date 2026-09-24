@@ -66,7 +66,9 @@ export type ServerMessage =
   | { type: 'recovery'; attempt: RecoveryAttempt }
   | { type: 'escalation'; escalation: CapabilityEscalation }
   /** This machine's link to the cloud control plane changed (local clients only; never relayed). */
-  | { type: 'remote.status'; status: RemoteNodeStatus };
+  | { type: 'remote.status'; status: RemoteNodeStatus }
+  /** The learning loop recorded a review, finding or improvement: its views refetch (local clients only; never relayed). */
+  | { type: 'learning'; change: 'review' | 'finding' | 'improvement'; taskId: string | null };
 
 export type ServerMessageType = ServerMessage['type'];
 

@@ -34,7 +34,7 @@ if (!existsSync(main)) {
   process.exit(1);
 }
 
-function makeRepo(name, { dirty = false, failingTests = false, skills = {} } = {}) {
+function makeRepo(name, { dirty = false, failingTests = false, skills = {}, files = {}, testScript = null } = {}) {
   const dir = path.join(reposDir, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -43,7 +43,7 @@ function makeRepo(name, { dirty = false, failingTests = false, skills = {} } = {
   git('config', 'user.email', 'demo@example.com');
   git('config', 'user.name', 'Demo');
   git('config', 'commit.gpgsign', 'false');
-  const test = failingTests ? 'node -e "console.log(\'2 failed, 10 passed\');process.exit(1)"' : 'node -e "console.log(\'12 passed\')"';
+  const test = testScript ?? (failingTests ? 'node -e "console.log(\'2 failed, 10 passed\');process.exit(1)"' : 'node -e "console.log(\'12 passed\')"');
   writeFileSync(
     path.join(dir, 'package.json'),
     JSON.stringify({ name, private: true, scripts: { lint: 'node -e "console.log(\'lint ok\')"', test, build: 'node -e "console.log(\'built\')"' } }, null, 2),
@@ -54,6 +54,7 @@ function makeRepo(name, { dirty = false, failingTests = false, skills = {} } = {
     mkdirSync(path.join(dir, '.claude', 'skills', skill), { recursive: true });
     writeFileSync(path.join(dir, '.claude', 'skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: ${description}\n---\n\n${description}.\n`);
   }
+  for (const [file, content] of Object.entries(files)) writeFileSync(path.join(dir, file), content);
   git('add', '-A');
   git('commit', '-qm', 'init');
   if (dirty) writeFileSync(path.join(dir, 'NOTES.md'), 'work in progress\n');
@@ -165,6 +166,22 @@ if (seed) {
   await task({ repositoryId: mobile.id, workflowId: 'quick-change', supervised: false, description: 'Migrate the settings screen to the new navigation. [sim:usage-limit]' });
   await task({ repositoryId: docs.id, workflowId: 'quick-change', maxFixCycles: 1, supervised: false, description: 'Update the changelog page layout.' });
   await api('POST', '/api/tasks', { repositoryId: billing.id, workflowId: 'quick-change', mode: 'autopilot', description: 'Rename the PaymentIntent helper for clarity.', start: false });
+  // Learning (docs/systems/learning.md): checks that pass only after two rounds of fixing, so the
+  // Chairman's review has something to notice. check.js counts the simulated agent's output lines.
+  const check = [
+    "const fs = require('fs');",
+    "const n = fs.existsSync('sim-output.md') ? fs.readFileSync('sim-output.md', 'utf8').split('\\n').filter(Boolean).length : 0;",
+    "console.log(n >= 3 ? '4 passed' : '1 failed, 3 passed');",
+    'process.exit(n >= 3 ? 0 : 1);',
+  ].join('\n');
+  const lab = await api('POST', '/api/repositories', { path: makeRepo('learning-lab', { files: { 'check.js': check }, testScript: 'node check.js' }), name: 'learning-lab' });
+  const lesson = await task({ repositoryId: lab.id, workflowId: 'quick-change', supervised: false, description: 'Add input validation to the signup form.' });
+  await waitFor(lesson.id, ['COMPLETED', 'FAILED']);
+  for (let i = 0; i < 200; i++) {
+    const { review } = await api('GET', `/api/learning/tasks/${lesson.id}`);
+    if (review && ['done', 'skipped', 'failed'].includes(review.status)) break;
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 // Marker for callers (e.g. the Playwright global setup) that seeding is done.

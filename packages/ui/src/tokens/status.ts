@@ -15,6 +15,7 @@ import {
   Link2Off,
   ArrowUpCircle,
   Eye,
+  FlaskConical,
   FilePen,
   Hourglass,
   ListOrdered,
@@ -27,6 +28,7 @@ import {
   TrendingDown,
   TrendingUp,
   UserRound,
+  Undo2,
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
@@ -49,6 +51,11 @@ import {
   type UsageEventStatus,
   type NodeStatus,
   type RemoteLinkState,
+  FINDING_STATUS_LABEL,
+  IMPROVEMENT_STATUS_LABEL,
+  type FindingStatus,
+  type ImprovementStatus,
+  type ReviewStatus,
 } from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
@@ -190,4 +197,29 @@ export const REMOTE_LINK_VISUAL: Record<RemoteLinkState, StatusVisual> = {
   offline: { label: 'Cloud unreachable', tone: 'warning', icon: CloudOff },
   revoked: { label: 'Revoked', tone: 'danger', icon: Ban },
   'update-required': { label: 'Update required', tone: 'warning', icon: ArrowUpCircle },
+};
+
+/** The learning loop (design.md §7.13): improvements, findings and reviews. */
+export const IMPROVEMENT_STATUS_VISUAL: Record<ImprovementStatus, StatusVisual> = {
+  trial: { label: IMPROVEMENT_STATUS_LABEL.trial, tone: 'info', icon: FlaskConical },
+  active: { label: IMPROVEMENT_STATUS_LABEL.active, tone: 'success', icon: CheckCircle2 },
+  ineffective: { label: IMPROVEMENT_STATUS_LABEL.ineffective, tone: 'warning', icon: Undo2 },
+  reverted: { label: IMPROVEMENT_STATUS_LABEL.reverted, tone: 'neutral', icon: Undo2 },
+  failed: { label: IMPROVEMENT_STATUS_LABEL.failed, tone: 'danger', icon: XCircle },
+};
+
+export const FINDING_STATUS_VISUAL: Record<FindingStatus, StatusVisual> = {
+  open: { label: FINDING_STATUS_LABEL.open, tone: 'neutral', icon: Eye },
+  adopted: { label: FINDING_STATUS_LABEL.adopted, tone: 'success', icon: CheckCircle2 },
+  needs_you: { label: FINDING_STATUS_LABEL.needs_you, tone: 'warning', icon: UserRound },
+  dismissed: { label: FINDING_STATUS_LABEL.dismissed, tone: 'neutral', icon: Minus },
+  failed: { label: FINDING_STATUS_LABEL.failed, tone: 'danger', icon: XCircle },
+};
+
+export const REVIEW_STATUS_VISUAL: Record<ReviewStatus, StatusVisual> = {
+  pending: { label: 'Queued', tone: 'neutral', icon: Clock },
+  running: { label: 'Reviewing', tone: 'accent', icon: CircleDot, active: true },
+  done: { label: 'Reviewed', tone: 'success', icon: CheckCircle2 },
+  skipped: { label: 'Clean run', tone: 'neutral', icon: SkipForward },
+  failed: { label: 'Review failed', tone: 'danger', icon: XCircle },
 };

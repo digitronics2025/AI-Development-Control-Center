@@ -59,6 +59,10 @@ export class ContextBuilder {
   guidance: (taskId: string) => string | null = () => null;
   /** Environment report and Control Center tools for a stage, set once the tool layer exists. */
   toolSections: (task: TaskRecord, def: StageDefinition, repo: RepositoryRecord) => Promise<string> = async () => '';
+  /** Lessons and learned skills from earlier tasks, set once the learning loop exists (docs/systems/learning.md). */
+  lessons: (task: TaskRecord, def: StageDefinition, stage: StageInstance) => string = () => '';
+  /** Managed skill plugins a stage run loads (`--plugin-dir`), set once the learning loop exists. */
+  pluginDirs: (task: TaskRecord) => Promise<string[]> = async () => [];
 
   constructor(
     private readonly store: Store,
@@ -235,7 +239,13 @@ export class ContextBuilder {
     const guidance = this.guidance(task.id);
     // Chairman guidance follows the role template so user-edited templates still receive it.
     const supervisor = guidance ? `\n\n## Chairman guidance (supervisor of this task)\n\n${guidance}\n` : '';
+    let lessons = '';
+    try {
+      lessons = this.lessons(task, def, stage);
+    } catch {
+      /* advice is optional: a prompt never fails for want of it */
+    }
     const tools = await this.toolSections(task, def, repo).catch(() => '');
-    return { prompt: header + renderTemplate(template.body, vars) + supervisor + tools, templateVersion: template.version };
+    return { prompt: header + renderTemplate(template.body, vars) + supervisor + lessons + tools, templateVersion: template.version };
   }
 }

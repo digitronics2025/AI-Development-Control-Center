@@ -419,6 +419,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     // Only the Control Center's own server (--mcp-config) is loaded.
     args.push('--strict-mcp-config');
     if (mcpConfig) args.push('--mcp-config', mcpConfig);
+    // Learned skills (docs/systems/learning.md): the Control Center's own plugin folders, for this run only.
+    for (const dir of input.pluginDirs ?? []) args.push('--plugin-dir', dir);
     return args;
   }
 

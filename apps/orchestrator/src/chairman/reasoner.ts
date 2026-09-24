@@ -209,7 +209,7 @@ export class Reasoner {
     return this.settings.get().chairman.agentId;
   }
 
-  private async run(taskId: string, prompt: string, cancellable?: Cancellable): Promise<ReasonerResult<string>> {
+  private async run(taskId: string, prompt: string, cancellable?: Cancellable, step = 'chairman'): Promise<ReasonerResult<string>> {
     const cfg = this.settings.get().chairman;
     const unavailable = this.unavailableReason();
     if (unavailable) return { ok: false, reason: unavailable };
@@ -224,7 +224,7 @@ export class Reasoner {
         taskId,
         runId: null,
         workflowId: task?.workflowId ?? null,
-        workflowStep: 'chairman',
+        workflowStep: step,
         agentRole: 'chairman',
         mode: task?.mode ?? null,
       };
@@ -253,10 +253,10 @@ export class Reasoner {
   }
 
   /** One call, one repair attempt on malformed output, then give up (§10). */
-  private async ask<T>(taskId: string, prompt: string, parse: (raw: unknown) => T, cancellable?: Cancellable): Promise<ReasonerResult<T>> {
+  private async ask<T>(taskId: string, prompt: string, parse: (raw: unknown) => T, cancellable?: Cancellable, step?: string): Promise<ReasonerResult<T>> {
     let current = prompt;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const out = await this.run(taskId, current, cancellable);
+      const out = await this.run(taskId, current, cancellable, step);
       if (!out.ok) return out;
       try {
         return { ok: true, value: parse(extractJson(out.value)) };
@@ -278,6 +278,15 @@ export class Reasoner {
   ): Promise<ReasonerResult<RecoveryChoice>> {
     const ids = new Set(candidates.map((c) => c.id));
     return this.ask(snapshot.taskId, recoveryPrompt(snapshot, trigger, candidates, evidence, diagnosis), (raw) => parseRecoveryChoice(raw, ids), cancellable);
+  }
+
+  /**
+   * A finished task's learning review (docs/systems/learning.md): the same
+   * read-only runner, its own prompt and parser, its usage recorded against
+   * the task with step `learning`.
+   */
+  review<T>(taskId: string, prompt: string, parse: (raw: unknown) => T): Promise<ReasonerResult<T>> {
+    return this.ask(taskId, prompt, parse, undefined, 'learning');
   }
 
   reply(

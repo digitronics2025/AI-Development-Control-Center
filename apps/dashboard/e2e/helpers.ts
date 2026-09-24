@@ -31,6 +31,9 @@ export const PAGES = [
   { name: 'usage-budgets', path: '/usage?tab=budgets', ready: 'Add budget' },
   { name: 'usage-events', path: '/usage?tab=events', ready: 'match' },
   { name: 'usage-task', path: '/usage/tasks/TASK-0001', ready: 'Cost flow' },
+  { name: 'learning', path: '/learning', ready: 'Tasks reviewed' },
+  { name: 'learning-findings', path: '/learning?tab=findings', ready: 'Proposed:' },
+  { name: 'settings-learning', path: '/settings/learning', ready: 'When a change is worth making' },
 ] as const;
 
 /** Console errors fail the test; collected from page load onwards. */

@@ -35,7 +35,8 @@ filesystem, git, github, runtime (Node/pnpm/npm/Python/uv/Java), browser
 [browser-and-web.md](browser-and-web.md)), http (+curl), web (search, read), network, windows, cloudflare, database (SQLite,
 psql, mysql), docker, android (adb, Gradle), hosted (processes, terminals,
 checkpoints, privileged helper, VS Code), verify, credential-broker
-(`credential.generate`). The orchestrator adds
+(`credential.generate`), installer (`software.catalog`, `software.install` —
+a reviewed program list only, [learning.md](learning.md#programs)). The orchestrator adds
 `environment` and one `mcp:<id>` provider per healthy MCP server
 ([mcp.md](mcp.md)). About 136 built-in capabilities in total.
 

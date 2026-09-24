@@ -10,6 +10,7 @@ import { registerRemoteRoutes } from './remote-routes.js';
 import { registerSourceControlRoutes } from './source-control-routes.js';
 import { registerToolRoutes } from './tool-routes.js';
 import { registerUsageRoutes } from './usage-routes.js';
+import { registerLearningRoutes } from './learning-routes.js';
 import { registerVaultBridgeRoutes } from './vault-bridge-routes.js';
 import { registerWebSocket } from './ws.js';
 
@@ -58,6 +59,7 @@ export async function buildServer(
   registerToolRoutes(app, s);
   registerVaultBridgeRoutes(app, s);
   registerUsageRoutes(app, s);
+  registerLearningRoutes(app, s);
   registerRemoteRoutes(app, s);
   // Remote commands run through these same routes, in process (docs/systems/remote-node.md).
   s.remote.attachHttp({ inject: (request) => app.inject({ ...request, method: request.method as 'GET' }) });

@@ -119,6 +119,12 @@ export interface AgentExecutionInput extends AgentRuntimeOptions {
    * written to disk or argv.
    */
   toolBridge?: { name: string; command: string; args: string[]; env: Record<string, string> };
+  /**
+   * Skill plugins the Control Center manages (docs/systems/learning.md), loaded
+   * for this run only. Adapters that cannot load plugins ignore them; the
+   * prompt then names the skill files instead.
+   */
+  pluginDirs?: string[];
   /** Human-readable, already-parsed output lines. Callers redact before persisting. */
   onLine?: (stream: AgentLogStream, text: string) => void;
 }

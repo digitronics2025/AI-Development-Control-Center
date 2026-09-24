@@ -46,6 +46,9 @@ export const keys = {
   sourceControlReview: (repositoryId: string) => ['source-control', repositoryId, 'review'] as const,
   /** Everything Usage & Costs shows; one prefix so a recorded attempt refreshes it all. */
   usageRoot: ['usage'] as const,
+  /** The learning loop (local mode only): overview and per-task reviews share one prefix. */
+  learningRoot: ['learning'] as const,
+  learningTask: (id: string) => ['learning', 'task', id] as const,
   /** This machine's link to the cloud control plane (local mode only). */
   remoteStatus: ['remote', 'status'] as const,
   /** Cloud mode: control-plane state (never cleared by a node switch). */

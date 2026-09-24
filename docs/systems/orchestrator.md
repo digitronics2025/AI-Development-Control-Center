@@ -27,6 +27,14 @@ hub, SQLite persistence and the workflow engine. Entry:
 | `ACC_REPOSITORY_AUTOMATION` | on | `0` never starts repository discovery or background sync (the demo and e2e set it) |
 | `ACC_ALLOWED_ORIGINS` | empty | Extra browser origins allowed to call the API |
 | `ACC_LOG_LEVEL` | `info` | Fastify/pino level |
+| `ACC_VERSION` | the build stamp | Overrides the reported version |
+
+**Version identity.** [build.mjs](../../apps/orchestrator/build.mjs) stamps the bundle with
+the commit it was built from: `version` is `<package version>+<short sha>` (`.dirty` when
+tracked files had uncommitted changes), and `GET /api/health` returns
+`build: {commit, dirty, builtAt}`. Run from source (tests, `tsx`) the version is
+`0.1.0-dev` and `build.commit` is null. Migrations stay forward-only; rolling back
+means restoring the pre-release `acc.db` backup together with the matching build.
 
 ## Data folder
 

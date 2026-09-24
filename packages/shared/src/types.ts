@@ -442,6 +442,8 @@ export interface ServiceHealth {
   port: number;
   simulatedAgents: boolean;
   git: { found: boolean; version: string | null };
+  /** Where this binary came from: the commit it was built from (null for an unbundled dev run). */
+  build: { commit: string | null; dirty: boolean; builtAt: string | null };
 }
 
 export interface PromptTemplate {

@@ -2,7 +2,23 @@
 // file, plus the stdio MCP bridge agents launch (dist/acc-mcp.js). Native
 // addons (better-sqlite3, node-pty) and packages that locate their own files
 // at run time (playwright-core, axe-core) stay external.
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
+
+// The binary carries the commit it was built from, so /api/health can say
+// exactly what is running (audit F-45). A build outside Git still works.
+const gitOut = (args) => {
+  try {
+    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+};
+const commit = gitOut(['rev-parse', 'HEAD']) || 'unknown';
+const dirty = gitOut(['status', '--porcelain', '--untracked-files=no']) !== '';
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const stamp = { version: `${version}+${commit.slice(0, 7)}${dirty ? '.dirty' : ''}`, commit, dirty, builtAt: new Date().toISOString() };
 
 const common = {
   bundle: true,
@@ -23,6 +39,7 @@ const common = {
     ].join('\n'),
   },
   logLevel: 'info',
+  define: { __ACC_BUILD__: JSON.stringify(stamp) },
 };
 
 await build({ ...common, entryPoints: ['src/main.ts'], outfile: 'dist/main.js' });

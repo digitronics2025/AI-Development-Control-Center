@@ -23,6 +23,13 @@ export interface OrchestratorConfig {
   version: string;
 }
 
+/** Stamped by build.mjs from the commit being built; absent when running from source (tests, tsx). */
+declare const __ACC_BUILD__: { version: string; commit: string; dirty: boolean; builtAt: string } | undefined;
+
+/** The identity of this binary, shown by /api/health (audit F-45). */
+export const BUILD: { version: string; commit: string | null; dirty: boolean; builtAt: string | null } =
+  typeof __ACC_BUILD__ === 'undefined' ? { version: '0.1.0-dev', commit: null, dirty: false, builtAt: null } : __ACC_BUILD__;
+
 export function defaultDataDir(): string {
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
@@ -83,6 +90,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean),
-    version: env.ACC_VERSION ?? '0.1.0',
+    version: env.ACC_VERSION ?? BUILD.version,
   };
 }

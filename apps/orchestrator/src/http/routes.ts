@@ -44,6 +44,7 @@ import { RemoteError } from '../remote/service.js';
 import { TerminalError } from '../tools/terminals.js';
 import { VAULT_BRIDGE_HTTP_STATUS, VaultBridgeError } from '../tools/vault-bridge.js';
 import { usageErrorStatus } from './usage-routes.js';
+import { BUILD } from '../config.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
 
@@ -118,6 +119,7 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
       git: await detectGit(),
       ok: true,
       version: s.config.version,
+      build: { commit: BUILD.commit, dirty: BUILD.dirty, builtAt: BUILD.builtAt },
       startedAt: s.startedAt,
       billingMode: s.settings.get().billingMode,
       dataDir: s.config.dataDir,

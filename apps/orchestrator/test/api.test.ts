@@ -83,6 +83,8 @@ describe('local service security', () => {
   it('reports health and binds to localhost', async () => {
     const res = await t.api('GET', '/api/health');
     expect(res.body).toMatchObject({ ok: true, billingMode: 'subscription', host: '127.0.0.1' });
+    // Run from source there is no build stamp; the bundled binary names its commit (audit F-45).
+    expect(res.body.build).toEqual({ commit: null, dirty: false, builtAt: null });
   });
 });
 

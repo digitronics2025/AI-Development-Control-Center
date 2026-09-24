@@ -107,9 +107,12 @@ Remote guards ([guards.ts](../../apps/orchestrator/src/remote/guards.ts)) refuse
 what only the machine may decide: billing mode, raising auto-approve levels, a
 more permissive policy (settings, repository, task), editing a repository's
 commands or dev command, choosing an agent's program (`executablePath`),
-removing the approval step from a workflow stage that has one, adding a
-repository-discovery folder or un-ignoring a removed repository,
-attachments, and a task across several repositories (`linkedRepositoryIds`). Lowering is allowed. Settings are judged as they would be saved
+removing the approval step from a workflow stage that has one or lowering a
+stage's permission level, creating a new workflow (duplicate one instead),
+adding a repository-discovery folder or un-ignoring a removed repository,
+turning on terminals, agent tool access, automatic repairs, the Chairman
+adopting improvements on its own, or an agent loading the operator's own CLI
+customisations, attachments, and a task across several repositories (`linkedRepositoryIds`). Lowering is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
 and a repository override set to `null` is judged by the Settings value it falls
 back to.

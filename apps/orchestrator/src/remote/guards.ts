@@ -15,6 +15,8 @@ export interface GuardContext {
   workflow: (id: string) => Pick<WorkflowProfile, 'stages'> | null;
   /** The task works in more than one repository (docs/systems/multi-repository-tasks.md). */
   isMultiRepositoryTask?: (taskId: string) => boolean;
+  /** An agent's saved settings, for judging a remote change to them. */
+  agent?: (id: string) => { loadUserConfig: boolean } | null;
 }
 
 export type GuardResult = { ok: true } | { ok: false; message: string };
@@ -52,6 +54,15 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       if (settings.repositoryAutomation.ignoredPaths.some((path) => !n.repositoryAutomation.ignoredPaths.includes(path))) {
         return deny('Bringing back a removed repository can only be done on this machine.');
       }
+      // Switches that widen what runs without asking are turned on here only; off is always allowed (audit F-50).
+      const widened: Array<[boolean, string]> = [
+        [n.execution.terminals && !settings.execution.terminals, 'Terminals'],
+        [n.execution.exposeToolsToAgents && !settings.execution.exposeToolsToAgents, "Giving agents the Control Center's tools"],
+        [n.execution.autoRepair && !settings.execution.autoRepair, 'Automatic repairs'],
+        [n.learning.autonomy === 'act' && settings.learning.autonomy !== 'act', 'Letting the Chairman adopt improvements on its own'],
+      ];
+      const first = widened.find(([on]) => on);
+      if (first) return deny(`${first[1]} can only be turned on on this machine.`);
       return allow;
     }
     case 'repository.update': {
@@ -76,15 +87,20 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
     case 'agent.update':
       // Choosing which program runs as an agent is choosing what executes on this machine.
       if ('executablePath' in b) return deny("An agent's program can only be chosen on this machine.");
+      // Loading the operator's own CLI hooks, plugins and skills into agent runs widens what they may do (audit F-50).
+      if (b.loadUserConfig === true && ctx.agent?.(params.id ?? '')?.loadUserConfig === false) return deny("Loading your own CLI customisations into an agent can only be turned on on this machine.");
       return allow;
     case 'workflow.save': {
       const current = ctx.workflow(params.id ?? '');
-      if (!current) return allow;
+      // Saving an unknown id creates a workflow: without this, a copy of a built-in with its approval
+      // steps removed could be created and then chosen for tasks (audit F-20). Duplicate from here instead.
+      if (!current) return deny('New workflows are created on this machine. From here, duplicate an existing workflow and edit the copy.');
       const next = Array.isArray(b.stages) ? b.stages.map(obj) : [];
       for (const stage of current.stages) {
-        if (!stage.requiresApproval) continue;
         const kept = next.find((n) => n.key === stage.key);
-        if (kept?.requiresApproval !== true) return deny(`Removing the approval step from "${stage.name}" can only be done on this machine.`);
+        if (stage.requiresApproval && kept?.requiresApproval !== true) return deny(`Removing the approval step from "${stage.name}" can only be done on this machine.`);
+        // A lower level can drop a stage under the auto-approve line, which skips its approval just the same.
+        if (kept && typeof kept.permissionLevel === 'number' && kept.permissionLevel < stage.permissionLevel) return deny(`Lowering the permission level of "${stage.name}" can only be done on this machine.`);
       }
       return allow;
     }

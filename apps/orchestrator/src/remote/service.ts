@@ -166,6 +166,10 @@ export class RemoteNodeService {
         repository: (id) => d.store.getRepository(id) ?? null,
         workflow: (id) => d.store.getWorkflow(id),
         isMultiRepositoryTask: (taskId) => d.store.listLinkedRepositories(taskId).length > 0,
+        agent: (id) => {
+          const a = d.store.getAgent(id);
+          return a ? { loadUserConfig: a.settings.loadUserConfig } : null;
+        },
       }),
       taskVersion: (taskId) => d.store.getTask(taskId)?.version ?? null,
       approvalView: (approvalId) => {

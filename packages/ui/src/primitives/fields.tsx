@@ -43,13 +43,15 @@ export interface FieldProps {
   /** Put the label beside the control on wide screens (settings rows). */
   inline?: boolean;
   id?: string;
+  /** Beside the control (e.g. a Browse… button); keeps the label on the control itself. */
+  addon?: ReactNode;
 }
 
 /**
  * Visible label, helper text and inline error, associated with the control
  * (design.md §8.2). No placeholder-only labels.
  */
-export function Field({ label, helper, error, children, className, optional, inline, id: givenId }: FieldProps) {
+export function Field({ label, helper, error, children, className, optional, inline, id: givenId, addon }: FieldProps) {
   const autoId = useId();
   const id = givenId ?? (children.props.id as string | undefined) ?? autoId;
   const helperId = helper ? `${id}-help` : undefined;
@@ -65,7 +67,14 @@ export function Field({ label, helper, error, children, className, optional, inl
         {optional ? <span className="ml-1.5 font-normal text-fg-secondary">(optional)</span> : null}
       </label>
       <div className="flex min-w-0 flex-col gap-1.5">
-        {control}
+        {addon ? (
+          <div className="flex gap-2">
+            {control}
+            {addon}
+          </div>
+        ) : (
+          control
+        )}
         {helper ? (
           <p id={helperId} className="text-small text-fg-secondary">
             {helper}

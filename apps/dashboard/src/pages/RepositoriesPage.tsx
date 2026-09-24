@@ -144,15 +144,19 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
           submit();
         }}
       >
-        <Field label="Folder path" error={error} helper="For example C:\\Users\\you\\code\\my-app">
-          <div className="flex gap-2">
-            <Input value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
-            {pickFolder ? (
+        <Field
+          label="Folder path"
+          error={error}
+          helper={'For example C:\\Users\\you\\code\\my-app'}
+          addon={
+            pickFolder ? (
               <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setPath(p))}>
                 Browse…
               </Button>
-            ) : null}
-          </div>
+            ) : null
+          }
+        >
+          <Input value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
         </Field>
         <Field label="Display name" optional helper="Defaults to the folder name.">
           <Input value={name} onChange={(e) => setName(e.target.value)} />

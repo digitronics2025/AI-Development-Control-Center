@@ -25,7 +25,8 @@ provides one, decides whether the call may run, runs it and records it.
   with a Zod input schema (also its JSON schema for MCP), a base permission
   level, a per-input `classify()` and `run()`.
 - Several providers may offer one capability: `shell.run` (PowerShell, CMD,
-  Git Bash, WSL), `network.port_owner` (Windows via PowerShell, netstat),
+  Git Bash, WSL), `network.port_owner` (Windows via PowerShell, netstat;
+  elsewhere `ss`/`netstat`, then `lsof` where those show no pids, as on macOS),
   `http.request` (built-in fetch, curl).
 
 Built-in packs live in [packs/](../../packages/tools/src/packs): shell,
@@ -49,7 +50,11 @@ checkpoints, privileged helper, VS Code), verify, credential-broker
   persisted in `tool_health`, fresh for 6 hours, refreshed in the background
   at startup (`refreshStale`) and on **Check**; account checks only on
   request. A provider never checked is detected on first use, so routing never
-  refuses a tool just because nobody looked yet.
+  refuses a tool just because nobody looked yet. The cache detects without a
+  folder; when that finds nothing and the call has a repository, the provider
+  is detected again in that folder (cached 10 minutes per folder), so a
+  project-local binary such as `node_modules/.bin/wrangler` is used without a
+  global install.
 
 ## The execution door ([service.ts](../../apps/orchestrator/src/tools/service.ts))
 
@@ -100,12 +105,13 @@ planner and implementer prompts. Also callable as `environment.discover`.
 
 `process.start` (and the verify stage, and `cloudflare.dev`) start long-running
 commands owned by a task: a port already in use is reported with its owner
-instead of fought over; readiness is an HTTP poll; child pids are learned so
-"is this pid ours" covers the real server under a shell. Processes stop as a
+instead of fought over; readiness is an HTTP poll; child pids are learned
+(Win32_Process on Windows, `ps` parent links elsewhere) so "is this pid ours"
+covers the real server under a shell. Processes stop as a
 tree when the task's loop exits in any state other than running/queued, on
 completion and cancel, and at shutdown. After a crash, rows still marked live
-are killed only if the pid's creation time is within 15 s of when we started
-it; otherwise they are marked gone.
+are killed only if the pid's creation time (Win32_Process, or `ps -o lstart`)
+is within 15 s of when we started it; otherwise they are marked gone.
 
 ## Tables (migration 5)
 
@@ -144,4 +150,4 @@ credential, checkpoint and session routes in their own docs. Realtime:
 - `node-pty`, `playwright-core`, `better-sqlite3` and `axe-core` stay external
   to the orchestrator bundle and must be dependencies of `@acc/orchestrator`.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

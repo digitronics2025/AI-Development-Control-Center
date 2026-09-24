@@ -163,6 +163,24 @@ describe('recovery classification', () => {
     expect(planRepair(classifyFailure('Tests 1 failed'), ctx)).toBeNull();
     expect(planRepair(classifyFailure('', { timedOut: true }), ctx)).toBeNull();
   });
+
+  it('does not treat a missing project file as a missing dependency', () => {
+    const ctx = { packageManager: 'npm', hasRequirementsTxt: false, declaredDependencies: [], nodeModulesPresent: false, attempted: [] };
+    for (const line of [
+      "Error: Cannot find module '/home/me/shop/test'",
+      "Error: Cannot find module './src/cart.mjs'",
+      "Error: Cannot find module '..'",
+      "Error: Cannot find module 'C:\\code\\shop\\test'",
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'file:///home/me/shop/src/missing.mjs' imported from /home/me/shop/test/a.test.mjs",
+    ]) {
+      const failure = classifyFailure(['noise', line]);
+      expect(failure.category, line).not.toBe('missing_dependency');
+      expect(planRepair(failure, ctx), line).toBeNull();
+    }
+    // A package is still a dependency, scoped or not.
+    expect(classifyFailure("Error: Cannot find module '@acme/ui'").category).toBe('missing_dependency');
+    expect(classifyFailure("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from /app/src/a.js").category).toBe('missing_dependency');
+  });
 });
 
 describe('verification matrix', () => {

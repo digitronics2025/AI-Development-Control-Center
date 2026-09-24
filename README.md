@@ -110,7 +110,7 @@ pnpm demo   # simulated agents, sample repositories, tasks in every state
 | Command | What it checks |
 |---|---|
 | `pnpm check` | typecheck, lint and unit/integration tests (engine, API security, adapters with fake CLIs, Git attribution, redaction) |
-| `pnpm e2e` | Playwright against a real orchestrator: every page at 5 viewports × Dark/Light, axe WCAG 2.2 AA, keyboard and realtime flows, VS Code WebView |
+| `pnpm e2e` | Playwright against a real orchestrator: every page at 5 viewports × Dark/Light, axe WCAG 2.2 AA, keyboard and realtime flows, VS Code WebView, and the full journey — add a real repository, approve the plan, fix loop, real tests, browser app check, Git commit — checked against the repository on disk |
 | `pnpm verify:agents` | real CLI detection and subscription check; add `--run` for a one-word prompt through each agent |
 | `pnpm cloud:test` | the cloud Worker in the real Workers runtime with a real orchestrator paired as its node |
 | `pnpm e2e:cloud` | the dashboard in cloud mode through that Worker, both themes, 5 viewports, axe |

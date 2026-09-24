@@ -102,7 +102,7 @@ export class EgressSanitizer {
       ...roots.repositories.filter((r) => r.path).map((r) => ({ root: r.path, replacement: `<repo:${r.name.replace(/[<>]/g, '')}>` })),
       { root: roots.dataDir, replacement: '<acc-data>' },
       { root: roots.homeDir ?? os.homedir(), replacement: '<home>' },
-    ].filter((e) => e.root && path.isAbsolute(e.root));
+    ].filter((e) => e.root && (path.win32.isAbsolute(e.root) || path.posix.isAbsolute(e.root)));
     // Longest first: a repository under the home folder keeps its own name.
     this.roots = entries
       .map((e) => ({ pattern: rootPattern(e.root), replacement: e.replacement, length: e.root.length }))

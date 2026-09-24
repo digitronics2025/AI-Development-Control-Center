@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { powershellJson, resolveShell, runScript, runShell, type ProcessHandle, type ShellKind } from '@acc/executor';
 import { redact, sanitizeEnv } from '@acc/security';
 import type { BillingMode, TaskProcess, TaskProcessStatus } from '@acc/shared';
@@ -5,6 +7,8 @@ import { tcpConnect, waitForHttp, type ManagedProcessInfo, type ProcessHost } fr
 import type { Bus } from '../bus.js';
 import { newId, now } from '../store/store.js';
 import type { TaskProcessRecord, ToolStore } from './store.js';
+
+const execFileAsync = promisify(execFile);
 
 const LIVE: readonly TaskProcessStatus[] = ['starting', 'running', 'healthy', 'unhealthy'];
 const LOG_LINES = 2000;
@@ -78,7 +82,7 @@ export class ProcessManager {
 
   /** Refresh the set of child processes (a shell's dev server is its child, and holds the port). */
   private async learnDescendants(id: string, rootPid: number): Promise<void> {
-    if (process.platform !== 'win32') return;
+    if (process.platform !== 'win32') return this.learnPosixDescendants(id, rootPid);
     const shell = await resolveShell('powershell');
     if (!shell) return;
     try {
@@ -89,6 +93,32 @@ export class ProcessManager {
       );
       const live = this.live.get(id);
       if (live) for (const pid of Array.isArray(pids) ? pids : pids === null ? [] : [pids]) live.descendants.add(pid);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Linux and macOS: walk `ps` parent links down from the process this task started. */
+  private async learnPosixDescendants(id: string, rootPid: number): Promise<void> {
+    try {
+      const { stdout } = await execFileAsync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { env: { ...process.env, LC_ALL: 'C' }, timeout: 15_000 });
+      const children = new Map<number, number[]>();
+      for (const line of stdout.split('\n')) {
+        const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+        if (!m) continue;
+        const [pid, ppid] = [Number(m[1]), Number(m[2])];
+        children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+      }
+      const live = this.live.get(id);
+      if (!live) return;
+      const queue = [rootPid];
+      while (queue.length) {
+        for (const child of children.get(queue.shift()!) ?? []) {
+          if (live.descendants.has(child)) continue;
+          live.descendants.add(child);
+          queue.push(child);
+        }
+      }
     } catch {
       /* best effort */
     }
@@ -252,13 +282,16 @@ export class ProcessManager {
       }
       return map;
     }
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 0);
-        // Without a portable creation time, only claim identity for pids that exist; the time check below then fails closed.
-      } catch {
-        /* not running */
+    // Linux and macOS: `ps` prints each live pid's start time (local time, second precision).
+    try {
+      const { stdout } = await execFileAsync('ps', ['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')], { env: { ...process.env, LC_ALL: 'C' }, timeout: 15_000 });
+      for (const line of stdout.split('\n')) {
+        const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+        const created = m ? new Date(m[2]!) : null;
+        if (m && created && !Number.isNaN(created.getTime())) map.set(Number(m[1]), created.toISOString());
       }
+    } catch {
+      /* no ps, or none of the pids is running: treat as gone (safe: nothing is killed) */
     }
     return map;
   }
@@ -276,7 +309,12 @@ export class ProcessManager {
     try {
       process.kill(-pid, 'SIGTERM');
     } catch {
-      /* gone */
+      // Not a process-group leader (started without its own group): signal the process itself.
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        /* gone */
+      }
     }
   }
 }

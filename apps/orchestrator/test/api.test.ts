@@ -115,6 +115,15 @@ describe('REST API', () => {
     expect(reset.body).toMatchObject({ version: before.version + 2, builtin: true });
   });
 
+  it('refuses a template with a placeholder the builder never fills, and saves no version for it', async () => {
+    const before = (await t.api('GET', '/api/prompts')).body.find((p: { role: string }) => p.role === 'fixer');
+    const refused = await t.api('PUT', '/api/prompts/fixer', { body: 'Fix {{request}} using {{ magic_context }} and {{nope}}' });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.message).toContain('{{magic_context}}, {{nope}}');
+    const after = (await t.api('GET', '/api/prompts')).body.find((p: { role: string }) => p.role === 'fixer');
+    expect(after.version).toBe(before.version);
+  });
+
   it('updates settings and keeps subscription-only as the default', async () => {
     const settings = (await t.api('GET', '/api/settings')).body;
     expect(settings).toMatchObject({ billingMode: 'subscription', autoApproveUpToLevel: 3, theme: 'dark', defaultMode: 'discuss' });

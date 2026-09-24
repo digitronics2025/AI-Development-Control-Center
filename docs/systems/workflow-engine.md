@@ -5,7 +5,7 @@ sources:
   - packages/shared/src/workflow.ts
   - workflows/**
   - prompts/**
-verified_at: 2d516aa
+verified_at: 8ce8b50
 ---
 
 # Workflow engine
@@ -159,14 +159,15 @@ skipped (its command was removed) has the approval withdrawn and continues. Grac
 Role templates ([prompts/](../../prompts)) are versioned in the database; each
 edit is a new version and tasks record which version each role used. The
 context builder ([context.ts](../../apps/orchestrator/src/engine/context.ts))
-gives each role only what it needs (e.g. the reviewer gets the diff and test
-results, bounded to 150 KB). Every prompt, including user-edited ones, is
-prefixed with `RUN_CONTEXT`: the agent is a subagent whose reply is a task
-record, so it writes no chat-style recap or to-do block.
+fills a fixed placeholder catalog for every agent stage, prefixes every
+prompt with `RUN_CONTEXT`, and saves each stage's rendered prompt as an
+artifact. The catalog, the marker lines the engine reads back (`VERDICT:`,
+`BLOCKED ON OPERATOR:`, `NEEDS OPERATOR:`, `CAUSE:`) and what each role is
+told are in [prompts.md](prompts.md).
 
 Stage summaries in timelines and reports come from the agent's **Summary**
 section (or Goal/Findings), else its first prose line — never a heading,
-table row or verdict line (`summarize`). Verification commands record their
+table row, verdict or cause line (`summarize`). Verification commands record their
 runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`, or for
 `node --test` (which prints `# pass 2` / `ℹ pass 2`, one total per line)
 a composed `1 failed | 2 passed (3)`

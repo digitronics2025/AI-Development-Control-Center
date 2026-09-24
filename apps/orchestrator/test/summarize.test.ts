@@ -74,3 +74,11 @@ describe('parseVerdict', () => {
     expect(parseVerdict('no verdict here')).toBeNull();
   });
 });
+
+describe('summarize with the v4 report shape', () => {
+  it('never returns a CAUSE line, and takes the Summary sentence before the marker lines', () => {
+    expect(summarize('CAUSE: code\n\nVERDICT: FAIL')).toBeNull();
+    const review = ['## Summary', '', 'One blocking defect: the null check the request asked for is missing.', '', '## Issues', '', '- blocking src/a.ts:12', '', 'CAUSE: code', '', 'VERDICT: FAIL'].join('\n');
+    expect(summarize(review)).toBe('One blocking defect: the null check the request asked for is missing.');
+  });
+});

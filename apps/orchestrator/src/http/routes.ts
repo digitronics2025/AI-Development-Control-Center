@@ -23,6 +23,7 @@ import {
   updateRepositorySchema,
   updateSettingsSchema,
   updateTaskSchema,
+  unknownPlaceholders,
   type ServiceHealth,
   type TaskChanges,
   type TaskStatus,
@@ -447,6 +448,13 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
 
   app.get('/api/prompts', async () => s.prompts.list());
   const roleParam = z.object({ role: z.enum(ROLES) });
-  app.put('/api/prompts/:role', async (request) => s.prompts.update(roleParam.parse(request.params).role, promptTemplateUpdateSchema.parse(request.body).body));
+  app.put('/api/prompts/:role', async (request) => {
+    const { role } = roleParam.parse(request.params);
+    const { body } = promptTemplateUpdateSchema.parse(request.body);
+    // Fail closed: a placeholder the builder never fills would silently render as "(none)" in every prompt.
+    const unknown = unknownPlaceholders(body);
+    if (unknown.length) throw new EngineError(`Unknown placeholders: ${unknown.map((n) => `{{${n}}}`).join(', ')}. See the list under the editor.`, 'INVALID_INPUT');
+    return s.prompts.update(role, body);
+  });
   app.post('/api/prompts/:role/reset', async (request) => s.prompts.reset(roleParam.parse(request.params).role));
 }

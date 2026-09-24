@@ -6,6 +6,7 @@ import {
   Banner,
   Button,
   ConfirmDialog,
+  Disclosure,
   Field,
   FieldGroup,
   Input,
@@ -23,8 +24,10 @@ import {
 import {
   MODE_HELP,
   PERMISSION_LEVEL_INFO,
+  PROMPT_PLACEHOLDERS,
   ROLES,
   ROLE_LABEL,
+  unknownPlaceholders,
   type ChairmanSettings,
   type LearningSettings,
   type PermissionLevel,
@@ -138,6 +141,8 @@ function PromptTemplates() {
   useEffect(() => setBody(current?.body ?? ''), [current?.role, current?.version]); // eslint-disable-line react-hooks/exhaustive-deps
   if (prompts.isLoading) return <Skeleton className="h-64" />;
   const available = ROLES.filter((r) => prompts.data?.some((p) => p.role === r));
+  // A placeholder the orchestrator never fills would render as "(none)" in every prompt; refuse it here as the API does.
+  const unknown = unknownPlaceholders(body);
   return (
     <div className="flex flex-col gap-3">
       <Field label="Role">
@@ -145,12 +150,23 @@ function PromptTemplates() {
       </Field>
       {current ? (
         <p className="text-small text-fg-secondary">
-          Version {current.version} · {current.builtin ? 'built-in' : 'edited by you'} · tasks record the version each role used. Placeholders such as {'{{request}}'} and {'{{plan}}'} are filled per stage.
+          Version {current.version} · {current.builtin ? 'built-in' : 'edited by you'} · tasks record the version each role used. A placeholder such as {'{{request}}'} is filled per stage; an empty one reads
+          "(none)".
         </p>
       ) : null}
-      <Field label="Template">
+      <Field label="Template" error={unknown.length ? `Unknown placeholder${unknown.length > 1 ? 's' : ''}: ${unknown.map((n) => `{{${n}}}`).join(', ')}. Use the names listed below.` : null}>
         <Textarea value={body} onChange={(e) => setBody(e.target.value)} className="min-h-[320px] font-mono text-code" spellCheck={false} />
       </Field>
+      <Disclosure title="Placeholders" description={`${Object.keys(PROMPT_PLACEHOLDERS).length} values the orchestrator fills for every stage`}>
+        <dl className="grid gap-x-4 gap-y-1.5 px-4 pb-4 text-small md:grid-cols-[max-content_minmax(0,1fr)]">
+          {Object.entries(PROMPT_PLACEHOLDERS).map(([name, description]) => (
+            <div key={name} className="contents">
+              <dt className="font-mono text-code text-fg">{`{{${name}}}`}</dt>
+              <dd className="text-fg-secondary">{description}</dd>
+            </div>
+          ))}
+        </dl>
+      </Disclosure>
       <div className="flex flex-wrap justify-end gap-2">
         <Button icon={RotateCcw} onClick={() => mutations.reset.mutate(role, { onSuccess: () => toast('Built-in template restored as a new version') })} loading={mutations.reset.isPending}>
           Restore built-in
@@ -158,8 +174,8 @@ function PromptTemplates() {
         <Button
           variant="primary"
           icon={Save}
-          disabled={!body.trim() || body === current?.body}
-          disabledReason="No unsaved changes"
+          disabled={!body.trim() || body === current?.body || unknown.length > 0}
+          disabledReason={unknown.length ? 'Fix the unknown placeholders first' : 'No unsaved changes'}
           loading={mutations.save.isPending}
           onClick={() => mutations.save.mutate({ role, body }, { onSuccess: () => toast(`${ROLE_LABEL[role]} template saved as a new version`), onError: (e) => toast(errorMessage(e), 'info') })}
         >

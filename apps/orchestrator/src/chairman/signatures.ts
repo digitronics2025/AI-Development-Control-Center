@@ -85,9 +85,25 @@ export function reviewIssues(output: string, limit = 3): string[] {
 
 const PLAN_WORDS = /\b(requirement|requirements|requested|the plan|plan is|approach|misunderstood|does not address|doesn't address|wrong feature|out of scope|not what was asked|success criteria)\b/i;
 
-/** A verifier/reviewer that says the work misses the request points at the plan, not the code. */
+/**
+ * The explicit `CAUSE: code | plan` line a reviewer or verifier writes with a
+ * FAIL (prompts/reviewer.md, prompts/verifier.md); the last one wins. Null when
+ * the output has none (an older or user-edited template).
+ */
+export function causeMarker(text: string): 'code' | 'plan' | null {
+  const last = [...text.matchAll(/^[\s>*+-]*\**CAUSE:?\**:?\s*(code|plan)\b/gim)].at(-1)?.[1];
+  return last ? (last.toLowerCase() as 'code' | 'plan') : null;
+}
+
+/**
+ * A verifier/reviewer that says the work misses the request points at the
+ * plan, not the code. The explicit marker decides when present; the word list
+ * is the fallback, since a verifier naming its "success criteria" is not
+ * thereby reporting a plan mismatch.
+ */
 export function pointsAtPlan(text: string): boolean {
-  return PLAN_WORDS.test(text);
+  const marker = causeMarker(text);
+  return marker ? marker === 'plan' : PLAN_WORDS.test(text);
 }
 
 function categoryOf(input: FailureInput): FailureCategory {

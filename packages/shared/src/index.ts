@@ -13,3 +13,4 @@ export * from './remote.js';
 export * from './remote-operations.js';
 export * from './skills.js';
 export * from './learning.js';
+export * from './prompts.js';

@@ -5,8 +5,10 @@ import { redact } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
   DEFAULT_VERIFY_COMMAND_KINDS,
+  PLACEHOLDER_PATTERN,
   ROLE_LABEL,
   type ArtifactType,
+  type PromptPlaceholder,
   type StageDefinition,
   type StageInstance,
 } from '@acc/shared';
@@ -29,7 +31,9 @@ const MAX_TEXT_ATTACHMENT = 50_000;
 export const RUN_CONTEXT = [
   'You are running as a subagent of the AI Development Control Center, not in a chat with the operator.',
   'Your reply is saved as this stage\'s artifact and read by the next stage and in the operator\'s dashboard.',
+  'Only your final message is kept: put the whole report in it, under the headings your role instructions ask for.',
   'Report facts in the requested sections only: no closing recap, summary for a non-technical reader or "what you need to do" block.',
+  'Lines starting with BLOCKED ON OPERATOR:, NEEDS OPERATOR:, CAUSE: and VERDICT: are read by the orchestrator; write them exactly as your role instructions show, each on its own line.',
   'The orchestrator handles commits, tests and approvals after you; do not tell the operator how to commit or what has not been saved.',
 ].join('\n');
 
@@ -37,8 +41,9 @@ function clip(text: string, max = MAX_SECTION_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}\n\n[truncated ${text.length - max} characters]` : text;
 }
 
+/** Fill `{{name}}` placeholders; an unknown or empty one renders as "(none)" so a prompt never fails for want of a value. */
 export function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, name: string) => {
+  return template.replace(new RegExp(PLACEHOLDER_PATTERN), (_m, name: string) => {
     const value = vars[name];
     return value === undefined || value.trim() === '' ? NONE : value;
   });
@@ -179,10 +184,11 @@ export class ContextBuilder {
     const snapshot: GitSnapshot | null = baseline ? { branch: baseline.branch, head: baseline.head, files: baseline.files } : null;
     const workdir = taskWorkdir(task, repo);
 
-    const needsDiff = ['reviewer', 'fixer', 'verifier'].includes(def.role) || def.role === 'implementer';
+    // Every role gets the diff: the investigator and planner are read-only,
+    // but a root-cause return or a re-plan is judged on the work so far.
     let diff = '';
     let changedFiles = '';
-    if (snapshot && needsDiff) {
+    if (snapshot) {
       try {
         const { diff: raw, truncated } = await diffSince(workdir, snapshot, { maxBytes: MAX_DIFF_CHARS });
         diff = redact(raw) + (truncated ? '\n[diff truncated]' : '');
@@ -191,7 +197,7 @@ export class ContextBuilder {
       } catch {
         diff = '(diff unavailable)';
       }
-    } else if (!snapshot && needsDiff) {
+    } else {
       // A Staged Review task has no baseline: it reviews the staged diff
       // Source Control saved (already redacted and bounded) when it started.
       const staged = await this.artifacts.latestText(task.id, 'staged-diff', MAX_DIFF_CHARS);
@@ -209,10 +215,13 @@ export class ContextBuilder {
     }
 
     const verifyKinds = new Set(DEFAULT_VERIFY_COMMAND_KINDS);
-    const vars: Record<string, string> = {
+    // Typed against the catalog: a placeholder the templates may use is always filled here.
+    const vars: Record<PromptPlaceholder, string> = {
       task_id: task.id,
       title: task.title,
       role: ROLE_LABEL[def.role],
+      stage_name: def.name,
+      workflow_name: task.workflow.name,
       request: `# ${task.title}\n\n${task.description}`,
       repository_name: repo.name,
       repository_path: workdir,
@@ -223,6 +232,7 @@ export class ContextBuilder {
       implementation_report: await this.artifactsOf(task.id, ['implementation-report', 'fix-report'], 20_000),
       review: await this.latest(task.id, 'review'),
       test_results: this.testResults(task),
+      verification_report: await this.latest(task.id, 'browser-report'),
       diff: clip(diff, MAX_DIFF_CHARS),
       changed_files: changedFiles,
       directives: this.directives(task, def, stage),
@@ -234,6 +244,7 @@ export class ContextBuilder {
         .join('\n'),
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
+      max_fix_cycles: String(task.maxFixCycles),
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);

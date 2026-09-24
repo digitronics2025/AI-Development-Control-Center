@@ -14,7 +14,7 @@ import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandi
 import { classifyProgress } from '../src/chairman/progress.js';
 import { extractJson, fenceEvidence, parseRecoveryChoice } from '../src/chairman/reasoner.js';
 import { deriveRule, globToRegExp, matchesAny } from '../src/chairman/rules.js';
-import { failingTestIds, normalizeMessage, pointsAtPlan, signatureOf, testFailureCount } from '../src/chairman/signatures.js';
+import { causeMarker, failingTestIds, normalizeMessage, pointsAtPlan, signatureOf, testFailureCount } from '../src/chairman/signatures.js';
 
 const WORKFLOW: WorkflowProfile = {
   id: 'wf',
@@ -60,6 +60,23 @@ describe('failure signatures', () => {
     expect(pointsAtPlan('The tests fail on null input')).toBe(false);
     const worker = signatureOf({ source: 'worker', stageKey: 'implement', message: 'out of credits', errorClass: 'USAGE_LIMIT' });
     expect(worker.category).toBe('AUTH_OR_EXTERNAL');
+  });
+
+  it('lets an explicit CAUSE line decide over the plan words (prompts/verifier.md)', () => {
+    // A verifier naming its success criteria is not reporting a plan mismatch.
+    const codeDefect = '## Criteria\n\n- Success criteria 2: not met, the requested null check is missing (src/a.ts:12)\n\nCAUSE: code\n\nVERDICT: FAIL';
+    expect(causeMarker(codeDefect)).toBe('code');
+    expect(pointsAtPlan(codeDefect)).toBe(false);
+    expect(signatureOf({ source: 'verify', stageKey: 'verify', message: 'Verify requested changes', detail: codeDefect }).category).toBe('CODE_OR_TEST');
+    // The marker also works without any of the words, bold or listed, and the last one wins.
+    const planMiss = '- The diff adds a list entry; the user wanted a heading.\n\n**CAUSE: plan**\n\nVERDICT: FAIL';
+    expect(causeMarker(planMiss)).toBe('plan');
+    expect(pointsAtPlan(planMiss)).toBe(true);
+    expect(causeMarker('CAUSE: plan\n\n- CAUSE: code')).toBe('code');
+    expect(causeMarker('the cause: plan mismatch, see CAUSE: code in prose')).toBeNull();
+    // Without a marker (an older or user-edited template) the word list still applies.
+    expect(causeMarker('The change does not address the requirement.')).toBeNull();
+    expect(pointsAtPlan('The change does not address the requirement.')).toBe(true);
   });
 });
 

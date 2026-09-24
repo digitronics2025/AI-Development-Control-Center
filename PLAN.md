@@ -821,18 +821,25 @@ The agent must inspect the repository directly when it needs code-level truth.
 
 ## 18. Standard Plan Template
 
-Generated plans should use:
+Generated plans should use (v4 templates, [docs/systems/prompts.md](docs/systems/prompts.md)):
 
-1. Goal
-2. Scope
-3. Success Criteria
-4. Implementation Plan
-5. Verification
-6. Security and Data Check
-7. Completion Report
-8. Found for Later
-9. Next Recommended Task
-10. Final Autopilot Instruction
+1. Summary (what the operator approves on: what changes, risk, anything irreversible)
+2. Goal
+3. Scope
+4. Success Criteria (each with how it is proven)
+5. Assumptions and Decisions
+6. Implementation Plan
+7. Verification
+8. Security and Data Check
+9. Irreversible steps and approvals
+10. Completion Report
+11. Found for Later
+12. Next Recommended Task
+13. Skills used
+
+The orchestrator is the autopilot, so a plan carries no "Final Autopilot
+Instruction"; decisions only the operator can make end the planner's reply as
+`BLOCKED ON OPERATOR:` lines instead of notes inside the plan.
 
 Prompt templates must be editable and versioned.
 

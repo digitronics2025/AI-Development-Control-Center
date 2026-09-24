@@ -4,6 +4,7 @@
 |---|---|---|
 | Orchestrator (HTTP, WebSocket, persistence) | [orchestrator.md](orchestrator.md) | `apps/orchestrator` |
 | Workflow engine | [workflow-engine.md](workflow-engine.md) | `apps/orchestrator/src/engine`, `packages/shared/src/workflow.ts`, `workflows/` |
+| Role prompts (templates, placeholders, marker lines, prompt artifacts) | [prompts.md](prompts.md) | `prompts/`, `packages/shared/src/prompts.ts`, `apps/orchestrator/src/engine/context.ts` |
 | Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
 | Learning loop (task reviews, findings, improvements the Chairman adopts) | [learning.md](learning.md) | `apps/orchestrator/src/learning`, `packages/shared/src/learning.ts`, `packages/tools/src/packs/installer.ts` |
 | Agent adapters | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |

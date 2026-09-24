@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/engine/supervision.ts
   - packages/shared/src/chairman.ts
   - apps/dashboard/src/pages/task/ChairmanDrawer.tsx
-verified_at: 953e754
+verified_at: 8ce8b50
 ---
 
 # Chairman supervisor
@@ -174,6 +174,10 @@ failure leaves no new failure to classify.
 
 [signatures.ts](../../apps/orchestrator/src/chairman/signatures.ts) normalises
 (ids, paths, timings, numbers stripped) and hashes; counts are kept apart.
+A review or verify failure is `REQUIREMENT_OR_PLAN` when the output's
+`CAUSE: plan` line says so (`causeMarker`, [prompts.md](prompts.md)); with
+`CAUSE: code` it stays `CODE_OR_TEST` whatever words the text uses, and only
+an output without the line falls back to the plan-word list (`pointsAtPlan`).
 [progress.ts](../../apps/orchestrator/src/chairman/progress.ts): fewer failures →
 PROGRESSING, more → REGRESSING, same hash 3× (tests) or 2× (review/verify) →
 STALLED, else STABLE/UNKNOWN. Stored in `failure_signatures` per recovery cycle.

@@ -69,13 +69,14 @@ export interface RunControl {
   watchdogReason: string | null;
 }
 
-const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string }>> = {
-  investigator: { type: 'investigation', name: 'investigation.md' },
-  planner: { type: 'plan', name: 'plan.md' },
-  implementer: { type: 'implementation-report', name: 'implementation-report.md' },
-  fixer: { type: 'fix-report', name: 'fix-report.md' },
-  reviewer: { type: 'review', name: 'review.md' },
-  verifier: { type: 'verification', name: 'verification.md' },
+/** The report artifact each role writes, and the name its rendered prompt is saved under (docs/systems/prompts.md). */
+const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string; prompt: string }>> = {
+  investigator: { type: 'investigation', name: 'investigation.md', prompt: 'investigation-prompt.md' },
+  planner: { type: 'plan', name: 'plan.md', prompt: 'plan-prompt.md' },
+  implementer: { type: 'implementation-report', name: 'implementation-report.md', prompt: 'implementation-prompt.md' },
+  fixer: { type: 'fix-report', name: 'fix-report.md', prompt: 'fix-prompt.md' },
+  reviewer: { type: 'review', name: 'review.md', prompt: 'review-prompt.md' },
+  verifier: { type: 'verification', name: 'verification.md', prompt: 'verification-prompt.md' },
 };
 
 /** Last `VERDICT: PASS|FAIL` line in an agent's output. */
@@ -101,7 +102,7 @@ function proseLine(raw: string): { text: string; label: string | null } | null {
   // A bare "Summary: text" label line carries its own content.
   const inline = /^(summary|goal)\s*:\s*(.+)$/i.exec(text);
   if (inline) return { text: inline[2]!, label: null };
-  if (text.length <= 3 || /^verdict:\s*(pass|fail)\.?$/i.test(text)) return null;
+  if (text.length <= 3 || /^verdict:\s*(pass|fail)\.?$/i.test(text) || /^cause:\s*(code|plan)\.?$/i.test(text)) return null;
   return { text, label: null };
 }
 
@@ -216,9 +217,8 @@ export class StageRunners {
     } catch (error) {
       return this.failStage(stage, 'CONTEXT_FAILURE', `Context could not be built: ${(error as Error).message}`);
     }
-    if (def.role === 'implementer') {
-      await this.d.artifacts.write(task.id, { name: 'implementation-prompt.md', type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key });
-    }
+    // What the agent actually read, kept per stage so any run can be debugged from its prompt.
+    await this.d.artifacts.write(task.id, { name: ROLE_ARTIFACT[def.role]?.prompt ?? `${def.key}-prompt.md`, type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key });
 
     const executionId = newId();
     const startedAt = now();

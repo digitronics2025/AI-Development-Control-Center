@@ -32,6 +32,7 @@ import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { testFailureSummary, testPassSummary } from './test-summary.js';
 import type { EngineTooling } from './tooling.js';
+import { agentWorkdir } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 /** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
@@ -222,7 +223,7 @@ export class StageRunners {
 
     const executionId = newId();
     const startedAt = now();
-    const workdir = taskWorkdir(task, repo);
+    const workdir = agentWorkdir(task, repo);
     store.insertExecution({
       id: executionId,
       taskId: task.id,

@@ -17,7 +17,7 @@ import { policyCeiling, PROFILE_IDS, profileForRepository, type ProfileId } from
 import { redact } from '@acc/security';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
-import { taskWorkdir } from '../engine/workdir.js';
+import { agentWorkdir } from '../engine/task-repositories.js';
 import { ToolService, type ToolScope, type ToolSession } from '../tools/service.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
@@ -159,7 +159,7 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
     let taskId: string | null = null;
     if (body.taskId) {
       const task = s.engine.task(body.taskId);
-      cwd = taskWorkdir(task, s.repositories.record(task.repositoryId));
+      cwd = agentWorkdir(task, s.repositories.record(task.repositoryId));
       taskId = task.id;
     } else if (body.repositoryId) {
       cwd = s.repositories.record(body.repositoryId).path;

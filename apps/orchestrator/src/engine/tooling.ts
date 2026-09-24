@@ -33,6 +33,7 @@ import type { ToolScope, ToolService } from '../tools/service.js';
 import type { ToolStore } from '../tools/store.js';
 import type { TerminalService } from '../tools/terminals.js';
 import type { Publisher } from './publisher.js';
+import { agentWorkdir } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
@@ -110,7 +111,7 @@ export class EngineTooling {
   }
 
   scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null }, sessionId: string | null = null): ToolScope {
-    const cwd = taskWorkdir(task, repo);
+    const cwd = agentWorkdir(task, repo);
     return {
       taskId: task.id,
       stageId: stage.stageId,
@@ -135,7 +136,7 @@ export class EngineTooling {
     if (!this.d.settings.get().execution.environmentDiscovery) return null;
     const existing = this.d.store.latestArtifactOfType(task.id, 'environment');
     if (existing) return (await this.d.artifacts.latestText(task.id, 'environment')) ?? null;
-    const cwd = taskWorkdir(task, repo);
+    const cwd = agentWorkdir(task, repo);
     let branch: string | null = null;
     let dirty: number | null = null;
     try {

@@ -35,3 +35,33 @@ describe('store: linked repositories', () => {
     ]);
   });
 });
+
+describe('task repositories accessor', () => {
+  it('answers exactly as before for a single-repository task, and lists linked ones in order', async () => {
+    const { agentWorkdir, inFolder, isMultiRepository, taskRepositories, taskRepository, taskRepositoryIds } = await import('../src/engine/task-repositories.js');
+    t = await createTestApp();
+    const apiPath = await makeRepo();
+    const api = await addRepo(t, apiPath);
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Accessor', { start: false });
+    const store = t.services.store;
+    const single = taskRepositories(store, store.getTask(id)!);
+    expect(single).toEqual([expect.objectContaining({ primary: true, folder: null, workdir: store.getRepository(api)!.path })]);
+    expect(agentWorkdir(store.getTask(id)!, store.getRepository(api)!)).toBe(store.getRepository(api)!.path);
+    expect(isMultiRepository(store, { id })).toBe(false);
+    expect(inFolder(null, 'src/a.ts')).toBe('src/a.ts');
+
+    store.insertLinkedRepositories([{ taskId: id, repositoryId: web, position: 1, folder: 'web', git: { ...store.getTask(id)!.git, worktreePath: '/ws/web' } }]);
+    store.updateTask(id, { git: { ...store.getTask(id)!.git, workspacePath: '/ws', worktreePath: '/ws/api', folder: 'api' } });
+    const task = store.getTask(id)!;
+    expect(taskRepositoryIds(store, task)).toEqual([api, web]);
+    expect(taskRepositories(store, task).map((r) => [r.repo.id, r.folder, r.workdir, r.primary])).toEqual([
+      [api, 'api', '/ws/api', true],
+      [web, 'web', '/ws/web', false],
+    ]);
+    expect(taskRepository(store, task, web)?.folder).toBe('web');
+    expect(agentWorkdir(task, store.getRepository(api)!)).toBe('/ws');
+    expect(isMultiRepository(store, task)).toBe(true);
+    expect(inFolder('web', 'src/a.ts')).toBe('web/src/a.ts');
+  });
+});

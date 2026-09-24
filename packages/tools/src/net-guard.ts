@@ -85,7 +85,6 @@ export async function readCapped(res: Response, max = MAX_RESPONSE_BYTES): Promi
     const room = max - total;
     if (value.byteLength > room) {
       if (room > 0) chunks.push(Buffer.from(value.subarray(0, room)));
-      total = max;
       await reader.cancel().catch(() => undefined);
       return { buffer: Buffer.concat(chunks), truncated: true };
     }

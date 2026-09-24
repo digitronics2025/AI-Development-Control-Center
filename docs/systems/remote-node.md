@@ -7,7 +7,7 @@ sources:
   - packages/shared/src/remote-operations.ts
   - apps/dashboard/src/components/remote-access.tsx
   - apps/dashboard/src/api/remote.ts
-verified_at: 953e754
+verified_at: c66a1fc
 ---
 
 # Remote execution node

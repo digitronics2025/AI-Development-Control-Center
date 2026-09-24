@@ -7,7 +7,7 @@ sources:
   - apps/dashboard/src/pages/NodesPage.tsx
   - apps/dashboard/e2e-cloud/**
   - .github/workflows/**
-verified_at: 953e754
+verified_at: c66a1fc
 ---
 
 # Cloud control plane

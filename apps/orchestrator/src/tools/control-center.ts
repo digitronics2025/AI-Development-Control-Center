@@ -97,7 +97,7 @@ export function controlCenterProvider(d: { store: Store; views: TaskViews; chair
           const rows = d.usage.breakdown(filter, input.groupBy).map((r) => ({ key: r.label || r.key, ...totals(r.totals), tasks: r.tasks, shareOfCost: r.shareOfCost }));
           return {
             ok: true,
-            summary: `Usage ${filter.from.slice(0, 10)} to ${filter.to.slice(0, 10)}: ${overview.totals.requests} run(s), $${dollars(overview.totals.costNanos) ?? 0}`,
+            summary: `Usage ${filter.from.slice(0, 10)} to ${filter.to.slice(0, 10)}: ${overview.totals.requests} run(s), $${(overview.totals.costNanos / 1e9).toFixed(2)}`,
             output: { range: filter, totals: totals(overview.totals), successfulTasks: overview.successfulTasks, failedTasks: overview.failedTasks, groupBy: input.groupBy, rows, billingNote: overview.billingNote },
           };
         },

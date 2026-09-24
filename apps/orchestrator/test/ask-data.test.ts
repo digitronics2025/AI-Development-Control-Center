@@ -174,6 +174,13 @@ describe('Ask data tools', () => {
     t.services.tools.closeSession(session.id);
   });
 
+  it('reports usage in dollars with two decimals', async () => {
+    const scope = { ...(t.services.ask as unknown as { readOnlyScope: (...a: unknown[]) => any }).readOnlyScope('.', null, ['controlcenter'], true), sessionId: null, escalated: new Set<string>() };
+    const r = await t.services.tools.invoke({ capability: 'controlcenter.usage', input: {}, origin: 'agent', scope });
+    expect(r.result.ok).toBe(true);
+    expect(r.result.summary).toMatch(/: \d+ run\(s\), \$\d+\.\d{2}$/);
+  });
+
   it('stops after the lookup limit for one answer', async () => {
     const id = await thread();
     const many = Array.from({ length: 27 }, () => '[sim:lookup:controlcenter.approvals]').join(' ');

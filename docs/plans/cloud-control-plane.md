@@ -2,7 +2,7 @@
 title: Cloud control plane and secure remote execution nodes on Cloudflare
 source: conversation 2026-09-23 (CLOUD_CONTROL_PLAN.md, attached to /implement-plan)
 created: 2026-09-23
-status: in-progress
+status: done
 ---
 
 # Cloud control plane and secure remote execution nodes on Cloudflare
@@ -43,7 +43,7 @@ status: in-progress
 - [x] T2. Similar-issue sweep — done when: every local route, bus message type and settings field was checked against the operation catalog and egress rules; sibling pages checked for token assumptions — check: `manual: list what was searched and what was found`
 - [x] T3. Full verification green — done when: typecheck, lint, docs guard, unit tests, build, local e2e and cloud e2e exit 0 — check: `pnpm check && pnpm build && pnpm e2e && pnpm e2e:cloud`
 - [x] T4. Docs synced per the repo's rules — done when: the system docs reflect the change with a current `Last verified:` date — check: `git diff --stat 238add7..HEAD -- docs/`
-- [ ] T5. Committed path-scoped and pushed — done when: `git status` shows none of this work uncommitted and the push succeeded — check: `git log origin/main..HEAD --oneline`
+- [x] T5. Committed path-scoped and pushed — done when: `git status` shows none of this work uncommitted and the push succeeded — check: `git log origin/main..HEAD --oneline`
 - [x] T6. Confirmed live — done when: the deployed Worker is observed on its hostnames (health, fail-closed control host, node connected) — check: `pnpm cloud:smoke`
 - [x] T7. A claim registered for this change — done when: the repo's claims register holds an entry, or this step says "no observable outcome" with the reason — check: `manual: name the claim and its deadline, or why none` → no change needed: this repository has no claims register (`docs/` holds only `plans/` and `systems/`); the observable outcome — the cloud dashboard usable from any browser — is gated on step 23 and is the first item of the final report's to-do list.
 

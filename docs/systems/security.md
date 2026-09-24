@@ -13,7 +13,7 @@ verified_at: 2d516aa
 
 1. **Host header** must be `127.0.0.1`, `localhost` or `[::1]` → blocks DNS rebinding (421).
 2. **Origin**, when present, must be a loopback `http://` origin, a `vscode-webview://` origin, or listed in `ACC_ALLOWED_ORIGINS` (403). Allowed origins get CORS headers.
-3. **Bearer token** for `/api/*` and `/ws` (`?token=` for WebSockets, compared in constant time). The token lives in the data folder; the dashboard gets it only through its own same-origin HTML.
+3. **Bearer token** for `/api/*` and `/ws` (`?token=` for WebSockets, compared in constant time). The token lives in the data folder; the dashboard gets it only through its own same-origin HTML. The check is decided on the percent-decoded path **and** the route the router matched, never on the raw request line (the router decodes `/%61pi/…` to `/api/…`); an undecodable path is 400. The tool-session and connected-app exemptions apply only when the matched route is in that group.
 4. Binds to loopback only; `ACC_HOST` elsewhere is refused unless `ACC_ALLOW_REMOTE=1`.
 5. Dashboard HTML ships a strict CSP (`script-src 'self'`, no framing).
 

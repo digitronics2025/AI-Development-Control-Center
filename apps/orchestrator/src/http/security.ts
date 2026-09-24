@@ -26,6 +26,22 @@ export function isAllowedOrigin(origin: string, extra: string[]): boolean {
   }
 }
 
+/** The request path, percent-decoded and with repeated slashes collapsed; null when it cannot be decoded. */
+export function decodedPath(url: string): string | null {
+  const raw = url.split(/[?#]/, 1)[0] ?? '';
+  try {
+    return decodeURIComponent(raw).replace(/\/{2,}/g, '/');
+  } catch {
+    return null;
+  }
+}
+
+/** `/api`, `/api/…` and `/ws` (any case, as the router may match either) need a token. */
+export function isApiPath(pathname: string): boolean {
+  const p = pathname.toLowerCase();
+  return p === '/api' || p.startsWith('/api/') || p === '/ws' || p.startsWith('/ws/');
+}
+
 export function tokensMatch(expected: string, provided: string | undefined | null): boolean {
   if (!provided) return false;
   const a = Buffer.from(expected);
@@ -66,24 +82,31 @@ export function registerSecurity(app: FastifyInstance, options: { token: string;
       reply.header('access-control-max-age', '600');
     }
     const url = request.url;
-    const isApi = url.startsWith('/api/') || url === '/api' || url.startsWith('/ws');
+    // The router matches percent-decoded paths (`/%61pi/tasks` reaches `/api/tasks`),
+    // so the gate is decided on the decoded path and on the route that matched —
+    // never on the raw request line alone (audit F-01).
+    const pathname = decodedPath(url);
+    if (pathname === null) return deny(request, reply, 400, 'BAD_PATH', 'Malformed request path.');
+    const route = request.routeOptions.url ?? '';
+    const isApi = isApiPath(pathname) || isApiPath(route) || isApiPath(url);
     if (!isApi) return;
     // Connected apps (Private Browser) call from their own process, never from a
     // web page: any Origin — even an allowed loopback one — is refused, so no
     // page can guess a pairing code or ride an app token. The routes check the
     // app token themselves (and only it: the local API token does not open them).
-    if (url.startsWith('/api/connected-app/')) {
+    // The exemptions below hold only when the matched route is itself one of these groups.
+    if (pathname.startsWith('/api/connected-app/') || route.startsWith('/api/connected-app/')) {
       if (origin) return deny(request, reply, 403, 'BAD_ORIGIN', 'Connected apps may not call from a web page.');
-      return;
+      if (route.startsWith('/api/connected-app/')) return;
     }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     // Tool sessions carry their own short-lived, scoped token; the route checks
     // it (and only it: the local API token does not open these routes).
-    if (url.startsWith('/api/tool-session/')) return;
+    if (pathname.startsWith('/api/tool-session/') && route.startsWith('/api/tool-session/')) return;
     const header = request.headers.authorization;
     const bearer = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
     // Browsers cannot set headers on a WebSocket handshake, so /ws also accepts ?token=.
-    const queryToken = url.startsWith('/ws') ? new URL(url, 'http://localhost').searchParams.get('token') : null;
+    const queryToken = pathname === '/ws' || route === '/ws' ? new URL(url, 'http://localhost').searchParams.get('token') : null;
     if (!tokensMatch(options.token, bearer ?? queryToken)) {
       return deny(request, reply, 401, 'UNAUTHORIZED', 'Missing or invalid local API token.');
     }

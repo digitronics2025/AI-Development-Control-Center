@@ -4,6 +4,7 @@ import { createServices } from './app.js';
 import { loadConfig } from './config.js';
 import { buildServer } from './http/server.js';
 import { reconcileGitOperations } from './source-control/reconcile.js';
+import { detectAmbientCredentials } from '@acc/security';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -29,6 +30,8 @@ async function main(): Promise<void> {
   writeFileSync(runtimeFile, JSON.stringify({ url, port, pid: process.pid, startedAt: services.startedAt, version: config.version }, null, 2));
 
   app.log.info(`AI Development Control Center listening on ${url}${config.simulatedAgents ? ' (SIMULATED AGENTS)' : ''}`);
+  const ambient = detectAmbientCredentials(process.env);
+  if (ambient.length) app.log.warn(`Provider credentials in this process's environment are withheld from every agent, tool and Git hook: ${ambient.join(', ')}. Store the ones tasks need under Tools → Credentials.`);
   if (recovered.interruptedTasks.length) app.log.warn(`Marked interrupted after restart: ${recovered.interruptedTasks.join(', ')}`);
 
   services.engine.schedule();

@@ -157,3 +157,23 @@ describe('checkpoints', () => {
     await expect(deleteRefs(repo, 'refs/heads/')).rejects.toThrow('Refusing');
   });
 });
+
+describe('environment of Git and its hooks (audit F-03)', () => {
+  it('never hands an ambient provider credential to a repository hook', async () => {
+    const out = path.join(repo, '..', `hook-env-${path.basename(repo)}.txt`);
+    writeFileSync(path.join(repo, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho "cf=\${CLOUDFLARE_API_TOKEN:-absent} gh=\${GH_TOKEN:-absent} path=\${PATH:+present}" > "${out.split(path.sep).join('/')}"\n`, { mode: 0o755 });
+    const saved = { cf: process.env.CLOUDFLARE_API_TOKEN, gh: process.env.GH_TOKEN };
+    process.env.CLOUDFLARE_API_TOKEN = ['ambient', 'cf', 'value'].join('-');
+    process.env.GH_TOKEN = ['ambient', 'gh', 'value'].join('-');
+    try {
+      writeFileSync(path.join(repo, 'a.txt'), 'two\n');
+      await sh(['commit', '-am', 'hooked']);
+    } finally {
+      if (saved.cf === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = saved.cf;
+      if (saved.gh === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = saved.gh;
+    }
+    expect(readFileSync(out, 'utf8').trim()).toBe('cf=absent gh=absent path=present');
+  });
+});

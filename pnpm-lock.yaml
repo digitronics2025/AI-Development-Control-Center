@@ -283,6 +283,9 @@ importers:
       '@acc/executor':
         specifier: workspace:*
         version: link:../executor
+      '@acc/security':
+        specifier: workspace:*
+        version: link:../security
       '@acc/shared':
         specifier: workspace:*
         version: link:../shared

@@ -7,6 +7,8 @@ import {
   Redactor,
   redactDeep,
   sanitizeEnv,
+  credentialFreeEnv,
+  detectAmbientCredentials,
 } from '../src/index.js';
 
 // Fake credentials are assembled at runtime so no credential-shaped literal
@@ -94,6 +96,21 @@ describe('sanitizeEnv', () => {
     const { env } = sanitizeEnv(source, 'api');
     expect(env.OPENAI_API_KEY).toBe('sk-x');
     expect(env.ACC_TOKEN).toBeUndefined();
+  });
+
+  it('strips ambient provider credentials in every billing mode, and keeps the subscription sign-in (audit F-03)', () => {
+    const ambient = { PATH: '/bin', CLOUDFLARE_API_TOKEN: fake('cf', ALNUM), gh_token: fake('g', ALNUM), DATABASE_URL: fake('postgres://u:', 'p', '@h/db'), CLAUDE_CODE_OAUTH_TOKEN: 'sub' };
+    for (const mode of ['subscription', 'api'] as const) {
+      const { env, removed } = sanitizeEnv(ambient, mode);
+      expect(env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+      expect(env.gh_token).toBeUndefined();
+      expect(env.DATABASE_URL).toBeUndefined();
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sub');
+      expect(env.PATH).toBe('/bin');
+      expect(removed).toEqual(expect.arrayContaining(['CLOUDFLARE_API_TOKEN', 'GH_TOKEN', 'DATABASE_URL']));
+    }
+    expect(credentialFreeEnv({ ...ambient, OPENAI_API_KEY: 'x' }).OPENAI_API_KEY).toBeUndefined();
+    expect(detectAmbientCredentials(ambient)).toEqual(['CLOUDFLARE_API_TOKEN', 'GH_TOKEN', 'DATABASE_URL']);
   });
 
   it('reports present API credentials by name only', () => {

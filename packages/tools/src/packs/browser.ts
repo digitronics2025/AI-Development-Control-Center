@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { redact } from '@acc/security';
+import { credentialFreeEnv, redact } from '@acc/security';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { z } from 'zod';
 import { resolveInside } from '../paths.js';
@@ -53,7 +53,8 @@ export async function launch(options: { headless?: boolean } = {}): Promise<Brow
   const choice = await findBrowser();
   if (!choice) throw new Error('No browser available: run `npx playwright install chromium`');
   const { chromium } = await import('playwright-core');
-  return chromium.launch({ headless: options.headless ?? true, executablePath: choice.executablePath ?? undefined, args: ['--no-first-run', '--no-default-browser-check'] });
+  // The browser never needs a credential from the orchestrator's environment (audit F-03).
+  return chromium.launch({ headless: options.headless ?? true, executablePath: choice.executablePath ?? undefined, args: ['--no-first-run', '--no-default-browser-check'], env: credentialFreeEnv(process.env) as Record<string, string> });
 }
 
 export const httpUrl = z

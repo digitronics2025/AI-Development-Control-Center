@@ -4,6 +4,7 @@ import { copyFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { runProcess } from '@acc/executor';
+import { credentialFreeEnv } from '@acc/security';
 import type { ChangedFile } from '@acc/shared';
 
 /** Git's well-known empty tree, used as the baseline of a repository with no commits. */
@@ -58,7 +59,8 @@ export async function git(cwd: string, args: string[], options: GitOptions = {})
     command: 'git',
     args: ['-c', 'core.quotepath=off', ...args],
     cwd,
-    env: { ...process.env, ...GIT_ENV, ...options.env },
+    // Git runs repository hooks an agent may have written: they never inherit a credential (audit F-03).
+    env: { ...credentialFreeEnv(process.env), ...GIT_ENV, ...options.env },
     stdin: options.stdin,
     timeoutMs: options.timeoutMs ?? 60_000,
     // `-z` output is one long NUL-separated record stream; never split it —

@@ -22,7 +22,15 @@ verified_at: 2d516aa
 In Subscription Only mode every child process (agents and repository commands)
 loses `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
 `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY`, `*_BASE_URL` and other metered-provider
-keys (case-insensitive). Adapters verify the CLI's own login before each launch
+keys (case-insensitive). In **every** billing mode each child also loses the
+ambient provider credentials an operator keeps in their own environment
+(`AMBIENT_CREDENTIAL_ENV_VARS`: `CLOUDFLARE_API_TOKEN`, `GH_TOKEN`/`GITHUB_TOKEN`,
+`NPM_TOKEN`, `AWS_*` keys, `DATABASE_URL`, deploy-platform tokens …); a tool that
+needs one receives it from the credential broker for that call only. Git — and
+therefore every repository hook — and the Playwright browser run with
+`credentialFreeEnv`, which strips all of the above whatever the mode. At start
+the orchestrator logs the **names** of any such variable it withheld.
+`CLAUDE_CODE_OAUTH_TOKEN` (the subscription sign-in) is kept. Adapters verify the CLI's own login before each launch
 (cached 5 minutes) and refuse API-key logins. Explicit API Mode requires typing
 `API BILLING` in Settings → Billing and shows a persistent indicator.
 
@@ -128,4 +136,4 @@ Revocation from the cloud or the admin CLI stops the node for good.
 - Tests build fake credentials at runtime; the operator's commit guard rejects credential-shaped literals.
 - Redaction is conservative: values such as `API_KEY=absent` are masked too.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

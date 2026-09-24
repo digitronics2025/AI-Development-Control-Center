@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@acc/executor": "workspace:*",
+    "@acc/security": "workspace:*",
     "@acc/shared": "workspace:*"
   }
 }

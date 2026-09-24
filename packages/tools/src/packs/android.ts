@@ -3,7 +3,7 @@ import path from 'node:path';
 import { runProcess } from '@acc/executor';
 import { redact } from '@acc/security';
 import { z } from 'zod';
-import { clip, detectExecutable, run } from '../detect.js';
+import { clip, detectExecutable, run, pushBounded } from '../detect.js';
 import { resolveInside } from '../paths.js';
 import { failure, missing, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
 
@@ -228,7 +228,7 @@ export function androidProviders(): ToolProvider[] {
               timeoutMs: input.timeoutSec * 1000,
               onLine: (stream, line) => {
                 const text = redact(line);
-                lines.push(text);
+                pushBounded(lines, text);
                 ctx.onLine?.(stream, text);
               },
             });

@@ -103,6 +103,10 @@ Verified against the operator's account on 2026-09-24.
 - `aria-ref=` is not in Playwright's public types; it is the engine behind
   `mode: 'ai'` refs. A Playwright upgrade must keep
   [browser-pages.test.ts](../../packages/tools/test/browser-pages.test.ts) green.
+- `browser.evaluate` is refused (`DENIED`) on a page opened with a saved
+  sign-in (`session`): a script there could read its cookies and stored
+  tokens. Read those pages with `browser.snapshot`, change them with
+  `browser.act`.
 - Page text, logs and evaluate results pass through `redact` in the pack;
   the service only redacts `summary`, `stdout` and `stderr`.
 

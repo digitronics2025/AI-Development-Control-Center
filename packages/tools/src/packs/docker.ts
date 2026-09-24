@@ -116,12 +116,15 @@ export function dockerProvider(): ToolProvider {
         level: 2,
         async run(input, ctx) {
           let dir: string;
+          let file: string | null = null;
           try {
             dir = resolveInside(ctx.roots, ctx.cwd, input.context);
+            // The Dockerfile is read on this machine too: confined like the context (audit F-34).
+            if (input.file) file = resolveInside(ctx.roots, ctx.cwd, input.file);
           } catch (error) {
             return failure('OUTSIDE_ROOT', (error as Error).message);
           }
-          const r = await docker(ctx, ['build', '-t', input.tag, ...(ctx.taskId ? ['--label', `${LABEL}=${ctx.taskId}`] : []), ...(input.file ? ['-f', input.file] : []), dir], 1_800_000);
+          const r = await docker(ctx, ['build', '-t', input.tag, ...(ctx.taskId ? ['--label', `${LABEL}=${ctx.taskId}`] : []), ...(file ? ['-f', file] : []), dir], 1_800_000);
           return r.ok ? { ...r, summary: `Built ${input.tag}` } : r;
         },
       }),

@@ -75,6 +75,12 @@ writes) → 6. inject brokered credentials ([credential-broker.md](credential-br
 `tool_executions` row, publish `toolExecution`, and add a `TOOL_CALL` event
 for notable calls (level ≥ 3, long-running, failures, verification evidence).
 
+Packs that stream a child process's output keep only its last 4000 lines
+(`pushBounded` in [detect.ts](../../packages/tools/src/detect.ts)), so a
+chatty build cannot grow the orchestrator's memory without limit. Package
+names that start with `-` are refused by `node.add_dependency`, and
+`docker.build`'s Dockerfile is confined to the repository like its context.
+
 Tool inputs are stored as redacted, bounded summaries; outputs are never
 stored, only the one-line summary, evidence lines, artifact ids, files changed
 and network targets.

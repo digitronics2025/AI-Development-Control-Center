@@ -50,6 +50,8 @@ interface OpenPage {
   reported: number;
   dialogs: 'accept' | 'dismiss';
   lastUsed: number;
+  /** Opened with a saved sign-in: its cookies and stored tokens are credentials (audit F-32). */
+  signedIn?: boolean;
 }
 
 const pages = new Map<string, OpenPage>();
@@ -392,7 +394,7 @@ export function browserPageOperations(): ToolOperation[] {
           ...(stateFile ? { storageState: stateFile } : {}),
         });
         await guardBrowserContext(context);
-        const p: OpenPage = { id: `pg-${randomBytes(4).toString('hex')}`, owner, context, page: await context.newPage(), visible, log: [], reported: 0, dialogs: 'dismiss', lastUsed: Date.now() };
+        const p: OpenPage = { id: `pg-${randomBytes(4).toString('hex')}`, owner, context, page: await context.newPage(), visible, log: [], reported: 0, dialogs: 'dismiss', lastUsed: Date.now(), signedIn: Boolean(stateFile) };
         pages.set(p.id, p);
         startSweeper();
         watch(p, p.page);
@@ -458,6 +460,8 @@ export function browserPageOperations(): ToolOperation[] {
       async run(input, ctx) {
         const p = pageFor(ctx, input.pageId);
         if (isResult(p)) return p;
+        // A script could read document.cookie or localStorage — the saved sign-in itself (audit F-32).
+        if (p.signedIn) return failure('DENIED', 'This page was opened with a saved sign-in, so scripts are not run in it: they could read its cookies and stored tokens. Read it with browser.snapshot and change it with browser.act.');
         let value: unknown;
         try {
           value = await p.page.evaluate(asEvaluable(input.script));

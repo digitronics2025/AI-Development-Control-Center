@@ -4,7 +4,7 @@ import { runProcess } from '@acc/executor';
 import { redact } from '@acc/security';
 import type { PermissionLevel } from '@acc/shared';
 import { z } from 'zod';
-import { clip, detectExecutable, localBin, run } from '../detect.js';
+import { clip, detectExecutable, localBin, run, pushBounded } from '../detect.js';
 import { resolveInside } from '../paths.js';
 import { failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 import { classifySql } from '../sql.js';
@@ -51,7 +51,7 @@ async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_0
     ...(stdin !== undefined ? { stdin } : {}),
     onLine: (stream, line) => {
       const text = redact(line);
-      (stream === 'stdout' ? lines : errs).push(text);
+      pushBounded(stream === 'stdout' ? lines : errs, text);
       ctx.onLine?.(stream, text);
     },
   });

@@ -2,7 +2,7 @@ import path from 'node:path';
 import { runProcess, runScript, type ShellKind } from '@acc/executor';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
-import { clip, firstVersion, run } from '../detect.js';
+import { clip, firstVersion, run, pushBounded } from '../detect.js';
 import { resolveInside } from '../paths.js';
 import { failure, missing, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 
@@ -176,7 +176,7 @@ export function shellProviders(): ToolProvider[] {
               timeoutMs: (input.timeoutSec ?? Math.round(ctx.timeoutMs / 1000)) * 1000,
               onLine: (stream, line) => {
                 const text = redact(line);
-                (stream === 'stdout' ? lines : errs).push(text);
+                pushBounded(stream === 'stdout' ? lines : errs, text);
                 ctx.onLine?.(stream, text);
               },
             });

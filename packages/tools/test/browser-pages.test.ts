@@ -62,6 +62,7 @@ const PAGES: Record<string, string> = {
   '/broken': `<!doctype html><title>Broken</title><h1>Broken</h1><script>fetch('/missing.json')</script>`,
   '/other': `<!doctype html><title>Help</title><main><h1>Help centre</h1><p>Returns take 14 days.</p><a href="https://example.com/terms">Terms</a></main>`,
   '/cookie': `<!doctype html><title>Cookie</title><script>document.cookie = 'signed=yes; path=/'</script><p>set</p>`,
+  '/whoami': `<!doctype html><title>Who</title><h1 id="c"></h1><script>document.getElementById('c').textContent = document.cookie</script>`,
 };
 
 beforeAll(async () => {
@@ -197,8 +198,10 @@ describe.skipIf(!browser)('pages an agent keeps open (real Chromium)', () => {
     await call('browser.close', { pageId, saveSession: 'shop-owner' });
     const fresh = (await call('browser.open', { url: `${base}/other`, screenshot: false })).output as { pageId: string };
     expect((await call('browser.evaluate', { pageId: fresh.pageId, script: 'document.cookie' })).stdout).toBe('""');
-    const signed = (await call('browser.open', { url: `${base}/other`, session: 'shop-owner', screenshot: false })).output as { pageId: string };
-    expect((await call('browser.evaluate', { pageId: signed.pageId, script: 'document.cookie' })).stdout).toBe('"signed=yes"');
+    const signed = (await call('browser.open', { url: `${base}/whoami`, session: 'shop-owner', screenshot: false })).output as { pageId: string };
+    expect((await call('browser.snapshot', { pageId: signed.pageId })).stdout).toMatch(/heading "signed=yes"/);
+    // Scripts never run in a signed-in page: they could read its cookies and tokens (audit F-32).
+    expect(await call('browser.evaluate', { pageId: signed.pageId, script: 'document.cookie' })).toMatchObject({ ok: false, error: { code: 'DENIED' } });
     expect(await call('browser.open', { url: `${base}/other`, session: 'nobody' })).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
     await closeBrowserPages('task-a');
   }, 90_000);

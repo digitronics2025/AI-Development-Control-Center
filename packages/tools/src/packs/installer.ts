@@ -3,7 +3,7 @@ import { runProcess, which } from '@acc/executor';
 import { redact } from '@acc/security';
 import { INSTALLABLE_TOOLS, INSTALLABLE_TOOL_IDS, type InstallableTool } from '@acc/shared';
 import { z } from 'zod';
-import { clip, run } from '../detect.js';
+import { clip, run, pushBounded } from '../detect.js';
 import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
 
 /**
@@ -28,7 +28,7 @@ async function exec(ctx: OperationContext, command: string, args: string[]): Pro
     timeoutMs: ctx.timeoutMs,
     onLine: (stream, line) => {
       const text = redact(line);
-      lines.push(text);
+      pushBounded(lines, text);
       ctx.onLine?.(stream, text);
     },
   });

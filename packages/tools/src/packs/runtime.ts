@@ -3,7 +3,7 @@ import path from 'node:path';
 import { runProcess, which } from '@acc/executor';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
-import { clip, detectExecutable } from '../detect.js';
+import { clip, detectExecutable, pushBounded } from '../detect.js';
 import { expandPackageScripts } from '../package-scripts.js';
 import { resolveInside } from '../paths.js';
 import { failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
@@ -39,7 +39,7 @@ async function exec(ctx: OperationContext, command: string, args: string[], opts
     timeoutMs: opts.timeoutMs ?? ctx.timeoutMs,
     onLine: (stream, line) => {
       const text = redact(line);
-      (stream === 'stdout' ? out : err).push(text);
+      pushBounded(stream === 'stdout' ? out : err, text);
       ctx.onLine?.(stream, text);
     },
   });
@@ -97,6 +97,9 @@ export function runtimeProviders(): ToolProvider[] {
           level: 2,
           classify: () => ({ reasons: ['Adds project dependencies'], effects: ['network', 'filesystem'] }),
           async run(input, ctx) {
+            // A name starting with '-' is a flag (-g turns a project install into a user-wide one): refused (audit F-33).
+            const flag = input.packages.find((n) => n.startsWith('-'));
+            if (flag) return failure('INVALID_INPUT', `"${flag}" is an option, not a package name`);
             const pm = packageManager(ctx.cwd);
             if (!pm) return failure('INVALID_INPUT', 'No package.json in the working directory');
             const verb = pm === 'npm' ? 'install' : 'add';

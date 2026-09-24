@@ -181,3 +181,28 @@ describe('F-14: production is decided by the resource, not by a label the caller
     expect(risk('cloudflare.d1_query', { database: 'app-db', sql: 'SELECT 1', environment: 'local' }).level).toBeLessThan(3);
   });
 });
+
+describe('F-33 / F-34 / F-35 / F-32: small pack guards', () => {
+  it('F-35 keeps only the tail of a stream', async () => {
+    const { pushBounded } = await import('../src/detect.js');
+    const list: string[] = [];
+    for (let i = 0; i < 10; i++) pushBounded(list, String(i), 3);
+    expect(list).toEqual(['7', '8', '9']);
+  });
+
+  it('F-33 refuses an option passed as a package name', async () => {
+    const os = await import('node:os');
+    const o = op('node.add_dependency');
+    const ctx = { executionId: 't', taskId: null, cwd: os.tmpdir(), roots: [os.tmpdir()], env: process.env, signal: new AbortController().signal, timeoutMs: 1000, tempDir: os.tmpdir(), stateDir: os.tmpdir(), shell: async () => null, detection: () => undefined, protectedPaths: [] } as never;
+    expect((await o.run(o.input.parse({ packages: ['-g', 'some-cli'] }), ctx)).error?.code).toBe('INVALID_INPUT');
+  });
+
+  it('F-34 confines the Dockerfile like the build context', async () => {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const root = path.join(os.tmpdir(), 'acc-docker-root');
+    const o = op('docker.build');
+    const ctx = { executionId: 't', taskId: null, cwd: root, roots: [root], env: process.env, signal: new AbortController().signal, timeoutMs: 1000, tempDir: os.tmpdir(), stateDir: os.tmpdir(), shell: async () => null, detection: () => undefined, protectedPaths: [] } as never;
+    expect((await o.run(o.input.parse({ context: '.', file: '../../outside/Dockerfile', tag: 'x:1' }), ctx)).error?.code).toBe('OUTSIDE_ROOT');
+  });
+});

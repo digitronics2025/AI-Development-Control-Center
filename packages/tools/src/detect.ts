@@ -71,6 +71,16 @@ export function withAuth(detection: ToolDetection, auth: ToolDetection['auth']):
 }
 
 /** Bound text for results that go back to a model or into a row. */
+/**
+ * Keep the last `max` lines of a stream while it runs: a command that prints for
+ * the whole stage must not grow the orchestrator's memory without bound (audit
+ * F-35). The tail is kept because that is where errors are.
+ */
+export function pushBounded(list: string[], text: string, max = 4000): void {
+  list.push(text);
+  if (list.length > max) list.splice(0, list.length - max);
+}
+
 export function clip(text: string, max = 32_000): string {
   return text.length > max ? `${text.slice(0, max)}\n[… ${text.length - max} more characters]` : text;
 }

@@ -53,6 +53,11 @@ broad. **Until `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set, every human reques
 is refused with 503 `ACCESS_NOT_CONFIGURED`** — fail closed. `ACCESS_JWKS` (a
 static key set) exists for tests and is ignored in staging and production.
 
+Production (since 2026-09-24): team `sparkling-breeze-b580.cloudflareaccess.com`,
+self-hosted application "ACC Control" on `acc.dr-badawi-abdalsalam.com` only,
+policy "Owner only" (the owner's two addresses; login method: Cloudflare
+account). Staging has no Access application and stays fail-closed (503).
+
 State-changing requests must be same-origin (`Origin`, `Sec-Fetch-Site`). The
 dashboard HTML gets a strict CSP, `X-Frame-Options: DENY` and `no-store`.
 

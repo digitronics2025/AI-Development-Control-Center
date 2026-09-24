@@ -42,7 +42,11 @@ window.startBridge = async (url) => {
       const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(P + ' code') }, ikm, 32));
       const hex = [...bits].map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
       keys = { send: await key('myvault->control-center'), recv: await key('control-center->myvault') };
-      window.accepted = { code: d.code, derived: hex.slice(0, 4) + '-' + hex.slice(4) };
+      // What MyVault checks first: the orchestrator's identity key signed this session's keys.
+      const idKey = await crypto.subtle.importKey('raw', fromB64u(d.identityKey), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      const signed = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, idKey, fromB64u(d.signature), enc.encode(P + ' identity\\n' + sid + '\\n' + pub + '\\n' + d.publicKey));
+      const fp = [...new Uint8Array(await crypto.subtle.digest('SHA-256', fromB64u(d.identityKey)))].slice(0, 16).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase().match(/.{4}/g).join(' ');
+      window.accepted = { code: d.code, derived: hex.slice(0, 4) + '-' + hex.slice(4), signed, fingerprint: fp };
     }
     if (d.type === 'response' || d.type === 'error') pending.get(d.id)?.(d);
   });
@@ -115,9 +119,13 @@ test('a trusted MyVault relays a sealed session end to end', async ({ context, p
   const popup = await openBridge(vault, baseURL!);
   const errors = trackConsoleErrors(popup);
   await expect(popup.getByRole('heading', { name: 'Connected' })).toBeVisible();
-  const accepted = await vault.evaluate(() => (window as unknown as { accepted: { code: string; derived: string } }).accepted);
+  const accepted = await vault.evaluate(() => (window as unknown as { accepted: { code: string; derived: string; signed: boolean; fingerprint: string } }).accepted);
   expect(accepted.code).toBe(accepted.derived);
   await expect(popup.getByText(accepted.code)).toBeVisible();
+  // The session carries a signature this page could not have made, from the key the dashboard shows.
+  expect(accepted.signed).toBe(true);
+  expect((await api<{ identity: { fingerprint: string } }>(page, 'GET', '/api/vault-bridge/status')).identity.fingerprint).toBe(accepted.fingerprint);
+  await expect(popup.getByText(accepted.fingerprint)).toBeVisible();
   const started = await vault.evaluate(() => (window as unknown as { send(t: string, b: unknown): Promise<{ opened: Array<{ type: string }> }> }).send('sync.start', {}));
   expect(started.opened.at(-1)!.type).toBe('snapshot.request');
   await expect(popup.getByText('Messages relayed')).toBeVisible();
@@ -179,6 +187,13 @@ test('Credentials shows source, scope and MyVault state, and never a value', asy
   await expect(row).toContainText('docs-site');
   await expect(page.getByText(/generated secrets? waits? for MyVault/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect MyVault to finish sync' })).toBeVisible();
+  // The Connect dialog shows the key MyVault will be asked to trust.
+  await page.getByRole('button', { name: 'Connect MyVault to finish sync' }).click();
+  const connect = page.getByRole('dialog', { name: 'Connect MyVault' });
+  const identity = (await api<{ identity: { fingerprint: string } }>(page, 'GET', '/api/vault-bridge/status')).identity;
+  await expect(connect.getByTestId('identity-fingerprint')).toHaveText(identity.fingerprint);
+  await connect.getByRole('button', { name: 'Close' }).first().click();
+  await expect(connect).toBeHidden();
 
   // MyVault shares one item: it arrives with no repository and MyVault owns its value.
   await api(page, 'POST', '/api/vault-bridge/origins', { origin: TRUSTED });

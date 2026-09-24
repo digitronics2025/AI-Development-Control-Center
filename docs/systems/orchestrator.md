@@ -56,7 +56,8 @@ layer's `tools`, `tool_capabilities`, `tool_health`, `tool_executions`,
 `capability_escalations`, `credential_references` (migration 5,
 [tool-system.md](tool-system.md), [tools/store.ts](../../apps/orchestrator/src/tools/store.ts)),
 the MyVault bridge's `credential_vault_links`, `vault_bridge_origins`,
-`credential_events` (migration 7, metadata only,
+`credential_events` (migration 7, metadata only) and `vault_bridge_identity`
+(migration 9, the bridge's sealed identity key;
 [credential-broker.md](credential-broker.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.

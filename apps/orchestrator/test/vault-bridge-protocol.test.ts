@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, fromBase64Url, generateBridgeKeyPair, newSessionId, toBase64Url, valueFingerprint, type BridgeChannel, type SealedEnvelope } from '../src/tools/vault-bridge-protocol.js';
+import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, fromBase64Url, generateBridgeKeyPair, identityFingerprint, newSessionId, signBridgeIdentity, toBase64Url, valueFingerprint, verifyBridgeIdentity, type BridgeChannel, type SealedEnvelope } from '../src/tools/vault-bridge-protocol.js';
 import { secretFingerprint } from '@acc/security';
 
 /**
@@ -60,6 +60,38 @@ describe('mvcc-bridge-v1 vectors', () => {
     for (const [value, fp] of Object.entries(vectors.fingerprints)) {
       expect(await valueFingerprint(value)).toBe(fp);
       expect(secretFingerprint(value)).toBe(fp);
+    }
+  });
+});
+
+describe('mvcc-bridge-v1 Control Center identity', () => {
+  const session = { sessionId: vectors.sessionId, myvaultPublicKey: vectors.myvault.publicKey, controlCenterPublicKey: vectors.controlCenter.publicKey };
+  const signed = { ...session, identityKey: vectors.identity.publicKey, signature: vectors.identity.signature };
+
+  it('verifies the vector signature and reproduces the fingerprint', async () => {
+    expect(await verifyBridgeIdentity(signed)).toBe(true);
+    expect(await identityFingerprint(vectors.identity.publicKey)).toBe(vectors.identity.fingerprint);
+  });
+
+  it('signs a session that verifies, and nothing else does', async () => {
+    const key = await subtle.importKey('jwk', vectors.identity.privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+    const signature = await signBridgeIdentity(key, session);
+    expect(await verifyBridgeIdentity({ ...signed, signature })).toBe(true);
+    const other = await generateBridgeKeyPair();
+    // Every transcript field is bound: another session id, either ephemeral key.
+    expect(await verifyBridgeIdentity({ ...signed, sessionId: newSessionId() })).toBe(false);
+    expect(await verifyBridgeIdentity({ ...signed, myvaultPublicKey: other.publicKey })).toBe(false);
+    expect(await verifyBridgeIdentity({ ...signed, controlCenterPublicKey: other.publicKey })).toBe(false);
+    // Another identity key cannot claim the signature.
+    const stranger = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'])) as webcrypto.CryptoKeyPair;
+    expect(await verifyBridgeIdentity({ ...signed, identityKey: toBase64Url(new Uint8Array(await subtle.exportKey('raw', stranger.publicKey))) })).toBe(false);
+  });
+
+  it('returns false rather than throwing for malformed identity input', async () => {
+    const flipped = fromBase64Url(vectors.identity.signature);
+    flipped[10] = flipped[10]! ^ 1;
+    for (const broken of [{ signature: toBase64Url(flipped) }, { signature: '' }, { signature: 'not base64!' }, { identityKey: '' }, { identityKey: toBase64Url(new Uint8Array(65)) }, { identityKey: vectors.controlCenter.publicKey.slice(0, 40) }]) {
+      expect(await verifyBridgeIdentity({ ...signed, ...broken })).toBe(false);
     }
   });
 });

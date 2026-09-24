@@ -48,6 +48,7 @@ export function VaultBridgePage() {
   const [phase, setPhase] = useState<Phase>(() => (window.opener ? { kind: 'waiting' } : { kind: 'no-opener' }));
   const [relayed, setRelayed] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [identity, setIdentity] = useState<string | null>(null);
   const session = useRef<{ id: string; origin: string } | null>(null);
 
   useEffect(() => {
@@ -87,9 +88,10 @@ export function VaultBridgePage() {
       const data = event.data;
       if (data.type === 'hello') {
         try {
-          const opened = await api.post<{ sessionId: string; publicKey: string; code: string }>('/api/vault-bridge/sessions', { origin: event.origin, vaultId: data.vaultId, publicKey: data.publicKey });
+          const opened = await api.post<{ sessionId: string; publicKey: string; code: string; identityKey: string; signature: string }>('/api/vault-bridge/sessions', { origin: event.origin, vaultId: data.vaultId, publicKey: data.publicKey });
           session.current = { id: opened.sessionId, origin: event.origin };
-          post(event.origin, { type: 'accept', sessionId: opened.sessionId, publicKey: opened.publicKey, code: opened.code });
+          // The signature is the orchestrator's, over MyVault's key and ours: this page passes it on and could not make one.
+          post(event.origin, { type: 'accept', sessionId: opened.sessionId, publicKey: opened.publicKey, code: opened.code, identityKey: opened.identityKey, signature: opened.signature });
           setPhase({ kind: 'connected', origin: event.origin, code: opened.code });
         } catch (error) {
           const code = error instanceof ApiError ? error.code : 'UNREACHABLE';
@@ -129,6 +131,7 @@ export function VaultBridgePage() {
         if (!alive) return;
         const origins = status.origins.map((o) => o.origin);
         trusted = origins;
+        setIdentity(status.identity?.fingerprint ?? null);
         setLoaded(true);
         for (const origin of origins) post(origin, { type: 'ready' });
       })
@@ -172,6 +175,7 @@ export function VaultBridgePage() {
             <KeyValueList
               items={[
                 { label: 'MyVault', value: phase.origin },
+                { label: 'Control Center key', value: identity ?? 'Unavailable' },
                 { label: 'Messages relayed', value: String(relayed) },
               ]}
             />

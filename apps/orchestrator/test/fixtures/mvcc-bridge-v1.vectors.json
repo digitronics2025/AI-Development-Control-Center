@@ -34,6 +34,23 @@
   "fingerprints": {
     "generated-vector-value": "82dbc5cf"
   },
+  "identity": {
+    "note": "ECDSA P-256 over \"mvcc-bridge-v1 identity\\n<sessionId>\\n<myvault publicKey>\\n<controlCenter publicKey>\". ECDSA signatures are randomized, so implementations verify this one rather than reproduce it.",
+    "privateJwk": {
+      "key_ops": [
+        "sign"
+      ],
+      "ext": true,
+      "kty": "EC",
+      "x": "I9tqcz9bbqNcpYbARKRPYVU9oNs6ao_jAtAgryQldNU",
+      "y": "ylkjHZmAjmw1UEkBm1zrUEL9tQZHjyENp2JBkG36_2Y",
+      "crv": "P-256",
+      "d": "0trHaLcLuWLDtnqB7kJgyslBCNirWmgFhc-qjQoYDXw"
+    },
+    "publicKey": "BCPbanM_W26jXKWGwESkT2FVPaDbOmqP4wLQIK8kJXTVylkjHZmAjmw1UEkBm1zrUEL9tQZHjyENp2JBkG36_2Y",
+    "fingerprint": "8FD0 366C 0719 9CCB 395E EAC5 6B50 5FBA",
+    "signature": "u9UQRJ0kHg96QitNB9ZN-UQxoXT1zPnQnoLw3xRbnsO2SHZf2x02D2nPDc4M5vWJ3Z4IADJeB-hnEjQczbTzMA"
+  },
   "messages": [
     {
       "from": "myvault",

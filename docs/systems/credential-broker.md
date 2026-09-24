@@ -11,7 +11,7 @@ sources:
   - packages/security/src/credential-cipher.ts
   - packages/security/src/env-guard.ts
   - packages/security/src/redact.ts
-verified_at: eaba6cf
+verified_at: 811149cd
 ---
 
 # Credential broker
@@ -40,6 +40,9 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
   - `vault_bridge_origins` — MyVault origins the operator trusted.
   - `credential_events` — audit: operation, direction, status, task, target,
     redacted detail. Never a value. Kept after a credential is deleted.
+- Migration 9: `vault_bridge_identity` — one row (`id = 1`): the bridge
+  identity's raw public key and its PKCS#8 private key sealed with
+  `sealValue` (see [Identity](#myvault-bridge)).
 - The 32-byte key: on Windows `<data>/credential-key.dpapi`, protected with
   DPAPI for the current user; elsewhere `<data>/credential-key` with mode 600.
   Loaded lazily; unavailable → `KEY_UNAVAILABLE`, and nothing is imported,
@@ -127,13 +130,33 @@ dashboard's `/vault-bridge` page as a popup and the two ends talk through it.
 - **Relay**: the popup posts `{envelope}` to
   `POST /api/vault-bridge/sessions/:id/messages` and passes the sealed replies
   back. It never sees a key or a value.
-- **What the code does not prove**: MyVault pins no long-term key of this
-  orchestrator; its trust anchor is the loopback address. Something that
-  controls the `/vault-bridge` page (script injected into the dashboard, or a
-  program squatting the port while the orchestrator is down) could complete
-  the handshake itself and read the items MyVault shares. The session code only
-  catches two windows talking past each other. Key pinning is a MyVault
-  follow-up.
+- **Identity** (plan: [myvault-bridge-identity-pinning.md](../plans/myvault-bridge-identity-pinning.md)):
+  the orchestrator holds one long-term ECDSA P-256 key, created on first use,
+  private half sealed (`sealValue`, AAD `vault-bridge-identity:<publicKey>`) and
+  unsealed only into a non-extractable signing key in memory. `POST
+  /api/vault-bridge/sessions` returns `identityKey` and `signature` over
+  `mvcc-bridge-v1 identity\n<sessionId>\n<MyVault key>\n<our key>`; the popup
+  relays both in `accept` and cannot make one. MyVault refuses a session without
+  a valid signature, asks the user to compare the key's fingerprint on first
+  contact, pins it per Control Center address, and refuses any other key there
+  until the user forgets the pin. `GET /api/vault-bridge/status` carries
+  `identity {publicKey, fingerprint}`; Connect MyVault and the popup show the
+  fingerprint (8 groups of 4 hex, 128 bits of SHA-256 over the raw key). If
+  the sealed key cannot be opened (the database moved to a machine with another
+  credential key), `identity` is null and opening a session answers
+  `IDENTITY_UNAVAILABLE` (503); nothing regenerates the key on its own, and
+  there is no reset action yet — deleting the `vault_bridge_identity` row by
+  hand makes the next call create a new key, which MyVault then refuses until
+  its user chooses Forget trusted key.
+- **What the code does not prove**: first contact is trust on first use. The
+  Credentials tab that shows the fingerprint is served from the same address,
+  so a program already answering there the very first time, when the user
+  trusts without comparing, gets pinned. After that, a script in the dashboard
+  can only relay ciphertext, and a program squatting the port is refused. In
+  the other direction the orchestrator does not authenticate MyVault: anything
+  holding the local API token can open a session as a trusted origin and be
+  sent pending generated secrets — no wider than that token's existing reach,
+  since it can already send any in-scope credential with `http.request`.
 - **Sessions** ([vault-bridge.ts](../../apps/orchestrator/src/tools/vault-bridge.ts)):
   memory only (a restart drops them all), one per origin (reconnect replaces),
   4 at most, 10 min idle / 30 min absolute, 512 KiB per message, 100 pushes and
@@ -167,7 +190,8 @@ MyVault to finish sync") while generated secrets wait, and the resolve actions
 DPAPI-protected key and a caller-chosen purpose binding (AAD), so a sealed value
 cannot be opened for another purpose. The remote execution node stores its
 private key this way (AAD `remote-node-identity:<nodeId>`); see
-[remote-node.md](remote-node.md#identity-and-pairing).
+[remote-node.md](remote-node.md#identity-and-pairing). So does the MyVault bridge
+identity (AAD `vault-bridge-identity:<publicKey>`).
 
 ## Verified
 
@@ -177,9 +201,12 @@ values absent from API responses, tool results, execution rows, events and raw
 SQLite; replay, duplicate, out-of-order, forged AAD, wrong session, malformed
 key, oversized and invalid ciphertext all refused; lost-ack resend, restart,
 conflict and missing transitions; a fake Wrangler proves stdin delivery and
-argv/output hygiene. Playwright ([vault-bridge.spec.ts](../../apps/dashboard/e2e/vault-bridge.spec.ts))
-drives the popup with a Web Crypto stand-in for MyVault. A real cross-app run
-(MyVault app + this orchestrator in Chromium) is recorded in the plan's Ledger.
+argv/output hygiene; every session's identity signature verifies, is bound to
+its session, uses one key that survives a restart, and no PKCS#8 appears in the
+row or any answer. Playwright ([vault-bridge.spec.ts](../../apps/dashboard/e2e/vault-bridge.spec.ts))
+drives the popup with a Web Crypto stand-in for MyVault that verifies the
+signature. Real cross-app runs (MyVault app + this orchestrator in Chromium) are
+recorded in both plans' Ledgers.
 
 ## Gotchas
 
@@ -192,4 +219,4 @@ drives the popup with a Web Crypto stand-in for MyVault. A real cross-app run
 - MyVault must send `Cross-Origin-Opener-Policy: same-origin-allow-popups`
   (not `same-origin`), or its popup has no opener to answer.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

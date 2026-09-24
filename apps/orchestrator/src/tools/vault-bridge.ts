@@ -1,8 +1,9 @@
 import type { VaultBridgeStatus } from '@acc/shared';
+import { webcrypto } from 'node:crypto';
 import { z } from 'zod';
 import type { CredentialBroker, VaultAck } from './credentials.js';
 import type { ToolStore } from './store.js';
-import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, generateBridgeKeyPair, newSessionId, type BridgeChannel, type SealedEnvelope } from './vault-bridge-protocol.js';
+import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, generateBridgeKeyPair, identityFingerprint, newSessionId, signBridgeIdentity, toBase64Url, type BridgeChannel, type SealedEnvelope } from './vault-bridge-protocol.js';
 
 /**
  * The Control Center end of the MyVault bridge (docs/systems/credential-broker.md,
@@ -21,13 +22,13 @@ import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, generateBridge
 export class VaultBridgeError extends Error {
   constructor(
     message: string,
-    readonly code: 'UNTRUSTED_ORIGIN' | 'NO_SESSION' | 'PROTOCOL' | 'LIMIT' | 'INVALID',
+    readonly code: 'UNTRUSTED_ORIGIN' | 'NO_SESSION' | 'PROTOCOL' | 'LIMIT' | 'INVALID' | 'IDENTITY_UNAVAILABLE',
   ) {
     super(message);
   }
 }
 
-export const VAULT_BRIDGE_HTTP_STATUS: Record<VaultBridgeError['code'], number> = { UNTRUSTED_ORIGIN: 403, NO_SESSION: 404, PROTOCOL: 400, LIMIT: 429, INVALID: 400 };
+export const VAULT_BRIDGE_HTTP_STATUS: Record<VaultBridgeError['code'], number> = { UNTRUSTED_ORIGIN: 403, NO_SESSION: 404, PROTOCOL: 400, LIMIT: 429, INVALID: 400, IDENTITY_UNAVAILABLE: 503 };
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const PUSHES_PER_SESSION = 100;
@@ -105,9 +106,20 @@ export interface VaultBridgeOptions {
   now: () => number;
 }
 
+const IDENTITY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' } as const;
+/** Binds the sealed private half to its public key, so a row cannot pair one key's private half with another's public half. */
+const identityBinding = (publicKey: string) => `vault-bridge-identity:${publicKey}`;
+
+interface BridgeIdentity {
+  signingKey: webcrypto.CryptoKey;
+  publicKey: string;
+  fingerprint: string;
+}
+
 export class VaultBridgeService {
   private readonly sessions = new Map<string, Session>();
   private readonly opts: VaultBridgeOptions;
+  private identityLoad: Promise<BridgeIdentity> | null = null;
 
   constructor(
     private readonly store: ToolStore,
@@ -117,10 +129,41 @@ export class VaultBridgeService {
     this.opts = { idleMs: 10 * 60_000, maxMs: 30 * 60_000, maxSessions: 4, now: Date.now, ...opts };
   }
 
-  status(): VaultBridgeStatus {
+  /**
+   * The identity MyVault pins: created on first use and kept for the life of
+   * the database. The private half is unsealed only into a non-extractable
+   * signing key held in memory.
+   */
+  identity(): Promise<BridgeIdentity> {
+    this.identityLoad ??= this.loadIdentity().catch((error: unknown) => {
+      this.identityLoad = null;
+      throw error;
+    });
+    return this.identityLoad;
+  }
+
+  private async loadIdentity(): Promise<BridgeIdentity> {
+    if (!this.store.vaultBridgeIdentity()) {
+      const pair = await webcrypto.subtle.generateKey(IDENTITY_ALGORITHM, true, ['sign', 'verify']);
+      const publicKey = toBase64Url(new Uint8Array(await webcrypto.subtle.exportKey('raw', pair.publicKey)));
+      const pkcs8 = Buffer.from(await webcrypto.subtle.exportKey('pkcs8', pair.privateKey)).toString('base64');
+      this.store.insertVaultBridgeIdentity(publicKey, await this.broker.sealValue(pkcs8, identityBinding(publicKey)));
+    }
+    const row = this.store.vaultBridgeIdentity()!;
+    const pkcs8 = await this.broker.openValue(row.sealed, identityBinding(row.publicKey));
+    const signingKey = await webcrypto.subtle.importKey('pkcs8', Buffer.from(pkcs8, 'base64'), IDENTITY_ALGORITHM, false, ['sign']);
+    return { signingKey, publicKey: row.publicKey, fingerprint: await identityFingerprint(row.publicKey) };
+  }
+
+  async status(): Promise<VaultBridgeStatus> {
     this.sweep();
+    const identity = await this.identity().then(
+      (i) => ({ publicKey: i.publicKey, fingerprint: i.fingerprint }),
+      () => null,
+    );
     const links = this.store.listVaultLinks();
     return {
+      identity,
       origins: this.store.listTrustedOrigins(),
       sessions: [...this.sessions.values()].map((s) => ({ id: s.id, origin: s.origin, code: s.channel.code, openedAt: new Date(s.openedAt).toISOString(), expiresAt: new Date(this.expiry(s)).toISOString() })),
       pendingPush: links.filter((l) => l.state === 'pending_push').length,
@@ -130,28 +173,34 @@ export class VaultBridgeService {
   }
 
   /** Operator approval, from the dashboard only: the bridge page itself can never add an origin. */
-  trustOrigin(input: string): VaultBridgeStatus {
+  trustOrigin(input: string): Promise<VaultBridgeStatus> {
     this.store.trustOrigin(normalizeVaultOrigin(input));
     return this.status();
   }
 
-  untrustOrigin(input: string): VaultBridgeStatus {
+  untrustOrigin(input: string): Promise<VaultBridgeStatus> {
     const origin = normalizeVaultOrigin(input);
     this.store.untrustOrigin(origin);
     for (const s of [...this.sessions.values()]) if (s.origin === origin) this.drop(s);
     return this.status();
   }
 
-  async open(raw: unknown): Promise<{ sessionId: string; publicKey: string; code: string; expiresAt: string }> {
+  /** `identityKey` and `signature` let MyVault check that this orchestrator, not whatever relays for it, made `publicKey`. */
+  async open(raw: unknown): Promise<{ sessionId: string; publicKey: string; code: string; expiresAt: string; identityKey: string; signature: string }> {
     const input = openSessionSchema.parse(raw);
     const origin = normalizeVaultOrigin(input.origin);
-    if (!this.store.listTrustedOrigins().some((o) => o.origin === origin)) {
-      throw new VaultBridgeError('This MyVault address is not trusted. Add it under Tools → Credentials → Connect MyVault first.', 'UNTRUSTED_ORIGIN');
+    const assertTrusted = () => {
+      if (!this.store.listTrustedOrigins().some((o) => o.origin === origin)) {
+        throw new VaultBridgeError('This MyVault address is not trusted. Add it under Tools → Credentials → Connect MyVault first.', 'UNTRUSTED_ORIGIN');
+      }
+    };
+    assertTrusted();
+    let identity: BridgeIdentity;
+    try {
+      identity = await this.identity();
+    } catch {
+      throw new VaultBridgeError('The Control Center could not open its MyVault bridge key, so it cannot prove who it is.', 'IDENTITY_UNAVAILABLE');
     }
-    this.sweep();
-    // One live session per vault tab origin: a reconnect replaces the old one.
-    for (const s of [...this.sessions.values()]) if (s.origin === origin) this.drop(s);
-    if (this.sessions.size >= this.opts.maxSessions) throw new VaultBridgeError('Too many MyVault connections are open', 'LIMIT');
     const keys = await generateBridgeKeyPair();
     const sessionId = newSessionId();
     let channel: BridgeChannel;
@@ -160,11 +209,22 @@ export class VaultBridgeService {
     } catch {
       throw new VaultBridgeError('The MyVault key was not accepted', 'PROTOCOL');
     }
+    const signature = await signBridgeIdentity(identity.signingKey, { sessionId, myvaultPublicKey: input.publicKey, controlCenterPublicKey: keys.publicKey });
+    // No await from here on: trust and the session limit are judged as the session is registered,
+    // so an origin removed while the keys were being made gets no session.
+    assertTrusted();
+    this.sweep();
+    // One live session per vault tab origin: a reconnect replaces the old one.
+    for (const s of [...this.sessions.values()]) if (s.origin === origin) this.drop(s);
+    if (this.sessions.size >= this.opts.maxSessions) {
+      channel.destroy();
+      throw new VaultBridgeError('Too many MyVault connections are open', 'LIMIT');
+    }
     const at = this.opts.now();
     const session: Session = { id: sessionId, origin, vaultId: input.vaultId, channel, openedAt: at, lastActivity: at, started: false, inFlight: new Map(), queue: Promise.resolve(), nextPart: 1, itemsSeen: 0, seen: new Set(), counts: { imported: 0, updated: 0, unchanged: 0, pending: 0, conflicts: 0, rejected: 0 } };
     this.sessions.set(sessionId, session);
     this.store.touchOrigin(origin, input.vaultId);
-    return { sessionId, publicKey: keys.publicKey, code: channel.code, expiresAt: new Date(this.expiry(session)).toISOString() };
+    return { sessionId, publicKey: keys.publicKey, code: channel.code, expiresAt: new Date(this.expiry(session)).toISOString(), identityKey: identity.publicKey, signature };
   }
 
   /** One sealed envelope in, the sealed replies out. Any protocol fault ends the session. */

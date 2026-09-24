@@ -212,6 +212,46 @@ export function parseEnvelope(value: unknown): SealedEnvelope {
 }
 
 /**
+ * The Control Center's long-term identity. The orchestrator signs every
+ * session's transcript — the session id and both ephemeral keys — with one
+ * ECDSA P-256 key, and MyVault pins that key per Control Center address. The
+ * bridge page relays the signature but cannot make one, so neither a script in
+ * that page nor a program answering on the loopback port can complete a
+ * handshake MyVault accepts.
+ */
+const IDENTITY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' } as const;
+const IDENTITY_SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
+
+export function identityTranscript(input: { sessionId: string; myvaultPublicKey: string; controlCenterPublicKey: string }): Uint8Array {
+  return encoder.encode(`${BRIDGE_PROTOCOL} identity\n${input.sessionId}\n${input.myvaultPublicKey}\n${input.controlCenterPublicKey}`);
+}
+
+/** The raw 64-byte signature Web Crypto verifies, base64url. */
+export async function signBridgeIdentity(privateKey: CryptoKey, input: { sessionId: string; myvaultPublicKey: string; controlCenterPublicKey: string }): Promise<string> {
+  return toBase64Url(new Uint8Array(await subtle.sign(IDENTITY_SIGN, privateKey, identityTranscript(input))));
+}
+
+/** False for anything that is not a valid signature by `identityKey` over this session — never throws. */
+export async function verifyBridgeIdentity(input: { identityKey: string; signature: string; sessionId: string; myvaultPublicKey: string; controlCenterPublicKey: string }): Promise<boolean> {
+  try {
+    const raw = fromBase64Url(input.identityKey);
+    const signature = fromBase64Url(input.signature);
+    if (raw.length !== 65 || raw[0] !== 4 || signature.length !== 64) return false;
+    const key = await subtle.importKey('raw', raw, IDENTITY_ALGORITHM, false, ['verify']);
+    return await subtle.verify(IDENTITY_SIGN, key, signature, identityTranscript(input));
+  } catch {
+    return false;
+  }
+}
+
+/** 128 bits of SHA-256 over the raw identity key, as eight groups of four hex characters: what a person compares. */
+export async function identityFingerprint(identityKey: string): Promise<string> {
+  const digest = new Uint8Array(await subtle.digest('SHA-256', fromBase64Url(identityKey)));
+  const hex = Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  return hex.match(/.{4}/g)!.join(' ');
+}
+
+/**
  * Derive this end's channel. Both ends pass the same session id and the two
  * public keys by role, so the salt — and so every key — is the same only
  * when both saw the same keys.

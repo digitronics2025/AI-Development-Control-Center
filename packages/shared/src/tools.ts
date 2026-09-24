@@ -227,6 +227,8 @@ export interface CredentialEventView {
 }
 
 export interface VaultBridgeStatus {
+  /** The key MyVault pins on first connect; null only when the sealed key cannot be opened. */
+  identity: { publicKey: string; fingerprint: string } | null;
   origins: Array<{ origin: string; vaultId: string | null; trustedAt: string; lastConnectedAt: string | null }>;
   sessions: Array<{ id: string; origin: string; code: string; openedAt: string; expiresAt: string }>;
   pendingPush: number;

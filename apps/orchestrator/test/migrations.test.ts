@@ -146,7 +146,7 @@ describe('chairman strategy outcomes migration (v7 → v8)', () => {
     const tables = ['tasks', 'task_events', 'task_directives', 'chairman_decisions'];
     const before = Object.fromEntries(tables.map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all()]));
 
-    expect(migrate(db)).toEqual([8]);
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 8))).toEqual([8]);
     expect(schemaVersion(db)).toBe(8);
     for (const t of tables) expect(db.prepare(`SELECT * FROM ${t}`).all()).toEqual(before[t]);
     const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chairman_strategy_runs' AND name LIKE 'idx_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
@@ -172,7 +172,33 @@ describe('chairman strategy outcomes migration (v7 → v8)', () => {
     expect(db.pragma('integrity_check', { simple: true })).toBe('ok');
     // The previous binary applies nothing and does not fail; re-running is a no-op.
     expect(migrate(db, previous)).toEqual([]);
-    expect(migrate(db)).toEqual([]);
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 8))).toEqual([]);
+    db.close();
+  });
+});
+
+/**
+ * MyVault bridge identity (docs/plans/myvault-bridge-identity-pinning.md):
+ * migration 9 adds one table for the key MyVault pins; nothing else changes.
+ */
+describe('bridge identity migration (v8 → v9)', () => {
+  it('adds a single-row identity table and leaves the bridge tables untouched', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-identity-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 8);
+    migrate(db, previous);
+    const ts = '2026-09-24T10:00:00.000Z';
+    db.prepare("INSERT INTO vault_bridge_origins (origin, vault_id, trusted_at, last_connected_at) VALUES ('https://vault.example', 'v1', ?, NULL)").run(ts);
+    const before = db.prepare('SELECT * FROM vault_bridge_origins').all();
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 9))).toEqual([9]);
+    expect(schemaVersion(db)).toBe(9);
+    expect(db.prepare('SELECT * FROM vault_bridge_origins').all()).toEqual(before);
+    const insert = (id: number) => db.prepare("INSERT INTO vault_bridge_identity (id, public_key, private_key_ciphertext, private_key_iv, private_key_tag, created_at) VALUES (?, 'pk', 'ct', 'iv', 'tag', ?)").run(id, ts);
+    insert(1);
+    // One identity per database: a second row, under any id, is refused.
+    expect(() => insert(1)).toThrow();
+    expect(() => insert(2)).toThrow();
+    expect(migrate(db, previous)).toEqual([]);
     db.close();
   });
 });

@@ -512,6 +512,18 @@ export class ToolStore {
     return this.db.prepare('DELETE FROM vault_bridge_origins WHERE origin = ?').run(origin).changes > 0;
   }
 
+  vaultBridgeIdentity(): { publicKey: string; sealed: { ciphertext: string; iv: string; tag: string } } | null {
+    const r = this.db.prepare('SELECT * FROM vault_bridge_identity WHERE id = 1').get() as Row | undefined;
+    return r ? { publicKey: r.public_key, sealed: { ciphertext: r.private_key_ciphertext, iv: r.private_key_iv, tag: r.private_key_tag } } : null;
+  }
+
+  /** The first identity wins; a concurrent second one is dropped, and both callers then read the winner. */
+  insertVaultBridgeIdentity(publicKey: string, sealed: { ciphertext: string; iv: string; tag: string }): void {
+    this.db
+      .prepare('INSERT INTO vault_bridge_identity (id, public_key, private_key_ciphertext, private_key_iv, private_key_tag, created_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING')
+      .run(publicKey, sealed.ciphertext, sealed.iv, sealed.tag, now());
+  }
+
   touchOrigin(origin: string, vaultId: string): void {
     this.db.prepare('UPDATE vault_bridge_origins SET vault_id = ?, last_connected_at = ? WHERE origin = ?').run(vaultId, now(), origin);
   }

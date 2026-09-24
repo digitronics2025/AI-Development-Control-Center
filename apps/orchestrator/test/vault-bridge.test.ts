@@ -10,7 +10,7 @@ import { migrate, openDatabase } from '../src/db/database.js';
 import { CredentialBroker, VAULT_SYNC_REQUIRED, type VaultAck, type VaultItemInput } from '../src/tools/credentials.js';
 import { ToolStore } from '../src/tools/store.js';
 import { VaultBridgeService } from '../src/tools/vault-bridge.js';
-import { deriveBridgeChannel, generateBridgeKeyPair, type BridgeChannel, type SealedEnvelope } from '../src/tools/vault-bridge-protocol.js';
+import { deriveBridgeChannel, generateBridgeKeyPair, identityFingerprint, verifyBridgeIdentity, type BridgeChannel, type SealedEnvelope } from '../src/tools/vault-bridge-protocol.js';
 import { operatorScope } from '../src/http/tool-routes.js';
 import { ToolService } from '../src/tools/service.js';
 import { addRepo, createTestApp, makeRepo, TOKEN, type TestApp } from './helpers.js';
@@ -210,6 +210,7 @@ class FakeVault {
   channel!: BridgeChannel;
   sessionId!: string;
   code!: string;
+  identityKey!: string;
   constructor(
     public t: TestApp,
     readonly origin = ORIGIN,
@@ -222,6 +223,10 @@ class FakeVault {
     if (res.status !== 201) return res;
     this.sessionId = res.body.sessionId;
     this.code = res.body.code;
+    // What MyVault does before it trusts anything in the session.
+    const signed = await verifyBridgeIdentity({ identityKey: res.body.identityKey, signature: res.body.signature, sessionId: this.sessionId, myvaultPublicKey: keys.publicKey, controlCenterPublicKey: res.body.publicKey });
+    if (!signed) throw new Error('The Control Center did not sign this session');
+    this.identityKey = res.body.identityKey;
     this.channel = await deriveBridgeChannel({ role: 'myvault', sessionId: this.sessionId, privateKey: keys.privateKey, myvaultPublicKey: keys.publicKey, controlCenterPublicKey: res.body.publicKey });
     return res;
   }
@@ -284,6 +289,50 @@ describe('bridge service over HTTP', () => {
     ] as const) {
       expect(matchRemoteOperation(method, url)).toBeNull();
     }
+  });
+
+  it('signs every session with one sealed identity key and shows its fingerprint', async () => {
+    await t.api('POST', '/api/vault-bridge/origins', { origin: ORIGIN });
+    const one = new FakeVault(t);
+    const two = new FakeVault(t);
+    const res = await one.connect();
+    await two.connect();
+    // connect() refuses an unsigned session, so reaching here means both verified — under the same key.
+    expect(two.identityKey).toBe(one.identityKey);
+    const status = (await t.api('GET', '/api/vault-bridge/status')).body;
+    expect(status.identity).toEqual({ publicKey: one.identityKey, fingerprint: await identityFingerprint(one.identityKey) });
+    expect(status.identity.fingerprint).toMatch(/^([0-9A-F]{4} ){7}[0-9A-F]{4}$/);
+    // A signature is bound to its session: replaying it for another session's keys fails.
+    expect(await verifyBridgeIdentity({ identityKey: one.identityKey, signature: res.body.signature, sessionId: two.sessionId, myvaultPublicKey: (await generateBridgeKeyPair()).publicKey, controlCenterPublicKey: res.body.publicKey })).toBe(false);
+    // The private half is sealed: no PKCS#8 in the row, and nothing of the row in any answer.
+    const row = t.services.db.prepare('SELECT * FROM vault_bridge_identity').get() as Record<string, string>;
+    expect(row.public_key).toBe(one.identityKey);
+    expect(JSON.stringify(row)).not.toMatch(/BEGIN|MIG[A-Za-z0-9+/]{20}/);
+    expect(JSON.stringify(status) + JSON.stringify(res.body)).not.toContain(row.private_key_ciphertext);
+    // The seal is bound to this public key: paired with another key it does not open.
+    const sealed = { ciphertext: row.private_key_ciphertext!, iv: row.private_key_iv!, tag: row.private_key_tag! };
+    await expect(t.services.credentials.openValue(sealed, `vault-bridge-identity:${(await generateBridgeKeyPair()).publicKey}`)).rejects.toThrow();
+  });
+
+  it('opens no session, and says why, when its identity key cannot be opened', async () => {
+    const { store, broker } = brokerHarness();
+    // A sealed row this broker key cannot open (a database restored onto another machine).
+    store.insertVaultBridgeIdentity((await generateBridgeKeyPair()).publicKey, { ciphertext: 'AAAA', iv: 'AAAAAAAAAAAAAAAA', tag: 'AAAAAAAAAAAAAAAAAAAAAA==' });
+    const bridge = new VaultBridgeService(store, broker);
+    await bridge.trustOrigin(ORIGIN);
+    await expect(bridge.open({ origin: ORIGIN, vaultId: VAULT, publicKey: (await generateBridgeKeyPair()).publicKey })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' });
+    expect(await bridge.status()).toMatchObject({ identity: null, sessions: [] });
+  });
+
+  it('gives no session to an origin removed while its keys were being made', async () => {
+    const { store, broker } = brokerHarness();
+    const bridge = new VaultBridgeService(store, broker);
+    await bridge.trustOrigin(ORIGIN);
+    const opening = bridge.open({ origin: ORIGIN, vaultId: VAULT, publicKey: (await generateBridgeKeyPair()).publicKey });
+    // The first open awaits identity creation; the operator removes the origin meanwhile.
+    await bridge.untrustOrigin(ORIGIN);
+    await expect(opening).rejects.toMatchObject({ code: 'UNTRUSTED_ORIGIN' });
+    expect((await bridge.status()).sessions).toEqual([]);
   });
 
   it('pushes a generated secret sealed, imports shared items, and never sends a value in clear', async () => {
@@ -397,6 +446,8 @@ describe('bridge service over HTTP', () => {
     await t.close();
     t = await createTestApp({ dataDir });
     vault.t = t;
+    // The identity MyVault pinned survives the restart.
+    expect((await t.api('GET', '/api/vault-bridge/status')).body.identity.publicKey).toBe(vault.identityKey);
     expect(t.services.credentials.get(credential.id)!.vault).toMatchObject({ state: 'pending_push' });
     expect(t.services.credentials.get(conflicted.id)!.vault).toMatchObject({ state: 'conflict' });
     const status = (await t.api('GET', '/api/vault-bridge/status')).body;
@@ -406,6 +457,7 @@ describe('bridge service over HTTP', () => {
     expect((await vault.send('sync.start', {})).error).toBe('NO_SESSION');
     const again = new FakeVault(t);
     await again.connect();
+    expect(again.identityKey).toBe(vault.identityKey);
     const push = (await again.send('sync.start', {})).replies.find((r) => r.body.ccId === credential.id)!;
     expect(push.body.fingerprint).toBe(credential.fingerprint);
   }, 60_000);
@@ -416,23 +468,23 @@ describe('bridge session lifetime', () => {
     const { store, broker } = brokerHarness();
     let clock = 1_000_000;
     const bridge = new VaultBridgeService(store, broker, { idleMs: 1000, maxMs: 5000, maxSessions: 2, now: () => clock });
-    bridge.trustOrigin(ORIGIN);
-    bridge.trustOrigin('https://second.example');
-    bridge.trustOrigin('https://third.example');
+    await bridge.trustOrigin(ORIGIN);
+    await bridge.trustOrigin('https://second.example');
+    await bridge.trustOrigin('https://third.example');
     const open = async (origin: string) => bridge.open({ origin, vaultId: VAULT, publicKey: (await generateBridgeKeyPair()).publicKey });
     const a = await open(ORIGIN);
     await open('https://second.example');
     await expect(open('https://third.example')).rejects.toMatchObject({ code: 'LIMIT' });
     clock += 1500;
-    expect(bridge.status().sessions).toEqual([]);
+    expect((await bridge.status()).sessions).toEqual([]);
     await expect(bridge.message(a.sessionId, {})).rejects.toMatchObject({ code: 'NO_SESSION' });
     // A reconnect from the same origin replaces its previous session.
     const b = await open(ORIGIN);
     const c = await open(ORIGIN);
-    expect(bridge.status().sessions.map((s) => s.id)).toEqual([c.sessionId]);
+    expect((await bridge.status()).sessions.map((s) => s.id)).toEqual([c.sessionId]);
     expect(b.sessionId).not.toBe(c.sessionId);
-    bridge.untrustOrigin(ORIGIN);
-    expect(bridge.status().sessions).toEqual([]);
+    await bridge.untrustOrigin(ORIGIN);
+    expect((await bridge.status()).sessions).toEqual([]);
     await expect(open(ORIGIN)).rejects.toMatchObject({ code: 'UNTRUSTED_ORIGIN' });
   });
 });

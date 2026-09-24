@@ -235,8 +235,22 @@ function ConnectMyVaultDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         <ol className="list-decimal space-y-1 pl-5 text-body text-fg-secondary">
           <li>In MyVault, unlock the vault.</li>
           <li>Open Settings → AI Development Control Center and choose Connect and sync.</li>
+          <li>The first time, MyVault shows this Control Center's key. Trust it only if it matches the key below.</li>
           <li>Check that both windows show the same session code.</li>
         </ol>
+        <section className="flex flex-col gap-1" aria-labelledby="control-center-key">
+          <h3 id="control-center-key" className="text-h3">This Control Center's key</h3>
+          {status.data ? (
+            status.data.identity ? (
+              <p className="font-mono text-body wrap-anywhere" data-testid="identity-fingerprint">{status.data.identity.fingerprint}</p>
+            ) : (
+              <Banner tone="danger" role="alert" title="Key unavailable">
+                The Control Center could not open its key, so MyVault cannot connect. This happens when its data came from another computer; resetting the key is a manual step for now (see the credential broker notes).
+              </Banner>
+            )
+          ) : null}
+          <p className="text-small text-fg-secondary">MyVault remembers this key and refuses a Control Center that answers here with a different one.</p>
+        </section>
         {status.data?.origins.length ? (
           <section className="flex flex-col gap-2" aria-labelledby="trusted-origins">
             <h3 id="trusted-origins" className="text-h3">Trusted</h3>

@@ -943,4 +943,21 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_chairman_strategy_runs_open ON chairman_strategy_runs(task_id, status);
     `,
   },
+  {
+    // The Control Center's MyVault bridge identity
+    // (docs/plans/myvault-bridge-identity-pinning.md): one ECDSA P-256 key
+    // MyVault pins. The private half is sealed with the broker key, never plain.
+    version: 9,
+    name: 'myvault bridge identity',
+    sql: `
+      CREATE TABLE vault_bridge_identity (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        public_key TEXT NOT NULL,
+        private_key_ciphertext TEXT NOT NULL,
+        private_key_iv TEXT NOT NULL,
+        private_key_tag TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

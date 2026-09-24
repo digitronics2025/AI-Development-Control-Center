@@ -302,6 +302,13 @@ describe('learning review', () => {
     expect(prompt).toContain('- s1 [fix_loops] tests:');
     expect(prompt).toContain('[fence removed]');
     expect(prompt).toContain('- jq: jq (jq)');
+    // The legend and the quality bar come before the signals and the fenced report (docs/plans/CHAIRMAN_PROMPTS_PLAN.md).
+    expect(prompt).toContain('SIGNAL KINDS:');
+    expect(prompt).toContain('- fix_loops (Several fix rounds): the task needed several fix rounds');
+    expect(prompt).toContain('ADD_LESSON for a way of working');
+    expect(prompt).toContain('HIGH when the signals show the problem and the fix directly');
+    expect(prompt.indexOf('SIGNAL KINDS:')).toBeLessThan(prompt.indexOf('SIGNALS (OBSERVED):'));
+    expect(prompt.indexOf('SIGNALS (OBSERVED):')).toBeLessThan(prompt.indexOf('<untrusted_evidence source='));
   });
 
   it('ranks skills by shared words', () => {

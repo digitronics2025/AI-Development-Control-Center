@@ -5,6 +5,8 @@ import {
   FINDING_KINDS,
   INSTALLABLE_TOOLS,
   LEARNING_SCOPES,
+  LEARNING_SIGNAL_KINDS,
+  SIGNAL_KIND_LABEL,
   installableFor,
   learningProposalSchema,
   type FindingConfidence,
@@ -14,6 +16,7 @@ import {
   type LearningProposal,
   type LearningScope,
   type LearningSignal,
+  type LearningSignalKind,
 } from '@acc/shared';
 import { z } from 'zod';
 import { fenceEvidence } from '../chairman/reasoner.js';
@@ -111,13 +114,30 @@ const REVIEW_RULES = [
   'Only report what would change how later tasks run: a missing program, a skill that would have helped, or a way of working (a lesson). Do not report one-off bugs in the task\'s own code.',
   'Every finding must cite at least one signal id from SIGNALS in "evidence". A finding without a valid signal id is discarded.',
   'Prefer fewer, sharper findings. Return an empty list when nothing is worth changing.',
-  'Lessons are short, concrete advice for agents in this repository ("Run `pnpm build` before `pnpm e2e`; e2e reads the built dashboard."). Never propose skipping, deleting or weakening tests, checks, review or hooks, and never include web addresses or secrets.',
+  'A finding\'s "detail" says what the signals show and what the task would have avoided with the change; "confidence" is HIGH when the signals show the problem and the fix directly, MEDIUM when the fix is a reasonable inference, LOW when it is a hunch.',
+  'Lessons are short, concrete advice for agents in this repository ("Run `pnpm build` before `pnpm e2e`; e2e reads the built dashboard."): one habit, written as an instruction with its reason, at most 400 characters. Never propose skipping, deleting or weakening tests, checks, review or hooks, and never include web addresses or secrets.',
+  'Choose the proposal by its shape: ADD_LESSON for a way of working; USE_SKILL when a skill under SKILLS already covers it; AUTHOR_SKILL only for a multi-step, repository-specific playbook no lesson can hold; INSTALL_TOOL for a missing program in INSTALLABLE PROGRAMS.',
   'A skill you write is a playbook agents read: numbered steps, repository-specific, no web addresses, no commands that download and run code.',
   'Only propose INSTALL_TOOL with an id from INSTALLABLE PROGRAMS. Only propose USE_SKILL with a name from SKILLS.',
   'When a finding repeats one under EXISTING FINDINGS, set "sameAs" to its id instead of inventing a new title.',
   'Problems in the Control Center itself (its engine, its tools, its dashboard) are kind "app_defect" with proposal null.',
   'Reply with exactly one JSON object in a ```json code block and nothing else.',
 ].join('\n');
+
+/** What each recorded signal kind means, so the model reads keys as facts rather than guessing. */
+const SIGNAL_LEGEND: Record<LearningSignalKind, string> = {
+  tool_missing: 'a program the agents needed is not installed',
+  command_missing: 'a shell command was not found',
+  tool_failures: 'one capability failed repeatedly',
+  skill_denied: 'a stage was refused a skill it asked for',
+  fix_loops: 'the task needed several fix rounds',
+  recovery: 'the Chairman had to change strategy',
+  stage_timeout: 'a stage hit its time limit',
+  provider_block: 'an agent was unavailable (usage limit, sign-in, model)',
+  completion_limits: 'the task finished with unmet checks',
+  slow_stage: 'an agent stage ran over twenty minutes',
+  task_stuck: 'the task ended on a blocker',
+};
 
 export function reviewPrompt(c: ReviewContext): string {
   return [
@@ -132,6 +152,9 @@ export function reviewPrompt(c: ReviewContext): string {
     `- Workflow: ${c.workflow}`,
     `- Repository: ${c.repositoryName}`,
     `- Result: ${c.finalStatus ?? 'unknown'}`,
+    '',
+    'SIGNAL KINDS:',
+    ...LEARNING_SIGNAL_KINDS.map((kind) => `- ${kind} (${SIGNAL_KIND_LABEL[kind]}): ${SIGNAL_LEGEND[kind]}`),
     '',
     'SIGNALS (OBSERVED):',
     ...c.signals.map((s) => `- ${s.id} [${s.kind}] ${s.key}: ${s.summary}`),

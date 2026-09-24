@@ -99,7 +99,7 @@ settings; `GET /api/skills?repositoryId=` serves it (remote read op
   (`--settings {"disableAllHooks":true}`), with `--tools ""` and
   `--strict-mcp-config`; `--setting-sources project,local` when user config is
   off, as in a run. Descriptions are read from the repository's, the user's and
-  each plugin's SKILL.md files (a plugin manifest's `skills` path is honoured);
+  each plugin's SKILL.md files (`skills/` plus any folder its manifest declares, never outside the plugin);
   a reported name without a readable file is listed with none (`builtin`, or
   `plugin`). Rebuilding the list from folders and `claude plugin list --json`
   was tried first and was wrong in both directions (link stubs and plugins the
@@ -119,7 +119,7 @@ none clearly does; at most once per stage; a refusal is an operator decision).
 The description and directives stay the record; there is no separate task field.
 
 `pnpm verify:agents --skills` also compares the picker's list with the CLI's
-(791 = 791 on 2026-09-24, 741 with a description) and checks that the `/skills`
+(791 = 791 on 2026-09-24, 750 with a description; the rest are built-ins with no file) and checks that the `/skills`
 lookup still uses no model turn.
 
 Codex loads `~/.codex/skills` and `~/.agents/skills` itself;

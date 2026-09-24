@@ -63,14 +63,14 @@ skills same behavior as claude chat". The discussion that followed
 - [x] 9. Demo repo gets a project skill; Playwright e2e for the picker (keyboard select, Escape, both themes) — done when: the spec passes — check: `pnpm build && pnpm e2e`
 - [x] 10. Real check: catalog vs the CLI's own init list for this repository — done when: every catalog name is in the CLI's list — check: `pnpm verify:agents --only claude --claude-model haiku --skills`
 - [x] 11. Docs: agents.md, dashboard.md, remote-node/op list, orchestrator API — done when: docs describe the endpoint, picker and prompt section — check: `git diff --stat docs/`
-- [ ] 12. Live: rebuild, restart, pick a skill on the real New Task page via Playwright — done when: `/` lists the operator's skills and inserts one — check: `manual: Playwright on 127.0.0.1:4317/tasks/new`
+- [x] 12. Live: rebuild, restart, pick a skill on the real New Task page via Playwright — done when: `/` lists the operator's skills and inserts one — check: `manual: Playwright on 127.0.0.1:4317/tasks/new`
 
 ## Tail
 
 - [x] T1. Adversarial review of the whole diff — done when: every finding is fixed or ledgered — check: `git diff --stat` reviewed hunk by hunk
 - [x] T2. Similar-issue sweep — done when: other free-text fields that reach prompts (directives, Chairman chat) were considered for the same picker — check: `manual: list what was searched`
 - [x] T3. Gates green — done when: `pnpm check` and `pnpm build && pnpm e2e` pass — check: the commands
-- [ ] T4. Docs synced — done when: design.md and system docs reflect the change — check: `git diff --stat design.md docs/`
+- [x] T4. Docs synced — done when: design.md and system docs reflect the change — check: `git diff --stat design.md docs/`
 - [ ] T5. Committed path-scoped and pushed — done when: the push succeeded with only this work — check: `git log origin/main..HEAD --oneline`
 - [ ] T6. Confirmed live where the push deploys — done when: no deploy on push (deploy-cloud is workflow_dispatch); local orchestrator restarted in step 12 — check: `manual`
 - [ ] T7. A claim registered — done when: registered or "no claims register" with the standing probe named — check: `manual`
@@ -85,3 +85,4 @@ skills same behavior as claude chat". The discussion that followed
 - 2026-09-24 — T3 — final gates on the finished tree: `pnpm check` (typecheck, lint, docs guard, 620/620 tests) and `pnpm build && pnpm e2e` (87/87) in one run, exit 0
 - 2026-09-24 — step 12 — live on the operator's orchestrator (clean build of the committed tree from the `acc-verify` worktree swapped into `apps/*/dist`, because the shared tree held another session's uncommitted vault-bridge work; DB backed up to `backups/acc-before-skill-picker-2026-09-24.db`, no migrations): on the real New Task page with this repository, typing `/fix` listed 43 real skills (`/fix`, `/fix-bug`, `/fix-issue`, `/dx:fix-bug`, … with descriptions and Yours/plugin labels); ArrowDown + Enter inserted `/fix-bug ` and the line read "Skills requested: /fix-bug"; screenshot `~/.claude/browser/playwright-mcp/skill-picker-live-open.png`. Nothing was submitted. The live task list holds only finished tasks (whose Directive box is closed), so the Directive picker is proven on the demo instead: new e2e "the Directive box on a task offers the same picker" (3/3 picker specs pass). Simple Browser: link fired, receipt still dated 2026-09-15 — not confirmed in the editor
 - 2026-09-24 — step 12 — found live: `/pw:fix` had no description. The pw plugin's manifest says `"skills": "./"` but its skills sit in `skills/`, which the CLI also reads; the scan now reads `skills/` plus declared folders (test). Real comparison after: 791 = 791, 750 with a description (the rest are Claude Code built-ins with no file)
+- 2026-09-24 — step 12 — after the fix, rebuilt from 6994ac9 in the clean worktree and restarted (pid 29168, dist hash equal to the worktree build); live `/pw:fi` now shows `/pw:fix` with its description

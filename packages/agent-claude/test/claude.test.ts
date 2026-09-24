@@ -221,6 +221,17 @@ describe('ClaudeCodeAdapter.listSkills', () => {
     expect(lookupWasFree('{"type":"result","num_turns":0,"total_cost_usd":0}')).toBe(true);
   });
 
+  it('finds skills under skills/ even when the manifest declares another folder', async () => {
+    const plugin = path.join(root, 'plugins', 'pw');
+    skill(path.join(plugin, 'skills'), 'fix', 'Fix flaky tests');
+    mkdirSync(path.join(plugin, '.claude-plugin'), { recursive: true });
+    writeFileSync(path.join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'pw', skills: './' }));
+    const pwListing = path.join(root, 'skills-pw.json');
+    writeFileSync(pwListing, JSON.stringify({ skills: ['pw:fix'], plugins: [{ name: 'pw', path: plugin }] }));
+    const skills = await new ClaudeCodeAdapter().listSkills(input({ env: { FAKE_CLAUDE_SKILLS_JSON: pwListing } }), repo);
+    expect(skills).toEqual([{ name: 'pw:fix', description: 'Fix flaky tests', source: 'plugin', plugin: 'pw' }]);
+  });
+
   it('never scans outside a plugin, whatever its manifest says', async () => {
     const outside = path.join(root, 'plugins', 'escape');
     skill(path.join(root, 'plugins', 'escape-sibling', 'skills'), 'stolen', 'Outside the plugin');

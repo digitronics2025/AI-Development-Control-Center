@@ -57,18 +57,23 @@ export function lookupWasFree(stdout: string): boolean {
   return true;
 }
 
-/** A plugin's skill folders: its manifest's `skills` (a path or list), else `skills/`. */
+/**
+ * A plugin's skill folders: `skills/` plus whatever its manifest's `skills`
+ * declares (a path or list). The CLI reads both — e.g. a manifest saying
+ * `"./"` still has its skills found under `skills/`.
+ */
 async function pluginSkillFolders(root: string): Promise<string[]> {
+  const base = path.resolve(root);
+  const folders = [path.join(base, 'skills')];
   try {
-    const manifest = JSON.parse(await readFile(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills?: unknown };
+    const manifest = JSON.parse(await readFile(path.join(base, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills?: unknown };
     const declared = (Array.isArray(manifest.skills) ? manifest.skills : [manifest.skills]).filter((p): p is string => typeof p === 'string');
-    const base = path.resolve(root);
     // Only folders inside the plugin: a manifest cannot point the scan elsewhere.
-    if (declared.length) return declared.map((p) => path.resolve(base, p)).filter((p) => p === base || p.startsWith(base + path.sep));
+    for (const p of declared.map((d) => path.resolve(base, d))) if ((p === base || p.startsWith(base + path.sep)) && !folders.includes(p)) folders.push(p);
   } catch {
     /* no manifest: the default layout */
   }
-  return [path.join(root, 'skills')];
+  return folders;
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];

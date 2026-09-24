@@ -40,6 +40,24 @@ test.describe('New Task slash picker (design.md §8.3)', () => {
     await page.close();
   });
 
+  test('the Directive box on a task offers the same picker', async ({ page }) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    const { items } = await api<{ items: Array<{ id: string; title: string }> }>(page, 'GET', '/api/tasks');
+    const draft = items.find((t) => t.title.startsWith('Rename the PaymentIntent helper'))!;
+    await page.goto(`/tasks/${draft.id}`);
+    const directive = page.getByLabel('Directive');
+    await directive.click();
+    await directive.pressSequentially('Before merging run /aud');
+    const list = page.getByRole('listbox', { name: 'Skills' });
+    await expect(list.getByRole('option')).toHaveText([/\/audit-refunds/]);
+    await page.keyboard.press('Enter');
+    await expect(directive).toHaveValue('Before merging run /audit-refunds ');
+    await expect(page.getByTestId('requested-skills')).toHaveText('Skills requested: /audit-refunds');
+    expect(errors).toEqual([]);
+  });
+
   for (const theme of ['dark', 'light'] as const) {
     test(`typing / lists the repository's skills and inserts one, keyboard only (${theme})`, async ({ page }, testInfo) => {
       const errors = trackConsoleErrors(page);

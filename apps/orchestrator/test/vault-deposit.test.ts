@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { VAULT_SYNC_REQUIRED } from '../src/tools/credentials.js';
 import {
@@ -12,6 +15,7 @@ import {
   openDeposit,
   type BridgeChannel,
 } from '../src/tools/vault-bridge-protocol.js';
+import { installFakeWrangler } from './fake-wrangler.js';
 import { addRepo, createTestApp, makeRepo, TOKEN, type TestApp } from './helpers.js';
 
 /**
@@ -102,8 +106,12 @@ describe('MyVault delivery box', () => {
 
   beforeAll(async () => {
     await worker.start();
-    t = await createTestApp();
-    repoId = await addRepo(t, await makeRepo({ files: { 'wrangler.toml': 'name = "fixture"\n' } }));
+    // A stand-in Wrangler in the repository: the deploy gate must answer whether or not
+    // this machine has a global Wrangler (audit F-17 — CI runners do not).
+    t = await createTestApp({ baseEnv: { ...process.env, FAKE_WRANGLER_STATE: path.join(mkdtempSync(path.join(os.tmpdir(), 'acc-deposit-wrangler-')), 'state.json') } });
+    const repoPath = await makeRepo({ files: { 'wrangler.toml': 'name = "fixture"\n' } });
+    installFakeWrangler(repoPath);
+    repoId = await addRepo(t, repoPath);
     await t.api('POST', '/api/vault-bridge/origins', { origin: worker.origin });
     identityKey = (await t.api('GET', '/api/vault-bridge/status')).body.identity.publicKey;
     delivery = await generateDepositKeyPair();
@@ -182,20 +190,25 @@ describe('MyVault delivery box', () => {
 
     const real = worker.token;
     worker.token = 'revoked';
-    const blocked = await generate('REVOKED_BOX_SECRET');
-    expect(blocked.vaultSync).toBe('pending_push');
-    const gate = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'cloudflare.secret_put', input: { credential: 'REVOKED_BOX_SECRET', secretName: 'X', environment: 'staging' }, confirmation: 'cloudflare.secret_put' });
-    expect(gate.body.result.summary).toContain('delivery box');
-    expect((await t.api('GET', '/api/vault-bridge/status')).body.delivery[0].lastError).toMatch(/no longer accepts deliveries/);
-    // Refused: nothing more is sent, not even on the next check, until MyVault offers a new credential —
-    // and the next session tells MyVault to do so.
-    const posts = [...worker.deposits.values()].reduce((n, d) => n + d.posts, 0);
-    await t.services.vaultBridge.deposits.poll();
-    expect([...worker.deposits.values()].reduce((n, d) => n + d.posts, 0)).toBe(posts);
-    const s = await session(t, worker.origin);
-    const started = await s.send('sync.start', {});
-    expect(started.at(-1)!.body.delivery).toMatchObject({ accepted: true, healthy: false });
-    worker.token = real;
+    // A failed assertion must not leave the box refused for the tests after this one (audit F-17).
+    let s: Awaited<ReturnType<typeof session>>;
+    try {
+      const blocked = await generate('REVOKED_BOX_SECRET');
+      expect(blocked.vaultSync).toBe('pending_push');
+      const gate = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'cloudflare.secret_put', input: { credential: 'REVOKED_BOX_SECRET', secretName: 'X', environment: 'staging' }, confirmation: 'cloudflare.secret_put' });
+      expect(gate.body.result.summary).toContain('delivery box');
+      expect((await t.api('GET', '/api/vault-bridge/status')).body.delivery[0].lastError).toMatch(/no longer accepts deliveries/);
+      // Refused: nothing more is sent, not even on the next check, until MyVault offers a new credential —
+      // and the next session tells MyVault to do so.
+      const posts = [...worker.deposits.values()].reduce((n, d) => n + d.posts, 0);
+      await t.services.vaultBridge.deposits.poll();
+      expect([...worker.deposits.values()].reduce((n, d) => n + d.posts, 0)).toBe(posts);
+      s = await session(t, worker.origin);
+      const started = await s.send('sync.start', {});
+      expect(started.at(-1)!.body.delivery).toMatchObject({ accepted: true, healthy: false });
+    } finally {
+      worker.token = real;
+    }
     const senderId = /^mvx_([0-9a-f-]{36})_/.exec(real)![1]!;
     await s.send('deposit.offer', { keyId: await depositKeyId(delivery.publicKey), publicKey: delivery.publicKey, senderId, token: real });
     await s.send('bye', {});

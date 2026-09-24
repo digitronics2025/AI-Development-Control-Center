@@ -193,6 +193,17 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
   return result.code === 0;
 }
 
+/**
+ * Delete a branch only while it still points at `commit` — an atomic
+ * compare-and-delete, so a branch that gained work since is never lost.
+ * Returns whether it was deleted.
+ */
+export async function deleteBranchIfAt(cwd: string, name: string, commit: string): Promise<boolean> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return false;
+  const result = await git(cwd, ['update-ref', '-d', `refs/heads/${name}`, commit]);
+  return result.code === 0;
+}
+
 export function taskBranchName(taskId: string, title: string): string {
   const slug = title
     .toLowerCase()

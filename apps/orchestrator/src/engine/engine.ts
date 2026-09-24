@@ -1,7 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { changesSince, createTaskBranch, currentBranch, diffSince, isGitRepository, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
+import { rmdir } from 'node:fs/promises';
+import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, diffSince, headCommit, isGitRepository, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMPLETE,
@@ -20,6 +21,7 @@ import {
   type PartialAssignment,
   type StageDefinition,
   type StageInstance,
+  type PermissionLevel,
   type TaskBlocker,
   type TaskDetail,
   type TaskStatus,
@@ -39,6 +41,7 @@ import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
 import type { EngineTooling } from './tooling.js';
+import { isMultiRepository, strictestPolicy, taskRepositories, workspaceFolders, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
@@ -140,8 +143,13 @@ export class TaskEngine {
   async createTask(raw: CreateTaskInput): Promise<TaskDetail> {
     const input = createTaskSchema.parse(raw) as z.output<typeof createTaskSchema>;
     const repo = this.d.repositories.record(input.repositoryId);
+    const linkedRepos = (input.linkedRepositoryIds ?? []).map((id) => this.d.repositories.record(id));
     const workflow = this.d.workflows.get(input.workflowId);
     const settings = this.d.settings.get();
+    // A task across repositories works in isolated worktrees of each: every one needs Git and a first commit.
+    if (linkedRepos.length) await this.checkWorkspaceRepositories([repo, ...linkedRepos]);
+    const allRepos = [repo, ...linkedRepos];
+    const folders = linkedRepos.length ? workspaceFolders(allRepos.map((r) => r.name)) : [];
     for (const assignment of [...Object.values(input.overrides?.roles ?? {}), ...Object.values(input.overrides?.stages ?? {})]) {
       if (assignment?.agentId && !this.d.agents.has(assignment.agentId)) {
         throw new EngineError(`Unknown agent "${assignment.agentId}"`, 'INVALID_INPUT');
@@ -169,7 +177,8 @@ export class TaskEngine {
       currentStageKey: workflow.stages[0]!.key,
       currentStageId: null,
       overrides: input.overrides ?? { roles: {}, stages: {} },
-      autoApproveUpToLevel: input.autoApproveUpToLevel ?? repo.autoApproveUpToLevel ?? settings.autoApproveUpToLevel,
+      // Across repositories the task gets the most restrictive of their defaults.
+      autoApproveUpToLevel: input.autoApproveUpToLevel ?? (Math.min(...allRepos.map((r) => r.autoApproveUpToLevel ?? settings.autoApproveUpToLevel)) as PermissionLevel),
       maxFixCycles: input.maxFixCycles ?? workflow.maxFixCycles,
       fixCycles: 0,
       pauseRequested: false,
@@ -180,12 +189,22 @@ export class TaskEngine {
         ? { maxRecoveryCycles: settings.chairman.maxRecoveryCycles, maxRuntimeMinutes: settings.chairman.maxTaskRuntimeMinutes, maxAgentRuns: settings.chairman.maxAgentRuns }
         : null,
       extraCheckKinds: [],
-      policyMode: input.policyMode ?? repo.policyMode ?? settings.execution.policyMode,
+      policyMode: input.policyMode ?? strictestPolicy(allRepos.map((r) => r.policyMode ?? settings.execution.policyMode)),
       version: 0,
       blocker: null,
       lastEvent: null,
       finalStatus: null,
-      git: { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null, worktreePath: null, isolated: input.worktree ?? repo.gitMode === 'worktree' },
+      git: {
+        baselineCommit: null,
+        baselineBranch: null,
+        taskBranch: null,
+        preexistingChanges: [],
+        commits: [],
+        baselineSnapshotId: null,
+        worktreePath: null,
+        isolated: linkedRepos.length ? true : (input.worktree ?? repo.gitMode === 'worktree'),
+        ...(linkedRepos.length ? { folder: folders[0]! } : {}),
+      },
       attachments: [],
       promptVersions: {},
       createdAt: ts,
@@ -194,7 +213,11 @@ export class TaskEngine {
       updatedAt: ts,
     };
     this.d.store.insertTask(task);
-    this.d.store.updateRepository(repo.id, { lastTaskId: id });
+    if (linkedRepos.length) {
+      const git = { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null, worktreePath: null, isolated: true };
+      this.d.store.insertLinkedRepositories(linkedRepos.map((r, i) => ({ taskId: id, repositoryId: r.id, position: i + 1, folder: folders[i + 1]!, git })));
+    }
+    for (const r of allRepos) this.d.store.updateRepository(r.id, { lastTaskId: id });
     this.supervisor?.onTaskCreated(task);
 
     if (input.attachments?.length) {
@@ -211,7 +234,7 @@ export class TaskEngine {
       this.d.store.updateTask(id, { attachments });
     }
     await this.d.artifacts.write(id, { name: 'request.md', type: 'request', content: `# ${title}\n\n${input.description}\n` });
-    this.publisher.event(id, 'TASK_CREATED', `Task created in ${repo.name} · ${workflow.name} · ${input.mode === 'discuss' ? 'Discuss First' : 'Autopilot'}`);
+    this.publisher.event(id, 'TASK_CREATED', `Task created in ${allRepos.map((r) => r.name).join(', ')} · ${workflow.name} · ${input.mode === 'discuss' ? 'Discuss First' : 'Autopilot'}`);
     if (input.start) await this.start(id);
     return this.detail(id);
   }
@@ -779,7 +802,7 @@ export class TaskEngine {
       let stage: StageInstance;
       let outcome: StageOutcome;
       try {
-        if (writes || task.git.isolated) await this.ensureBaseline(this.task(taskId), repo.path);
+        if ((writes || task.git.isolated) && !(await this.ensureBaseline(this.task(taskId), repo.path))) return;
         if (!environmentChecked) {
           environmentChecked = true;
           await this.d.tooling.discoverEnvironment(this.task(taskId), repo).catch((error: unknown) => {
@@ -888,14 +911,18 @@ export class TaskEngine {
     return stage;
   }
 
-  /** Record the Git baseline and create the task branch before the first write-capable stage. */
-  private async ensureBaseline(task: TaskRecord, repoPath: string): Promise<void> {
-    if (task.git.baselineSnapshotId) return;
+  /**
+   * Record the Git baseline and create the task branch before the first
+   * write-capable stage. Returns false when the task was parked instead.
+   */
+  private async ensureBaseline(task: TaskRecord, repoPath: string): Promise<boolean> {
+    if (isMultiRepository(this.d.store, task)) return this.ensureWorkspace(task);
+    if (task.git.baselineSnapshotId) return true;
     if (!(await isGitRepository(repoPath))) {
       if (!this.d.store.lastEventOfType(task.id, ['GIT_BASELINE'])) {
         this.publisher.event(task.id, 'GIT_BASELINE', 'Not a Git repository: changes cannot be tracked or separated from existing work');
       }
-      return;
+      return true;
     }
     const repo = this.d.repositories.record(task.repositoryId);
     if (task.git.isolated) {
@@ -910,7 +937,7 @@ export class TaskEngine {
         });
         this.publisher.event(task.id, 'GIT_BASELINE', `Baseline recorded at ${created.head.slice(0, 10)} in an isolated worktree · your working tree is not touched`, { head: created.head, branch: created.taskBranch, worktree: created.worktreePath });
         await this.d.tooling.prepareWorktree(this.task(task.id), repo);
-        return;
+        return true;
       }
       this.publisher.updateTask(task.id, { git: { ...task.git, isolated: false } });
       task = this.task(task.id);
@@ -943,6 +970,72 @@ export class TaskEngine {
         { branch: snap.branch, stackedOn },
       );
     }
+    return true;
+  }
+
+  /** Every repository of a task across repositories must be Git with a first commit, or the task is refused before anything is written. */
+  private async checkWorkspaceRepositories(repos: Array<{ name: string; path: string }>): Promise<void> {
+    for (const r of repos) {
+      if (!(await isGitRepository(r.path))) throw new EngineError(`${r.name} is not a Git repository. A task across several repositories needs Git in each of them.`, 'INVALID_INPUT');
+      if (!(await headCommit(r.path))) throw new EngineError(`${r.name} has no commits yet. Commit once before using it in a task across several repositories.`, 'INVALID_INPUT');
+    }
+  }
+
+  /**
+   * A task across repositories: one worktree per repository, side by side in
+   * the task workspace, all created before the first stage runs
+   * (docs/plans/MULTI_REPO_TASKS_PLAN.md). A repository already baselined
+   * is kept, so this resumes after an interruption. When one cannot be
+   * prepared, the worktrees and untouched branches this attempt made are
+   * removed again and the task waits for you. Returns false when parked.
+   */
+  private async ensureWorkspace(task: TaskRecord): Promise<boolean> {
+    const repos = taskRepositories(this.d.store, task);
+    if (repos.every((r) => r.git.baselineSnapshotId) && task.git.workspacePath) return true;
+    const workspace = this.d.tooling.workspaceRoot(task);
+    const created: Array<{ entry: TaskRepository; dir: string; taskBranch: string; head: string }> = [];
+    let current: TaskRepository | null = null;
+    try {
+      for (const entry of repos) {
+        if (entry.git.baselineSnapshotId) continue;
+        current = entry;
+        const dir = path.join(workspace, entry.folder!);
+        const made = await this.d.tooling.addWorkspaceWorktree(this.task(task.id), entry.repo, dir);
+        created.push({ entry, dir, ...made });
+        const snapshotId = newId();
+        this.d.store.insertSnapshot({ id: snapshotId, taskId: task.id, stageId: null, kind: 'baseline', branch: made.taskBranch, head: made.head, files: [], createdAt: now() });
+        this.publisher.updateRepositoryGit(task.id, entry.repo.id, {
+          baselineSnapshotId: snapshotId,
+          baselineCommit: made.head,
+          baselineBranch: await currentBranch(entry.repo.path),
+          taskBranch: made.taskBranch,
+          preexistingChanges: [],
+          worktreePath: dir,
+          isolated: true,
+        });
+        this.publisher.event(task.id, 'GIT_BASELINE', `${entry.repo.name}: baseline recorded at ${made.head.slice(0, 10)} in an isolated worktree (${entry.folder}/) · your working tree is not touched`, {
+          repositoryId: entry.repo.id,
+          head: made.head,
+          branch: made.taskBranch,
+          worktree: dir,
+        });
+      }
+    } catch (error) {
+      const reason = redact((error as Error)?.message ?? String(error)).slice(0, 300);
+      for (const c of created.reverse()) {
+        await removeWorktree(c.entry.repo.path, c.dir, { force: true }).catch(() => false);
+        await deleteBranchIfAt(c.entry.repo.path, c.taskBranch, c.head).catch(() => false);
+        this.publisher.updateRepositoryGit(task.id, c.entry.repo.id, { baselineSnapshotId: null, baselineCommit: null, baselineBranch: null, taskBranch: null, worktreePath: null });
+      }
+      await rmdir(workspace).catch(() => undefined);
+      const message = `Could not prepare ${current?.repo.name ?? 'a repository'} for this task: ${reason}. Nothing was changed in your repositories; resume to try again.`;
+      this.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'error', message, errorClass: 'UNKNOWN' } });
+      this.publisher.event(task.id, 'TASK_WAITING', message);
+      return false;
+    }
+    this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, workspacePath: workspace } });
+    for (const c of created) await this.d.tooling.prepareWorktree(this.task(task.id), c.entry.repo, c.dir);
+    return true;
   }
 
   /** Decide the next step from a stage outcome. Returns true to keep looping. */

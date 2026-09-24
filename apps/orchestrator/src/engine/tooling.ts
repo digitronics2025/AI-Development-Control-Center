@@ -110,15 +110,20 @@ export class EngineTooling {
     return policyCeiling(this.policyMode(task, repo), task.autoApproveUpToLevel ?? DEFAULT_AUTO_APPROVE_LEVEL);
   }
 
-  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null }, sessionId: string | null = null): ToolScope {
-    const cwd = agentWorkdir(task, repo);
+  /**
+   * The tool scope of a task. Its root is where the task's agents work (the
+   * workspace of a multi-repository task); `stage.cwd` starts a call in a
+   * folder inside that root, e.g. one repository of the workspace.
+   */
+  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string }, sessionId: string | null = null): ToolScope {
+    const root = agentWorkdir(task, repo);
     return {
       taskId: task.id,
       stageId: stage.stageId,
       sessionId,
       repositoryId: repo.id,
-      cwd,
-      roots: [cwd],
+      cwd: stage.cwd ?? root,
+      roots: [root],
       stageLevel: stage.level,
       autoApproveUpToLevel: task.autoApproveUpToLevel ?? DEFAULT_AUTO_APPROVE_LEVEL,
       mode: this.policyMode(task, repo),
@@ -324,6 +329,26 @@ export class EngineTooling {
   }
 
   /** Create the task's worktree and branch; returns the new git record fields, or null to fall back to a task branch. */
+  /** The folder of a multi-repository task: one worktree per repository, side by side (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+  workspaceRoot(task: Pick<TaskRecord, 'id'>): string {
+    return path.join(this.d.dataDir, 'workspaces', task.id);
+  }
+
+  /**
+   * One repository's worktree inside a task workspace. Unlike
+   * `createWorktree` there is no fallback: a task across repositories is
+   * isolated in every one of them, so a failure is thrown to the caller.
+   * A folder left by an interrupted attempt (no record, so no agent ever ran
+   * in it) is removed first.
+   */
+  async addWorkspaceWorktree(task: TaskRecord, repo: RepositoryRecord, dir: string): Promise<{ taskBranch: string; head: string }> {
+    if (existsSync(dir)) await removeWorktree(repo.path, dir, { force: true });
+    mkdirSync(path.dirname(dir), { recursive: true });
+    const { branch, head } = await addWorktree(repo.path, dir, taskBranchName(task.id, task.title));
+    this.event(task.id, 'WORKTREE_CREATED', `${repo.name}: working in an isolated worktree on ${branch}; your working tree is not touched`, { path: dir, branch, repositoryId: repo.id });
+    return { taskBranch: branch, head };
+  }
+
   async createWorktree(task: TaskRecord, repo: RepositoryRecord): Promise<{ worktreePath: string; taskBranch: string; head: string } | null> {
     if (!(await isGitRepository(repo.path))) return null;
     const dir = path.join(this.worktreeRoot(repo), task.id);
@@ -343,14 +368,13 @@ export class EngineTooling {
    * lockfile. Without a lockfile an install would write one into the task's
    * changes, so it is left to the test stage's repair instead.
    */
-  async prepareWorktree(task: TaskRecord, repo: RepositoryRecord): Promise<void> {
-    const cwd = taskWorkdir(task, repo);
+  async prepareWorktree(task: TaskRecord, repo: RepositoryRecord, cwd: string = taskWorkdir(task, repo)): Promise<void> {
     if (!packageManager(cwd) || existsSync(path.join(cwd, 'node_modules'))) return;
     if (!LOCKFILES.some((f) => existsSync(path.join(cwd, f)))) {
       this.event(task.id, 'TOOL_CALL', 'No lockfile in the worktree: dependencies are installed when a check needs them', {});
       return;
     }
-    const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null }), preApproved: true, timeoutMs: 20 * 60_000 });
+    const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null, cwd }), preApproved: true, timeoutMs: 20 * 60_000 });
     this.event(task.id, 'TOOL_CALL', `Installed dependencies in the worktree: ${outcome.result.summary}`, { executionId: outcome.execution.id, ok: outcome.result.ok });
   }
 

@@ -1,4 +1,5 @@
-import { appendFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { appendFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentCapabilities, ModelDescriptor, SkillInfo } from '@acc/shared';
 import { scanSkillDirectory } from './skills.js';
@@ -263,10 +264,16 @@ export class SimulatedAgentAdapter implements AgentAdapter {
               'BLOCKED ON OPERATOR: Which rounding rule is right — halves up (till) or halves to even (accounts)? I recommend halves up.';
             break;
           }
-          const file = path.join(input.cwd, 'sim-output.md');
-          await appendFile(file, `- ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
-          base.filesChanged = ['sim-output.md'];
-          emit(`[file] update sim-output.md`);
+          // In a multi-repository task workspace (no Git at the root), change every repository folder in it.
+          const folders = existsSync(path.join(input.cwd, '.git'))
+            ? []
+            : (await readdir(input.cwd, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory() && existsSync(path.join(input.cwd, d.name, '.git'))).map((d) => d.name);
+          const files = folders.length ? folders.map((folder) => `${folder}/sim-output.md`) : ['sim-output.md'];
+          for (const rel of files) {
+            await appendFile(path.join(input.cwd, rel), `- ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            emit(`[file] update ${rel}`);
+          }
+          base.filesChanged = files;
           output = `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
           break;
         }

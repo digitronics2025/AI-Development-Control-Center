@@ -70,6 +70,18 @@ export class Publisher {
     return task;
   }
 
+  /** Update one repository's Git record of a task (the primary's is `tasks.git`) and publish the new summary. */
+  updateRepositoryGit(taskId: string, repositoryId: string, patch: Partial<TaskRecord['git']>): TaskRecord {
+    const task = this.store.getTask(taskId)!;
+    if (repositoryId === task.repositoryId) return this.updateTask(taskId, { git: { ...task.git, ...patch } });
+    const linked = this.store.listLinkedRepositories(taskId).find((l) => l.repositoryId === repositoryId);
+    if (!linked) throw new Error(`${taskId} does not work in repository ${repositoryId}`);
+    this.store.updateLinkedRepositoryGit(taskId, repositoryId, { ...linked.git, ...patch });
+    const updated = this.store.getTask(taskId)!;
+    this.task(updated);
+    return updated;
+  }
+
   updateStage(stageId: string, patch: Partial<StageInstance>): StageInstance {
     const stage = this.store.updateStage(stageId, patch);
     this.stage(stage);

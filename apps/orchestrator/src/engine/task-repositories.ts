@@ -1,3 +1,4 @@
+import { POLICY_MODES, type PolicyMode } from '@acc/shared';
 import type { RepositoryRecord, Store, TaskGitRecord, TaskRecord } from '../store/store.js';
 import { taskWorkdir } from './workdir.js';
 
@@ -55,4 +56,27 @@ export function taskRepositoryIds(store: Store, task: TaskRecord): string[] {
 /** Label a path or name with its repository folder, only when the task has more than one repository. */
 export function inFolder(folder: string | null, value: string): string {
   return folder ? `${folder}/${value}` : value;
+}
+
+/**
+ * Folder names for the repositories of a task workspace, in order: the
+ * repository name as a slug (letters, digits, dashes; at most 30), made
+ * unique with -2, -3…
+ */
+export function workspaceFolders(names: string[]): string[] {
+  const used = new Set<string>();
+  return names.map((name) => {
+    const slug = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/g, '') || 'repository';
+    // Windows reserves these names in every folder.
+    const base = /^(con|prn|aux|nul|com\d|lpt\d)$/.test(slug) ? `${slug}-repo` : slug;
+    let folder = base;
+    for (let n = 2; used.has(folder); n++) folder = `${base}-${n}`;
+    used.add(folder);
+    return folder;
+  });
+}
+
+/** The most restrictive execution policy of several (safe < autopilot < full). */
+export function strictestPolicy(modes: PolicyMode[]): PolicyMode {
+  return POLICY_MODES[Math.min(...modes.map((m) => POLICY_MODES.indexOf(m)))]!;
 }

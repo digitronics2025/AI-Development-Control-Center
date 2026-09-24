@@ -176,7 +176,12 @@ do (Settings → Remote access, attachments). See [dashboard.md](dashboard.md).
 Both rollbacks and a deliberately failing migration were exercised on staging
 (plan Ledger, step 22). CI ([ci.yml](../../.github/workflows/ci.yml)) runs the
 full local and cloud suites on Windows; releases are manual
-(`deploy-cloud.yml`, `rollback-cloud.yml`).
+(`deploy-cloud.yml`, `rollback-cloud.yml`). `deploy-cloud.yml` first runs a `gate`
+job: the ref must be `main` and `ci.yml` must have a successful run for that
+exact commit. The GitHub environments `staging` and `production` require the
+owner's review and accept only `main`. The workflows hold no Cloudflare secrets
+yet (they would go in through secret-custody as environment secrets), so today
+every release runs from the operator's shell with `pnpm cloud:deploy:production`.
 
 ## Data ownership
 

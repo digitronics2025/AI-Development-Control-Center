@@ -1,7 +1,12 @@
 # Manual release of the cloud control plane (docs/systems/cloud-control.md §Deploy).
 # D1 migrations are applied first; if they fail, nothing is deployed.
-# Needs repository secrets CLOUDFLARE_API_TOKEN (scoped: Workers Scripts edit,
-# D1 edit, R2 edit, Workers Routes edit on the zone) and CLOUDFLARE_ACCOUNT_ID.
+# Needs environment secrets CLOUDFLARE_API_TOKEN (scoped: Workers Scripts edit,
+# D1 edit, R2 edit, Workers Routes edit on the zone) and CLOUDFLARE_ACCOUNT_ID,
+# provisioned through secret-custody; until they exist, releases run from the
+# operator's shell (`pnpm cloud:deploy:production`).
+#
+# Gated (audit F-18): only `main`, only a commit whose CI run passed, and the
+# GitHub environment (staging/production) requires the owner's review.
 name: Deploy cloud control plane
 
 on:
@@ -21,7 +26,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Only main, only a commit CI passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then echo "Deploys run from main only (got $REF)."; exit 1; fi
+          passed=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq '.total_count')
+          if [ "$passed" = "0" ]; then echo "CI has not passed for $SHA. Release a commit CI verified."; exit 1; fi
+          echo "CI passed for $SHA."
+
   deploy:
+    needs: gate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     timeout-minutes: 20

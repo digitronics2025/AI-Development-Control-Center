@@ -37,6 +37,7 @@ export function credentialProvider(): ToolProvider {
           description: z.string().max(300).default(''),
           bytes: z.number().int().min(16).max(64).default(32),
           encoding: z.enum(['base64url', 'hex']).default('base64url'),
+          cwd: z.string().min(1).max(1000).optional().describe('In a task across several repositories: the folder of the repository the secret belongs to.'),
         }),
         level: 2,
         classify: () => ({ level: 2, reasons: ['Stores a new secret in the local credential broker'], effects: [] }),

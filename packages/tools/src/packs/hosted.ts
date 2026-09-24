@@ -115,11 +115,22 @@ export function hostedProviders(): ToolProvider[] {
           id: 'terminal.start',
           title: 'Open a terminal',
           description: 'Start an interactive shell session (PTY). Use terminal.send to type and terminal.read to see output. Every line you send is classified first.',
-          input: z.object({ shell: shellKind.default(process.platform === 'win32' ? 'powershell' : 'bash'), cols: z.number().int().min(20).max(400).default(120), rows: z.number().int().min(5).max(200).default(30) }),
+          input: z.object({
+            shell: shellKind.default(process.platform === 'win32' ? 'powershell' : 'bash'),
+            cols: z.number().int().min(20).max(400).default(120),
+            rows: z.number().int().min(5).max(200).default(30),
+            cwd: z.string().min(1).max(1000).optional().describe('Folder to open the shell in, relative to the working directory (e.g. one repository of a task across several).'),
+          }),
           level: 2,
           async run(input, ctx) {
             if (!ctx.terminals) return failure('UNAVAILABLE', 'Terminals are not available in this session');
-            const t = await ctx.terminals.start({ shell: input.shell, cwd: ctx.cwd, cols: input.cols, rows: input.rows });
+            let cwd = ctx.cwd;
+            try {
+              if (input.cwd) cwd = resolveInside(ctx.roots, ctx.cwd, input.cwd);
+            } catch (error) {
+              return failure('OUTSIDE_ROOT', (error as Error).message);
+            }
+            const t = await ctx.terminals.start({ shell: input.shell, cwd, cols: input.cols, rows: input.rows });
             return { ok: true, summary: `Terminal ${t.id} started`, output: t };
           },
         }),

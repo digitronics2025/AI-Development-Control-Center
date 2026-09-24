@@ -117,6 +117,8 @@ export class EngineTooling {
    */
   scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string }, sessionId: string | null = null): ToolScope {
     const root = agentWorkdir(task, repo);
+    const units = taskRepositories(this.d.store, task);
+    const multi = units.length > 1;
     return {
       taskId: task.id,
       stageId: stage.stageId,
@@ -127,9 +129,11 @@ export class EngineTooling {
       stageLevel: stage.level,
       autoApproveUpToLevel: task.autoApproveUpToLevel ?? DEFAULT_AUTO_APPROVE_LEVEL,
       mode: this.policyMode(task, repo),
-      profile: profileForRepository(repo.tooling, stage.level),
+      // Across repositories the task may need any of their tools; permission still comes from level and policy.
+      profile: profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
       escalated: new Set(),
       protectedPaths: task.git.isolated ? [] : task.git.preexistingChanges,
+      ...(multi ? { repositories: units.map((u) => ({ id: u.repo.id, root: u.workdir })) } : {}),
     };
   }
 
@@ -207,6 +211,9 @@ export class EngineTooling {
       `This run has the Control Center's tools as an MCP server named "acc" (profile: ${profile}, stage Level ${def.permissionLevel}, policy ${this.policyMode(task, repo)}).`,
       'Prefer them to raw commands for: checking the app in a real browser (browser.check_page, verify.web), HTTP checks (http.request), who holds a port (network.port_owner), background dev servers (process.start — stopped for you at the end), databases, Cloudflare, Android and GitHub.',
       'Use acc_find_capability to discover more and acc_call_capability to call one that is not listed. A refusal explains why; do not work around it — report it as an operator decision.',
+      ...(taskRepositories(this.d.store, task).length > 1
+        ? ['This task works in several repositories: a tool call runs in one of them. Pass `cwd` (or `directory`) naming the repository folder; the call can then touch only that repository and use only its credentials. At the workspace root, Git tools do not work and only credentials shared by every repository are available.']
+        : []),
     ].join('\n');
   }
 

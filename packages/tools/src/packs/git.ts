@@ -7,7 +7,8 @@ import { git, type GitResult } from '@acc/git';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable } from '../detect.js';
-import { failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
+import { OutsideRootError, resolveInside } from '../paths.js';
+import { failure, operation, type OperationContext, type OperationResult, type ToolOperation, type ToolProvider } from '../sdk.js';
 
 /**
  * Structured Git capabilities (V2 plan §14). Native `git` with argv only;
@@ -34,6 +35,38 @@ function out(result: GitResult, summary: string, output?: unknown): OperationRes
 
 function protectedHits(ctx: OperationContext, list: readonly string[]): string[] {
   return list.filter((p) => ctx.protectedPaths.includes(p.replace(/\\/g, '/')));
+}
+
+const folder = z
+  .string()
+  .min(1)
+  .max(1000)
+  .optional()
+  .describe('Repository folder to run in, relative to the working directory. In a task working across several repositories, name the repository folder (e.g. "web").');
+
+/**
+ * Every Git capability takes an optional `cwd`: the repository folder to run
+ * in, confined to the call's roots. Where the user's pre-existing work is
+ * protected, paths are relative to the repository root, so a folder other
+ * than that root is refused rather than letting a protected path slip past.
+ */
+function inFolder(op: ToolOperation): ToolOperation {
+  return {
+    ...op,
+    input: (op.input as unknown as z.ZodObject).extend({ cwd: folder }),
+    async run(input: { cwd?: string }, ctx: OperationContext) {
+      let cwd = ctx.cwd;
+      if (input.cwd) {
+        try {
+          cwd = resolveInside(ctx.roots, ctx.cwd, input.cwd);
+        } catch (error) {
+          return failure(error instanceof OutsideRootError ? 'OUTSIDE_ROOT' : 'INVALID_INPUT', (error as Error).message);
+        }
+        if (cwd !== ctx.cwd && ctx.protectedPaths.length) return failure('INVALID_INPUT', 'Git runs at the repository root in this task; leave cwd out');
+      }
+      return op.run(input, { ...ctx, cwd });
+    },
+  };
 }
 
 export function gitProvider(): ToolProvider {
@@ -317,6 +350,6 @@ export function gitProvider(): ToolProvider {
           }
         },
       }),
-    ],
+    ].map(inFolder),
   };
 }

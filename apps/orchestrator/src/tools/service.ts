@@ -7,10 +7,12 @@ import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOr
 import {
   builtinProviders,
   decide,
+  isInside,
   policyCeiling,
   PROFILES,
   profileIncludes,
   profileRank,
+  resolveInside,
   ToolHealthCache,
   ToolRegistry,
   ToolRouter,
@@ -51,6 +53,38 @@ export interface ToolScope {
   /** Capabilities enabled by escalation in this scope. */
   escalated: Set<string>;
   protectedPaths: string[];
+  /**
+   * A task across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md): its
+   * repositories and their folders in the workspace. Each call is narrowed
+   * to the repository its folder names (`narrowToRepository`).
+   */
+  repositories?: Array<{ id: string; root: string }>;
+}
+
+/**
+ * In a task across repositories, a call runs in one repository: the one
+ * containing the folder it names (its `cwd`, else its `directory`, else
+ * the scope's cwd). Its roots shrink to that repository's folder, so nothing
+ * it touches is in another repository, and it is given that repository's
+ * credentials only. A call in no repository (the workspace root) keeps the
+ * workspace as its root and may use only credentials scoped to every
+ * repository. Fails closed: a folder outside the roots is refused.
+ */
+export function narrowToRepository(scope: ToolScope, rawInput: unknown): { scope: ToolScope; input: unknown } | { error: string } {
+  if (!scope.repositories?.length) return { scope, input: rawInput };
+  const raw = (rawInput && typeof rawInput === 'object' ? rawInput : {}) as Record<string, unknown>;
+  const field = typeof raw.cwd === 'string' && raw.cwd ? 'cwd' : typeof raw.directory === 'string' && raw.directory ? 'directory' : null;
+  let target = scope.cwd;
+  if (field) {
+    try {
+      target = resolveInside(scope.roots, scope.cwd, raw[field] as string);
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }
+  const repo = scope.repositories.find((r) => isInside(r.root, target));
+  if (!repo) return { scope: { ...scope, repositoryId: null }, input: rawInput };
+  return { scope: { ...scope, repositoryId: repo.id, cwd: repo.root, roots: [repo.root] }, input: field ? { ...raw, [field]: target } : rawInput };
 }
 
 export interface ToolCallRequest {
@@ -314,7 +348,7 @@ export class ToolService {
   }
 
   async invoke(req: ToolCallRequest): Promise<ToolCallOutcome> {
-    const { scope } = req;
+    let scope = req.scope;
     const started = Date.now();
     const base: Omit<ToolExecution, 'status' | 'decision' | 'permissionLevel' | 'risk' | 'effects' | 'summary' | 'errorCode'> = {
       id: newId(),
@@ -341,6 +375,12 @@ export class ToolService {
       this.record(execution);
       return { execution, result: { ok: false, summary: message, error: { code, message } }, decision };
     };
+
+    // 0. A task across repositories: the call belongs to the repository its folder names.
+    const narrowed = narrowToRepository(scope, req.input);
+    if ('error' in narrowed) return refuse('failed', 'OUTSIDE_ROOT', narrowed.error, 'deny');
+    scope = narrowed.scope;
+    const rawInput = narrowed.input;
 
     // 1. Route the capability to a provider available here.
     const prefer = req.preferProvider ?? (typeof (req.input as { shell?: unknown })?.shell === 'string' ? ((req.input as { shell: string }).shell as string) : null);
@@ -369,7 +409,7 @@ export class ToolService {
     base.routeReason = route.reason;
 
     // 2. Validate the input against the capability's schema.
-    const parsed = operation.input.safeParse(req.input ?? {});
+    const parsed = operation.input.safeParse(rawInput ?? {});
     if (!parsed.success) return refuse('failed', 'INVALID_INPUT', `Invalid input for ${req.capability}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`, 'deny');
     const input = parsed.data;
 
@@ -488,6 +528,8 @@ export class ToolService {
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {
+          // Across repositories a secret must belong to one of them: name its folder.
+          if (scope.repositories?.length && !scope.repositoryId) throw new Error('This task works in several repositories: set cwd to the folder of the repository the secret belongs to');
           const r = await this.d.credentials.generate({ ...input, repositoryIds: scope.repositoryId ? [scope.repositoryId] : [], taskId: scope.taskId });
           // With a MyVault delivery box set up, the new secret is saved for MyVault right away.
           if (this.d.deposits?.eligible(r.credential.id)) await this.d.deposits.ensureDeposited(r.credential.id, 15_000);

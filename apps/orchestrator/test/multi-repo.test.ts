@@ -313,3 +313,81 @@ describe('agent prompts across repositories', () => {
     expect(prompt).toContain('AGENTS.md or CLAUDE.md');
   }, 180_000);
 });
+
+describe('tool calls across repositories', () => {
+  it('narrows each call to the repository its folder names, refuses folders outside, and keeps credentials apart', async () => {
+    const path = await import('node:path');
+    const { narrowToRepository } = await import('../src/tools/service.js');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Tools [sim:slow]', { linkedRepositoryIds: [web], workflowId: 'quick-change' });
+    const task = await waitFor(() => t!.services.store.getTask(id)!, (x) => Boolean(x.git.workspacePath), 30_000, 'workspace');
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    const workspace = task.git.workspacePath!;
+    const scope = {
+      taskId: id,
+      stageId: null,
+      sessionId: null,
+      repositoryId: api,
+      cwd: workspace,
+      roots: [workspace],
+      stageLevel: 2 as const,
+      autoApproveUpToLevel: 3 as const,
+      mode: 'autopilot' as const,
+      profile: 'general' as const,
+      escalated: new Set<string>(),
+      protectedPaths: [],
+      repositories: [
+        { id: api, root: task.git.worktreePath! },
+        { id: web, root: linked.git.worktreePath! },
+      ],
+    };
+
+    // Pure narrowing: the folder decides the repository, the roots shrink to it, outside is refused.
+    const toWeb = narrowToRepository(scope, { cwd: linked.folder });
+    expect('scope' in toWeb && toWeb.scope.repositoryId).toBe(web);
+    expect('scope' in toWeb && toWeb.scope.roots).toEqual([linked.git.worktreePath]);
+    expect('scope' in toWeb && (toWeb.input as { cwd: string }).cwd).toBe(linked.git.worktreePath);
+    const atRoot = narrowToRepository(scope, {});
+    expect('scope' in atRoot && atRoot.scope.repositoryId).toBeNull();
+    expect('error' in narrowToRepository(scope, { cwd: '..' })).toBe(true);
+    expect('error' in narrowToRepository(scope, { directory: path.dirname(workspace) })).toBe(true);
+
+    const call = (capability: string, input: unknown) => t!.services.tools.invoke({ capability, input, origin: 'agent', scope: { ...scope, escalated: new Set() } });
+    // Git runs in the folder named; the workspace root is not a repository; outside is refused.
+    const status = await call('git.status', { cwd: linked.folder });
+    expect(status.result.ok, status.result.summary).toBe(true);
+    expect(status.result.summary).toContain(linked.git.taskBranch!);
+    expect((await call('git.status', { cwd: '../..' })).result.error?.code).toBe('OUTSIDE_ROOT');
+    expect((await call('git.status', {})).result.ok).toBe(false);
+    // A call in web cannot reach into api.
+    expect((await call('fs.read', { path: `${task.git.folder}/README.md`, cwd: linked.folder })).result.ok).toBe(false);
+
+    // Secrets: refused at the root; generated in web they belong to web only.
+    const refused = await call('credential.generate', { name: 'ROOT_SECRET' });
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.summary).toMatch(/several repositories/);
+    const made = await call('credential.generate', { name: 'WEB_SECRET', cwd: linked.folder });
+    expect(made.result.ok, made.result.summary).toBe(true);
+    expect((made.result.output as { repositoryIds: string[] }).repositoryIds).toEqual([web]);
+    expect(await t.services.credentials.value('WEB_SECRET', web, { includeUnsynced: true })).toBeTruthy();
+    expect(await t.services.credentials.value('WEB_SECRET', api, { includeUnsynced: true })).toBeNull();
+    expect(await t.services.credentials.value('WEB_SECRET', null, { includeUnsynced: true })).toBeNull();
+  }, 120_000);
+});
+
+describe('git cwd where user work is protected', () => {
+  it('refuses a folder other than the repository root, and allows the root itself', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { builtinProviders } = await import('@acc/tools');
+    const repo = await makeRepo();
+    mkdirSync(path.join(repo, 'sub'));
+    const status = builtinProviders().find((p) => p.id === 'git')!.operations.find((o) => o.id === 'git.status')!;
+    const ctx = { cwd: repo, roots: [repo], protectedPaths: ['notes.md'], env: process.env } as never;
+    expect((await status.run(status.input.parse({ cwd: 'sub' }), ctx)).error?.code).toBe('INVALID_INPUT');
+    expect((await status.run(status.input.parse({ cwd: '.' }), ctx)).ok).toBe(true);
+    expect((await status.run(status.input.parse({ cwd: '..' }), ctx)).error?.code).toBe('OUTSIDE_ROOT');
+  });
+});

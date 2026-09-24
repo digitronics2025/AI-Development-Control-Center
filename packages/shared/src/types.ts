@@ -91,8 +91,12 @@ export interface TaskSummary {
   title: string;
   repositoryId: string;
   repositoryName: string;
-  /** Every repository the task works in, primary first; one entry for a single-repository task. */
-  repositories: TaskRepositoryRef[];
+  /**
+   * Every repository the task works in, primary first; one entry for a
+   * single-repository task. Absent on records written before it existed
+   * (cloud snapshots, older nodes).
+   */
+  repositories?: TaskRepositoryRef[];
   workflowId: string;
   workflowName: string;
   mode: TaskMode;

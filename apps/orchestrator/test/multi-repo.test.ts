@@ -26,7 +26,8 @@ describe('store: linked repositories', () => {
     const version = t.services.store.getTask(id)!.version;
     t.services.store.updateLinkedRepositoryGit(id, web, { ...t.services.store.listLinkedRepositories(id)[0]!.git, taskBranch: 'ai/x' });
     expect(t.services.store.listLinkedRepositories(id)[0]!.git.taskBranch).toBe('ai/x');
-    expect(t.services.store.getTask(id)!.version).toBe(version + 1);
+    // Like tasks.git, a repository's Git record is not a material change: no stale decisions or remote conflicts.
+    expect(t.services.store.getTask(id)!.version).toBe(version);
 
     const summary = (await t.api('GET', `/api/tasks/${id}`)).body;
     expect(summary.repositories).toEqual([
@@ -474,9 +475,32 @@ describe('API, Source Control and remote across repositories', () => {
     expect((await t.api('GET', `/api/tasks/${id}/diff?repositoryId=nope`)).status).toBe(404);
 
     expect((await t.api('GET', `/api/tasks?repositoryId=${web}`)).body.items.map((x: { id: string }) => x.id)).toContain(id);
+    // The linked repository shows the task as active (only through its own baseline) …
     const snapshot = (await t.api('GET', `/api/repositories/${web}/source-control`)).body;
-    expect(JSON.stringify(snapshot)).toContain(id);
+    expect(snapshot.state.activeTask?.id).toBe(id);
+    // … and your own uncommitted work there is never labelled as the task's: the task works in its worktree.
+    writeFileSync(path.join(t.services.store.getRepository(web)!.path, 'mine.txt'), 'mine\n');
+    const dirty = (await t.api('POST', `/api/repositories/${web}/source-control/refresh`)).body;
+    expect(dirty.state.attributionTaskId).toBeNull();
+    expect(JSON.stringify(dirty)).toContain('mine.txt');
   }, 120_000);
+
+  it('attributes a linked repository’s commits to the task in its history', async () => {
+    const { git } = await import('@acc/git');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const webPath = await makeRepo();
+    const web = await addRepo(t, webPath);
+    const id = await createTask(t, api, 'History', { linkedRepositoryIds: [web], workflowId: 'quick-change', supervised: false });
+    await waitForStatus(t, id, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 120_000);
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    expect(linked.git.commits.length).toBeGreaterThan(0);
+    // You check out the task branch to review it: its commits are attributed to the task.
+    expect((await git(webPath, ['switch', linked.git.taskBranch!])).code).toBe(0);
+    const history = (await t.api('GET', `/api/repositories/${web}/source-control/history`)).body;
+    const commit = history.items.find((c: { sha: string }) => c.sha === linked.git.commits.at(-1));
+    expect(commit?.attribution).toMatchObject({ kind: 'task', taskId: id });
+  }, 180_000);
 
   it('refuses a task across repositories from the cloud, and never sends the workspace path', async () => {
     const { guardRemoteCommand } = await import('../src/remote/guards.js');
@@ -486,7 +510,57 @@ describe('API, Source Control and remote across repositories', () => {
     const body = { description: 'x', repositoryId: 'r1', workflowId: 'quick-change', mode: 'autopilot' };
     expect(guardRemoteCommand('task.create', {}, body, ctx)).toEqual({ ok: true });
     expect(guardRemoteCommand('task.create', {}, { ...body, linkedRepositoryIds: ['r2'] }, ctx)).toEqual({ ok: false, message: 'A task across several repositories can only be created on this machine.' });
+    const withTasks = { ...ctx, isMultiRepositoryTask: (taskId: string) => taskId === 'TASK-0002' };
+    expect(guardRemoteCommand('task.start', { id: 'TASK-0002' }, {}, withTasks)).toEqual({ ok: false, message: 'A task across several repositories can only be started on this machine.' });
+    expect(guardRemoteCommand('task.start', { id: 'TASK-0001' }, {}, withTasks)).toEqual({ ok: true });
     const out = stripLocalFields({ task: { git: { workspacePath: 'C:/data/workspaces/TASK-0001', worktreePath: 'C:/data/workspaces/TASK-0001/api', folder: 'api' } } }) as { task: { git: Record<string, unknown> } };
     expect(out.task.git).toEqual({ workspacePath: null, worktreePath: null, folder: 'api' });
+  });
+});
+
+describe('review fixes: strays, missing worktrees, nested repositories', () => {
+  it('a file written at the workspace root is reported and the task is not READY', async () => {
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Stray [sim:slow]', { linkedRepositoryIds: [web], workflowId: 'quick-change', supervised: false });
+    const task = await waitFor(() => t!.services.store.getTask(id)!, (x) => Boolean(x.git.workspacePath), 30_000, 'workspace');
+    writeFileSync(path.join(task.git.workspacePath!, 'stray.ts'), 'export {};\n');
+    const done = await waitForStatus(t, id, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 120_000);
+    expect(done.finalStatus).toBe('NEEDS_USER_ACTION');
+    const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
+    expect(report).toMatch(/1 item\(s\) were written outside every repository folder and are on no task branch: stray\.ts/);
+    expect(t.services.store.listEvents(id).map((e) => e.message).join('\n')).toMatch(/The task workspace is kept at .+: it still holds stray\.ts/);
+  }, 180_000);
+
+  it('resuming with a worktree removed outside the Control Center parks the task and names it', async () => {
+    const { rmSync } = await import('node:fs');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Missing [sim:needs-decision]', { linkedRepositoryIds: [web], workflowId: 'quick-change', supervised: false });
+    await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    rmSync(linked.git.worktreePath!, { recursive: true, force: true });
+    await t.api('POST', `/api/tasks/${id}/directives`, { text: 'ANSWER: go on' });
+    await t.api('POST', `/api/tasks/${id}/resume`);
+    const parked = await waitFor(() => t!.services.store.getTask(id)!, (x) => x.status === 'WAITING_FOR_USER' && /is missing/.test(x.blocker?.message ?? ''), 60_000, 'missing-worktree blocker');
+    expect(parked.blocker!.message).toContain(`The worktree of ${t.services.store.getRepository(web)!.name} is missing`);
+  }, 120_000);
+
+  it('Git cwd cannot name a folder inside the repository, which could be a nested repository', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { builtinProviders } = await import('@acc/tools');
+    const { git } = await import('@acc/git');
+    const repo = await makeRepo();
+    mkdirSync(path.join(repo, 'vendor', 'lib'), { recursive: true });
+    await git(path.join(repo, 'vendor', 'lib'), ['init', '-q']);
+    const status = builtinProviders().find((p) => p.id === 'git')!.operations.find((o) => o.id === 'git.status')!;
+    const ctx = { cwd: repo, roots: [repo], protectedPaths: [], env: process.env } as never;
+    expect((await status.run(status.input.parse({ cwd: 'vendor/lib' }), ctx)).error?.code).toBe('INVALID_INPUT');
+    expect((await status.run(status.input.parse({ cwd: '.' }), ctx)).ok).toBe(true);
   });
 });

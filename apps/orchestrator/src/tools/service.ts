@@ -380,6 +380,10 @@ export class ToolService {
     const narrowed = narrowToRepository(scope, req.input);
     if ('error' in narrowed) return refuse('failed', 'OUTSIDE_ROOT', narrowed.error, 'deny');
     scope = narrowed.scope;
+    // The workspace root is not a repository; Git there would search upward into whatever repository holds the data folder.
+    if (scope.repositories?.length && !scope.repositoryId && req.capability.startsWith('git.')) {
+      return refuse('failed', 'INVALID_INPUT', 'This task works in several repositories: set cwd to the folder of the repository to run Git in', 'deny');
+    }
     const rawInput = narrowed.input;
 
     // 1. Route the capability to a provider available here.
@@ -452,7 +456,9 @@ export class ToolService {
     let result: OperationResult;
     try {
       const credentialEnv = operation.credentials?.length ? await this.d.credentials.envFor(operation.credentials, scope.repositoryId) : {};
-      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...credentialEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine });
+      // In a task workspace, a Git process started by any tool stops searching for a repository at the workspaces folder.
+      const ceiling = req.scope.repositories?.length ? { GIT_CEILING_DIRECTORIES: path.dirname(req.scope.roots[0]!) } : {};
+      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine });
       result = await Promise.race([
         operation.run(input, ctx),
         new Promise<OperationResult>((resolve) => controller.signal.addEventListener('abort', () => resolve({ ok: false, summary: req.signal?.aborted ? 'Stopped' : `Timed out after ${Math.round(timeoutMs / 1000)}s`, error: { code: req.signal?.aborted ? 'CANCELLED' : 'TIMEOUT', message: 'aborted' } }), { once: true })),

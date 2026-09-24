@@ -139,7 +139,7 @@ export function NewTaskPage() {
         title: title.trim() || undefined,
         description: description.trim(),
         repositoryId: repositoryId!,
-        linkedRepositoryIds: across ? linkedIds : undefined,
+        linkedRepositoryIds: across ? linkedRepos.map((r) => r.id) : undefined,
         workflowId: effectiveWorkflowId,
         mode: effectiveMode,
         overrides: { roles: cleanRoles, stages: {} },
@@ -288,7 +288,7 @@ export function NewTaskPage() {
               />
             </Field>
             {linkedRepos.length ? (
-              <ul aria-label="Also work in" className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+              <ul aria-label="Repositories added" className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
                 {linkedRepos.map((r) => (
                   <li key={r.id} className="flex items-center gap-2 px-3 py-1.5">
                     <FolderGit2 size={14} className="text-fg-secondary" aria-hidden />

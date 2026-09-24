@@ -165,6 +165,7 @@ export class RemoteNodeService {
         settings: d.settings.get(),
         repository: (id) => d.store.getRepository(id) ?? null,
         workflow: (id) => d.store.getWorkflow(id),
+        isMultiRepositoryTask: (taskId) => d.store.listLinkedRepositories(taskId).length > 0,
       }),
       taskVersion: (taskId) => d.store.getTask(taskId)?.version ?? null,
       approvalView: (approvalId) => {

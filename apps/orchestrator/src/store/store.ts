@@ -769,9 +769,9 @@ export class Store {
 
   insertLinkedRepositories(rows: LinkedRepositoryRecord[]): void {
     const insert = this.db.prepare('INSERT INTO task_linked_repositories (task_id, repository_id, position, folder, git) VALUES (?, ?, ?, ?, ?)');
-    this.db.transaction(() => {
+    this.transaction(() => {
       for (const r of rows) insert.run(r.taskId, r.repositoryId, r.position, r.folder, json(r.git));
-    })();
+    });
   }
 
   listLinkedRepositories(taskId: string): LinkedRepositoryRecord[] {
@@ -781,8 +781,8 @@ export class Store {
 
   updateLinkedRepositoryGit(taskId: string, repositoryId: string, git: TaskGitRecord): void {
     this.db.prepare('UPDATE task_linked_repositories SET git = ? WHERE task_id = ? AND repository_id = ?').run(json(git), taskId, repositoryId);
-    // A Git change is a material change of the task: clients refetch on the version bump.
-    this.db.prepare('UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?').run(now(), taskId);
+    // Like a change of tasks.git: not material (no version bump, which would make pending decisions and remote commands stale).
+    this.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(now(), taskId);
   }
 
   countTasksByStatus(): Record<string, number> {

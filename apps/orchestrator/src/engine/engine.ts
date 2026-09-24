@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { rmdir } from 'node:fs/promises';
+import { readdir, rmdir } from 'node:fs/promises';
 import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, diffSince, headCommit, isGitRepository, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
 import { redact } from '@acc/security';
 import {
@@ -213,11 +213,14 @@ export class TaskEngine {
       finishedAt: null,
       updatedAt: ts,
     };
-    this.d.store.insertTask(task);
-    if (linkedRepos.length) {
-      const git = { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null, worktreePath: null, isolated: true };
-      this.d.store.insertLinkedRepositories(linkedRepos.map((r, i) => ({ taskId: id, repositoryId: r.id, position: i + 1, folder: folders[i + 1]!, git })));
-    }
+    // The task and its linked repositories are written together, or not at all.
+    this.d.store.transaction(() => {
+      this.d.store.insertTask(task);
+      if (linkedRepos.length) {
+        const git = { baselineCommit: null, baselineBranch: null, taskBranch: null, preexistingChanges: [], commits: [], baselineSnapshotId: null, worktreePath: null, isolated: true };
+        this.d.store.insertLinkedRepositories(linkedRepos.map((r, i) => ({ taskId: id, repositoryId: r.id, position: i + 1, folder: folders[i + 1]!, git })));
+      }
+    });
     for (const r of allRepos) this.d.store.updateRepository(r.id, { lastTaskId: id });
     this.supervisor?.onTaskCreated(task);
 
@@ -1007,7 +1010,15 @@ export class TaskEngine {
    */
   private async ensureWorkspace(task: TaskRecord): Promise<boolean> {
     const repos = taskRepositories(this.d.store, task);
-    if (repos.every((r) => r.git.baselineSnapshotId) && task.git.workspacePath) return true;
+    if (repos.every((r) => r.git.baselineSnapshotId) && task.git.workspacePath) {
+      // Resuming: the records say ready; the worktrees must still be there, or work would land outside every branch.
+      const missing = repos.find((r) => !r.git.worktreePath || !existsSync(path.join(r.git.worktreePath, '.git')));
+      if (!missing) return true;
+      const message = `The worktree of ${missing.repo.name} is missing (${missing.git.worktreePath ?? 'never recorded'}); it was removed outside the Control Center. Its task branch ${missing.git.taskBranch ?? ''} still holds committed work. Cancel this task and start a new one.`;
+      this.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'error', message, errorClass: 'UNKNOWN' } });
+      this.publisher.event(task.id, 'TASK_WAITING', message);
+      return false;
+    }
     const workspace = this.d.tooling.workspaceRoot(task);
     const created: Array<{ entry: TaskRepository; dir: string; taskBranch: string; head: string }> = [];
     let current: TaskRepository | null = null;
@@ -1044,13 +1055,15 @@ export class TaskEngine {
         this.publisher.updateRepositoryGit(task.id, c.entry.repo.id, { baselineSnapshotId: null, baselineCommit: null, baselineBranch: null, taskBranch: null, worktreePath: null });
       }
       await rmdir(workspace).catch(() => undefined);
-      const message = `Could not prepare ${current?.repo.name ?? 'a repository'} for this task: ${reason}. Nothing was changed in your repositories; resume to try again.`;
+      const kept = repos.some((r) => r.git.baselineSnapshotId);
+      const message = `Could not prepare ${current?.repo.name ?? 'a repository'} for this task: ${reason}. ${kept ? 'Repositories prepared earlier keep their worktrees; your working trees were not changed' : 'Nothing was changed in your repositories'}; resume to try again.`;
       this.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'error', message, errorClass: 'UNKNOWN' } });
       this.publisher.event(task.id, 'TASK_WAITING', message);
       return false;
     }
     this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, workspacePath: workspace } });
-    for (const c of created) await this.d.tooling.prepareWorktree(this.task(task.id), c.entry.repo, c.dir);
+    // Every repository, including one prepared before an interruption (an install is skipped when node_modules exists).
+    for (const u of taskRepositories(this.d.store, this.task(task.id))) if (u.git.worktreePath) await this.d.tooling.prepareWorktree(this.task(task.id), u.repo, u.git.worktreePath);
     return true;
   }
 
@@ -1070,9 +1083,20 @@ export class TaskEngine {
     if (workspace) {
       await rmdir(workspace).catch(() => undefined);
       if (!existsSync(workspace)) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, workspacePath: null } });
-      else this.publisher.event(task.id, 'WORKTREE_REMOVED', `The task workspace is kept at ${workspace} because a worktree in it could not be removed.`);
+      else {
+        const left = await readdir(workspace).catch(() => [] as string[]);
+        this.publisher.event(task.id, 'WORKTREE_REMOVED', `The task workspace is kept at ${workspace}: it still holds ${left.slice(0, 10).join(', ') || 'files'}.`);
+      }
     }
     return this.task(task.id);
+  }
+
+  /** Entries at the root of a task workspace that are not one of its repository folders. */
+  private async workspaceStrays(task: TaskRecord): Promise<string[]> {
+    const workspace = task.git.workspacePath;
+    if (!workspace) return [];
+    const folders = new Set(taskRepositories(this.d.store, task).map((u) => u.folder));
+    return (await readdir(workspace).catch(() => [] as string[])).filter((name) => !folders.has(name)).sort();
   }
 
   /** Decide the next step from a stage outcome. Returns true to keep looping. */
@@ -1284,6 +1308,9 @@ export class TaskEngine {
     // Nothing the task started outlives it; an isolated task's work lands on its branch.
     const cleanup = await this.d.tooling.cleanup(task, repo, 'task completed');
     if (multi) {
+      // Anything written at the workspace root is in no repository, so on no task branch: say so, never READY.
+      const strays = await this.workspaceStrays(task);
+      if (strays.length) gateLimitations = [...gateLimitations, `${strays.length} item(s) were written outside every repository folder and are on no task branch: ${strays.slice(0, 10).join(', ')}${strays.length > 10 ? ', …' : ''}.`];
       task = await this.finalizeWorkspace(task, 'completed');
     } else if (task.git.worktreePath) {
       const git = await this.d.tooling.finalizeWorktree(task, repo, 'completed');

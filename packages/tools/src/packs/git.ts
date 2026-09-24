@@ -7,7 +7,7 @@ import { git, type GitResult } from '@acc/git';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable } from '../detect.js';
-import { OutsideRootError, resolveInside } from '../paths.js';
+import { isInside, OutsideRootError, resolveInside } from '../paths.js';
 import { failure, operation, type OperationContext, type OperationResult, type ToolOperation, type ToolProvider } from '../sdk.js';
 
 /**
@@ -46,9 +46,10 @@ const folder = z
 
 /**
  * Every Git capability takes an optional `cwd`: the repository folder to run
- * in, confined to the call's roots. Where the user's pre-existing work is
- * protected, paths are relative to the repository root, so a folder other
- * than that root is refused rather than letting a protected path slip past.
+ * in, confined to the call's roots. It may only name the call's repository
+ * root (in a task across repositories the call was already narrowed to the
+ * folder it names): a subfolder could hold another, nested repository, and
+ * protected paths are relative to the root.
  */
 function inFolder(op: ToolOperation): ToolOperation {
   return {
@@ -62,7 +63,7 @@ function inFolder(op: ToolOperation): ToolOperation {
         } catch (error) {
           return failure(error instanceof OutsideRootError ? 'OUTSIDE_ROOT' : 'INVALID_INPUT', (error as Error).message);
         }
-        if (cwd !== ctx.cwd && ctx.protectedPaths.length) return failure('INVALID_INPUT', 'Git runs at the repository root in this task; leave cwd out');
+        if (!(isInside(cwd, ctx.cwd) && isInside(ctx.cwd, cwd))) return failure('INVALID_INPUT', 'cwd must name a repository folder of the task, not a folder inside it');
       }
       return op.run(input, { ...ctx, cwd });
     },

@@ -100,7 +100,7 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
       recovery: s.toolStore.listRecovery(task.id),
       escalations: s.toolStore.listEscalations(task.id),
       checkpoints: s.chairman.store.listCheckpoints(task.id),
-      workdir: task.git.worktreePath ?? null,
+      workdir: task.git.workspacePath ?? task.git.worktreePath ?? null,
       policyMode: task.policyMode ?? s.settings.get().execution.policyMode,
     };
   });

@@ -1,5 +1,5 @@
 import { ExternalLink, FileCode, FileDiff, GitBranch } from 'lucide-react';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Banner, Button, DiffViewer, EmptyState, Skeleton, cn, shortSha } from '@acc/ui';
 import type { ChangedFile, TaskChanges, TaskDetail } from '@acc/shared';
 import { useRepositories, useTaskChanges, useTaskDiff } from '../../api/hooks';
@@ -50,10 +50,12 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
   const files = useMemo(() => groups.flatMap((g) => g.changes.files.map((file) => ({ file, repositoryId: g.repositoryId }))), [groups]);
 
   useEffect(() => {
-    if (!selected && files.length) {
+    // A selection this task's changes no longer contain (another task, a refetch) falls back to the first file.
+    const present = selected && files.some((f) => f.repositoryId === selected.repositoryId && f.file.path === selected.path);
+    if (!present && files.length) {
       const first = files.find((f) => f.file.origin !== 'preexisting') ?? files[0]!;
       setSelected({ repositoryId: first.repositoryId, path: first.file.path });
-    }
+    } else if (!present && selected) setSelected(null);
   }, [files, selected]);
 
   if (changes.isLoading) return <Skeleton className="h-64" />;
@@ -70,6 +72,34 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
   const selectedFile = selected ? files.find((f) => isSelected(f.repositoryId, f.file.path))?.file : undefined;
   const selectedRepo = repositories.data?.find((r) => r.id === (selected?.repositoryId ?? task.repositoryId));
   const selectedGroup = groups.find((g) => g.repositoryId === selected?.repositoryId);
+  const fileItem = (g: Group, file: ChangedFile) => (
+    <li key={`${g.repositoryId}:${file.path}`}>
+      <button
+        type="button"
+        aria-current={isSelected(g.repositoryId, file.path) ? 'true' : undefined}
+        onClick={() => setSelected({ repositoryId: g.repositoryId, path: file.path })}
+        className={cn(
+          'flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11',
+          isSelected(g.repositoryId, file.path) ? 'bg-accent-muted' : 'hover:bg-elevated',
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <span aria-label={file.status} className="w-3 shrink-0 font-mono text-small font-semibold text-fg-secondary">
+            {STATUS_LETTER[file.status]}
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-code text-fg" title={g.folder ? `${g.folder}/${file.path}` : file.path}>
+            {file.path}
+          </span>
+          <span className="tabular shrink-0 text-small text-fg-secondary">
+            {file.additions !== null ? `+${file.additions}` : ''} {file.deletions !== null ? `−${file.deletions}` : ''}
+          </span>
+        </span>
+        <span className="pl-5">
+          <Badge className={cn(file.origin !== 'task' && 'border-warning')}>{ORIGIN_LABEL[file.origin]}</Badge>
+        </span>
+      </button>
+    </li>
+  );
   return (
     <div className="flex flex-col gap-4">
       {groups.map((g) => (
@@ -95,7 +125,10 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
         </div>
       ))}
       {groups.some((g) => g.changes.preexistingWarning) ? (
-        <Banner tone="warning" title="This repository had uncommitted work before the task started">
+        <Banner
+          tone="warning"
+          title={multi ? `${groups.filter((g) => g.changes.preexistingWarning).map((g) => g.name).join(', ')} had uncommitted work before the task started` : 'This repository had uncommitted work before the task started'}
+        >
           Those files are marked “Your change”. The task never overwrites them; files marked “Task change on top of your work” mix both and need your review before committing.
         </Banner>
       ) : null}
@@ -104,43 +137,18 @@ export function ChangesTab({ task }: { task: TaskDetail }) {
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
           <ul aria-label="Changed files" className="flex max-h-[60vh] flex-col overflow-y-auto rounded-lg border border-border-subtle bg-surface p-1">
-            {groups.map((g) => (
-              <Fragment key={g.repositoryId}>
-                {g.name && g.changes.files.length ? (
-                  <li className="px-2.5 pb-1 pt-2 text-small font-semibold text-fg-secondary">
-                    {g.name}
-                  </li>
-                ) : null}
-                {g.changes.files.map((file) => (
-                  <li key={`${g.repositoryId}:${file.path}`}>
-                    <button
-                      type="button"
-                      aria-current={isSelected(g.repositoryId, file.path) ? 'true' : undefined}
-                      onClick={() => setSelected({ repositoryId: g.repositoryId, path: file.path })}
-                      className={cn(
-                        'flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11',
-                        isSelected(g.repositoryId, file.path) ? 'bg-accent-muted' : 'hover:bg-elevated',
-                      )}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span aria-label={file.status} className="w-3 shrink-0 font-mono text-small font-semibold text-fg-secondary">
-                          {STATUS_LETTER[file.status]}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate font-mono text-code text-fg" title={g.folder ? `${g.folder}/${file.path}` : file.path}>
-                          {file.path}
-                        </span>
-                        <span className="tabular shrink-0 text-small text-fg-secondary">
-                          {file.additions !== null ? `+${file.additions}` : ''} {file.deletions !== null ? `−${file.deletions}` : ''}
-                        </span>
+            {multi
+              ? groups
+                  .filter((g) => g.changes.files.length)
+                  .map((g) => (
+                    <li key={g.repositoryId}>
+                      <span id={`changes-${g.repositoryId}`} className="block px-2.5 pb-1 pt-2 text-small font-semibold text-fg-secondary">
+                        {g.name}
                       </span>
-                      <span className="pl-5">
-                        <Badge className={cn(file.origin !== 'task' && 'border-warning')}>{ORIGIN_LABEL[file.origin]}</Badge>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </Fragment>
-            ))}
+                      <ul aria-labelledby={`changes-${g.repositoryId}`}>{g.changes.files.map((file) => fileItem(g, file))}</ul>
+                    </li>
+                  ))
+              : groups.flatMap((g) => g.changes.files.map((file) => fileItem(g, file)))}
           </ul>
           <div className="flex min-w-0 flex-col gap-2">
             {selected ? (

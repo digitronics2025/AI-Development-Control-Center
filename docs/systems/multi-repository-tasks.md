@@ -65,7 +65,9 @@ one write path for a repository's Git record.
 | Git checkpoint | Commits task files in each repository; a hook rejection names the repository |
 | Complete | One `git-diff.patch` with folder prefixes (`a/web/src/x.ts`); per-repository Files and Git sections in the report; every worktree finalized, then the empty workspace removed |
 | Cancel | Uncommitted work of each repository kept in its own `refs/acc/worktree-backup/<task>` |
-| Checkpoints | One ref per repository under the same name; restore is refused if any repository has new commits, takes a safety checkpoint of all, and puts back the repositories already restored if a later one fails |
+| Checkpoints | One ref per repository under the same name; restore is refused if any repository has new commits, takes a safety checkpoint of all, and if one fails puts every repository back — or names the safety checkpoint to restore when that fails too |
+| Resume | A worktree removed outside the Control Center parks the task with its name instead of running in a missing folder |
+| Stray files | Anything written at the workspace root is on no branch: the report lists it and is never READY |
 
 ## Tool calls
 
@@ -73,8 +75,10 @@ A call in a multi-repository scope runs in **one** repository
 (`narrowToRepository`, [service.ts](../../apps/orchestrator/src/tools/service.ts)):
 the one containing its `cwd` (else `directory`, else the scope cwd). Its
 roots shrink to that repository's folder and it gets that repository's
-credentials only. At the workspace root it keeps the workspace as its root
-and only credentials scoped to every repository are usable;
+credentials only. At the workspace root it keeps the workspace as its root,
+only credentials not limited to any repository are usable, and Git capabilities
+are refused (any Git process there also gets `GIT_CEILING_DIRECTORIES`, so it
+never finds a repository above the data folder);
 `credential.generate` is refused there (it takes `cwd`). A folder outside the
 roots is refused (`OUTSIDE_ROOT`). Git tools and `terminal.start` accept a
 confined `cwd`.
@@ -90,7 +94,8 @@ single-repository variables; the prompt tells agents to read each folder's
 
 - `POST /api/tasks {linkedRepositoryIds}`; `TaskSummary.repositories` (primary
   first, length 1 for a single repository).
-- `GET /api/tasks?repositoryId=` and task history match linked repositories.
+- `GET /api/tasks?repositoryId=` and task history match linked repositories
+  (on this machine; the cloud's offline copy filters by the primary only).
 - `GET /api/tasks/:id/changes` keeps the primary's flat fields and adds
   `repositories[]`; `GET /api/tasks/:id/diff?repositoryId=` (404 for a
   repository the task does not work in).
@@ -99,11 +104,15 @@ single-repository variables; the prompt tells agents to read each folder's
 - New Task: **Also work in** (local only), Tasks list "api + 1", header and
   Overview list every repository, Changes groups files by repository;
   `openDiff` carries `repositoryId`.
+- Additive for every task: test runs carry `repositoryId` (null for a single
+  repository) and checkpoints `parts` (null for a single repository).
 - Cloud: a `task.create` with `linkedRepositoryIds` is refused on the node;
   `workspacePath` is stripped from egress.
 
 ## Gotchas
 
+- A Git `cwd` may only name a repository folder, never a folder inside it
+  (it could hold a nested repository).
 - Codex runs with `-C <workspace> --sandbox workspace-write`, so it can write
   every folder; it was not exercised in the real run (Claude Code was).
 - Each repository's `.claude/settings.json` hooks do not load: the agent's

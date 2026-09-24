@@ -603,7 +603,9 @@ export class Chairman implements SupervisorHooks {
         const files = (await changesSince(unit.workdir, baseline)).filter((f) => f.origin !== 'preexisting').map((f) => inFolder(units.length > 1 ? unit.folder : null, f.path));
         taskFiles = [...(taskFiles ?? []), ...files];
       } catch {
-        /* unreadable: counted as unknown only when no repository could be read */
+        // A repository that cannot be read makes the whole list unknown, never a partial one.
+        taskFiles = null;
+        break;
       }
     }
     return completionGate({

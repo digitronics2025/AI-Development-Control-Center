@@ -104,7 +104,7 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
               { label: task.supervised ? 'Fix attempts' : 'Fix cycles', value: <span className="tabular">{task.fixCycles} of {task.maxFixCycles}{task.supervised ? ' in this strategy' : ''}</span> },
               { label: 'Recovery cycles', value: <span className="tabular">{task.recoveryCycle}</span>, hidden: !task.supervised },
               { label: 'Mode', value: MODE_LABEL[task.mode] },
-              { label: 'Repositories', value: task.repositories.map((r) => (r.folder ? `${r.name} (${r.folder}/)` : r.name)).join(', '), hidden: task.repositories.length <= 1 },
+              { label: 'Repositories', value: (task.repositories ?? []).map((r) => (r.folder ? `${r.name} (${r.folder}/)` : r.name)).join(', '), hidden: (task.repositories ?? []).length <= 1 },
               { label: 'Branch', value: task.git.taskBranch ? <code className="font-mono text-code">{task.git.taskBranch}</code> : task.git.baselineBranch ? `${task.git.baselineBranch} (no task branch)` : 'Not recorded yet' },
               { label: 'Baseline', value: task.git.baselineCommit ? <code className="font-mono text-code">{shortSha(task.git.baselineCommit)}</code> : '—', hidden: !task.git.baselineCommit },
               { label: 'Your changes', value: `${task.git.preexistingChanges.length} pre-existing file(s) protected`, hidden: task.git.preexistingChanges.length === 0 },

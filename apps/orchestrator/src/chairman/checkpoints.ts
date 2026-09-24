@@ -240,11 +240,20 @@ export class CheckpointService {
         result.skipped.push(...r.skipped.map(label));
         done.push(unit!);
       } catch (error) {
-        for (const u of done) {
+        // restoreCheckpoint may have changed the failing repository before it failed: put it back as well.
+        let unrestored: string | null = null;
+        for (const u of [...done, unit!]) {
           const back = safety?.parts?.find((p) => p.repositoryId === u.repo.id);
-          if (back) await restoreCheckpoint(u.workdir, back.commit, () => true).catch(() => undefined);
+          const ok = back ? await restoreCheckpoint(u.workdir, back.commit, () => true).then(() => true, () => false) : false;
+          if (!ok) unrestored = u.repo.name;
         }
-        throw new EngineError(`Rollback of ${unit!.repo.name} failed (${redact((error as Error).message).slice(0, 200)}); the repositories already rolled back were put back as they were.`, 'INVALID_STATE');
+        const reason = redact((error as Error).message).slice(0, 200);
+        throw new EngineError(
+          unrestored
+            ? `Rollback of ${unit!.repo.name} failed (${reason}), and ${unrestored} could not be put back automatically: restore checkpoint ${safety?.seq ?? '(none)'} to return to the state before the rollback.`
+            : `Rollback of ${unit!.repo.name} failed (${reason}); every repository was put back as it was before the rollback.`,
+          'INVALID_STATE',
+        );
       }
     }
     this.publisher.event(

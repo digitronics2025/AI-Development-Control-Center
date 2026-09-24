@@ -257,10 +257,15 @@ export class SourceControlService {
   private attributionTask(repositoryId: string, branch: string | null): TaskRecord | null {
     const tasks = this.d.store.listTasks({ repositoryId, limit: 50 }).filter((t) => this.gitIn(t, repositoryId).baselineSnapshotId && !isReadOnlyWorkflow(t.workflow));
     return (
-      tasks.find((t) => !TERMINAL_TASK_STATUSES.includes(t.status) && t.status !== 'DRAFT') ??
+      tasks.find((t) => !TERMINAL_TASK_STATUSES.includes(t.status) && t.status !== 'DRAFT' && !this.inWorkspace(t)) ??
       tasks.find((t) => TERMINAL_TASK_STATUSES.includes(t.status) && branch !== null && (this.gitIn(t, repositoryId).taskBranch ?? this.gitIn(t, repositoryId).baselineBranch) === branch) ??
       null
     );
+  }
+
+  /** A task across repositories: all of its work is in its own worktrees, never in your working tree. */
+  private inWorkspace(task: TaskRecord): boolean {
+    return this.d.store.listLinkedRepositories(task.id).length > 0;
   }
 
   /**

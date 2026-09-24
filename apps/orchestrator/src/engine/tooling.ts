@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { addWorktree, changesSince, commitPaths, createCheckpoint, isGitRepository, removeWorktree, repositoryStatus, taskBranchName } from '@acc/git';
+import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, headCommit, isGitRepository, removeWorktree, repositoryStatus, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
 import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
 import {
@@ -146,10 +146,12 @@ export class EngineTooling {
     const existing = this.d.store.latestArtifactOfType(task.id, 'environment');
     if (existing) return (await this.d.artifacts.latestText(task.id, 'environment')) ?? null;
     const cwd = agentWorkdir(task, repo);
+    // The workspace root is not a repository: Git status comes from the primary repository's worktree.
+    const statusDir = task.git.workspacePath ? taskWorkdir(task, repo) : cwd;
     let branch: string | null = null;
     let dirty: number | null = null;
     try {
-      const st = await repositoryStatus(cwd);
+      const st = await repositoryStatus(statusDir);
       branch = st.branch.head;
       dirty = st.entries.length;
     } catch {
@@ -349,7 +351,12 @@ export class EngineTooling {
    * in it) is removed first.
    */
   async addWorkspaceWorktree(task: TaskRecord, repo: RepositoryRecord, dir: string): Promise<{ taskBranch: string; head: string }> {
-    if (existsSync(dir)) await removeWorktree(repo.path, dir, { force: true });
+    if (existsSync(dir)) {
+      await removeWorktree(repo.path, dir, { force: true });
+      // No agent ever ran there (no record), so its branch is still at HEAD and can go.
+      const head = await headCommit(repo.path);
+      if (head) await deleteBranchIfAt(repo.path, taskBranchName(task.id, task.title), head);
+    }
     mkdirSync(path.dirname(dir), { recursive: true });
     const { branch, head } = await addWorktree(repo.path, dir, taskBranchName(task.id, task.title));
     this.event(task.id, 'WORKTREE_CREATED', `${repo.name}: working in an isolated worktree on ${branch}; your working tree is not touched`, { path: dir, branch, repositoryId: repo.id });

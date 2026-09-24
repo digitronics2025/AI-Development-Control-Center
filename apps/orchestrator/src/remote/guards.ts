@@ -13,6 +13,8 @@ export interface GuardContext {
   settings: Settings;
   repository: (id: string) => Pick<Repository, 'runtime' | 'autoApproveUpToLevel' | 'policyMode'> | null;
   workflow: (id: string) => Pick<WorkflowProfile, 'stages'> | null;
+  /** The task works in more than one repository (docs/systems/multi-repository-tasks.md). */
+  isMultiRepositoryTask?: (taskId: string) => boolean;
 }
 
 export type GuardResult = { ok: true } | { ok: false; message: string };
@@ -84,6 +86,11 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
         const kept = next.find((n) => n.key === stage.key);
         if (kept?.requiresApproval !== true) return deny(`Removing the approval step from "${stage.name}" can only be done on this machine.`);
       }
+      return allow;
+    }
+    case 'task.start': {
+      // The cloud leases one repository per task, so a task across repositories starts on this machine only.
+      if (params.id && ctx.isMultiRepositoryTask?.(params.id)) return deny('A task across several repositories can only be started on this machine.');
       return allow;
     }
     case 'task.create': {

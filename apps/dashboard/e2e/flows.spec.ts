@@ -277,7 +277,7 @@ test.describe('Tasks across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md)',
     await also.click();
     await page.getByRole('searchbox').fill('storefront');
     await page.keyboard.press('Enter');
-    const chosen = page.getByRole('list', { name: 'Also work in' });
+    const chosen = page.getByRole('list', { name: 'Repositories added' });
     await expect(chosen.getByText('storefront')).toBeVisible();
     await also.click();
     await page.getByRole('searchbox').fill('mobile');

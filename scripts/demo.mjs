@@ -114,6 +114,9 @@ const env = {
   ACC_TOKEN_OVERRIDE: process.env.ACC_TOKEN_OVERRIDE ?? '',
 };
 if (!env.ACC_TOKEN_OVERRIDE) delete env.ACC_TOKEN_OVERRIDE;
+// The demo always stays on this machine: a shell that exports a remote bind must not carry it here (audit I-11).
+env.ACC_HOST = '127.0.0.1';
+delete env.ACC_ALLOW_REMOTE;
 
 const child = spawn(process.execPath, [main], { env, stdio: ['ignore', 'pipe', 'inherit'] });
 // Keep the orchestrator's structured log next to the demo data for diagnostics.

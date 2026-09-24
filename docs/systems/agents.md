@@ -46,7 +46,7 @@ removed when the run ends.
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
 - Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] --strict-mcp-config [--mcp-config <acc>]`
-- Permission mapping (`claudeToolPolicy`): L1 `dontAsk` + read-only tools; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Force push, `git reset --hard`, `git clean`, `rm -rf` are always denied. `Skill` is allowed at every level.
+- Permission mapping (`claudeToolPolicy`): L1 `dontAsk` + read-only tools; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Always denied, at every level (prefix rules on Claude's native Bash — a heuristic, not the Control Center's classifier): force and mirror push, `git reset --hard`, `git clean`, `git restore`, `git checkout --`/`.`/`-f`, `git switch --discard-changes`, `git stash drop|clear`, `git branch -D`, `git worktree remove`, `git filter-branch`, `rm -rf`/`rm -r`, `rmdir /s`, `rd /s`, `del /s`, `Remove-Item`, `npx rimraf`. `Skill` is allowed at every level.
 - Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Bash, Skill, ToolSearch, TodoWrite`; L2+ adds `Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
 - `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.

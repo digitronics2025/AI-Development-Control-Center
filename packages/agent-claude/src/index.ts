@@ -91,7 +91,33 @@ const READ_ONLY_BASH = ['git status', 'git diff', 'git log', 'git show', 'git br
 );
 const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 /** Never allowed from an agent: the orchestrator does these itself, behind approvals. */
-const ALWAYS_DENIED = ['git push --force', 'git push -f', 'git push --force-with-lease', 'git reset --hard', 'git clean', 'rm -rf'].map(
+// Prefix rules on Claude Code's native Bash, not the Control Center's classifier: they catch the
+// usual spellings of commands that destroy work or history (audit F-12); ToolService judges the rest.
+const ALWAYS_DENIED = [
+  'git push --force',
+  'git push -f',
+  'git push --force-with-lease',
+  'git push --mirror',
+  'git reset --hard',
+  'git clean',
+  'git restore',
+  'git checkout --',
+  'git checkout .',
+  'git checkout -f',
+  'git switch --discard-changes',
+  'git stash drop',
+  'git stash clear',
+  'git branch -D',
+  'git worktree remove',
+  'git filter-branch',
+  'rm -rf',
+  'rm -r',
+  'rmdir /s',
+  'rd /s',
+  'del /s',
+  'Remove-Item',
+  'npx rimraf',
+].map(
   (cmd) => `Bash(${cmd}:*)`,
 );
 const GIT_WRITE = ['git commit', 'git push', 'gh pr create', 'gh pr merge'].map((cmd) => `Bash(${cmd}:*)`);

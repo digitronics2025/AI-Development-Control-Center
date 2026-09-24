@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, redact, sanitizeEnv } from '@acc/security';
+import { constantTimeEqual, redact, referencesSelf, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -420,6 +420,14 @@ export class ToolService {
     // 3. Classify this concrete call.
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
     const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid) }) };
+
+    // An agent never reaches the Control Center itself — its token, keys, data folder or API — through
+    // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
+    if (req.origin === 'agent' && referencesSelf(JSON.stringify(input) ?? '')) {
+      const self: ToolRisk = { ...risk, level: 5, risk: 'dangerous', reasons: ["Reaches the Control Center's own token, data folder or API"] };
+      this.escalate(scope, req.capability, 'denied', self.reasons[0]!, 5);
+      return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);
+    }
 
     // 4. Policy.
     const inProfile = profileIncludes(PROFILES[scope.profile], req.capability) || scope.escalated.has(req.capability);

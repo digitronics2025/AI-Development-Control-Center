@@ -264,7 +264,11 @@ describe('claudeToolPolicy', () => {
     expect(l1.allowed).not.toContain('Edit');
     expect(l1.denied).toContain('Edit');
     for (const level of [1, 2, 3, 4, 5] as const) {
-      expect(claudeToolPolicy(level).denied).toContain('Bash(git push --force:*)');
+      const denied = claudeToolPolicy(level).denied;
+      // Audit F-12: the commands that discard work most directly are denied at every level.
+      for (const cmd of ['git push --force', 'git restore', 'git checkout --', 'git stash drop', 'git branch -D', 'git worktree remove', 'Remove-Item', 'rd /s']) {
+        expect(denied, `${cmd} at L${level}`).toContain(`Bash(${cmd}:*)`);
+      }
     }
     expect(claudeToolPolicy(2).denied).toContain('Bash(git push:*)');
     expect(claudeToolPolicy(3).denied).not.toContain('Bash(git push:*)');

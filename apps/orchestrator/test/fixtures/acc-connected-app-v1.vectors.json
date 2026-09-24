@@ -1,0 +1,32 @@
+{
+  "protocol": "acc-connected-app-v1",
+  "note": "Fixed identity key for interoperability tests only. ECDSA signatures are randomised: implementations must VERIFY these, not reproduce them. Never use this key for anything else.",
+  "identity": {
+    "publicKey": "BI7DOz6YflfcmHrBl5Sr5ipwsbocV_eTqt11Mpl9FRqyq-qdNZVEM2m-lajA8yHLSWbBzZCafCpGal682T6Sljc",
+    "privateJwk": {
+      "key_ops": [
+        "sign"
+      ],
+      "ext": true,
+      "kty": "EC",
+      "x": "jsM7Pph-V9yYesGXlKvmKnCxuhxX95Oq3XUymX0VGrI",
+      "y": "q-qdNZVEM2m-lajA8yHLSWbBzZCafCpGal682T6Sljc",
+      "crv": "P-256",
+      "d": "qz_AJ5GOpmvoX7nIcPlV4sTwdHWpV_LIf6ZRb7swRhk"
+    }
+  },
+  "statements": [
+    {
+      "purpose": "pair",
+      "appId": "vector-app-0000000001",
+      "nonce": "vector-nonce-00000000001",
+      "signature": "UDtswRdpF625-tjLv1u0g1UZ7pYk3WSkpVOaOTNgC0DFngd5z-tcHdQgAHanc2lhqr-SU7JzwhaeOPzfxhOwWQ"
+    },
+    {
+      "purpose": "hello",
+      "appId": "vector-app-0000000001",
+      "nonce": "vector-nonce-00000000002",
+      "signature": "mUWa1ScxfsssynnZIjwcHuMCaE4AS3j7lMbcV0IRdMfA0T-qaGV6doFpnCvPUGx0L7-TfNPg9gwPc7Cahqssiw"
+    }
+  ]
+}

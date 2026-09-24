@@ -1081,4 +1081,45 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Connected apps (docs/plans/private-browser-control-center-link.md): a
+    // paired local app — Private Browser — that may create tasks from evidence
+    // the operator approved, read those tasks, and attach re-check evidence.
+    // Metadata only: the app's token is kept as a SHA-256 hash, and evidence
+    // lives in task attachments and artifacts like every other task file.
+    version: 12,
+    name: 'connected apps',
+    sql: `
+      CREATE TABLE connected_apps (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        default_mode TEXT NOT NULL DEFAULT 'discuss',
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        revoked_at TEXT
+      );
+      CREATE TABLE connected_app_tasks (
+        app_id TEXT NOT NULL REFERENCES connected_apps(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL,
+        source_origin TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (app_id, task_id),
+        UNIQUE (app_id, request_id)
+      );
+      CREATE INDEX idx_connected_app_tasks_task ON connected_app_tasks(task_id);
+      CREATE TABLE connected_app_evidence (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL REFERENCES connected_apps(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (app_id, request_id)
+      );
+      CREATE INDEX idx_connected_app_evidence_task ON connected_app_evidence(task_id);
+    `,
+  },
 ];

@@ -286,6 +286,9 @@ export class CacheSync {
       case 'learning':
         void this.qc.invalidateQueries({ queryKey: keys.learningRoot });
         return;
+      case 'connectedApp':
+        void this.qc.invalidateQueries({ queryKey: keys.connectedAppsRoot });
+        return;
     }
   };
 }

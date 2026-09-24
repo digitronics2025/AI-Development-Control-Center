@@ -88,6 +88,10 @@ needs an approval with a typed confirmation (the task ID).
 - Every path a tool touches is confined to the task's roots after resolving
   links ([paths.ts](../../packages/tools/src/paths.ts)); files holding the
   user's pre-existing work are refused for writes, commits and restores.
+- Connected apps ([connected-apps.md](connected-apps.md)): `/api/connected-app/*`
+  skips the local token and refuses any `Origin`; each route accepts only a
+  paired app's token (stored as a SHA-256 hash), which opens nothing else.
+  Both route groups refuse `x-acc-remote-request`.
 - Credentials: [credential-broker.md](credential-broker.md), including the
   MyVault bridge: its routes take the local token like any `/api` route, are
   not tools, not MCP and not remote operations, and trusted MyVault origins

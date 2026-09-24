@@ -1292,7 +1292,8 @@ Tools                                              [Check all]
 
 ## Tabs
 
-Overview · Processes · Terminals · MCP servers · Credentials · Policy.
+Overview · Processes · Terminals · MCP servers · Credentials · Connected apps ·
+Policy. Connected apps exists on the local dashboard and in VS Code only.
 
 ## Overview
 
@@ -1321,6 +1322,22 @@ environment variables mapped to stored credentials — never raw values).
 Names, kind, environment variable, scope and fingerprint only. Values are
 write-only: the add/replace dialog uses a password field and the value is
 never shown again. Delete uses a confirmation dialog.
+
+## Connected apps
+
+Local apps that may turn a page problem the operator approved into a task —
+Private Browser today. A one-line description says what they can do and that
+each send is approved in the app first. Primary action **Pair Private
+Browser** opens a dialog: **Make a pairing code** → the eight-digit code in
+mono (two groups of four), "Works once · expires in m:ss", the three steps to
+take in the app, and this Control Center's key fingerprint to compare. Closing
+the dialog withdraws the code. The list (a table, stacked when narrow): app
+name and kind, status chip (Connected / Disconnected — icon and text), "New
+tasks start in" as a compact segmented control (Discuss First · Autopilot),
+tasks created, last used, and **Disconnect** — destructive, with a
+confirmation that says it stops at once and the tasks it created stay. Tasks an
+app created carry a neutral **From Private Browser** badge in the task list and
+the task header.
 
 ## Policy
 

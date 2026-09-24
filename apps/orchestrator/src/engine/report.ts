@@ -18,6 +18,8 @@ export interface ReportInput {
   verification?: { type: string; satisfied: string[]; missing: string[] } | null;
   /** Tool calls, repairs, escalations and processes. */
   executionLines?: string[];
+  /** Re-checks the operator attached from Private Browser (docs/systems/connected-apps.md): informational, never a pass. */
+  browserRechecks?: string[];
 }
 
 const MAX_OPERATOR_ITEMS = 10;
@@ -160,9 +162,12 @@ export function buildFinalReport(input: ReportInput): ReportResult {
           `- Project type: ${input.verification.type}`,
           `- Verified: ${input.verification.satisfied.join(', ') || 'nothing yet'}`,
           ...(input.verification.missing.length ? [`- Not verified: ${input.verification.missing.join(', ')}`] : []),
+          ...(input.browserRechecks?.length ? [`- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`] : []),
           '',
         ]
-      : []),
+      : input.browserRechecks?.length
+        ? ['## Verification coverage', '', `- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`, '']
+        : []),
     ...(input.executionLines?.length ? ['## Execution', '', ...input.executionLines, ''] : []),
     '## Cloud',
     '',

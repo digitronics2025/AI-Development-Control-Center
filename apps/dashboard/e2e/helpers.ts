@@ -24,6 +24,7 @@ export const PAGES = [
   { name: 'tools', path: '/tools', ready: 'Check all' },
   { name: 'tools-policy', path: '/tools/policy', ready: 'Give agents the Control Center tools' },
   { name: 'tools-credentials', path: '/tools/credentials', ready: 'Values are write-only' },
+  { name: 'tools-apps', path: '/tools/apps', ready: 'Pair Private Browser' },
   { name: 'task-execution', path: '/tasks/TASK-0001?tab=execution', ready: 'Tool calls' },
   { name: 'usage-overview', path: '/usage', ready: 'Spend in range' },
   { name: 'usage-models', path: '/usage?tab=models', ready: 'Price list' },

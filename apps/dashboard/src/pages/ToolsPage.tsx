@@ -48,12 +48,13 @@ import { errorMessage } from '../api/client';
 import { useRepositories, useSettings, useUpdateSettings } from '../api/hooks';
 import { useCredentials, useMcpMutations, useMcpServers, useProcesses, useStopProcess, useTerminals, useToolMutations, useTools } from '../api/tools';
 import { useBreadcrumb } from '../app/breadcrumbs';
-import { useConnection } from '../app/runtime';
+import { useConnection, useRuntime } from '../app/runtime';
 import { TerminalDrawer } from '../components/terminal';
 import { CredentialsTab } from './tools/CredentialsTab';
+import { ConnectedAppsTab } from './tools/ConnectedAppsTab';
 import { LIVE_PROCESS, PROCESS_VISUAL, TOOL_HEALTH_VISUAL } from '../components/tools';
 
-const TABS = ['overview', 'processes', 'terminals', 'mcp', 'credentials', 'policy'] as const;
+const TABS = ['overview', 'processes', 'terminals', 'mcp', 'credentials', 'apps', 'policy'] as const;
 type TabKey = (typeof TABS)[number];
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -431,8 +432,10 @@ function PolicyTab() {
 export function ToolsPage() {
   const { tab: raw } = useParams();
   const navigate = useNavigate();
-  const tab: TabKey = (TABS as readonly string[]).includes(raw ?? '') ? (raw as TabKey) : 'overview';
-  useBreadcrumb([{ label: 'Tools', to: '/tools' }, ...(tab !== 'overview' ? [{ label: tab === 'mcp' ? 'MCP servers' : tab[0]!.toUpperCase() + tab.slice(1) }] : [])]);
+  const { mode } = useRuntime();
+  // Connected apps exist on this machine only; the cloud dashboard has no such tab.
+  const tab: TabKey = (TABS as readonly string[]).includes(raw ?? '') && !(raw === 'apps' && mode !== 'local') ? (raw as TabKey) : 'overview';
+  useBreadcrumb([{ label: 'Tools', to: '/tools' }, ...(tab !== 'overview' ? [{ label: tab === 'mcp' ? 'MCP servers' : tab === 'apps' ? 'Connected apps' : tab[0]!.toUpperCase() + tab.slice(1) }] : [])]);
   const tools = useTools();
   const settings = useSettings();
   const mutations = useToolMutations();
@@ -469,6 +472,7 @@ export function ToolsPage() {
           <Tab value="terminals">Terminals</Tab>
           <Tab value="mcp">MCP servers</Tab>
           <Tab value="credentials">Credentials</Tab>
+          {mode === 'local' ? <Tab value="apps">Connected apps</Tab> : null}
           <Tab value="policy">Policy</Tab>
         </TabList>
         <TabPanel value="overview">
@@ -486,6 +490,11 @@ export function ToolsPage() {
         <TabPanel value="credentials">
           <CredentialsTab />
         </TabPanel>
+        {mode === 'local' ? (
+          <TabPanel value="apps">
+            <ConnectedAppsTab />
+          </TabPanel>
+        ) : null}
         <TabPanel value="policy">
           <PolicyTab />
         </TabPanel>

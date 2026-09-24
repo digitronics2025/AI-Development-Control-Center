@@ -375,3 +375,56 @@ export const terminalOpenSchema = z.object({
 
 export const checkpointCreateSchema = z.object({ label: z.string().min(1).max(120) });
 export const checkpointRestoreSchema = z.object({ checkpointId: z.string().min(1).max(100).optional() });
+
+// ---------------------------------------------------------------------------
+// Connected apps (docs/systems/connected-apps.md): a paired local app —
+// Private Browser — that turns evidence the operator approved into tasks.
+// ---------------------------------------------------------------------------
+
+export const CONNECTED_APP_KINDS = ['private-browser'] as const;
+export type ConnectedAppKind = (typeof CONNECTED_APP_KINDS)[number];
+
+export const CONNECTED_APP_LABEL: Record<ConnectedAppKind, string> = {
+  'private-browser': 'Private Browser',
+};
+
+/** How a task created by a connected app starts; only the dashboard sets it. */
+export const CONNECTED_APP_MODES = ['discuss', 'autopilot'] as const;
+export type ConnectedAppMode = (typeof CONNECTED_APP_MODES)[number];
+
+export interface ConnectedAppView {
+  id: string;
+  kind: ConnectedAppKind;
+  name: string;
+  defaultMode: ConnectedAppMode;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  taskCount: number;
+}
+
+export interface ConnectedAppsStatus {
+  apps: ConnectedAppView[];
+  /** The pairing code on offer, without the code itself. */
+  pairing: { kind: ConnectedAppKind; expiresAt: string; attemptsLeft: number } | null;
+  /** The Control Center identity the app pins (the same key MyVault pins); null when the sealed key cannot be opened. */
+  identity: { publicKey: string; fingerprint: string } | null;
+}
+
+export interface ConnectedAppPairing {
+  kind: ConnectedAppKind;
+  code: string;
+  expiresAt: string;
+  identity: { publicKey: string; fingerprint: string };
+}
+
+/** Which tasks a connected app created, for the dashboard badge. */
+export interface ConnectedAppTaskOrigin {
+  taskId: string;
+  appId: string;
+  kind: ConnectedAppKind;
+  name: string;
+}
+
+export const connectedAppPairingSchema = z.object({ kind: z.enum(CONNECTED_APP_KINDS).default('private-browser') });
+export const connectedAppUpdateSchema = z.object({ defaultMode: z.enum(CONNECTED_APP_MODES) });

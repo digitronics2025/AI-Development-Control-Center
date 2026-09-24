@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router';
-import { RelativeTime, StageRail, TaskStatusChip, cn, durationBetween, formatDuration, useNow } from '@acc/ui';
-import { workflowHappyPath, type TaskDetail, type TaskSummary } from '@acc/shared';
+import { Badge, RelativeTime, StageRail, TaskStatusChip, cn, durationBetween, formatDuration, useNow } from '@acc/ui';
+import { CONNECTED_APP_LABEL, workflowHappyPath, type TaskDetail, type TaskSummary } from '@acc/shared';
+import { useTaskOrigin } from '../api/connected-apps';
 import { AssignmentText } from './agents';
 import { TaskPrimaryAction } from './task-actions';
 
@@ -42,6 +43,7 @@ export function ActiveTaskRow({ task }: { task: TaskSummary }) {
   const running = task.status === 'RUNNING';
   const now = useNow(1000, running);
   const elapsed = durationBetween(task.startedAt ?? task.createdAt, task.finishedAt, now);
+  const origin = useTaskOrigin(task.id);
   return (
     <li
       className="grid cursor-pointer grid-cols-1 gap-3 px-4 py-3 hover:bg-elevated md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_auto] md:items-center"
@@ -51,6 +53,7 @@ export function ActiveTaskRow({ task }: { task: TaskSummary }) {
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <TaskStatusChip status={task.status} size="compact" />
           <span className="tabular font-mono text-small text-fg-secondary">{task.id}</span>
+          {origin ? <Badge title={`Sent from ${origin.name}`}>From {CONNECTED_APP_LABEL[origin.kind]}</Badge> : null}
         </div>
         <Link
           to={`/tasks/${task.id}`}

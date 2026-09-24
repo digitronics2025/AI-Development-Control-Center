@@ -38,6 +38,8 @@ import { VaultBridgeService } from './tools/vault-bridge.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
 import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
+import { ConnectedAppService } from './connected-apps/service.js';
+import { ConnectedAppStore } from './connected-apps/store.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -78,6 +80,8 @@ export interface AppServices {
   remote: RemoteNodeService;
   /** The learning loop: reviews finished tasks and adopts improvements (docs/systems/learning.md). */
   learning: LearningService;
+  /** Paired local apps such as Private Browser (docs/systems/connected-apps.md). */
+  connectedApps: ConnectedAppService;
   startedAt: string;
   /** Restart recovery: engine reconciliation, then the Chairman's resume decisions. */
   recover(): Promise<{ interruptedTasks: string[] }>;
@@ -161,6 +165,7 @@ export function createServices(
     }),
   });
   mcp.restore();
+  const connectedApps = new ConnectedAppService({ apps: new ConnectedAppStore(db), store, bus, engine, views, artifacts, settings, workflows, identity: () => vaultBridge.identity() });
   const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, repositories, tools, credentials, usage, terminals, artifacts, timings: options.remoteTimings });
 
   return {
@@ -197,6 +202,7 @@ export function createServices(
     usage,
     remote,
     learning,
+    connectedApps,
     startedAt: new Date().toISOString(),
     async recover() {
       // Before anything runs: replay spooled usage and close attempts a stop interrupted.

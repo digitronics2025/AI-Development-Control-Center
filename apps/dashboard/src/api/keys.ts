@@ -34,6 +34,10 @@ export const keys = {
   terminals: ['terminals'] as const,
   mcpServers: ['mcp'] as const,
   credentials: ['credentials'] as const,
+  /** Paired local apps such as Private Browser (local mode only); one prefix for status and task origins. */
+  connectedAppsRoot: ['connected-apps'] as const,
+  connectedApps: ['connected-apps', 'status'] as const,
+  connectedAppOrigins: ['connected-apps', 'origins'] as const,
   prompts: ['prompts'] as const,
   /** Everything Source Control shows for one repository; one prefix so realtime invalidation reaches it all. */
   sourceControlRoot: (repositoryId: string) => ['source-control', repositoryId] as const,

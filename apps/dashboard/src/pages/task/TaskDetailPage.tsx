@@ -2,6 +2,7 @@ import { Bot, Copy, FileDiff, FlaskConical, Gavel, MessageSquarePlus, MoreHorizo
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
+  Badge,
   Banner,
   Button,
   Drawer,
@@ -24,9 +25,10 @@ import {
   type Command,
   type TimelineStage,
 } from '@acc/ui';
-import { MODE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
+import { CONNECTED_APP_LABEL, MODE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
 import { ApiError, errorMessage } from '../../api/client';
 import { useChairman, useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
+import { useTaskOrigin } from '../../api/connected-apps';
 import { useBreadcrumb } from '../../app/breadcrumbs';
 import { usePageCommands } from '../../app/commands';
 import { useConnection } from '../../app/runtime';
@@ -127,6 +129,7 @@ function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: Tas
 /** design.md §7.3 — the primary product screen. */
 export function TaskDetailPage() {
   const { id = '' } = useParams();
+  const origin = useTaskOrigin(id);
   const task = useTask(id);
   const tests = useTaskTests(id);
   const artifacts = useTaskArtifacts(id);
@@ -209,6 +212,7 @@ export function TaskDetailPage() {
             <span className="tabular font-mono">{data.id}</span>
             <span aria-hidden>·</span>
             <span>{data.repositoryName}</span>
+            {origin ? <Badge title={`Sent from ${origin.name} with page evidence attached`}>From {CONNECTED_APP_LABEL[origin.kind]}</Badge> : null}
           </div>
           <h1 className="text-h1 text-fg wrap-anywhere">{data.title}</h1>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-small text-fg-secondary">

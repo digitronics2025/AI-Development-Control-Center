@@ -68,6 +68,14 @@ export function registerSecurity(app: FastifyInstance, options: { token: string;
     const url = request.url;
     const isApi = url.startsWith('/api/') || url === '/api' || url.startsWith('/ws');
     if (!isApi) return;
+    // Connected apps (Private Browser) call from their own process, never from a
+    // web page: any Origin — even an allowed loopback one — is refused, so no
+    // page can guess a pairing code or ride an app token. The routes check the
+    // app token themselves (and only it: the local API token does not open them).
+    if (url.startsWith('/api/connected-app/')) {
+      if (origin) return deny(request, reply, 403, 'BAD_ORIGIN', 'Connected apps may not call from a web page.');
+      return;
+    }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     // Tool sessions carry their own short-lived, scoped token; the route checks
     // it (and only it: the local API token does not open these routes).

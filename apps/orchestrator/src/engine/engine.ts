@@ -1142,7 +1142,7 @@ export class TaskEngine {
     }
     const testRuns = this.d.store.listTestRuns(task.id);
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
-    const report = buildFinalReport({ task, repo, stages, testRuns, files, testsSkipped, deployed, operatorItems, gateLimitations, verification, executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)] });
+    const report = buildFinalReport({ task, repo, stages, testRuns, files, testsSkipped, deployed, operatorItems, gateLimitations, verification, browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'browser-report' && a.name.startsWith('browser-recheck-')).map((a) => a.name), executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)] });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
     const completion = { status: 'COMPLETED' as const, finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE };

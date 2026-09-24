@@ -59,7 +59,9 @@ the MyVault bridge's `credential_vault_links`, `vault_bridge_origins`,
 `credential_events` (migration 7, metadata only), `vault_bridge_identity`
 (migration 9, the bridge's sealed identity key) and `vault_deposit_targets`,
 `vault_deposits` (migration 10, MyVault's delivery box;
-[credential-broker.md](credential-broker.md)). Access goes through
+[credential-broker.md](credential-broker.md)), and the connected apps'
+`connected_apps`, `connected_app_tasks`, `connected_app_evidence` (migration 12,
+metadata only; [connected-apps.md](connected-apps.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -83,6 +85,7 @@ before any row is written.
 | Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile; see [usage.md](usage.md#api-apiusage-bearer-token) |
 | Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…`, `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
 | Tool sessions | `tool-session/{tools,find,call}` — session token only, never the local API token ([mcp.md](mcp.md)) |
+| Connected apps | `connected-apps[/…]` (dashboard) and `connected-app/*` — the paired app's token only ([connected-apps.md](connected-apps.md)) |
 
 `GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
@@ -100,7 +103,7 @@ Control mutation) and the Chairman's `chairman`, `chairman.message`,
 `chairman.decision`, `chairman.action`, `checkpoint`, `usage` (a recorded or
 re-costed attempt; clients refetch usage views), and the tool layer's
 `tool`, `toolExecution`, `taskProcess`, `terminal`, `mcpServer(.deleted)`,
-`credential(.deleted)`, `recovery`, `escalation`. `terminal.output` goes only
+`credential(.deleted)`, `recovery`, `escalation`, `connectedApp` (never relayed to the cloud). `terminal.output` goes only
 to clients that sent `subscribeTerminal`, which may then send `terminal.input`
 and `terminal.resize` for it ([pty.md](pty.md)). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log

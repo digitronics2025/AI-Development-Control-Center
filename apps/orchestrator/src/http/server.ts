@@ -12,6 +12,7 @@ import { registerToolRoutes } from './tool-routes.js';
 import { registerUsageRoutes } from './usage-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
 import { registerVaultBridgeRoutes } from './vault-bridge-routes.js';
+import { registerConnectedAppRoutes } from './connected-app-routes.js';
 import { registerWebSocket } from './ws.js';
 
 const DASHBOARD_CSP = [
@@ -58,6 +59,7 @@ export async function buildServer(
   registerSourceControlRoutes(app, s);
   registerToolRoutes(app, s);
   registerVaultBridgeRoutes(app, s);
+  registerConnectedAppRoutes(app, s);
   registerUsageRoutes(app, s);
   registerLearningRoutes(app, s);
   registerRemoteRoutes(app, s);

@@ -14,7 +14,7 @@ import type {
 } from './types.js';
 import type { Settings, WorkflowProfile } from './schemas.js';
 import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
-import type { CapabilityEscalation, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
+import type { CapabilityEscalation, ConnectedAppView, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
 import type { UsageEvent } from './usage.js';
 import type { RemoteNodeStatus } from './remote.js';
 
@@ -68,7 +68,9 @@ export type ServerMessage =
   /** This machine's link to the cloud control plane changed (local clients only; never relayed). */
   | { type: 'remote.status'; status: RemoteNodeStatus }
   /** The learning loop recorded a review, finding or improvement: its views refetch (local clients only; never relayed). */
-  | { type: 'learning'; change: 'review' | 'finding' | 'improvement'; taskId: string | null };
+  | { type: 'learning'; change: 'review' | 'finding' | 'improvement'; taskId: string | null }
+  /** A connected app was paired, changed or disconnected (local clients only; never relayed). */
+  | { type: 'connectedApp'; app: ConnectedAppView };
 
 export type ServerMessageType = ServerMessage['type'];
 

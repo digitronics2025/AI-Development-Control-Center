@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-09-23
+> Last verified: 2026-09-24
 
 ## Pieces
 
@@ -160,12 +160,20 @@ the top-bar node selector, banners for offline or out-of-date nodes, "Run on"
 and "Run when the node is back" on New Task, and hides what only the machine may
 do (Settings → Remote access, attachments). See [dashboard.md](dashboard.md).
 
+The cloud dashboard can be installed to a phone as an app. The manifest and
+icons are ordinary assets behind Access and the Worker's own check; there is no
+bypass path, and `pnpm cloud:smoke` proves `/manifest.webmanifest` is refused
+without a sign-in. An installed app notices an expired Access session and says
+so ([dashboard.md § Installable app](dashboard.md#installable-app-pwa)).
+Changing the control hostname changes the app's origin, so installed copies
+must be reinstalled.
+
 ## Deploy, pair, revoke, recover
 
 | Task | Command |
 |---|---|
 | Release | `pnpm cloud:deploy:staging` / `pnpm cloud:deploy:production` ([deploy.mjs](../../apps/cloud-control/scripts/deploy.mjs)): refuses a test key set → applies D1 migrations (a failure stops before any code ships) → deploys → creates `NODE_SESSION_SECRET` on first release → live smoke |
-| Live check | `pnpm cloud:smoke` ([smoke.mjs](../../apps/cloud-control/scripts/smoke.mjs)): both `/health`, control host refuses dashboard/API/realtime/forged tokens, relay serves no dashboard, refuses unknown nodes, and answers a forged session on a real WebSocket upgrade with 401 |
+| Live check | `pnpm cloud:smoke` ([smoke.mjs](../../apps/cloud-control/scripts/smoke.mjs)): both `/health`, control host refuses dashboard/app manifest/API/realtime/forged tokens, relay serves no dashboard, refuses unknown nodes, and answers a forged session on a real WebSocket upgrade with 401 |
 | Turn on Access | `pnpm cloud:access --env production --team <team>.cloudflareaccess.com --aud <tag> --email you@…` ([access-setup.mjs](../../apps/cloud-control/scripts/access-setup.mjs)) after creating a self-hosted Access application for the **control** hostname only; writes the three vars into wrangler.jsonc and releases. Commit the changed file. |
 | Pairing code without the dashboard | `pnpm cloud:admin pair-code --env production --label "Desk PC"` |
 | Emergency revocation | `pnpm cloud:admin revoke --env production --node node_…` — works with Access or the dashboard down (writes D1 through Wrangler); pending commands are rejected and leases released |

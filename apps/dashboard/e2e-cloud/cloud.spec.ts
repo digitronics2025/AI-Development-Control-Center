@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import { expectNoAxeViolations, expectNoHorizontalOverflow, trackConsoleErrors, VIEWPORTS } from '../e2e/helpers';
 import { cloudApi, nodeApi, state } from './helpers';
 
@@ -203,6 +203,44 @@ test('15: responsive and accessible in both themes at every viewport', async ({ 
     }
   }
   await setTheme(page, 'dark');
+});
+
+test('16: the installable app stays behind sign-in, and an expired sign-in is named as such', async ({ page, playwright }) => {
+  const s = state();
+  // Signed in (the storage state carries the Access cookie): manifest and icons load.
+  const manifest = await page.request.get(`${s.cloudUrl}/manifest.webmanifest`);
+  expect(manifest.status()).toBe(200);
+  expect(((await manifest.json()) as { display: string }).display).toBe('standalone');
+  expect((await page.request.get(`${s.cloudUrl}/icons/icon-512.png`)).status()).toBe(200);
+  // Without a sign-in nothing is served, the manifest included: there is no bypass path.
+  const anonymous = await playwright.request.newContext({ storageState: { cookies: [], origins: [] } });
+  expect((await anonymous.get(`${s.cloudUrl}/manifest.webmanifest`)).status()).toBe(401);
+  expect((await anonymous.get(`${s.cloudUrl}/icons/icon-512.png`)).status()).toBe(401);
+  await anonymous.dispose();
+
+  const errors = trackConsoleErrors(page);
+  // Pass-through realtime the test can cut, as a phone losing its socket while asleep does.
+  let current: WebSocketRoute | null = null;
+  await page.routeWebSocket(/\/ws$/, (ws) => {
+    current = ws;
+    ws.connectToServer();
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('crossorigin', 'use-credentials');
+  await nodeOnline(page);
+  // On the phone from here on (the status line moves into the navigation drawer).
+  await page.setViewportSize({ width: 390, height: 844 });
+  // The sign-in expires while the app stays open, then the socket drops: every reconnect is refused.
+  await page.context().clearCookies();
+  await (current as WebSocketRoute | null)?.close();
+  const banner = page.getByRole('alert').filter({ hasText: 'Your sign-in expired.' });
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('The control plane is not reachable')).toHaveCount(0);
+  await expect(banner.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  // The refused requests and reconnects are the expected symptoms, reported by the browser itself.
+  expect(errors.filter((e) => !/status of 401|HTTP Authentication failed/.test(e))).toEqual([]);
 });
 
 test('14: revoking the node stops all control at once', async ({ page }) => {

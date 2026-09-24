@@ -24,6 +24,8 @@ export interface ApiConfig {
   /** '' for same origin (standalone dashboard, cloud), or http://127.0.0.1:PORT (VS Code WebView). */
   baseUrl: string;
   auth: ApiAuth;
+  /** Cloud mode: a failure an expired sign-in would also cause (no answer, 401, a non-JSON page). */
+  onAuthSuspect?: () => void;
 }
 
 /**
@@ -61,6 +63,7 @@ export function createApi(config: ApiConfig) {
       });
     } catch (error) {
       if ((error as Error).name === 'AbortError') throw error;
+      config.onAuthSuspect?.();
       throw new ApiError(config.auth.kind === 'cloud' ? 'The control plane is not reachable. Check your connection.' : 'The orchestrator is not reachable. Check that it is running.', 0, 'UNREACHABLE');
     }
     if (response.status === 204) return undefined as T;
@@ -70,8 +73,15 @@ export function createApi(config: ApiConfig) {
     if (response.status === 202 && commandStatus && commandStatus !== 'succeeded' && commandStatus !== 'failed') {
       throw new ApiError('Sent to the node. This page updates when it finishes.', 202, 'REMOTE_PENDING');
     }
+    if (response.status === 401) config.onAuthSuspect?.();
     const text = await response.text();
-    const data = text ? (JSON.parse(text) as unknown) : undefined;
+    let data: unknown;
+    try {
+      data = text ? (JSON.parse(text) as unknown) : undefined;
+    } catch {
+      config.onAuthSuspect?.();
+      throw new ApiError(`Unexpected response (${response.status}). Reload the page.`, response.status, 'BAD_RESPONSE');
+    }
     if (!response.ok) {
       const err = (data as ApiErrorBody | undefined)?.error;
       throw new ApiError(err?.message ?? `Request failed (${response.status})`, response.status, err?.code ?? 'HTTP_ERROR', err?.details);

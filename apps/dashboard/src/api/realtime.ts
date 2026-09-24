@@ -12,6 +12,16 @@ export interface ConnectionState {
 
 type Listener = () => void;
 
+/** How often a visible page checks that its socket still carries traffic. */
+export const HEARTBEAT_MS = 25_000;
+/** A ping without any answer for this long means the socket is dead even though it never closed. */
+export const PONG_DEADLINE_MS = 10_000;
+/**
+ * Sent verbatim, never decorated with a node id: the cloud hub answers exactly this
+ * string itself (setWebSocketAutoResponse) and the orchestrator replies `{"type":"pong"}`.
+ */
+const PING_FRAME = '{"type":"ping"}';
+
 /**
  * Cloud mode only: which relayed messages this page keeps (those of the selected
  * node, plus the cloud's own), and what the hub needs added to outgoing ones.
@@ -20,12 +30,20 @@ export interface RealtimeRouting {
   accept: (message: RelayedServerMessage) => boolean;
   decorate: (message: ClientMessage) => ClientMessage & { nodeId?: string };
   onCloudMessage: (message: RelayedServerMessage) => void;
+  /** Called after each failed (re)connect, so the page can tell an expired sign-in from a network fault. */
+  onLinkFailure?: (attempts: number) => void;
 }
 
 /**
  * WebSocket client with bounded exponential backoff. Every (re)connect
  * triggers `onOpen`, which the app uses to refetch and reconcile with the
  * orchestrator — the client never trusts its cache across a disconnect.
+ *
+ * A socket can die without closing (a phone that slept, a switch from Wi-Fi to
+ * mobile data): while the page is visible it is pinged every HEARTBEAT_MS, and
+ * whenever the page comes back (visible again, restored from the back/forward
+ * cache, back online) it is probed at once. No answer within PONG_DEADLINE_MS
+ * replaces the socket, which runs the normal reconnect and refetch.
  */
 export class RealtimeClient {
   private socket: WebSocket | null = null;
@@ -35,6 +53,8 @@ export class RealtimeClient {
   /** Terminal output is delivered to listeners directly, never through the query cache. */
   private readonly terminalListeners = new Map<string, Set<(data: string, cursor: number, notice?: boolean) => void>>();
   private retryTimer: number | null = null;
+  private heartbeatTimer: number | null = null;
+  private pongTimer: number | null = null;
   private stopped = false;
 
   constructor(
@@ -47,13 +67,18 @@ export class RealtimeClient {
   start(): void {
     this.stopped = false;
     this.connect();
-    window.addEventListener('online', this.reconnectNow);
+    window.addEventListener('online', this.probe);
+    window.addEventListener('pageshow', this.probe);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   stop(): void {
     this.stopped = true;
-    window.removeEventListener('online', this.reconnectNow);
+    window.removeEventListener('online', this.probe);
+    window.removeEventListener('pageshow', this.probe);
+    document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.retryTimer) window.clearTimeout(this.retryTimer);
+    this.stopHeartbeat();
     const socket = this.socket;
     this.socket = null;
     // Closing a socket that is still connecting logs a browser warning; close it once open instead.
@@ -75,6 +100,63 @@ export class RealtimeClient {
     this.socket?.close();
     this.connect();
   };
+
+  /** Check the link now: reconnect if it is down, ping it if it claims to be up. */
+  probe = (): void => {
+    if (this.stopped) return;
+    if (this.state.status === 'open') this.ping();
+    else this.reconnectNow();
+  };
+
+  private onVisibility = (): void => {
+    if (document.visibilityState === 'visible') this.probe();
+  };
+
+  private ping(): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || this.pongTimer !== null) return;
+    try {
+      socket.send(PING_FRAME);
+    } catch {
+      this.replaceSocket();
+      return;
+    }
+    this.pongTimer = window.setTimeout(() => {
+      this.pongTimer = null;
+      if (this.socket === socket) this.replaceSocket();
+    }, PONG_DEADLINE_MS);
+  }
+
+  /** Any frame proves the socket is alive. */
+  private markAlive(): void {
+    if (this.pongTimer !== null) window.clearTimeout(this.pongTimer);
+    this.pongTimer = null;
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.markAlive();
+  }
+
+  /** Drop a socket that stopped answering without waiting for a close that may never come, and connect again. */
+  private replaceSocket(): void {
+    if (this.stopped) return;
+    const dead = this.socket;
+    this.socket = null;
+    this.stopHeartbeat();
+    if (dead) {
+      dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
+      try {
+        dead.close();
+      } catch {
+        /* already closing */
+      }
+    }
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.connect();
+  }
 
   /** Ref-counted log subscription; survives reconnects. */
   subscribeLogs(executionId: string): () => void {
@@ -135,13 +217,19 @@ export class RealtimeClient {
     socket.onopen = () => {
       const isReconnect = this.state.everConnected;
       this.setState({ status: 'open', everConnected: true, attempts: 0 });
+      this.stopHeartbeat();
+      this.heartbeatTimer = window.setInterval(() => {
+        if (document.visibilityState === 'visible') this.ping();
+      }, HEARTBEAT_MS);
       for (const executionId of this.logRefs.keys()) this.send({ type: 'subscribeLogs', executionId });
       for (const terminalId of this.terminalListeners.keys()) this.send({ type: 'subscribeTerminal', terminalId });
       this.onOpen(isReconnect);
     };
     socket.onmessage = (event) => {
+      this.markAlive();
       try {
-        const relayed = JSON.parse(String(event.data)) as RelayedServerMessage;
+        const relayed = JSON.parse(String(event.data)) as RelayedServerMessage | { type: 'pong' };
+        if (relayed.type === 'pong') return;
         if (this.routing) {
           if (relayed.type === 'remote.node' || relayed.type === 'remote.command') {
             // Only the cloud itself sends these; one relayed from a node (it carries a nodeId) is an impersonation attempt.
@@ -163,6 +251,7 @@ export class RealtimeClient {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
+      this.stopHeartbeat();
       if (!this.stopped) this.scheduleRetry();
     };
   }
@@ -170,6 +259,7 @@ export class RealtimeClient {
   private scheduleRetry(): void {
     const attempts = this.state.attempts + 1;
     this.setState({ status: 'closed', attempts });
+    this.routing?.onLinkFailure?.(attempts);
     const delay = Math.min(15_000, 1000 * 2 ** Math.min(attempts - 1, 4)) + Math.random() * 400;
     this.retryTimer = window.setTimeout(() => {
       this.retryTimer = null;

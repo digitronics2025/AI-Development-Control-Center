@@ -46,6 +46,8 @@ const refused = (s) => s === 302 || s === 401 || s === 403 || s === 503;
 await check('control /health', `https://${control}/health`, {}, (s) => s === 200 || s === 302);
 await check('relay /health', `https://${relay}/health`, {}, (s) => s === 200);
 await check('control dashboard without sign-in is refused', `https://${control}/`, {}, refused);
+// The installable-app manifest and icons sit behind sign-in like everything else (no bypass path).
+await check('control app manifest without sign-in is refused', `https://${control}/manifest.webmanifest`, {}, refused);
 await check('control API without sign-in is refused', `https://${control}/api/cloud/session`, {}, refused);
 await check('control realtime without sign-in is refused', `https://${control}/ws`, {}, refused);
 await check('control API with a forged token is refused', `https://${control}/api/tasks`, { headers: { 'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.eyJ9.e30' } }, refused);

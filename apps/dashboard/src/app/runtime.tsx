@@ -5,6 +5,7 @@ import { TASK_STATUS_LABEL, type ClientMessage, type CloudNodeView, type Relayed
 import { createApi, type Api } from '../api/client';
 import { keys } from '../api/keys';
 import { RealtimeClient, type ConnectionState } from '../api/realtime';
+import { SessionWatch, type SessionState } from '../api/session';
 import { CacheSync } from '../api/sync';
 import { NodeSelection, pickNode } from './mode';
 
@@ -46,6 +47,8 @@ interface RuntimeValue extends RuntimeConfig {
   realtime: RealtimeClient;
   /** Cloud mode only. */
   nodes: NodeSelection | null;
+  /** Cloud mode only: whether the Access sign-in still holds. */
+  session: SessionWatch | null;
 }
 
 const RuntimeContext = createContext<RuntimeValue | null>(null);
@@ -73,6 +76,15 @@ export function useSelectedNode(): { node: CloudNodeView | null; nodeId: string 
   const store = nodes ?? noop;
   const nodeId = useSyncExternalStore(store.subscribe, store.get, store.get);
   return { nodeId, node: list.data?.find((n) => n.id === nodeId) ?? null, select: (id) => store.select(id) };
+}
+
+const neverExpires = { get: (): SessionState => 'ok', subscribe: () => () => {} };
+
+/** Cloud mode: 'expired' once Cloudflare Access stopped accepting this page's sign-in. */
+export function useSessionState(): SessionState {
+  const { session } = useRuntime();
+  const store = session ?? neverExpires;
+  return useSyncExternalStore(store.subscribe, store.get, store.get);
 }
 
 export interface Connection extends ConnectionState {
@@ -142,7 +154,12 @@ export function RuntimeProvider({ config, children }: { config: RuntimeConfig; c
   const { announce } = useFeedback();
   const value = useMemo(() => {
     const nodes = config.mode === 'cloud' ? new NodeSelection() : null;
-    const api = createApi({ baseUrl: config.baseUrl, auth: nodes ? { kind: 'cloud', node: nodes.get } : { kind: 'local', token: config.token ?? '' } });
+    const session = config.mode === 'cloud' ? new SessionWatch() : null;
+    const api = createApi({
+      baseUrl: config.baseUrl,
+      auth: nodes ? { kind: 'cloud', node: nodes.get } : { kind: 'local', token: config.token ?? '' },
+      onAuthSuspect: session?.check,
+    });
     const sync = new CacheSync(qc, (taskId, title, status) => announce(`${taskId} ${title}: ${TASK_STATUS_LABEL[status as TaskStatus] ?? status}`));
     const routing = nodes
       ? {
@@ -150,6 +167,10 @@ export function RuntimeProvider({ config, children }: { config: RuntimeConfig; c
           accept: (m: RelayedServerMessage) => !m.nodeId || m.nodeId === nodes.get(),
           decorate: (m: ClientMessage) => ({ ...m, nodeId: nodes.get() ?? undefined }),
           onCloudMessage: (m: RelayedServerMessage) => applyCloudMessage(qc, m),
+          // One failed reconnect is a blip; a second may be Access refusing the upgrade.
+          onLinkFailure: (attempts: number) => {
+            if (attempts >= 2) session?.check();
+          },
         }
       : null;
     const realtime = new RealtimeClient(
@@ -161,7 +182,7 @@ export function RuntimeProvider({ config, children }: { config: RuntimeConfig; c
       },
       routing,
     );
-    return { ...config, api, realtime, nodes };
+    return { ...config, api, realtime, nodes, session };
   }, [config, qc, announce]);
 
   useEffect(() => {

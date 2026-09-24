@@ -41,8 +41,9 @@ import {
 import { useApprovals, useHealth, useSettings } from '../api/hooks';
 import { AskDrawerProvider, useAskLauncher } from '../components/ask';
 import { useCrumbs } from './breadcrumbs';
+import { PageErrorBoundary } from './PageErrorBoundary';
 import { useCommandRegistry } from './commands';
-import { useCloudNodes, useConnection, useRuntime, useSelectedNode } from './runtime';
+import { useCloudNodes, useConnection, useRuntime, useSelectedNode, useSessionState } from './runtime';
 
 interface NavItem {
   to: string;
@@ -316,8 +317,21 @@ function CloudConnectionBanner() {
   );
 }
 
+/** Cloud mode: Access stopped accepting the sign-in. Named for what it is, not as a network fault. */
+function SessionExpiredBanner() {
+  return (
+    <div className="px-4 pt-3 sm:px-5 md:px-6 xl:px-8">
+      <Banner tone="danger" role="alert" title="Your sign-in expired." actions={<Button size="compact" variant="primary" onClick={() => window.location.reload()}>Sign in again</Button>}>
+        Nothing on this page updates until you sign in again. Work already running on your machines continues.
+      </Banner>
+    </div>
+  );
+}
+
 function ConnectionBanner() {
   const connection = useConnection();
+  const session = useSessionState();
+  if (session === 'expired') return <SessionExpiredBanner />;
   if (connection.mode === 'cloud') return <CloudConnectionBanner />;
   if (connection.online || (!connection.everConnected && connection.attempts < 2)) return null;
   return (
@@ -405,9 +419,9 @@ export function Shell({ children }: { children: ReactNode }) {
         <TopBar showMenu={!showSidebar} onOpenNav={() => setMobileNavOpen(true)} />
         <ConnectionBanner />
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
-          <Suspense key={location.pathname} fallback={<PageFallback />}>
-            {children}
-          </Suspense>
+          <PageErrorBoundary key={location.pathname}>
+            <Suspense fallback={<PageFallback />}>{children}</Suspense>
+          </PageErrorBoundary>
         </main>
       </div>
       {!showSidebar ? (

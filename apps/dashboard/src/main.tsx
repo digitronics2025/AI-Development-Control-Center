@@ -3,10 +3,16 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { App, createQueryClient } from './app/App';
 import { detectMode, type RuntimeConfig } from './app/runtime';
+import { reloadOnceForNewVersion } from './app/reload';
 import { applyInitialTheme } from './app/theme';
 import './styles.css';
 
 applyInitialTheme('web');
+// A route chunk from before a release is gone: reload once for the new build; a repeat
+// failure reaches the page's error boundary, which offers Reload (app/reload.ts).
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnceForNewVersion()) event.preventDefault();
+});
 const root = document.getElementById('root')!;
 
 function render(config: RuntimeConfig): void {

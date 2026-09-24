@@ -9,6 +9,18 @@
   "engines": {
     "vscode": "^1.95.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The orchestrator path, data folder and auto-start are machine settings: a workspace cannot choose what this extension runs.",
+      "restrictedConfigurations": [
+        "acc.dataDirectory",
+        "acc.orchestratorPath",
+        "acc.autoStart"
+      ]
+    },
+    "virtualWorkspaces": false
+  },
   "categories": [
     "Other"
   ],
@@ -118,17 +130,20 @@
         "acc.dataDirectory": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Orchestrator data folder holding `runtime.json` and `auth-token`. Empty uses the default (`%LOCALAPPDATA%\\AIDevControlCenter` on Windows)."
+          "markdownDescription": "Orchestrator data folder holding `runtime.json` and `auth-token`. Empty uses the default (`%LOCALAPPDATA%\\AIDevControlCenter` on Windows).",
+          "scope": "machine"
         },
         "acc.orchestratorPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the orchestrator's `dist/main.js`, used by **Start Orchestrator**. Empty looks next to this extension in the repository checkout."
+          "markdownDescription": "Path to the orchestrator's `dist/main.js`, used by **Start Orchestrator**. Empty looks next to this extension in the repository checkout.",
+          "scope": "machine"
         },
         "acc.autoStart": {
           "type": "boolean",
           "default": false,
-          "description": "Start the orchestrator automatically when VS Code opens and it is not running."
+          "description": "Start the orchestrator automatically when VS Code opens and it is not running.",
+          "scope": "machine"
         },
         "acc.notifications": {
           "type": "boolean",

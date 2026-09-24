@@ -51,6 +51,9 @@ class ControlCenter implements vscode.Disposable {
       this.scheduleRediscovery();
       return false;
     }
+    // Connected: a rediscovery still pending from an earlier attempt would reconnect for nothing.
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     this.stream = new EventStream(this.discovery!, (m) => this.onMessage(m), (connected) => {
       this.connected = connected;
       if (connected) void this.refresh();

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import path from 'node:path';
 import * as vscode from 'vscode';
 import type { ApiClient, Discovery } from './connection';
+import { registeredFile, registeredRoot } from './paths';
 
 type HostMessage =
   | { type: 'openFile'; repositoryPath: string; path: string }
@@ -56,9 +56,10 @@ function untitled(content: string, language: string): Thenable<vscode.TextEditor
 export async function handleHostMessage(webview: vscode.Webview, api: ApiClient, message: HostMessage): Promise<void> {
   switch (message.type) {
     case 'openFile': {
-      const target = path.resolve(message.repositoryPath, message.path);
-      if (!target.startsWith(path.resolve(message.repositoryPath))) return;
-      await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: true });
+      // The WebView names both the folder and the file, so the folder must be one the
+      // orchestrator registered, and the file must stay inside it (audit F-48).
+      const target = await registeredFile(api, message.repositoryPath, message.path);
+      if (target) await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: true });
       return;
     }
     case 'openDiff': {
@@ -82,9 +83,11 @@ export async function handleHostMessage(webview: vscode.Webview, api: ApiClient,
       await untitled(diff || 'No changes in this file.', 'diff');
       return;
     }
-    case 'revealRepository':
-      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.resolve(message.repositoryPath)));
+    case 'revealRepository': {
+      const root = await registeredRoot(api, message.repositoryPath);
+      if (root) await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(root));
       return;
+    }
     case 'openArtifact': {
       const { content } = await api.request<{ content: string }>('GET', `/api/artifacts/${encodeURIComponent(message.artifactId)}/content`);
       await untitled(content, message.name.endsWith('.md') ? 'markdown' : message.name.endsWith('.json') ? 'json' : message.name.endsWith('.patch') ? 'diff' : 'plaintext');

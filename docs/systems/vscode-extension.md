@@ -17,7 +17,13 @@ Reads `runtime.json` and `auth-token` from the data folder (setting
 `acc.dataDirectory`, default `%LOCALAPPDATA%\AIDevControlCenter`); only loopback
 URLs are accepted. If the orchestrator is not running it re-checks every 10 s;
 **Start Orchestrator** launches `apps/orchestrator/dist/main.js` (or
-`acc.orchestratorPath`) detached. `acc.autoStart` does that on startup.
+`acc.orchestratorPath`) detached. `acc.autoStart` does that on startup. A
+successful connect cancels any pending re-check.
+
+Those three settings decide what the extension runs, so they are
+`"scope": "machine"`: only the user's own settings can set them, never a
+workspace's `.vscode/settings.json` (as VS Code does for `git.path`).
+`capabilities.untrustedWorkspaces` is `limited` and lists them as restricted.
 
 ## Surfaces
 
@@ -27,13 +33,16 @@ URLs are accepted. If the orchestrator is not running it re-checks every 10 s;
 - **Commands**: Open Control Center, New Task, Pause/Resume, Cancel (modal confirm), Add Directive, Retry Stage, Reroute, Open Logs/Artifacts/Diff, Review Approvals, Start Orchestrator, Reconnect.
 - **URI**: `vscode://digitronics2025.acc-vscode/open?route=/tasks/TASK-0001`.
 
-The WebView posts `openDiff`, `openArtifact`, `openFile` and
-`pickRepositoryFolder` to the host, which opens real editors / the native
+The WebView posts `openDiff`, `openArtifact`, `openFile`, `openExternal`
+(http/https only) and `pickRepositoryFolder` to the host, which opens real editors / the native
 folder picker; the host sends `navigate` to change route without reloading.
 
 Source Control runs in the same WebView page. Host messages
 `openSourceControlDiff` and `openCommitDiff` open the orchestrator's (redacted,
-bounded) diff in an editor tab; `revealRepository` reveals the folder. VS Code's
+bounded) diff in an editor tab; `revealRepository` reveals the folder.
+`openFile` and `revealRepository` act only on a folder the orchestrator lists
+in `/api/repositories`, and `openFile` only on a file inside it
+([paths.ts](../../apps/vscode-extension/src/paths.ts)): the WebView names both. VS Code's
 own SCM API is not used as a second source of truth.
 
 ## Tests

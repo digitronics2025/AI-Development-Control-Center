@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Role, TaskSummary } from '@acc/shared';
 import { discover } from '../src/connection';
+import { registeredFile, registeredRoot } from '../src/paths';
 import { deriveStatus, shortAgentName } from '../src/status';
 
 const base: TaskSummary = {
@@ -87,5 +88,20 @@ describe('discover', () => {
     writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify({ url: 'http://evil.example.com:4317' }));
     writeFileSync(path.join(dir, 'auth-token'), 'tok');
     expect(discover(dir)).toBeNull();
+  });
+});
+
+describe('openFile confinement (audit F-48)', () => {
+  const root = path.join(os.tmpdir(), 'acc-registered');
+  const api = { request: async <T>() => [{ path: root }] as T };
+  it('opens only files inside a registered repository', async () => {
+    expect(await registeredFile(api, root, 'src/a.ts')).toBe(path.join(root, 'src', 'a.ts'));
+    expect(await registeredFile(api, root, '../outside.txt')).toBeNull();
+    expect(await registeredFile(api, root, path.join(os.tmpdir(), 'elsewhere.txt'))).toBeNull();
+    // A sibling folder that shares the prefix was accepted by the old startsWith check.
+    expect(await registeredFile(api, `${root}-evil`, 'x.txt')).toBeNull();
+    expect(await registeredFile(api, os.homedir(), '.ssh/id_rsa')).toBeNull();
+    expect(await registeredRoot(api, root)).toBe(path.resolve(root));
+    expect(await registeredRoot(api, os.homedir())).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { taskWorkdir } from '../engine/workdir.js';
+import { inFolder, taskRepositories } from '../engine/task-repositories.js';
 import { changesSince } from '@acc/git';
 import { redact } from '@acc/security';
 import {
@@ -122,7 +122,7 @@ export class Chairman implements SupervisorHooks {
       version: 1,
       goal: `${task.title}\n\n${task.description}`.slice(0, 20_000),
       successCriteria: criteria,
-      scope: { repository: repo?.name ?? task.repositoryId, workflow: task.workflow.name },
+      scope: { repository: taskRepositories(this.d.store, task).map((u) => u.repo.name).join(', ') || (repo?.name ?? task.repositoryId), workflow: task.workflow.name },
       autonomyMode: task.mode === 'autopilot' ? 'FULL_AUTOPILOT' : 'DISCUSS_FIRST',
       constraints: [],
       reason: 'Task created',
@@ -594,14 +594,16 @@ export class Chairman implements SupervisorHooks {
   // ===========================================================================
 
   async gate(task: TaskRecord): Promise<GateResult> {
-    const repo = this.d.store.getRepository(task.repositoryId);
-    const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
+    const units = taskRepositories(this.d.store, task);
     let taskFiles: string[] | null = null;
-    if (repo && baseline) {
+    for (const unit of units) {
+      const baseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
+      if (!baseline) continue;
       try {
-        taskFiles = (await changesSince(taskWorkdir(task, repo), baseline)).filter((f) => f.origin !== 'preexisting').map((f) => f.path);
+        const files = (await changesSince(unit.workdir, baseline)).filter((f) => f.origin !== 'preexisting').map((f) => inFolder(units.length > 1 ? unit.folder : null, f.path));
+        taskFiles = [...(taskFiles ?? []), ...files];
       } catch {
-        taskFiles = null;
+        /* unreadable: counted as unknown only when no repository could be read */
       }
     }
     return completionGate({
@@ -610,7 +612,8 @@ export class Chairman implements SupervisorHooks {
       testRuns: this.d.store.listTestRuns(task.id),
       activeDirectives: activeDirectives(this.d.store.listDirectives(task.id)),
       taskFiles,
-      configuredKinds: new Set((repo?.commands ?? []).filter((c) => c.enabled).map((c) => c.kind)),
+      // Across repositories a check kind is available when any of them configures it.
+      configuredKinds: new Set(units.flatMap((u) => u.repo.commands).filter((c) => c.enabled).map((c) => c.kind)),
     });
   }
 

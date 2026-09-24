@@ -7,7 +7,9 @@ import { EngineError } from '../engine/engine.js';
 import type { Publisher } from '../engine/publisher.js';
 import type { RepositoryService } from '../services/repositories.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
+import { agentWorkdir, taskRepositories, type TaskRepository } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
+import type { TaskCheckpointPart } from '@acc/shared';
 import type { CheckpointRecord, ChairmanStore } from './store.js';
 
 export type CheckpointReason = 'before-stage' | 'recovery-pivot' | 'user' | 'before-rollback';
@@ -36,8 +38,69 @@ export class CheckpointService {
     return (await isGitRepository(cwd)) ? cwd : null;
   }
 
+  /** A task across repositories: every repository with a baseline, primary first; null for a single-repository task. */
+  private workspaceUnits(task: TaskRecord): TaskRepository[] | null {
+    const units = taskRepositories(this.store, task);
+    if (units.length <= 1) return null;
+    return units.filter((u) => u.git.baselineSnapshotId);
+  }
+
+  /** Where a database checkpoint's file must be: the task workspace across repositories, else the working directory. */
+  private async databaseRoot(task: TaskRecord): Promise<string | null> {
+    const units = this.workspaceUnits(task);
+    if (!units) return this.repoPath(task);
+    const repo = this.store.getRepository(task.repositoryId);
+    return units.length && repo ? agentWorkdir(task, repo) : null;
+  }
+
+  /**
+   * One checkpoint across every repository of the task, under the same ref
+   * name in each. If one repository cannot be checkpointed, the refs already
+   * made are deleted again and the error is thrown: a checkpoint is all or
+   * nothing.
+   */
+  private async createAcross(task: TaskRecord, units: TaskRepository[], opts: { label: string; reason: CheckpointReason; stageKey?: string | null }): Promise<CheckpointRecord | null> {
+    if (!units.length) return null;
+    const seq = this.chairman.nextCheckpointSeq(task.id);
+    const ref = `refs/acc/checkpoints/${task.id}/${seq}`;
+    const parts: TaskCheckpointPart[] = [];
+    try {
+      for (const u of units) {
+        const cp = await createCheckpoint(u.workdir, ref, `${task.id} checkpoint ${seq}: ${opts.label}`);
+        parts.push({ repositoryId: u.repo.id, folder: u.folder, ref, commit: cp.commit, head: cp.head });
+      }
+    } catch (error) {
+      for (const p of parts) {
+        const u = units.find((x) => x.repo.id === p.repositoryId)!;
+        await deleteRefs(u.repo.path, ref).catch(() => undefined);
+      }
+      throw error;
+    }
+    const metadata = await checkpointMetadata(units[0]!.workdir).catch(() => ({}));
+    const rec = this.chairman.insertCheckpoint({
+      type: 'git',
+      metadata,
+      parts,
+      id: newId(),
+      taskId: task.id,
+      seq,
+      label: redact(opts.label).slice(0, 120),
+      reason: opts.reason,
+      commit: parts[0]!.commit,
+      ref,
+      head: parts[0]!.head,
+      stageKey: opts.stageKey ?? null,
+      createdAt: now(),
+    });
+    this.bus.publish({ type: 'checkpoint', checkpoint: rec });
+    this.publisher.event(task.id, 'CHECKPOINT_CREATED', `Checkpoint ${seq}: ${rec.label} (${parts.length} repositories)`, { checkpointId: rec.id, seq, reason: opts.reason });
+    return rec;
+  }
+
   /** Null when the task has no Git baseline yet (nothing it could have changed). */
   async create(task: TaskRecord, opts: { label: string; reason: CheckpointReason; stageKey?: string | null }): Promise<CheckpointRecord | null> {
+    const units = this.workspaceUnits(task);
+    if (units) return this.createAcross(task, units, opts);
     const cwd = await this.repoPath(task);
     if (!cwd) return null;
     const seq = this.chairman.nextCheckpointSeq(task.id);
@@ -69,7 +132,7 @@ export class CheckpointService {
    * restored only into the same file.
    */
   async createDatabase(task: TaskRecord, file: string, label: string, dataDir: string): Promise<CheckpointRecord | null> {
-    const cwd = await this.repoPath(task);
+    const cwd = await this.databaseRoot(task);
     if (!cwd) return null;
     const absolute = path.resolve(cwd, file);
     if (!absolute.startsWith(path.resolve(cwd) + path.sep)) throw new EngineError('The database must be inside the task working directory', 'INVALID_INPUT');
@@ -115,7 +178,7 @@ export class CheckpointService {
   }
 
   async restore(task: TaskRecord, checkpointId?: string): Promise<{ checkpoint: CheckpointRecord; result: RestoreResult }> {
-    const cwd = await this.repoPath(task);
+    const cwd = this.workspaceUnits(task) ? await this.databaseRoot(task) : await this.repoPath(task);
     if (!cwd) throw new EngineError('Rollback needs a Git repository and a recorded baseline; this task has neither.', 'INVALID_STATE');
     const target = checkpointId ? this.chairman.checkpoint(checkpointId) : this.lastChangeTarget(task);
     if (!target || target.taskId !== task.id) throw new EngineError(checkpointId ? 'Checkpoint not found' : 'There is no checkpoint before the last change to roll back to.', checkpointId ? 'NOT_FOUND' : 'INVALID_STATE');
@@ -129,6 +192,8 @@ export class CheckpointService {
       return { checkpoint: target, result: { restored: [file], removed: [], skipped: [] } };
     }
     if (target.type === 'deployment') throw new EngineError('Deployment checkpoints record the live version; roll a deployment back with an approved deploy of that version.', 'INVALID_STATE');
+    const units = this.workspaceUnits(task);
+    if (units) return this.restoreAcross(task, units, target);
     const head = await headCommit(cwd);
     if (head !== target.head) {
       throw new EngineError(`Rollback refused: the branch has new commits since checkpoint ${target.seq}, and rolling back across a commit could lose work. Revert that commit instead.`, 'INVALID_STATE');
@@ -147,14 +212,60 @@ export class CheckpointService {
     return { checkpoint: target, result };
   }
 
+  /**
+   * Restore every repository of a task to one checkpoint, all or nothing:
+   * refused when any repository has new commits since; the current state of
+   * all of them is checkpointed first; and if one repository fails part-way,
+   * the ones already restored are put back from that checkpoint.
+   */
+  private async restoreAcross(task: TaskRecord, units: TaskRepository[], target: CheckpointRecord): Promise<{ checkpoint: CheckpointRecord; result: RestoreResult }> {
+    const parts = target.parts ?? [];
+    const pairs = parts.map((p) => ({ part: p, unit: units.find((u) => u.repo.id === p.repositoryId) }));
+    const missing = pairs.find((p) => !p.unit);
+    if (!parts.length || missing) throw new EngineError(`Checkpoint ${target.seq} does not cover every repository of this task, so it cannot be restored across them.`, 'INVALID_STATE');
+    for (const { part, unit } of pairs) {
+      if ((await headCommit(unit!.workdir)) !== part.head) {
+        throw new EngineError(`Rollback refused: ${unit!.repo.name} has new commits since checkpoint ${target.seq}, and rolling back across a commit could lose work. Revert that commit instead.`, 'INVALID_STATE');
+      }
+    }
+    const safety = await this.createAcross(task, units, { label: `Before rolling back to checkpoint ${target.seq}`, reason: 'before-rollback', stageKey: task.currentStageKey });
+    const result: RestoreResult = { restored: [], removed: [], skipped: [] };
+    const done: TaskRepository[] = [];
+    for (const { part, unit } of pairs) {
+      try {
+        const r = await restoreCheckpoint(unit!.workdir, part.commit, () => true);
+        const label = (p: string) => (unit!.folder ? `${unit!.folder}/${p}` : p);
+        result.restored.push(...r.restored.map(label));
+        result.removed.push(...r.removed.map(label));
+        result.skipped.push(...r.skipped.map(label));
+        done.push(unit!);
+      } catch (error) {
+        for (const u of done) {
+          const back = safety?.parts?.find((p) => p.repositoryId === u.repo.id);
+          if (back) await restoreCheckpoint(u.workdir, back.commit, () => true).catch(() => undefined);
+        }
+        throw new EngineError(`Rollback of ${unit!.repo.name} failed (${redact((error as Error).message).slice(0, 200)}); the repositories already rolled back were put back as they were.`, 'INVALID_STATE');
+      }
+    }
+    this.publisher.event(
+      task.id,
+      'ROLLBACK_COMPLETED',
+      `Rolled back ${units.length} repositories to checkpoint ${target.seq} (${target.label}): ${result.restored.length} restored, ${result.removed.length} removed`,
+      { checkpointId: target.id, ...result },
+    );
+    for (const u of units) this.repositories.invalidate(u.repo.id);
+    return { checkpoint: target, result };
+  }
+
   /** Drop the hidden refs once the task is finished; the rows stay as history. */
   async prune(task: TaskRecord): Promise<void> {
-    const repo = this.store.getRepository(task.repositoryId);
-    if (!repo || !this.chairman.listCheckpoints(task.id).some((c) => (c.type ?? 'git') === 'git')) return;
-    try {
-      await deleteRefs(repo.path, `refs/acc/checkpoints/${task.id}/`);
-    } catch {
-      /* repository moved or deleted: nothing to clean */
+    if (!this.chairman.listCheckpoints(task.id).some((c) => (c.type ?? 'git') === 'git')) return;
+    for (const unit of taskRepositories(this.store, task)) {
+      try {
+        await deleteRefs(unit.repo.path, `refs/acc/checkpoints/${task.id}/`);
+      } catch {
+        /* repository moved or deleted: nothing to clean */
+      }
     }
   }
 }

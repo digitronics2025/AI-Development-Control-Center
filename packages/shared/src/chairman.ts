@@ -276,6 +276,16 @@ export interface TaskCheckpoint {
   type?: 'git' | 'database' | 'deployment';
   /** Branch, Git status, changed files, lockfile hashes, backup location… (no secrets, no file contents). */
   metadata?: Record<string, unknown>;
+  /** A task across repositories: one Git checkpoint per repository, primary first (`commit`/`head` above are the primary's). */
+  parts?: TaskCheckpointPart[] | null;
+}
+
+export interface TaskCheckpointPart {
+  repositoryId: string;
+  folder: string | null;
+  ref: string;
+  commit: string;
+  head: string | null;
 }
 
 export interface ChairmanOverview {

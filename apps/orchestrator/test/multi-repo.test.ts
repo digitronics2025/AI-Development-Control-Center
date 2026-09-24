@@ -391,3 +391,59 @@ describe('git cwd where user work is protected', () => {
     expect((await status.run(status.input.parse({ cwd: '..' }), ctx)).error?.code).toBe('OUTSIDE_ROOT');
   });
 });
+
+describe('checkpoints across repositories', () => {
+  it('checkpoints and restores every repository together, and refuses when one has new commits', async () => {
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { git } = await import('@acc/git');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Checkpoint both [sim:needs-decision]', { linkedRepositoryIds: [web], workflowId: 'quick-change', supervised: false });
+    await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+    const task = t.services.store.getTask(id)!;
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    const apiDir = task.git.worktreePath!;
+    const webDir = linked.git.worktreePath!;
+    writeFileSync(path.join(apiDir, 'a.txt'), 'api one\n');
+    writeFileSync(path.join(webDir, 'a.txt'), 'web one\n');
+    const cps = t.services.chairman.checkpoints;
+    const cp = (await cps.create(task, { label: 'one', reason: 'user' }))!;
+    expect(cp.parts?.map((p) => p.repositoryId)).toEqual([api, web]);
+    expect((await git(webDir, ['rev-parse', '--verify', cp.ref])).code).toBe(0);
+
+    writeFileSync(path.join(apiDir, 'a.txt'), 'api two\n');
+    writeFileSync(path.join(webDir, 'a.txt'), 'web two\n');
+    writeFileSync(path.join(webDir, 'b.txt'), 'new\n');
+    const { result } = await cps.restore(t.services.store.getTask(id)!, cp.id);
+    expect(readFileSync(path.join(apiDir, 'a.txt'), 'utf8')).toBe('api one\n');
+    expect(readFileSync(path.join(webDir, 'a.txt'), 'utf8')).toBe('web one\n');
+    expect(result.removed).toContain(`${linked.folder}/b.txt`);
+
+    // A commit in one repository since the checkpoint: refused, nothing touched.
+    writeFileSync(path.join(apiDir, 'a.txt'), 'api three\n');
+    await git(webDir, ['add', 'a.txt']);
+    await git(webDir, ['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-m', 'moved on']);
+    await expect(cps.restore(t.services.store.getTask(id)!, cp.id)).rejects.toThrow(/has new commits since checkpoint/);
+    expect(readFileSync(path.join(apiDir, 'a.txt'), 'utf8')).toBe('api three\n');
+
+    await cps.prune(t.services.store.getTask(id)!);
+    expect((await git(webDir, ['rev-parse', '--verify', '--quiet', cp.ref])).code).not.toBe(0);
+    expect((await git(apiDir, ['rev-parse', '--verify', '--quiet', cp.ref])).code).not.toBe(0);
+  }, 120_000);
+});
+
+describe('Chairman evidence across repositories', () => {
+  it('labels each repository’s paths with its folder, longest path first', async () => {
+    const { scrubRoots } = await import('../src/chairman/evidence.js');
+    const text = 'C:/data/workspaces/TASK-0001/web/src/a.ts failed; see C:/data/workspaces/TASK-0001/notes and C:/code/api/x.ts';
+    const out = scrubRoots(text, [
+      { path: 'C:/data/workspaces/TASK-0001', label: '<workspace>' },
+      { path: 'C:/data/workspaces/TASK-0001/web', label: '<repo:web>' },
+      { path: 'C:/code/api', label: '<repo:api>' },
+    ]);
+    expect(out).toBe('<repo:web>/src/a.ts failed; see <workspace>/notes and <repo:api>/x.ts');
+    expect(scrubRoots('at C:/code/api/x.ts', ['C:/code/api'])).toBe('at <repo>/x.ts');
+  });
+});

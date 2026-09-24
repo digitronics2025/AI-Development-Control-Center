@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { changesSince } from '@acc/git';
 import { redact } from '@acc/security';
 import { FAILURE_CATEGORY_LABEL, STRATEGY_OUTCOME_LABEL, type ChangedFile, type FailureCategory, type RecoveryAttempt, type ToolExecution } from '@acc/shared';
+import { inFolder, taskRepositories } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
@@ -235,7 +236,16 @@ export class ChairmanEvidenceService {
     };
   }
 
-  private roots(task: TaskRecord): string[] {
+  private roots(task: TaskRecord): Array<string | { path: string; label: string }> {
+    // Only a task across repositories has a workspace (while its worktrees exist, which is when paths can appear).
+    const units = task.git.workspacePath ? taskRepositories(this.d.store, task) : [];
+    if (units.length > 1) {
+      // Each repository keeps its own label, so the model can tell them apart.
+      return [
+        ...units.flatMap((u) => [u.git.worktreePath, u.repo.path].filter((p): p is string => Boolean(p)).map((p) => ({ path: p, label: `<repo:${u.folder}>` }))),
+        ...(task.git.workspacePath ? [{ path: task.git.workspacePath, label: '<workspace>' }] : []),
+      ];
+    }
     const repo = this.d.store.getRepository(task.repositoryId);
     return [task.git.worktreePath, repo?.path].filter((p): p is string => Boolean(p));
   }
@@ -352,18 +362,29 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Absolute repository paths become `<repo>`: the model needs relative names, not this machine's layout. */
-export function scrubRoots(text: string, roots: string[]): string {
+/** Absolute repository paths become `<repo>` (or their own label): the model needs relative names, not this machine's layout. */
+export function scrubRoots(text: string, roots: Array<string | { path: string; label: string }>): string {
   let out = text;
-  for (const root of [...roots].sort((a, b) => b.length - a.length)) {
-    const parts = root.replace(/[\\/]+$/, '').split(/[\\/]+/).map(escapeRegExp);
-    out = out.replace(new RegExp(parts.join('[\\\\/]+'), 'gi'), '<repo>');
+  const all = roots.map((r) => (typeof r === 'string' ? { path: r, label: '<repo>' } : r));
+  for (const root of all.sort((a, b) => b.path.length - a.path.length)) {
+    const parts = root.path.replace(/[\\/]+$/, '').split(/[\\/]+/).map(escapeRegExp);
+    out = out.replace(new RegExp(parts.join('[\\\\/]+'), 'gi'), root.label);
   }
   return out;
 }
 
 function defaultChangedFiles(store: Store) {
   return async (task: TaskRecord): Promise<ChangedFile[] | null> => {
+    const units = taskRepositories(store, task);
+    if (units.length > 1) {
+      // Every repository's changes, paths under its folder.
+      const out: ChangedFile[] = [];
+      for (const u of units) {
+        const baseline = u.git.baselineSnapshotId ? store.getSnapshot(u.git.baselineSnapshotId) : null;
+        if (baseline) out.push(...(await changesSince(u.workdir, baseline)).map((f) => ({ ...f, path: inFolder(u.folder, f.path), repositoryId: u.repo.id })));
+      }
+      return out;
+    }
     const repo = store.getRepository(task.repositoryId);
     const baseline = task.git.baselineSnapshotId ? store.getSnapshot(task.git.baselineSnapshotId) : null;
     if (!repo || !baseline) return null;

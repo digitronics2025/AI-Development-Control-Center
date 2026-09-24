@@ -15,6 +15,7 @@ import type { Bus } from '../bus.js';
 import { EngineError, type TaskEngine } from '../engine/engine.js';
 import type { Publisher } from '../engine/publisher.js';
 import type { RunControl } from '../engine/runners.js';
+import { taskRepositories } from '../engine/task-repositories.js';
 import type { TaskViews } from '../engine/views.js';
 import type { Store, TaskRecord } from '../store/store.js';
 import type { CheckpointService } from './checkpoints.js';
@@ -238,8 +239,9 @@ export class ActionGateway {
     return Boolean(def && def.permissionLevel >= 2);
   }
 
+  /** Check kinds any repository of the task configures. */
   private configuredKinds(task: TaskRecord): Set<CommandKind> {
-    return new Set((this.d.store.getRepository(task.repositoryId)?.commands ?? []).filter((c) => c.enabled).map((c) => c.kind));
+    return new Set(taskRepositories(this.d.store, task).flatMap((u) => u.repo.commands).filter((c) => c.enabled).map((c) => c.kind));
   }
 
   private async apply(task: TaskRecord, action: ChairmanActionRequest, ctx: ActionContext): Promise<string> {

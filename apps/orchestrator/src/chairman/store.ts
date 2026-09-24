@@ -173,6 +173,13 @@ const toCheckpoint = (r: Row): CheckpointRecord => ({
   stageKey: r.stage_key,
   createdAt: r.created_at,
   type: r.type ?? 'git',
+  parts: (() => {
+    try {
+      return r.parts ? (JSON.parse(r.parts) as CheckpointRecord['parts']) : null;
+    } catch {
+      return null;
+    }
+  })(),
   metadata: (() => {
     try {
       return JSON.parse(r.metadata ?? '{}') as Record<string, unknown>;
@@ -481,8 +488,8 @@ export class ChairmanStore {
 
   insertCheckpoint(c: CheckpointRecord): CheckpointRecord {
     this.db
-      .prepare('INSERT INTO task_checkpoints (id, task_id, seq, label, reason, commit_hash, ref, head, stage_key, created_at, type, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(c.id, c.taskId, c.seq, c.label, c.reason, c.commit, c.ref, c.head, c.stageKey, c.createdAt, c.type ?? 'git', JSON.stringify(c.metadata ?? {}));
+      .prepare('INSERT INTO task_checkpoints (id, task_id, seq, label, reason, commit_hash, ref, head, stage_key, created_at, type, metadata, parts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(c.id, c.taskId, c.seq, c.label, c.reason, c.commit, c.ref, c.head, c.stageKey, c.createdAt, c.type ?? 'git', JSON.stringify(c.metadata ?? {}), c.parts?.length ? JSON.stringify(c.parts) : null);
     return c;
   }
 

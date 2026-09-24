@@ -28,6 +28,35 @@ describe('local service security', () => {
     expect(bad.statusCode).toBe(401);
   });
 
+  it('decides the token check on the path the router matches, not the raw request line (audit F-01)', async () => {
+    const host = { host: '127.0.0.1:4317' };
+    for (const url of ['/%61pi/tasks', '/%61pi/settings', '/api%2Ftasks', '//api/tasks', '/API/tasks', '/%61pi/tool-session/../tasks', '/%61pi/connected-app/../../api/tasks']) {
+      const res = await t.app.inject({ method: 'GET', url, headers: host });
+      expect([401, 400], url).toContain(res.statusCode);
+    }
+    expect((await t.app.inject({ method: 'GET', url: '/%E0%A4%A', headers: host })).statusCode).toBe(400);
+    // Encoded paths still work for a caller that has the token.
+    expect((await t.api('GET', '/%61pi/tasks')).status).toBe(200);
+  });
+
+  it('refuses a WebSocket upgrade to an encoded /ws path without the token (audit F-01)', async () => {
+    await t.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (t.app.server.address() as { port: number }).port;
+    const status = (path: string) =>
+      new Promise<number>((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+        ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+        ws.on('open', () => {
+          ws.close();
+          resolve(101);
+        });
+        ws.on('error', () => resolve(0));
+      });
+    expect(await status('/%77s')).toBe(401);
+    expect(await status('/w%73?token=nope')).toBe(401);
+    expect(await status(`/%77s?token=${TOKEN}`)).toBe(101);
+  });
+
   it('rejects non-loopback Host headers (DNS rebinding)', async () => {
     const res = await t.api('GET', '/api/tasks', undefined, { host: 'evil.example.com' });
     expect(res.status).toBe(421);

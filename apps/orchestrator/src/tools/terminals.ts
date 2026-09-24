@@ -24,6 +24,8 @@ export class TerminalError extends Error {
  */
 export class TerminalService {
   private readonly manager = new PtyManager({ maxSessions: 12 });
+  /** What an agent has typed on the current line of each of its terminals, not yet run. */
+  private readonly agentLines = new Map<string, string>();
 
   constructor(
     private readonly store: ToolStore,
@@ -82,11 +84,49 @@ export class TerminalService {
     this.session(id).write(data);
   }
 
-  /** Agent input: each line is classified; anything above Level 2 is refused. */
+  /**
+   * Agent input. The shell runs a line when Enter arrives, so the line is
+   * judged then — assembled from every chunk the agent sent, not chunk by chunk
+   * (audit F-15). Characters are typed as they come; at Enter a refused line is
+   * cancelled with Ctrl+C instead. Escape sequences and Tab are dropped: history
+   * recall and completion would change the line without the classifier seeing
+   * it. A program reading its own input (a REPL) is typed into the same way.
+   */
   writeAsAgent(id: string, data: string, maxLevel: number): void {
-    const c = classifyCommand(data);
-    if (c.risk === 'dangerous' || c.level > maxLevel) throw new TerminalError(`Refused to type this into the terminal: ${c.reasons.join(', ')} (Level ${c.level})`, 'DENIED');
-    this.session(id).write(data);
+    const session = this.session(id);
+    let line = this.agentLines.get(id) ?? '';
+    let out = '';
+    // eslint-disable-next-line no-control-regex
+    const clean = data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]|\x1b/g, '').replace(/\t/g, '');
+    for (const ch of clean) {
+      if (ch === '\r' || ch === '\n') {
+        const c = line.trim() ? classifyCommand(line.trim()) : null;
+        if (c && (c.risk === 'dangerous' || c.level > maxLevel)) {
+          this.agentLines.set(id, '');
+          session.write(`${out}\x03`);
+          throw new TerminalError(`Refused to run this line in the terminal: ${c.reasons.join(', ')} (Level ${c.level}). It was cancelled with Ctrl+C.`, 'DENIED');
+        }
+        line = '';
+        out += '\r';
+        continue;
+      }
+      if (ch === '\x03') {
+        line = '';
+        out += ch;
+        continue;
+      }
+      if (ch === '\x7f' || ch === '\b') {
+        line = Array.from(line).slice(0, -1).join('');
+        out += ch;
+        continue;
+      }
+      if (ch < ' ') continue;
+      line += ch;
+      out += ch;
+    }
+    if (line.length > 20_000) throw new TerminalError('The line is too long to type', 'DENIED');
+    this.agentLines.set(id, line);
+    if (out) session.write(out);
   }
 
   read(id: string, since = 0) {

@@ -36,8 +36,11 @@ package, `allowBuilds` only runs its prebuild check).
   Output (`terminal.output`) goes only to subscribed clients and is never
   stored. `pty_sessions` keeps status rows only; rows left running by a crash
   are marked exited at startup.
-- Agent input (`terminal.send`) is classified like a command and refused when
-  dangerous or above the stage level.
+- Agent input (`terminal.send`) is typed as it arrives and each line is
+  classified when Enter arrives — assembled from however many sends it took
+  ([terminals.ts](../../apps/orchestrator/src/tools/terminals.ts)). A line that is
+  dangerous or above the stage level is cancelled with Ctrl+C and the call fails
+  `DENIED`. Tab and escape sequences are dropped, as for the cloud's terminals.
 
 ## API
 
@@ -69,4 +72,4 @@ to the shell. See [remote-node.md](remote-node.md#terminals).
   list agent print "AttachConsole failed"; the bundled-DLL mode avoids the
   agent entirely.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

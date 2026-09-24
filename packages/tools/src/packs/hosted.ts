@@ -137,7 +137,7 @@ export function hostedProviders(): ToolProvider[] {
         operation({
           id: 'terminal.send',
           title: 'Type into a terminal',
-          description: 'Send input to a terminal. End a command with "\\n" (Enter). The text is classified like a command.',
+          description: 'Send input to a terminal. End a command with "\\n" (Enter). Each line is classified like a command when Enter arrives, however many sends it took; a refused line is cancelled with Ctrl+C. Tab and escape sequences are not typed.',
           input: z.object({ id: z.string().min(1).max(100), input: z.string().min(1).max(20_000) }),
           level: 2,
           classify: (input) => {

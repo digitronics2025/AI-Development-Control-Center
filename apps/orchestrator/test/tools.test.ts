@@ -333,6 +333,14 @@ describe('terminals', () => {
     const opened = await t.api('POST', '/api/terminals', { repositoryId: repoId });
     const id = opened.body.id as string;
     expect(() => t.services.terminals.writeAsAgent(id, 'Remove-Item -Recurse -Force C:\\work\r', 2)).toThrow(/Refused/);
+    // Audit F-15: split across sends, the line is still judged whole when Enter arrives.
+    expect(() => t.services.terminals.writeAsAgent(id, 'Remove-Item ', 2)).not.toThrow();
+    expect(() => t.services.terminals.writeAsAgent(id, '-Recurse -Force C:\\work', 2)).not.toThrow();
+    expect(() => t.services.terminals.writeAsAgent(id, '\r', 2)).toThrow(/Refused/);
+    // The refused line is cancelled, so the next one starts clean.
+    expect(() => t.services.terminals.writeAsAgent(id, 'Get-Location\r', 2)).not.toThrow();
+    // A history recall (up arrow) is not typed.
+    expect(() => t.services.terminals.writeAsAgent(id, '\x1b[A\r', 2)).not.toThrow();
     await t.api('DELETE', `/api/terminals/${id}`);
   }, 60_000);
 });

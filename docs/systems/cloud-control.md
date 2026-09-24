@@ -198,7 +198,9 @@ loses no work; restoring an older D1 makes the node resend everything
 `pnpm cloud:test`: the real Workers runtime (`wrangler dev --local`, local
 D1/R2/DO) with a test Access key set and the real orchestrator as the node —
 `auth`, `nodes`, `commands`, `objects`, `features`, `load`, `uploads`
-([test/](../../apps/cloud-control/test/)). `pnpm e2e:cloud`: the cloud
+([test/](../../apps/cloud-control/test/)). Without a dashboard build (`pnpm check`
+on a fresh checkout) the harness serves a placeholder page through `--assets`
+instead of failing; the assets these tests touch are only the Worker's gate. `pnpm e2e:cloud`: the cloud
 dashboard in a browser against that Worker and a paired simulated-agent node,
 both themes, five viewports, axe
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)).

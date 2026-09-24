@@ -104,6 +104,12 @@ without asking for approval (`skipsForLackOfCommands`).
 
 - **Pause** cancels the running execution; the stage is PAUSED and re-runs on resume.
 - **Reroute** writes a stage override; if that stage is running it is stopped and re-run with the new agent in the same loop (no restart from zero — the prompt carries the previous attempt).
+  `applyToRole` also sets the role override; `applyToAgent` also moves every other
+  agent stage of the task still resolved to the stage's current agent (same
+  model, each stage keeps its effort unless one is given), and the `REROUTED`
+  event names them (`· also Review, Verify`). The dialog offers it whenever other
+  stages use that agent and ticks it by default when the blocker is `usage` or
+  `auth` — a provider out of credits would otherwise stop each of its stages in turn.
 - **Directives** are persisted immediately and applied when the next agent stage builds its prompt.
 - **Retry** re-queues the chosen stage; pending approvals are withdrawn.
 - **Redirect** (Chairman/chat): `redirect()` stops the running loop, waits for it

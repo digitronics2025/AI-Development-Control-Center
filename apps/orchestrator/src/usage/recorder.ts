@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { AgentExecutionResult, CapacityObservation, ProviderUsageCapabilities } from '@acc/agent-sdk';
 import { redact } from '@acc/security';
-import type { UsageBilling, UsageEventStatus } from '@acc/shared';
+import { blocksRuns, type AgentInfo, type UsageBilling, type UsageEventStatus } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { BudgetService } from './budgets.js';
 import type { CapacityStore } from './capacity.js';
@@ -33,6 +33,8 @@ export interface UsageMeter {
   finished(dispatch: UsageDispatch | null, result: AgentExecutionResult): void;
   /** The run's completion promise rejected; the attempt is recorded with unknown usage. */
   aborted(dispatch: UsageDispatch | null, error: unknown): void;
+  /** A fresh reading that says this agent cannot run now (e.g. out of credits), or null. Fails open. */
+  capacityBlock(agentId: string): AgentInfo['capacityBlock'];
 }
 
 interface SpooledWrite {
@@ -104,6 +106,16 @@ export class UsageRecorder implements UsageMeter {
     } catch (error) {
       // A broken budget engine must not stop work: warn and let the run go.
       this.warn(`Budget check failed, run allowed: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  capacityBlock(agentId: string): AgentInfo['capacityBlock'] {
+    try {
+      const reading = this.d.capacity.readings().find((r) => r.agentId === agentId && blocksRuns(r));
+      return reading ? { label: reading.label, detail: reading.detail, capturedAt: reading.capturedAt } : null;
+    } catch (error) {
+      this.warn(`Capacity check failed: ${(error as Error).message}`);
       return null;
     }
   }

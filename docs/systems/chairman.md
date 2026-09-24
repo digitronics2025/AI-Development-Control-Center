@@ -56,6 +56,12 @@ A **recovery cycle** increments `tasks.recovery_cycle`, resets `fix_cycles`
 | worker_failure | change agent → retry once |
 | provider_blocked | change agent (not a recovery cycle) |
 
+"Available" agents for change-agent candidates are enabled, signed in, and
+have no `capacityBlock` ([usage.md](usage.md#capacity)): an agent that just
+reported it is out of credits or out of its window is not an escape route, so
+with no other agent left the task waits for the limit instead of burning an
+attempt.
+
 Candidates whose fingerprint `hash(signature|kind|stage|agent)` was already
 tried are excluded, and a stage is never handed back to an agent that already
 ran it. `rankCandidates` then reorders — never removes — what is left: a

@@ -307,7 +307,10 @@ export class TaskEngine {
     this.schedule();
   }
 
-  async reroute(id: string, input: { stageKey?: string; agentId: string; model?: string; effort?: string; reason?: string; applyToRole?: boolean }): Promise<TaskDetail> {
+  async reroute(
+    id: string,
+    input: { stageKey?: string; agentId: string; model?: string; effort?: string; reason?: string; applyToRole?: boolean; applyToAgent?: boolean },
+  ): Promise<TaskDetail> {
     const task = this.task(id);
     if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
     const key = input.stageKey ?? task.currentStageKey;
@@ -321,14 +324,24 @@ export class TaskEngine {
     const overrides = structuredClone(task.overrides);
     overrides.stages[def.key] = assignment;
     if (input.applyToRole) overrides.roles[def.role] = assignment;
+    const alsoMoved: string[] = [];
+    if (input.applyToAgent && input.agentId !== before.agentId) {
+      for (const other of task.workflow.stages) {
+        if (other.kind !== 'agent' || other.key === def.key) continue;
+        const current = this.d.views.assignmentFor(task, other);
+        if (current.agentId !== before.agentId) continue;
+        overrides.stages[other.key] = { agentId: input.agentId, model: input.model ?? 'default', effort: input.effort ?? current.effort };
+        alsoMoved.push(other.name);
+      }
+    }
     this.publisher.updateTask(id, { overrides });
     const fromName = this.d.agents.has(before.agentId) ? this.d.agents.adapter(before.agentId).displayName : before.agentId;
     const toName = this.d.agents.adapter(input.agentId).displayName;
     this.publisher.event(
       id,
       'REROUTED',
-      `${ROLE_LABEL[def.role]} rerouted · ${fromName} → ${toName} · Reason: ${input.reason?.trim() || 'user action'}`,
-      { stageKey: def.key, from: before, to: assignment, reason: input.reason ?? 'user action' },
+      `${ROLE_LABEL[def.role]} rerouted · ${fromName} → ${toName}${alsoMoved.length ? ` · also ${alsoMoved.join(', ')}` : ''} · Reason: ${input.reason?.trim() || 'user action'}`,
+      { stageKey: def.key, from: before, to: assignment, reason: input.reason ?? 'user action', alsoMoved },
     );
 
     const running = this.runners.get(id);

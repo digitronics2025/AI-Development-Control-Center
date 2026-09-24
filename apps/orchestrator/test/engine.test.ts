@@ -252,6 +252,24 @@ describe('live control', () => {
     await t.api('POST', `/api/tasks/${id}/cancel`);
   });
 
+  it('moves every stage of a blocked provider in one reroute when asked', async () => {
+    // The implementer (Claude Code) runs out of credits; the fixer is Claude Code too and would stop next.
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Big job [sim:usage-limit] [sim:review-fail-once]', { supervised: false });
+    const blocked = await waitForStatus(t, id, ['WAITING_FOR_USAGE_RESET']);
+    expect(blocked.blocker).toMatchObject({ kind: 'usage', stageKey: 'implement' });
+    const res = await t.api('POST', `/api/tasks/${id}/reroute`, { agentId: 'codex', reason: 'out of credits', applyToAgent: true });
+    expect(res.status).toBe(200);
+    expect(res.body.assignments.fix.agentId).toBe('codex');
+    expect(res.body.assignments.investigate.agentId).toBe('codex');
+    const rerouted = t.services.store.listEvents(id).find((e) => e.type === 'REROUTED');
+    expect(rerouted?.message).toBe('Implementer rerouted · Claude Code (simulated) → Codex (simulated) · also Fix · Reason: out of credits');
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(done.status).toBe('COMPLETED');
+    const ran = t.services.store.listStages(id).filter((s) => ['implement', 'fix'].includes(s.stageKey) && s.status === 'SUCCESS');
+    expect(ran.map((s) => s.stageKey)).toEqual(['implement', 'fix']);
+    expect(ran.every((s) => s.agentId === 'codex')).toBe(true);
+  });
+
   it('queues a directive while running and applies it at the next agent boundary', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Slow work [sim:slow]');
     await waitFor(() => t.services.store.latestStage(id, 'investigate'), (s) => s?.status === 'RUNNING', 20_000);

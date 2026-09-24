@@ -390,6 +390,8 @@ export interface AgentInfo {
   capabilities: AgentCapabilities;
   models: ModelDescriptor[];
   settings: AgentSettings;
+  /** The agent's last run reported it cannot run now (e.g. out of credits); null when nothing says so. */
+  capacityBlock: { label: string; detail: string | null; capturedAt: Iso } | null;
 }
 
 export interface OverviewCounts {

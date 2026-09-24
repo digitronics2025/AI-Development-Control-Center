@@ -314,7 +314,11 @@ export class Chairman implements SupervisorHooks {
   private candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature) {
     const assignments: Record<string, string> = {};
     for (const s of task.workflow.stages) if (s.kind === 'agent') assignments[s.key] = this.d.views.assignmentFor(task, s).agentId;
-    const available = this.d.agents.list().filter((a) => a.settings.enabled && ['connected', 'unknown'].includes(a.health.state)).map((a) => a.id);
+    // An agent whose last run reported it out of credits or out of its window is no escape route.
+    const available = this.d.agents
+      .list()
+      .filter((a) => a.settings.enabled && ['connected', 'unknown'].includes(a.health.state) && !a.capacityBlock)
+      .map((a) => a.id);
     const triedAgents: Record<string, string[]> = {};
     for (const s of this.d.store.listStages(task.id)) {
       if (!s.agentId || s.status === 'CANCELLED') continue;

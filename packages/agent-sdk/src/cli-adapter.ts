@@ -3,7 +3,7 @@ import os from 'node:os';
 import { DEFAULT_MAX_LINE_LENGTH, runProcess, which, type ProcessHandle, type ProcessResult } from '@acc/executor';
 import { sanitizeEnv } from '@acc/security';
 import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
-import { classifyFailureText, summarizeFailure } from './classify.js';
+import { classifyFailureText, describeExit, isProtocolEvent, summarizeFailure } from './classify.js';
 import {
   AgentGuardError,
   type AgentAdapter,
@@ -283,13 +283,15 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     const failed = process.exitCode !== 0 || raw.failureMessages.length > 0 || raw.usageLimited;
     if (!failed) return { ...base, status: 'succeeded', errorClass: null, errorMessage: null };
 
-    // Structured failure messages from the provider outrank incidental log noise in the tail.
+    // Structured failure messages from the provider outrank incidental log noise in the tail,
+    // and the tail counts only plain output: protocol events hold what the agent read, not why it failed.
+    const evidence = process.tail.filter((line) => !isProtocolEvent(line));
     const errorClass = raw.usageLimited
       ? 'USAGE_LIMIT'
       : (classifyFailureText(raw.failureMessages.join('\n')) ??
-        classifyFailureText(process.tail.join('\n')) ??
+        classifyFailureText(evidence.join('\n')) ??
         'PROCESS_CRASH');
-    const message = summarizeFailure(raw.failureMessages, process.tail) || `Exited with code ${process.exitCode}`;
+    const message = summarizeFailure(raw.failureMessages, evidence) || describeExit(this.displayName, process.exitCode);
     return { ...base, status: 'failed', errorClass, errorMessage: message };
   }
 }

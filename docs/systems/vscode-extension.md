@@ -36,10 +36,16 @@ Source Control runs in the same WebView page. Host messages
 bounded) diff in an editor tab; `revealRepository` reveals the folder. VS Code's
 own SCM API is not used as a second source of truth.
 
+## Tests
+
+Unit tests run under the root Vitest projects. The package is CommonJS (no
+`"type": "module"`, as VS Code loads the extension with `require`), so its
+Vitest config is [vitest.config.mts](../../apps/vscode-extension/vitest.config.mts).
+
 ## Verified
 
 2026-09-23 in an Extension Development Host (VS Code 1.138): status bar showed
 live state, the WebView connected over WebSocket from its `vscode-webview://`
 origin and rendered Task Detail in the editor theme.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

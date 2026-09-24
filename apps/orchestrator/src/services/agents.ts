@@ -114,6 +114,7 @@ export class AgentRegistry {
         capabilities: a.capabilities ?? NO_CAPABILITIES,
         models: models.filter((m) => m.agentId === a.id),
         settings: a.settings,
+        capacityBlock: a.settings.enabled ? (this.meter?.capacityBlock(a.id) ?? null) : null,
       }));
   }
 

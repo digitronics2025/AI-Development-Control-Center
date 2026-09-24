@@ -235,6 +235,17 @@ export interface CapacityReading extends CapacitySnapshot {
   staleReason: string | null;
 }
 
+/**
+ * Whether a reading means the agent cannot run now: a fresh `exhausted`
+ * reading of anything but paid overage (extra usage past the subscription,
+ * which Subscription Only mode never uses). Stale readings never block, so an
+ * old reading cannot hold an agent back after credits are added or a window
+ * resets.
+ */
+export function blocksRuns(reading: CapacityReading): boolean {
+  return reading.status === 'exhausted' && !reading.stale && reading.metric !== 'overage';
+}
+
 export interface ProviderCapabilityView {
   tokenUsage: boolean;
   providerCost: boolean;

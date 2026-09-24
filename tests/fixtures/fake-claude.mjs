@@ -68,6 +68,12 @@ if (args[0] === '-p') {
       writeNext();
       return;
     }
+    if (scenario === 'crash') {
+      // Observed 2026-09-24: the CLI read a file, then died (0xC0000409) with no result event.
+      // What it read mentions credits and has a line 429; neither is why it failed.
+      out({ type: 'user', message: { content: [{ type: 'tool_result', content: "429\tif (/out of credits/.test(text)) return 'USAGE_LIMIT';" }] } });
+      process.exit(3);
+    }
     if (scenario === 'usage') {
       out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1790122800, rateLimitType: 'five_hour' } });
       out({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 9pm" });

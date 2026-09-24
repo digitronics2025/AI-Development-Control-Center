@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyFailureText, summarizeFailure, SimulatedAgentAdapter } from '../src/index.js';
+import { classifyFailureText, describeExit, isProtocolEvent, summarizeFailure, SimulatedAgentAdapter } from '../src/index.js';
 
 describe('classifyFailureText', () => {
   it.each([
@@ -22,6 +22,22 @@ describe('classifyFailureText', () => {
 
   it('summarises with the most explanatory line', () => {
     expect(summarizeFailure([], ['noise', 'You have hit your usage limit', 'more noise'])).toBe('You have hit your usage limit');
+  });
+});
+
+describe('crash evidence', () => {
+  it('recognises agent protocol events, including lines the tail truncated', () => {
+    expect(isProtocolEvent('{"type":"user","message":{"content":[{"type":"tool_result","content":"429\\tconst x')).toBe(true);
+    expect(isProtocolEvent('  { "type": "turn.failed", "error": {} }')).toBe(true);
+    expect(isProtocolEvent('Error: connect ECONNREFUSED')).toBe(false);
+    expect(isProtocolEvent('{"error":"plain JSON on stderr"}')).toBe(false);
+  });
+
+  it('describes a crash without output in words, not as an unexplained number', () => {
+    expect(describeExit('Claude Code', 3221226505)).toBe('Claude Code crashed (fatal internal error) · Windows status 0xC0000409');
+    expect(describeExit('Codex', 0xc0000123)).toBe('Codex crashed · Windows status 0xC0000123');
+    expect(describeExit('Codex', 1)).toBe('Codex exited with code 1 without reporting an error');
+    expect(describeExit('Codex', null)).toBe('Codex stopped without an exit code');
   });
 });
 

@@ -29,7 +29,7 @@ function Metric({ label, value, tone }: { label: string; value: number | undefin
   );
 }
 
-function HealthRow({ icon: Icon, name, ok, detail, action }: { icon: typeof Server; name: string; ok: boolean | null; detail: string; action?: React.ReactNode }) {
+function HealthRow({ icon: Icon, name, ok, detail, action }: { icon: typeof Server; name: string; ok: boolean | null; detail: React.ReactNode; action?: React.ReactNode }) {
   const StateIcon = ok === null ? null : ok ? CheckCircle2 : XCircle;
   return (
     <li className="flex items-start gap-3 py-2.5">
@@ -48,7 +48,18 @@ function HealthRow({ icon: Icon, name, ok, detail, action }: { icon: typeof Serv
 }
 
 function agentOk(agent: AgentInfo): boolean {
-  return agent.health.state === 'connected';
+  return agent.health.state === 'connected' && !agent.capacityBlock;
+}
+
+/** Sign-in state, or why a signed-in agent cannot run right now. */
+function agentDetail(agent: AgentInfo): React.ReactNode {
+  const block = agent.capacityBlock;
+  if (!block || agent.health.state !== 'connected') return agent.health.message;
+  return (
+    <>
+      Can't run now — {block.detail ?? `${block.label} exhausted`} · reported <RelativeTime iso={block.capturedAt} />. Stages assigned to it will pause; reroute them or wait.
+    </>
+  );
 }
 
 const recentColumns: Column<TaskSummary>[] = [
@@ -131,7 +142,12 @@ export function HomePage() {
                 </Button>
               }
             >
-              {disconnectedAgents.map((a) => a.health.message).join(' ')}
+              {disconnectedAgents.map((a) => (
+                <span key={a.id} className="block">
+                  {disconnectedAgents.length > 1 ? `${a.name}: ` : null}
+                  {agentDetail(a)}
+                </span>
+              ))}
             </Banner>
           ) : null}
         </section>
@@ -213,7 +229,7 @@ export function HomePage() {
                 icon={Bot}
                 name={agent.name}
                 ok={agent.settings.enabled ? agentOk(agent) : null}
-                detail={agent.health.message}
+                detail={agentDetail(agent)}
                 action={
                   agent.health.checkedAt ? (
                     <span className="shrink-0 text-small text-fg-secondary">

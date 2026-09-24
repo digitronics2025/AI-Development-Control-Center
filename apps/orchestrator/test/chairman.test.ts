@@ -178,6 +178,18 @@ describe('supervised recovery (plan §7.2)', () => {
     });
   });
 
+  it('does not hand a blocked stage to an agent that just reported it is out of credits', async () => {
+    t.services.usage.capacity.record('simulated', 'codex', null, 'test', [
+      { metric: 'credit', label: 'Credit', usedPercent: null, status: 'exhausted', resetsAt: null, detail: 'Your workspace is out of credits.', observedAt: new Date().toISOString() },
+    ]);
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Big job [sim:usage-limit]');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER', 'WAITING_FOR_USAGE_RESET'], 60_000);
+    // No healthy agent left: it waits for the limit instead of burning an attempt on Codex.
+    expect(task.status).toBe('WAITING_FOR_USAGE_RESET');
+    expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'implement').map((s) => s.agentId)).toEqual(['claude']);
+    expect(decisions(id).some((d) => d.decision === 'Hand Implement to codex')).toBe(false);
+  });
+
   it('turns a stage that keeps crashing into a hard blocker once every safe option is used', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Crash [sim:fail:investigator]');
     const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);

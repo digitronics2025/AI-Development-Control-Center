@@ -65,6 +65,16 @@ Structured provider messages are classified before log noise: `USAGE_LIMIT`
 `MODEL_UNAVAILABLE` ("requires a newer version"…), `PERMISSION_DENIED`,
 `CONTEXT_FAILURE`; otherwise `PROCESS_CRASH`.
 
+Only plain output lines count as evidence from the output tail
+(`isProtocolEvent`): stdout protocol events (`{"type":…}`, matched by prefix
+because the tail truncates long lines) carry what the agent read and ran, and
+the parsers already lift structured errors out of them. Before this, a crash
+right after reading a file that mentions "out of credits" — or line 429 of any
+file — was classified `USAGE_LIMIT`, and the task waited for a reset that would
+never come. A failure with no explaining line reads as `describeExit`: "Claude
+Code crashed (fatal internal error) · Windows status 0xC0000409", not a raw
+protocol line.
+
 ## Simulated agents
 
 [simulated.ts](../../packages/agent-sdk/src/simulated.ts) is registered only
@@ -74,6 +84,13 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:needs-operator]` (verifier names an operator decision),
 `[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
+
+## Observed on the operator's machine (2026-09-24)
+
+- Codex 0.156.1 accepts the default model; runs now fail only with "workspace
+  is out of credits" (`USAGE_LIMIT`), an account matter.
+- Claude Code 2.1.280 occasionally exits with `0xC0000409` mid-review with no
+  result event; the stage retry recovers it.
 
 ## Observed on the operator's machine (2026-09-23)
 
@@ -85,4 +102,4 @@ Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 - Loading the user's own Claude customisations costs ~150k cached tokens per
   run; turn off **Load my CLI customisations** per agent for leaner runs.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

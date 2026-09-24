@@ -75,12 +75,18 @@ export function RerouteDialog({ task, open, onOpenChange, stageKey }: { task: Ta
   const [assignment, setAssignment] = useState<PartialAssignment>({});
   const [reason, setReason] = useState('');
   const [applyToRole, setApplyToRole] = useState(false);
+  // A provider that is out of credits or signed out would stop every one of its stages in turn.
+  const [applyToAgent, setApplyToAgent] = useState(task.blocker?.kind === 'usage' || task.blocker?.kind === 'auth');
   const [error, setError] = useState<string | null>(null);
   const command = useTaskCommand(task.id);
   const names = useAgentNames();
   const { toast } = useFeedback();
   const def = agentStages.find((s) => s.key === key);
   const target = assignment.agentId ? names(assignment.agentId) : null;
+  const sameAgentStages =
+    current && assignment.agentId && assignment.agentId !== current.agentId
+      ? agentStages.filter((s) => s.key !== key && task.assignments[s.key]?.agentId === current.agentId)
+      : [];
 
   return (
     <Dialog
@@ -107,7 +113,7 @@ export function RerouteDialog({ task, open, onOpenChange, stageKey }: { task: Ta
             loading={command.isPending}
             onClick={() =>
               command.mutate(
-                { command: 'reroute', body: { stageKey: key, agentId: assignment.agentId, model: assignment.model, effort: assignment.effort, reason: reason.trim() || undefined, applyToRole } },
+                { command: 'reroute', body: { stageKey: key, agentId: assignment.agentId, model: assignment.model, effort: assignment.effort, reason: reason.trim() || undefined, applyToRole, applyToAgent: applyToAgent && sameAgentStages.length > 0 } },
                 {
                   onSuccess: () => {
                     toast(`${def?.name ?? 'Stage'} rerouted to ${target}`);
@@ -140,6 +146,13 @@ export function RerouteDialog({ task, open, onOpenChange, stageKey }: { task: Ta
         </Field>
         {def ? (
           <Checkbox checked={applyToRole} onCheckedChange={setApplyToRole} label={`Also use it for later ${ROLE_LABEL[def.role]} stages`} />
+        ) : null}
+        {current && sameAgentStages.length ? (
+          <Checkbox
+            checked={applyToAgent}
+            onCheckedChange={setApplyToAgent}
+            label={`Also move this task's other ${names(current.agentId)} stages (${sameAgentStages.map((s) => s.name).join(', ')})`}
+          />
         ) : null}
         {error ? <p role="alert" className="text-body text-danger">{error}</p> : null}
       </div>

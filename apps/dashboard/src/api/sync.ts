@@ -52,6 +52,8 @@ export class CacheSync {
     this.usageTimer = window.setTimeout(() => {
       this.usageTimer = null;
       void this.qc.invalidateQueries({ queryKey: keys.usageRoot });
+      // A run's capacity reading can mark an agent out of credits, or clear it.
+      void this.qc.invalidateQueries({ queryKey: keys.agents });
     }, 1_000);
   }
 

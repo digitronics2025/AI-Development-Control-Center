@@ -186,6 +186,12 @@ export const rerouteSchema = z.object({
   reason: z.string().max(300).optional(),
   /** Also reassign later stages that share this stage's role. */
   applyToRole: z.boolean().default(false),
+  /**
+   * Also move every other stage of this task still assigned to the stage's
+   * current agent — for a provider that is out of credits or signed out,
+   * where each of its stages would stop in turn.
+   */
+  applyToAgent: z.boolean().default(false),
 });
 
 export const assignmentChangeSchema = z.object({

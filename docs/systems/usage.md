@@ -169,6 +169,14 @@ have no separate limits endpoint. They are never fetched, scraped or estimated.
   window's reset time has passed.
 - Metrics a provider does not expose show `Unavailable`.
 - "Refresh" re-judges freshness and prunes superseded readings older than 90 days.
+- **Can't run now.** `blocksRuns` ([usage.ts](../../packages/shared/src/usage.ts)):
+  a fresh `exhausted` reading of any metric except `overage` (paid extra usage,
+  never used in Subscription Only mode). The recorder's `capacityBlock(agentId)`
+  exposes it as `AgentInfo.capacityBlock` on `GET /api/agents`; Home shows it
+  on the agent's health row, and the Chairman never reroutes into such an agent
+  ([chairman.md](chairman.md)). It never refuses a launch, and a stale reading
+  never blocks, so adding credits or a window reset clears it by itself.
+  Dashboards refetch agents with every `usage` message.
 
 ## Budgets
 
@@ -240,4 +248,4 @@ components ([charts.tsx](../../packages/ui/src/components/charts.tsx)):
   from a committed, checked tree: the dashboard is served live as soon as it is
   rebuilt.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

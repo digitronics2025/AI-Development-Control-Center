@@ -145,6 +145,19 @@ describe('usage capture', () => {
     const simulated = providers.find((p) => p.provider === 'simulated')!;
     expect(simulated.usageLimitEvents).toBe(1);
     expect(simulated.capacity).toEqual(expect.arrayContaining([expect.objectContaining({ metric: 'usage_limit', status: 'exhausted', confidence: 'LIVE' })]));
+    // The agent list says the implementer's agent cannot run now; the other agent is unaffected.
+    const agents = (await t.api('GET', '/api/agents')).body as Array<{ id: string; capacityBlock: { label: string; detail: string | null } | null }>;
+    expect(agents.find((a) => a.id === 'claude')!.capacityBlock).toMatchObject({ label: 'Usage limit', detail: 'You have hit your usage limit. Limit resets at 21:00.' });
+    expect(agents.find((a) => a.id === 'codex')!.capacityBlock).toBeNull();
+  });
+
+  it('never lets an old or paid-overage reading mark an agent as unable to run', async () => {
+    const capacity = t.services.usage.capacity;
+    const old = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    capacity.record('simulated', 'claude', null, 'test', [{ metric: 'credit', label: 'Credit', usedPercent: null, status: 'exhausted', resetsAt: null, detail: 'out of credits', observedAt: old }]);
+    capacity.record('simulated', 'codex', null, 'test', [{ metric: 'overage', label: 'Extra usage', usedPercent: null, status: 'exhausted', resetsAt: null, detail: 'Not available', observedAt: new Date().toISOString() }]);
+    const agents = (await t.api('GET', '/api/agents')).body as Array<{ id: string; capacityBlock: unknown }>;
+    expect(agents.map((a) => a.capacityBlock)).toEqual([null, null]);
   });
 
   it('never lets a telemetry failure fail the task or call the provider again, and saves the attempt later', async () => {

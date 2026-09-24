@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes, webcrypto, type webcrypto as WebCrypto } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -14,6 +14,8 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WRANGLER = path.join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+/** The dashboard build the Worker serves (wrangler.jsonc `assets.directory`). */
+const DASHBOARD_ASSETS = path.resolve(ROOT, '..', 'dashboard', 'dist', 'web');
 export const ACCESS_TEAM = 'acc-test.cloudflareaccess.com';
 export const ACCESS_AUD = 'acc-test-audience';
 export const USER = 'operator@example.com';
@@ -116,11 +118,20 @@ export async function startCloud(options: { vars?: Record<string, string>; port?
   const migrate = spawnSync(process.execPath, [WRANGLER, 'd1', 'migrations', 'apply', 'acc-control-dev', '--local', '--env', '', '--persist-to', persist], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });
   if (migrate.status !== 0) throw new Error(`D1 migrations failed: ${migrate.stderr || migrate.stdout}`);
   const port = options.port ?? (await freePort());
+  // Without a dashboard build (`pnpm check` before `pnpm build`), serve a placeholder
+  // from the temporary folder: these tests exercise the Worker, not the dashboard.
+  const assetArgs: string[] = [];
+  if (!existsSync(DASHBOARD_ASSETS)) {
+    const placeholder = path.join(dir, 'assets');
+    mkdirSync(placeholder);
+    writeFileSync(path.join(placeholder, 'index.html'), '<!doctype html><title>test placeholder</title><div id="root"></div>');
+    assetArgs.push('--assets', placeholder);
+  }
   const logs: string[] = [];
   let child: ChildProcess | null = null;
 
   const launch = async () => {
-    const args = [WRANGLER, 'dev', '--env', '', '--local', '--ip', '127.0.0.1', '--port', String(port), '--inspector-port', String(await freePort()), '--persist-to', persist, '--show-interactive-dev-session=false', '--log-level', process.env.ACC_CLOUD_LOG_LEVEL ?? 'warn'];
+    const args = [WRANGLER, 'dev', '--env', '', '--local', '--ip', '127.0.0.1', '--port', String(port), '--inspector-port', String(await freePort()), '--persist-to', persist, '--show-interactive-dev-session=false', '--log-level', process.env.ACC_CLOUD_LOG_LEVEL ?? 'warn', ...assetArgs];
     for (const [k, v] of Object.entries(vars)) args.push('--var', `${k}:${v}`);
     child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false', NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout!.on('data', (d: Buffer) => logs.push(d.toString()));

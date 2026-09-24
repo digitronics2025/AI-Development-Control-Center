@@ -69,3 +69,35 @@ export function summarizeFailure(messages: string[], tail: string[]): string {
   const clean = hit.replace(/\s+/g, ' ').trim();
   return clean.length > 400 ? `${clean.slice(0, 397)}...` : clean;
 }
+
+/**
+ * A structured event on an agent CLI's stdout (Claude Code stream-json,
+ * Codex JSONL). These lines carry what the agent read and ran — file
+ * contents, command output — so they are never evidence of why the CLI
+ * failed: a file mentioning "out of credits" or line 429 of any file would
+ * otherwise turn a crash into a usage limit. The adapters' parsers already
+ * take structured errors out of them. Matched by prefix because the output
+ * tail truncates long lines, which then no longer parse as JSON.
+ */
+export function isProtocolEvent(line: string): boolean {
+  return /^\s*\{\s*"type"\s*:\s*"/.test(line);
+}
+
+/** Windows process status codes an agent CLI can exit with when it crashes. */
+const WINDOWS_STATUS: Record<number, string> = {
+  0xc0000005: 'access violation',
+  0xc00000fd: 'stack overflow',
+  0xc0000142: 'failed to start',
+  0xc000013a: 'interrupted',
+  0xc0000409: 'fatal internal error',
+};
+
+/** A readable reason for a CLI that exited without explaining itself. */
+export function describeExit(displayName: string, exitCode: number | null): string {
+  if (exitCode === null) return `${displayName} stopped without an exit code`;
+  if (exitCode >= 0xc0000000 && exitCode <= 0xffffffff) {
+    const label = WINDOWS_STATUS[exitCode];
+    return `${displayName} crashed${label ? ` (${label})` : ''} · Windows status 0x${exitCode.toString(16).toUpperCase()}`;
+  }
+  return `${displayName} exited with code ${exitCode} without reporting an error`;
+}

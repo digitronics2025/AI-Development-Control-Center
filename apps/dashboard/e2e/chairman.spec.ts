@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { api, expectNoAxeViolations, expectNoHorizontalOverflow, setTheme, trackConsoleErrors } from './helpers';
@@ -11,8 +10,12 @@ import { api, expectNoAxeViolations, expectNoHorizontalOverflow, setTheme, track
  * seeded demo tasks are not disturbed.
  */
 
+/** Inside the run's data root (reused per port), so repositories never pile up in the temp folder. */
+const reposRoot = path.join(process.env.ACC_E2E_DATA_ROOT!, 'chairman');
+
 function repoWithCheck(check: string): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-e2e-chairman-'));
+  mkdirSync(reposRoot, { recursive: true });
+  const dir = mkdtempSync(path.join(reposRoot, 'repo-'));
   const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'e2e@example.com');
@@ -50,6 +53,8 @@ async function say(page: Page, text: string) {
 }
 
 test.beforeAll(async ({ browser }) => {
+  // The demo server starts with a fresh database, so the previous run's repositories are unused.
+  rmSync(reposRoot, { recursive: true, force: true });
   const page = await browser.newPage();
   await page.goto('/');
   await setTheme(page, 'dark');

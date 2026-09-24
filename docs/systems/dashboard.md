@@ -53,7 +53,8 @@ removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 
 ## Pages
 
-Home, Tasks, New Task (execution policy, isolated worktree), Task Detail
+Home (System Health marks a signed-in agent whose last run reported it
+cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New Task (execution policy, isolated worktree), Task Detail
 (Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary

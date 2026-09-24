@@ -102,6 +102,11 @@ describe('ClaudeCodeAdapter', () => {
     expect(result).toMatchObject({ status: 'failed', errorMessage: 'Something broke' });
   });
 
+  it('reports a silent crash as a crash, not as whatever the agent last read', async () => {
+    const result = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_SCENARIO: 'crash' } }))).done;
+    expect(result).toMatchObject({ status: 'failed', errorClass: 'PROCESS_CRASH', errorMessage: 'Claude Code exited with code 3 without reporting an error' });
+  });
+
   it('cancels a running execution', async () => {
     const adapter = new ClaudeCodeAdapter();
     const run = input({ env: { FAKE_CLAUDE_SCENARIO: 'hang' } });

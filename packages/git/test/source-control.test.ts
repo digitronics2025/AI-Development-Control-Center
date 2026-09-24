@@ -26,6 +26,8 @@ import {
   remoteMissing,
   remoteOwnerKey,
   repositoryStatus,
+  outgoingFiles,
+  patchHeaderPath,
   splitPatch,
   stagedPatch,
   stagePaths,
@@ -281,6 +283,20 @@ describe('diffs', () => {
     const split = splitPatch(patch);
     expect(split.files).toEqual(['.env']);
     expect(split.added).toBe('TOKEN=abc');
+  });
+
+  it('reads quoted and space-split file names in patch headers, and lists pushed files with -z (audit F-47)', async () => {
+    mkdirSync(path.join(repo, 'x b'));
+    writeFileSync(path.join(repo, 'x b', 'c.txt'), 'one\n');
+    writeFileSync(path.join(repo, 'café.env'), 'two\n');
+    await stagePaths(repo, ['x b/c.txt', 'café.env']);
+    const { patch } = await stagedPatch(repo, { hasHead: true, maxBytes: 100_000 });
+    expect(splitPatch(patch).files.sort()).toEqual(['café.env', 'x b/c.txt']);
+    // Quotes, backslashes and control characters are C-quoted by git (not legal in Windows names, so synthetic here).
+    expect(patchHeaderPath('diff --git "a/we\\"ird\\tname" "b/we\\"ird\\tname"')).toBe('we"ird\tname');
+    expect(patchHeaderPath('diff --git a/plain.txt b/plain.txt')).toBe('plain.txt');
+    await run(repo, ['commit', '-q', '-m', 'odd names']);
+    expect((await outgoingFiles(repo, { tip: 'HEAD', exclude: 'HEAD~1' })).sort()).toEqual(['café.env', 'x b/c.txt']);
   });
 });
 

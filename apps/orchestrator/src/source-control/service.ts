@@ -18,6 +18,7 @@ import {
   hooksInstalled,
   indexLocked,
   lineStats,
+  outgoingFiles,
   outgoingPatch,
   pathDiff,
   pushRef,
@@ -926,7 +927,9 @@ export class SourceControlService {
   private async pushPreflight(root: string, tip: string, exclude: string | null): Promise<void> {
     const { patch, truncated } = await outgoingPatch(root, { tip, exclude, maxBytes: MAX_PREFLIGHT_BYTES });
     if (truncated) throw new SourceControlError('PREFLIGHT_INCOMPLETE', 'The commits to push are too large to check for secrets (over 20 MB). Push them from a terminal after checking them yourself.');
-    const findings = preflightFindings(splitPatch(patch).files, patch);
+    // File names come from `--name-only -z`: a quoted or binary file is still checked by name (audit F-47).
+    const files = [...new Set([...(await outgoingFiles(root, { tip, exclude })), ...splitPatch(patch).files])];
+    const findings = preflightFindings(files, patch);
     if (findings.length) {
       throw new SourceControlError('SENSITIVE_CONTENT', 'The commits to push include secret material. Remove it from those commits (outside Source Control) before pushing.', { findings });
     }

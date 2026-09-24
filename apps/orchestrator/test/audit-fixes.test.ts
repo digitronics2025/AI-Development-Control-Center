@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setSelfReferences } from '@acc/security';
+import { preflightFindings, withoutSensitiveFiles } from '../src/source-control/preflight.js';
 import type { ToolScope } from '../src/tools/service.js';
 import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
@@ -158,4 +159,15 @@ describe('F-11: an agent a crash left running is stopped before the task resumes
     expect(await t.services.processes.stopLeftoverExecutions([{ pid, startedAt }, { pid: null, startedAt }])).toBe(1);
     await waitFor(() => processAlive(pid), (alive) => !alive, 15_000);
   }, 60_000);
+});
+
+describe('F-47: the secret preflight reads every file header', () => {
+  it('checks added lines under a quoted or unreadable name, and keeps unreadable names out of AI context', () => {
+    const secret = ['gh', 'p_', 'C'.repeat(36)].join('');
+    const quoted = ['diff --git "a/we\\"ird.ts" "b/we\\"ird.ts"', 'new file mode 100644', '@@ -0,0 +1 @@', `+const t = "${secret}";`].join('\n');
+    expect(preflightFindings([], quoted)).toEqual([{ path: 'we"ird.ts', reason: expect.stringContaining('GitHub token') }]);
+    const odd = ['diff --git no-sides-here', '@@ -0,0 +1 @@', `+${secret}`].join('\n');
+    expect(preflightFindings([], odd)).toHaveLength(1);
+    expect(withoutSensitiveFiles(odd).patch).not.toContain(secret);
+  });
 });

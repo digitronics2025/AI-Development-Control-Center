@@ -124,6 +124,14 @@ lines matching the high-confidence `blocking` rules of
 reports them; staging one explicitly is allowed but its commit is blocked.
 AI context omits sensitive files entirely and redacts the rest.
 
+File names: a push takes its file list from `git log --name-only -z`, so no
+name is quoted or split. Patch headers are read by `patchHeaderPath`
+([source-control.ts](../../packages/git/src/source-control.ts)), which
+un-C-quotes names with quotes, backslashes or control characters and settles
+unquoted names containing ` b/`; a header it cannot read still has its added
+lines scanned, and is left out of AI context. **Limit:** a binary file has no
+added lines, so it is checked by name only.
+
 ## Journal (`git_operations`, migration 3)
 
 Kinds `stage unstage commit fetch fast_forward push publish sync`; statuses

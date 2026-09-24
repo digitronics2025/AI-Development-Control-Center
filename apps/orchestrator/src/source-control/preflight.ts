@@ -1,3 +1,4 @@
+import { patchHeaderPath } from '@acc/git';
 import { detectSecrets, sensitiveFileReason } from '@acc/security';
 
 /**
@@ -30,9 +31,10 @@ export function addedLinesByFile(patch: string): Map<string, string[]> {
   let current: string[] | null = null;
   for (const line of patch.split('\n')) {
     if (line.startsWith('diff --git ')) {
-      const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-      current = m ? (files.get(m[2]!) ?? []) : null;
-      if (m && current) files.set(m[2]!, current);
+      // A header whose name cannot be read still has its lines checked (audit F-47).
+      const file = patchHeaderPath(line) ?? line.slice('diff --git '.length);
+      current = files.get(file) ?? [];
+      files.set(file, current);
     } else if (current && line.startsWith('+') && !line.startsWith('+++')) current.push(line.slice(1));
   }
   return files;
@@ -63,9 +65,10 @@ export function withoutSensitiveFiles(patch: string): { patch: string; omitted: 
   let skipping = false;
   for (const line of patch.split('\n')) {
     if (line.startsWith('diff --git ')) {
-      const file = /^diff --git a\/.+ b\/(.+)$/.exec(line)?.[1] ?? '';
-      skipping = Boolean(sensitiveFileReason(file));
-      if (skipping) omitted.push(file);
+      const file = patchHeaderPath(line);
+      // An unreadable name is left out of AI context rather than guessed at.
+      skipping = file === null || Boolean(sensitiveFileReason(file));
+      if (skipping) omitted.push(file ?? line.slice('diff --git '.length));
     }
     if (!skipping) out.push(line);
   }

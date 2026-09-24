@@ -257,14 +257,70 @@ export async function outgoingPatch(cwd: string, options: { tip: string; exclude
   return { patch: result.stdout, truncated: Boolean(result.truncated), commits };
 }
 
+/** Every file the push would carry, from `--name-only -z` so no name is quoted or split (audit F-47). */
+export async function outgoingFiles(cwd: string, options: { tip: string; exclude: string | null }): Promise<string[]> {
+  const range = options.exclude ? [options.tip, '--not', options.exclude] : [options.tip, '--not', '--remotes'];
+  const result = await git(cwd, ['log', '--name-only', '-z', '--no-renames', '--format=', ...range, '--'], { timeoutMs: 60_000 });
+  if (result.code !== 0) throw gitFailure('log', result);
+  return [...new Set(result.stdout.split('\0').map((f) => f.replace(/^\n+/, '')).filter(Boolean))];
+}
+
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+
+/** Read one C-quoted token (`"a/x\tb"`, octal bytes for non-ASCII) from the start of `text`. */
+function readQuoted(text: string): { value: string; rest: string } | null {
+  if (!text.startsWith('"')) return null;
+  const bytes: number[] = [];
+  for (let i = 1; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"') return { value: Buffer.from(bytes).toString('utf8'), rest: text.slice(i + 1) };
+    if (ch !== '\\') {
+      bytes.push(...Buffer.from(ch, 'utf8'));
+      continue;
+    }
+    const next = text[i + 1] ?? '';
+    const octal = /^[0-3][0-7]{2}/.exec(text.slice(i + 1));
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8));
+      i += 3;
+    } else if (next in C_ESCAPES) {
+      bytes.push(C_ESCAPES[next]!);
+      i += 1;
+    } else return null;
+  }
+  return null;
+}
+
+/**
+ * The new-side path of a `diff --git` header line, or null when it cannot be
+ * read. Git C-quotes names with quotes, backslashes, control characters or
+ * (by default) non-ASCII bytes; with `--no-renames` both sides name the same
+ * file, which also settles unquoted names that contain " b/" (audit F-47).
+ */
+export function patchHeaderPath(line: string): string | null {
+  if (!line.startsWith('diff --git ')) return null;
+  const rest = line.slice('diff --git '.length);
+  const first = readQuoted(rest);
+  if (first) {
+    const after = first.rest.replace(/^ /, '');
+    const second = readQuoted(after)?.value ?? after;
+    return second.startsWith('b/') ? second.slice(2) : null;
+  }
+  const n = (rest.length - 5) / 2;
+  if (Number.isInteger(n) && n > 0 && rest.startsWith('a/') && rest.slice(2 + n, 5 + n) === ' b/' && rest.slice(2, 2 + n) === rest.slice(5 + n)) return rest.slice(5 + n);
+  const quotedSecond = / "b\/.*"$/.exec(rest);
+  if (quotedSecond) return readQuoted(quotedSecond[0].slice(1))?.value.slice(2) ?? null;
+  return /^a\/.+ b\/(.+)$/.exec(rest)?.[1] ?? null;
+}
+
 /** Files named in `diff --git` headers of a patch, and its added lines. */
 export function splitPatch(patch: string): { files: string[]; added: string } {
   const files = new Set<string>();
   const added: string[] = [];
   for (const line of patch.split('\n')) {
     if (line.startsWith('diff --git ')) {
-      const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-      if (m) files.add(m[2]!);
+      const file = patchHeaderPath(line);
+      if (file) files.add(file);
     } else if (line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
   }
   return { files: [...files], added: added.join('\n') };

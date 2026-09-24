@@ -136,11 +136,27 @@ builds the task:
 
 ## Re-check evidence
 
-A re-check becomes an artifact `browser-recheck-N.md` (type `browser-report`,
-fenced like the intake evidence) and a `VERIFICATION` event. A final report
-written after a re-check exists lists it under Verification coverage as
-*Operator-observed browser evidence*. That line is informational and never
-changes `READY`. A report written before the re-check is not rewritten.
+A re-check becomes an artifact `browser-recheck-N.md` (type
+`operator-evidence`, fenced like the intake evidence) and a `VERIFICATION`
+event. A final report written after a re-check exists lists it under
+Verification coverage as *Operator-observed browser evidence*. That line is
+informational and never changes `READY`. A report written before the re-check
+is not rewritten.
+
+## What leaves this computer
+
+When this machine is paired with the cloud control plane
+([remote-node.md](remote-node.md)):
+
+| Item | Cloud |
+|---|---|
+| Re-check artifacts (`operator-evidence`) | Never. The type is in the local-only set in `defaultArtifactSensitivity` ([remote.ts](../../packages/shared/src/remote.ts)); audit finding F-21. |
+| Intake evidence (`browser-evidence.md`, `page.jpg`) | Never. These are task attachments, not artifacts, and attachments are not uploaded. |
+| `request.md` | Syncs like every task's request. It holds the operator's note and the page origin and path, never the page text. |
+| Agent execution logs | Sync as usual, and an agent may quote the evidence it read. That is the same rule as for any file an agent reads; nothing here changes it. |
+
+The type also keeps a re-check from being read as the verifier's
+`browser-report` in later prompts.
 
 ## Limits
 

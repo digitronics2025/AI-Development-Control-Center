@@ -215,7 +215,8 @@ export type ArtifactSensitivity = (typeof ARTIFACT_SENSITIVITIES)[number];
  * (environment) or raw tool data stays on the node unless the user shares it
  * from that machine.
  */
-const LOCAL_ONLY_ARTIFACTS: ReadonlySet<string> = new Set(['git-diff', 'staged-diff', 'environment', 'task-json', 'tool-output']);
+// operator-evidence: page text from the operator's own browser (docs/systems/connected-apps.md) — F-21.
+const LOCAL_ONLY_ARTIFACTS: ReadonlySet<string> = new Set(['git-diff', 'staged-diff', 'environment', 'task-json', 'tool-output', 'operator-evidence']);
 
 export function defaultArtifactSensitivity(type: string): ArtifactSensitivity {
   return LOCAL_ONLY_ARTIFACTS.has(type) ? 'local_only' : 'safe_sync';

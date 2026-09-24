@@ -23,6 +23,7 @@ const TYPE_LABEL: Record<Artifact['type'], string> = {
   environment: 'Environment',
   screenshot: 'Screenshot',
   'browser-report': 'Browser verification',
+  'operator-evidence': 'From your browser (this computer only)',
   'tool-output': 'Tool output',
 };
 

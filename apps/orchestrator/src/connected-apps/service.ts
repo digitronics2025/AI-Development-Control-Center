@@ -393,7 +393,7 @@ export class ConnectedAppService {
       fenceEvidence(CONNECTED_APP_LABEL[app.kind], input.evidence),
       '',
     ].join('\n');
-    const artifact = await this.d.artifacts.write(taskId, { name: `browser-recheck-${count + 1}.md`, type: 'browser-report', content });
+    const artifact = await this.d.artifacts.write(taskId, { name: `browser-recheck-${count + 1}.md`, type: 'operator-evidence', content });
     this.d.apps.insertEvidence({ id: newId(), appId: app.id, taskId, requestId: input.requestId, artifactId: artifact.id, createdAt: capturedAt });
     this.d.engine.publisher.event(taskId, 'VERIFICATION', `${app.name} re-check attached: ${artifact.name}`, { artifactId: artifact.id, source: 'connected-app' });
     return { artifactId: artifact.id, name: artifact.name, created: true };

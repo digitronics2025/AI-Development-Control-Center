@@ -29,5 +29,6 @@
 | Remote execution node (pairing, outbound link, typed commands, egress) | [remote-node.md](remote-node.md) | `apps/orchestrator/src/remote`, `packages/shared/src/remote*.ts` |
 | Cloud control plane (Worker, D1, R2, hub, Access, deploy and recovery) | [cloud-control.md](cloud-control.md) | `apps/cloud-control`, `apps/dashboard/src/app/mode.ts` |
 | Execution policy and privileged helper | [autopilot.md](autopilot.md) | `packages/tools/src/policy.ts`, `scripts/windows/privileged-helper.ps1` |
+| Pre-release audit (2026-09-24, findings F-01 to F-54, production snapshot) | [../security/prerelease-audit-2026-09-24.md](../security/prerelease-audit-2026-09-24.md) | whole repository, both Cloudflare hostnames, D1 `acc-control-production` |
 
 Last verified: 2026-09-24

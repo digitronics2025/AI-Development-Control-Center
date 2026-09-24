@@ -1332,7 +1332,7 @@ export class TaskEngine {
       gateLimitations,
       verification,
       repositories,
-      browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'browser-report' && a.name.startsWith('browser-recheck-')).map((a) => a.name),
+      browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'operator-evidence').map((a) => a.name),
       executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)],
     });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });

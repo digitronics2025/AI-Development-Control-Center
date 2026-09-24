@@ -200,6 +200,8 @@ export const ARTIFACT_TYPES = [
   'screenshot',
   'browser-report',
   'tool-output',
+  /** Page evidence the operator sent from Private Browser (a re-check): never leaves this computer (remote.ts). */
+  'operator-evidence',
 ] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 

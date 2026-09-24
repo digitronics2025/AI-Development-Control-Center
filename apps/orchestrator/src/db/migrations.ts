@@ -1144,4 +1144,38 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE task_checkpoints ADD COLUMN parts TEXT;
     `,
   },
+  {
+    // Ask (docs/systems/ask.md): read-only conversations outside tasks. A
+    // conversation outlives the repository it read (SET NULL) and takes its
+    // messages with it when deleted. Additive only.
+    version: 14,
+    name: 'ask conversations',
+    sql: `
+      CREATE TABLE ask_threads (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        repository_id TEXT REFERENCES repositories(id) ON DELETE SET NULL,
+        agent_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_ask_threads_updated ON ask_threads(updated_at);
+      CREATE TABLE ask_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES ask_threads(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT,
+        client_message_id TEXT,
+        execution_id TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (thread_id, seq)
+      );
+      CREATE UNIQUE INDEX idx_ask_messages_client ON ask_messages(thread_id, client_message_id) WHERE client_message_id IS NOT NULL;
+    `,
+  },
 ];

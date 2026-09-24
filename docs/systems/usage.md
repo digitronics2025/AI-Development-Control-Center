@@ -87,7 +87,9 @@ table, only `error_class`.
 `run_id` (stage instance id: one per stage attempt), `workflow_id` (also the
 task type used for comparisons), `workflow_step` (stage key), `agent_role` and
 `mode`. A Chairman attempt uses step `chairman`. A commit-message attempt uses
-step `commit-message`, role `committer` and no task.
+step `commit-message`, role `committer` and no task. An Ask answer
+([ask.md](ask.md)) uses origin, step and role `ask`, no task, and the
+conversation's repository as `project_id`.
 
 **Lineage** (stage attempts only). The parent is the previous attempt of the
 same stage in the same task. The attempt reason is:

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { SimulatedAgentAdapter, type AgentAdapter } from '@acc/agent-sdk';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
+import { AskService } from './ask/service.js';
+import { AskStore } from './ask/store.js';
 import { Bus } from './bus.js';
 import { Chairman } from './chairman/chairman.js';
 import { ChairmanChat } from './chairman/chat.js';
@@ -61,6 +63,8 @@ export interface AppServices {
   repositoryAutomation: RepositoryAutomation;
   chairman: Chairman;
   chat: ChairmanChat;
+  /** Read-only questions outside tasks (docs/systems/ask.md). */
+  ask: AskService;
   watchdog: Watchdog;
   /** Universal tool layer (docs/plans/tool-layer-v2). */
   toolStore: ToolStore;
@@ -141,6 +145,7 @@ export function createServices(
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore, coordinator });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
+  const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
   context.lessons = (task, def, stage) => learning.promptSection(task, def, stage);
@@ -189,6 +194,7 @@ export function createServices(
     repositoryAutomation,
     chairman,
     chat,
+    ask,
     watchdog,
     toolStore,
     tools,
@@ -215,6 +221,7 @@ export function createServices(
       const result = engine.recover();
       await chairman.onStartup();
       chat.recoverPending();
+      ask.recoverPending();
       // Reviews a restart interrupted resume, and completed tasks are reviewed from now on.
       learning.start();
       // Only once local state is settled: the cloud then receives the corrected picture.
@@ -229,6 +236,7 @@ export function createServices(
       await repositoryAutomation.stop();
       await engine.shutdown();
       await chat.idle();
+      await ask.stopAll();
       await processes.stopAll('orchestrator shutdown').catch(() => undefined);
       await terminals.shutdown().catch(() => undefined);
       await mcp.close().catch(() => undefined);

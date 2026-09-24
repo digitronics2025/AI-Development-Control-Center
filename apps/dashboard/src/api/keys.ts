@@ -14,6 +14,12 @@ export const keys = {
   taskDirectives: (id: string) => ['task', id, 'directives'] as const,
   taskApprovals: (id: string) => ['task', id, 'approvals'] as const,
   chairman: (id: string) => ['task', id, 'chairman'] as const,
+  /** Ask conversations (local mode only); one prefix for the list and each conversation. */
+  askRoot: ['ask'] as const,
+  askThreads: ['ask', 'threads'] as const,
+  askThread: (id: string) => ['ask', 'thread', id] as const,
+  /** An answer being written (`ask.delta`): transient, never fetched, dropped when the answer is stored. */
+  askDraft: (messageId: string) => ['ask', 'draft', messageId] as const,
   logs: (executionId: string) => ['logs', executionId] as const,
   artifactContent: (id: string) => ['artifact', id] as const,
   approvals: (status: 'pending' | 'all') => ['approvals', status] as const,

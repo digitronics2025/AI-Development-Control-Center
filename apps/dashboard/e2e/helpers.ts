@@ -11,6 +11,7 @@ export const VIEWPORTS = [
 
 export const PAGES = [
   { name: 'home', path: '/', ready: 'Active Tasks' },
+  { name: 'ask', path: '/ask', ready: 'Questions to an agent that can read' },
   { name: 'tasks', path: '/tasks', ready: 'Every task on this machine' },
   { name: 'task-detail', path: '/tasks/TASK-0001', ready: 'Completion report' },
   { name: 'new-task', path: '/tasks/new', ready: 'Start Task' },

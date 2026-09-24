@@ -13,6 +13,7 @@ import type {
   TestRun,
 } from './types.js';
 import type { Settings, WorkflowProfile } from './schemas.js';
+import type { AskMessage, AskThread } from './ask.js';
 import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, TaskCheckpoint } from './chairman.js';
 import type { CapabilityEscalation, ConnectedAppView, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
 import type { UsageEvent } from './usage.js';
@@ -50,6 +51,12 @@ export type ServerMessage =
   | { type: 'chairman.decision'; decision: ChairmanDecision }
   | { type: 'chairman.action'; action: ChairmanAction }
   | { type: 'checkpoint'; checkpoint: TaskCheckpoint }
+  /** Ask conversations (docs/systems/ask.md); local clients only, never relayed. */
+  | { type: 'ask.thread'; thread: AskThread }
+  | { type: 'ask.thread.deleted'; threadId: string }
+  | { type: 'ask.message'; message: AskMessage }
+  /** Text of an answer being written; not stored. The finished answer arrives as `ask.message`. */
+  | { type: 'ask.delta'; threadId: string; messageId: string; text: string; activity: string | null }
   /** A provider attempt was recorded (or re-costed): usage views refetch. */
   | { type: 'usage'; event: UsageEvent }
   // Universal tool layer (docs/plans/tool-layer-v2)

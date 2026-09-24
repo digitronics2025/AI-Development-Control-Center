@@ -1,6 +1,6 @@
 import { FolderGit2, Paperclip, Play, Plus, Save, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Banner,
   Button,
@@ -65,6 +65,8 @@ export function NewTaskPage() {
   useBreadcrumb([{ label: 'Tasks', to: '/tasks' }, { label: 'New Task' }]);
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  // "Turn into task" from Ask (design.md §7.3.2) hands over a description and a repository.
+  const handover = (useLocation().state ?? null) as { description?: string; repositoryId?: string | null } | null;
   const repositories = useRepositories();
   const workflows = useWorkflows();
   const settings = useSettings();
@@ -80,8 +82,8 @@ export function NewTaskPage() {
   const { toast } = useFeedback();
   const agentName = useAgentNames();
 
-  const [repositoryId, setRepositoryId] = useState<string | undefined>(params.get('repo') ?? undefined);
-  const [description, setDescription] = useState('');
+  const [repositoryId, setRepositoryId] = useState<string | undefined>(params.get('repo') ?? handover?.repositoryId ?? undefined);
+  const [description, setDescription] = useState(typeof handover?.description === 'string' ? handover.description.slice(0, 20_000) : '');
   const [workflowId, setWorkflowId] = useState<string | undefined>();
   const [mode, setMode] = useState<TaskMode | undefined>();
   const [attachments, setAttachments] = useState<Attachment[]>([]);

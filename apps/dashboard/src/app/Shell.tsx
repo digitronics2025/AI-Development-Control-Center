@@ -8,6 +8,7 @@ import {
   GitBranch,
   House,
   ListChecks,
+  MessageCircleQuestion,
   Server,
   Menu as MenuIcon,
   Plus,
@@ -18,7 +19,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { Suspense, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, Suspense, useMemo, useState, type ReactNode } from 'react';
 import { NavLink, Link, useLocation, useNavigate } from 'react-router';
 import {
   Banner,
@@ -38,6 +39,7 @@ import {
   type Command,
 } from '@acc/ui';
 import { useApprovals, useHealth, useSettings } from '../api/hooks';
+import { AskDrawerProvider, useAskLauncher } from '../components/ask';
 import { useCrumbs } from './breadcrumbs';
 import { useCommandRegistry } from './commands';
 import { useCloudNodes, useConnection, useRuntime, useSelectedNode } from './runtime';
@@ -159,7 +161,11 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
   return (
     <nav aria-label="Primary" className="flex min-h-0 flex-1 flex-col gap-1">
       {NAV.map((item) => (
-        <NavEntry key={item.to} item={item} collapsed={collapsed} badge={item.to === '/approvals' ? pending : undefined} onNavigate={onNavigate} />
+        <Fragment key={item.to}>
+          <NavEntry item={item} collapsed={collapsed} badge={item.to === '/approvals' ? pending : undefined} onNavigate={onNavigate} />
+          {/* Ask sits right after Home and exists only on the machine itself (design.md §3). */}
+          {item.to === '/' && mode === 'local' ? <NavEntry item={{ to: '/ask', label: 'Ask', icon: MessageCircleQuestion }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
+        </Fragment>
       ))}
       {mode === 'local' ? <NavEntry item={{ to: '/learning', label: 'Learning', icon: GraduationCap }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       {mode === 'cloud' ? <NavEntry item={{ to: '/nodes', label: 'Nodes', icon: Server }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
@@ -336,6 +342,7 @@ function GlobalCommands() {
   const navigate = useNavigate();
   const { pageCommands, paletteOpen, setPaletteOpen } = useCommandRegistry();
   const { mode } = useRuntime();
+  const ask = useAskLauncher();
   useHotkey('k', (e) => {
     e.preventDefault();
     setPaletteOpen(!paletteOpen);
@@ -344,6 +351,8 @@ function GlobalCommands() {
     () => [
       ...pageCommands,
       { id: 'new-task', label: 'New Task', group: 'Create', icon: Plus, onSelect: () => navigate('/tasks/new') },
+      ...(ask ? [{ id: 'ask', label: 'Ask a question', group: 'Create', icon: MessageCircleQuestion, hint: 'or type ?', keywords: 'chat question help', onSelect: () => ask.open() }] : []),
+      ...(ask ? [{ id: 'go-ask', label: 'Go to Ask', group: 'Go to', icon: MessageCircleQuestion, onSelect: () => navigate('/ask') }] : []),
       { id: 'open-task', label: 'Open Task…', group: 'Go to', icon: ListChecks, onSelect: () => navigate('/tasks') },
       { id: 'open-repo', label: 'Open Repository…', group: 'Go to', icon: FolderGit2, onSelect: () => navigate('/repositories') },
       { id: 'go-source-control', label: 'Go to Source Control', group: 'Go to', icon: GitBranch, onSelect: () => navigate('/source-control') },
@@ -356,9 +365,13 @@ function GlobalCommands() {
       ...(mode === 'cloud' ? [{ id: 'go-nodes', label: 'Go to Nodes', group: 'Go to', icon: Server, onSelect: () => navigate('/nodes') }] : []),
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },
     ],
-    [pageCommands, navigate, mode],
+    [pageCommands, navigate, mode, ask],
   );
-  return <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} commands={commands} />;
+  const queryAction = useMemo(
+    () => (ask ? { prefix: '?', group: 'Ask', icon: MessageCircleQuestion, label: (text: string) => `Ask: ${text}`, run: (text: string) => ask.open(text) } : undefined),
+    [ask],
+  );
+  return <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} commands={commands} queryAction={queryAction} />;
 }
 
 export function PageFallback() {
@@ -374,7 +387,7 @@ export function PageFallback() {
 /** design.md §3.1 global shell with the §6 responsive recomposition. */
 export function Shell({ children }: { children: ReactNode }) {
   const { isTabletUp, isCompactUp } = useBreakpoint();
-  const { host } = useRuntime();
+  const { host, mode } = useRuntime();
   const [preferCollapsed, setPreferCollapsed] = useLocalPreference('sidebar-collapsed', false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
@@ -382,7 +395,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const collapsed = host === 'vscode' ? true : !isCompactUp || preferCollapsed;
   const showSidebar = isTabletUp && host !== 'vscode' ? true : isTabletUp;
 
-  return (
+  const shell = (
     <div className="flex min-h-dvh bg-canvas">
       <a href="#main" className="sr-only-focusable fixed left-2 top-2 z-[70] rounded-md bg-accent px-3 py-2 font-semibold text-fg-inverse">
         Skip to content
@@ -407,4 +420,6 @@ export function Shell({ children }: { children: ReactNode }) {
       <GlobalCommands />
     </div>
   );
+  // Ask exists only on the machine itself; its drawer serves the palette on every page.
+  return mode === 'local' ? <AskDrawerProvider>{shell}</AskDrawerProvider> : shell;
 }

@@ -33,6 +33,12 @@ and the composer (client message ids make sends idempotent). Data:
 `useChairman` (`/api/tasks/:id/chairman`) patched live by `sync.ts`. Settings →
 Chairman edits `settings.chairman`.
 
+## Ask
+
+The **Ask** sidebar item (local and VS Code only) opens `/ask`. The palette's
+**Ask a question** and `?question` open the Ask drawer in the Shell. Turn into
+task pre-fills New Task through router state. See [ask.md](ask.md).
+
 ## State
 
 The orchestrator is the only source of truth. Queries load snapshots;

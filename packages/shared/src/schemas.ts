@@ -260,6 +260,14 @@ export const chairmanSettingsSchema = z.object({
 });
 export type ChairmanSettings = z.infer<typeof chairmanSettingsSchema>;
 
+/** Ask defaults for new conversations (docs/systems/ask.md); each conversation can change them. */
+export const askSettingsSchema = z.object({
+  agentId: agentIdSchema.default('claude'),
+  model: modelIdSchema.default('default'),
+  effort: effortSchema.default('low'),
+});
+export type AskSettings = z.infer<typeof askSettingsSchema>;
+
 /** An absolute local folder path (Windows drive or UNC, or POSIX). */
 const absolutePathSchema = z
   .string()
@@ -300,6 +308,7 @@ export const settingsSchema = z.object({
     .default({ approvals: true, failures: true, completions: true }),
   developerMode: z.boolean().default(false),
   chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
+  ask: askSettingsSchema.default(askSettingsSchema.parse({})),
   repositoryAutomation: repositoryAutomationSettingsSchema.default(repositoryAutomationSettingsSchema.parse({})),
   execution: executionSettingsSchema.default(executionSettingsSchema.parse({})),
   /** The learning loop (docs/systems/learning.md). */

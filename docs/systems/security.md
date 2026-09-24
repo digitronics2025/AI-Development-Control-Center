@@ -104,6 +104,10 @@ needs an approval with a typed confirmation (the task ID).
   kind and rule — come only from the user's own words.
 - Chat has no shell: messages become typed actions or answers. Chairman text,
   decisions and directives are redacted before storage.
+- Ask ([ask.md](ask.md)) runs every answer at permission level 1 with no tool
+  bridge, through the metered launch. No route or setting raises the level.
+  Questions and answers are redacted, Control Center records reach the prompt
+  only as fenced evidence, and nothing about Ask is relayed to the cloud.
 
 ## Tool layer
 

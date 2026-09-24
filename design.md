@@ -170,6 +170,7 @@ Primary navigation:
 
 ```text
 Home
+Ask
 Tasks
 Workflows
 Agents
@@ -199,6 +200,11 @@ run the work, their pairing, keys and presence (§7.12). The local dashboard and
 VS Code never show it — a machine manages its own link under Settings → Remote
 access (§7.8).
 
+Ask is another, and exists **only on the machine itself** (local dashboard and
+VS Code): read-only questions to an agent are not tasks — they change nothing,
+need no repository and must be answerable while no task exists (§7.3.2). The
+cloud dashboard never shows it.
+
 Secondary content belongs inside the relevant section.
 
 ## 3.1 Global shell
@@ -225,19 +231,20 @@ Collapsed width: **72px**
 Order:
 1. Product mark + product name
 2. Home
-3. Tasks
-4. Workflows
-5. Agents
-6. Tools
-7. Repositories
-8. Source Control
-9. Approvals
-10. Usage & Costs
-11. Learning (local dashboard and VS Code only)
-12. Nodes (cloud dashboard only)
-13. flexible spacer
-14. Settings
-15. service status (local: the orchestrator; cloud: the selected node)
+3. Ask (local dashboard and VS Code only)
+4. Tasks
+5. Workflows
+6. Agents
+7. Tools
+8. Repositories
+9. Source Control
+10. Approvals
+11. Usage & Costs
+12. Learning (local dashboard and VS Code only)
+13. Nodes (cloud dashboard only)
+14. flexible spacer
+15. Settings
+16. service status (local: the orchestrator; cloud: the selected node)
 
 Rules:
 - one icon family only,
@@ -942,6 +949,50 @@ from a **Chairman** button in the task header, beside the primary action:
   technical events.
 - Blockers set by the Chairman use the existing banner: "The Chairman needs
   you" (hard blocker) and "Paused at a limit", each with **Open Chairman**.
+
+## 7.3.2 Ask
+
+Ask (see `docs/systems/ask.md`) is a read-only conversation with an agent,
+outside any task. It is reached three ways: the **Ask** sidebar item, the
+palette's **Ask a question** command, and typing `?` followed by a question in
+the palette (Enter asks it at once).
+
+Page (`/ask`), desktop:
+
+```text
+┌ Conversations ─────┐┌ Conversation ────────────────────────────────────────┐
+│ [ + New question ] ││ Title                          [ Turn into task ] [⋯] │
+│ ▸ How does the le… ││ ─────────────────────────────────────────────────────│
+│   Why is TASK-6 …  ││ log: question (right, muted) / answer (Markdown)      │
+│                    ││ ─────────────────────────────────────────────────────│
+│                    ││ Repository [ none ▾ ]  Options ▸                      │
+│                    ││ [ composer                                  ] [Send] │
+└────────────────────┘└──────────────────────────────────────────────────────┘
+```
+
+- The conversation list is 280px, newest activity first, one line each
+  (title + relative time). Mobile shows the list or the conversation, never
+  both, with a back button.
+- Empty page: compact empty state (§8.10) — one line, **New question**.
+- The conversation is `role="log"` with a polite live region and follows new
+  text only while the reader is at the bottom (§9.3). Questions are right
+  aligned on a muted surface; answers render Markdown (no raw HTML).
+- An answer being written shows its text as it arrives, with the activity dot
+  (§10) and the agent's latest tool line ("Reading README.md") in secondary
+  text. **Stop** replaces **Send** while it runs. A failed answer shows the
+  reason in a danger-toned line; a stopped one says "Stopped".
+- Composer: visible label "Ask a question", Enter sends, Shift+Enter adds a
+  line, the `/` skill picker (§8.3) when a repository is chosen, a repository
+  picker ("No repository" first), and an **Options** disclosure for agent,
+  model and effort. Helper text: "Read-only: answers never change your files."
+- **Turn into task** opens New Task with the description filled from the
+  conversation (first question, last answer) and the repository selected; it
+  is enabled once there is an answer.
+- Rename and delete live in the conversation's ⋯ menu; delete confirms (§8.7).
+
+Drawer: the palette opens the same conversation in the standard right drawer
+(§8.8), 460px, with **Open in Ask** in the footer. It starts a new conversation
+unless one is already open in it.
 
 ---
 
@@ -1873,6 +1924,7 @@ Provide `Ctrl/Cmd + K`.
 
 Initial commands:
 - New Task
+- Ask a question (and `?question` asks it directly, §7.3.2)
 - Open Task
 - Open Repository
 - Go to Agents

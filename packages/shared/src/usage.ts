@@ -24,7 +24,7 @@ export const USAGE_EVENT_STATUSES = ['succeeded', 'failed', 'cancelled', 'timed_
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
 /** What asked for the run. */
-export const USAGE_ORIGINS = ['stage', 'chairman', 'source_control'] as const;
+export const USAGE_ORIGINS = ['stage', 'chairman', 'source_control', 'ask'] as const;
 export type UsageOrigin = (typeof USAGE_ORIGINS)[number];
 
 /**
@@ -567,7 +567,7 @@ export const COST_SOURCE_HELP: Record<CostSource, string> = {
 };
 export const CONFIDENCE_LABEL: Record<MetricConfidence, string> = { LIVE: 'Live', CALCULATED: 'Calculated', ESTIMATED: 'Estimated', UNAVAILABLE: 'Unavailable' };
 export const ATTEMPT_REASON_LABEL: Record<AttemptReason, string> = { initial: 'First attempt', retry: 'Retry after an error', rerun: 'Re-run', reroute: 'Rerouted' };
-export const USAGE_ORIGIN_LABEL: Record<UsageOrigin, string> = { stage: 'Workflow stage', chairman: 'Chairman', source_control: 'Source Control' };
+export const USAGE_ORIGIN_LABEL: Record<UsageOrigin, string> = { stage: 'Workflow stage', chairman: 'Chairman', source_control: 'Source Control', ask: 'Ask' };
 export const USAGE_BILLING_LABEL: Record<UsageBilling, string> = { subscription: 'Subscription', api: 'API billing', simulated: 'Simulated', unknown: 'Unknown billing' };
 export const BUDGET_SCOPE_LABEL: Record<BudgetScope, string> = { GLOBAL: 'All usage', PROVIDER: 'Provider', PROJECT: 'Repository', MODEL: 'Model', AGENT: 'Agent', TASK: 'Task' };
 export const BUDGET_PERIOD_LABEL: Record<BudgetPeriod, string> = { day: 'Daily', week: 'Weekly', month: 'Monthly', total: 'Whole task' };

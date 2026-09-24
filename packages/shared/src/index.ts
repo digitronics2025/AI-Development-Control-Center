@@ -7,6 +7,7 @@ export * from './workflow.js';
 export * from './source-control.js';
 export * from './git-graph.js';
 export * from './chairman.js';
+export * from './ask.js';
 export * from './tools.js';
 export * from './usage.js';
 export * from './remote.js';

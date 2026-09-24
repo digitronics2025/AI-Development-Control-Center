@@ -12,6 +12,7 @@ import { Shell } from './Shell';
 import { useThemeController } from './theme';
 
 // Route-level code splitting keeps the shell fast (design.md §21).
+const AskPage = lazy(() => import('../pages/AskPage').then((m) => ({ default: m.AskPage })));
 const TasksPage = lazy(() => import('../pages/TasksPage').then((m) => ({ default: m.TasksPage })));
 const NewTaskPage = lazy(() => import('../pages/NewTaskPage').then((m) => ({ default: m.NewTaskPage })));
 const TaskDetailPage = lazy(() => import('../pages/task/TaskDetailPage').then((m) => ({ default: m.TaskDetailPage })));
@@ -96,6 +97,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
+      {mode === 'local' ? <Route path="/ask" element={<AskPage />} /> : null}
       <Route path="/tasks" element={<TasksPage />} />
       <Route path="/tasks/new" element={<NewTaskPage />} />
       <Route path="/tasks/:id" element={<TaskDetailPage />} />

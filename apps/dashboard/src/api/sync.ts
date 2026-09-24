@@ -2,6 +2,8 @@ import type { QueryClient } from '@tanstack/react-query';
 import type {
   AgentInfo,
   Approval,
+  AskThread,
+  AskThreadDetail,
   Artifact,
   ChairmanOverview,
   Directive,
@@ -288,6 +290,29 @@ export class CacheSync {
         return;
       case 'connectedApp':
         void this.qc.invalidateQueries({ queryKey: keys.connectedAppsRoot });
+        return;
+      case 'ask.thread': {
+        const thread = message.thread;
+        qc.setQueryData<AskThread[]>(keys.askThreads, (old) => (old ? (upsert(old, thread, (x) => x.id) ?? old).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : old));
+        qc.setQueryData<AskThreadDetail>(keys.askThread(thread.id), (old) => (old ? { ...old, thread } : old));
+        return;
+      }
+      case 'ask.thread.deleted':
+        qc.setQueryData<AskThread[]>(keys.askThreads, (old) => old?.filter((x) => x.id !== message.threadId));
+        qc.removeQueries({ queryKey: keys.askThread(message.threadId) });
+        return;
+      case 'ask.message': {
+        const m = message.message;
+        // A conversation still loading may have been read before this message: fetch it again.
+        if (!qc.getQueryData(keys.askThread(m.threadId))) void qc.invalidateQueries({ queryKey: keys.askThread(m.threadId), exact: true });
+        qc.setQueryData<AskThreadDetail>(keys.askThread(m.threadId), (old) =>
+          old ? { ...old, messages: (upsert(old.messages, m, (x) => x.id) ?? old.messages).sort((a, b) => a.seq - b.seq) } : old,
+        );
+        if (m.status !== 'running') qc.removeQueries({ queryKey: keys.askDraft(m.id) });
+        return;
+      }
+      case 'ask.delta':
+        qc.setQueryData(keys.askDraft(message.messageId), { text: message.text, activity: message.activity });
         return;
     }
   };

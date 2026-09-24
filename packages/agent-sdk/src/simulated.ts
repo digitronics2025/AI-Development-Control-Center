@@ -331,6 +331,14 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             ? '## Verification\n\nThe code criteria are met.\n\nNEEDS OPERATOR: Choose whether the service listens on the network.\n\nVERDICT: PASS'
             : '## Verification\n\nAll success criteria were checked.\n\nVERDICT: PASS';
           break;
+        case 'ask': {
+          // The question closes the prompt; the answer names what the agent was told.
+          const question = (input.prompt.split('\nQUESTION:\n').at(-1) ?? '').trim().split('\n')[0]!.slice(0, 120);
+          const repo = /repository "([^"]+)"/.exec(input.prompt)?.[1];
+          const task = /<untrusted_evidence source="task (TASK-\d+)">/.exec(input.prompt)?.[1];
+          output = [`Simulated answer to: ${question}`, '', `- Repository: ${repo ?? 'none'}`, ...(task ? [`- Looked up ${task}`] : [])].join('\n');
+          break;
+        }
         default:
           output = `Simulated ${role} output.`;
       }

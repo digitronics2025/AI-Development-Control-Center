@@ -2,6 +2,9 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect } from 'react';
 import type {
   AgentInfo,
+  AskMessage,
+  AskThread,
+  AskThreadDetail,
   Approval,
   Artifact,
   ChairmanAction,
@@ -109,6 +112,48 @@ export function useChairmanMessage(taskId: string) {
   return useMutation({
     mutationFn: ({ text, clientMessageId }: { text: string; clientMessageId: string }) => api.post<ChairmanMessage>(`/api/tasks/${taskId}/chairman/messages`, { text, clientMessageId }),
   });
+}
+
+// ----- Ask (docs/systems/ask.md) --------------------------------------------------------
+
+export function useAskThreads(enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.askThreads, queryFn: ({ signal }) => api.get<AskThread[]>('/api/ask/threads', signal), enabled });
+}
+
+/** One conversation with its messages, kept live over the WebSocket. */
+export function useAskThread(id: string | null) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.askThread(id ?? ''), queryFn: ({ signal }) => api.get<AskThreadDetail>(`/api/ask/threads/${id}`, signal), enabled: Boolean(id) });
+}
+
+export function useCreateAskThread() {
+  const api = useApi();
+  return useMutation({ mutationFn: (input: { repositoryId?: string | null; agentId?: string; model?: string; effort?: string }) => api.post<AskThread>('/api/ask/threads', input) });
+}
+
+export function useUpdateAskThread(id: string) {
+  const api = useApi();
+  return useMutation({ mutationFn: (patch: Partial<Pick<AskThread, 'title' | 'repositoryId' | 'agentId' | 'model' | 'effort'>>) => api.patch<AskThread>(`/api/ask/threads/${id}`, patch) });
+}
+
+export function useDeleteAskThread() {
+  const api = useApi();
+  return useMutation({ mutationFn: (id: string) => api.del<void>(`/api/ask/threads/${id}`) });
+}
+
+/** Ask a question. The client id makes a retried or double-submitted send idempotent. */
+export function useAskMessage() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: ({ threadId, text, clientMessageId }: { threadId: string; text: string; clientMessageId: string }) =>
+      api.post<AskMessage>(`/api/ask/threads/${threadId}/messages`, { text, clientMessageId }),
+  });
+}
+
+export function useAskCancel() {
+  const api = useApi();
+  return useMutation({ mutationFn: (threadId: string) => api.post<AskThreadDetail>(`/api/ask/threads/${threadId}/cancel`, {}) });
 }
 
 /** Direct Chairman controls (e.g. removing a directive) through the same gateway as chat. */

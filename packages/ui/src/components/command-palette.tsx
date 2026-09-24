@@ -15,19 +15,49 @@ export interface Command {
 }
 
 /**
+ * Free-text action for queries that start with `prefix` (e.g. `?` asks a
+ * question, design.md §15): the typed text after the prefix is the argument,
+ * offered as the only row.
+ */
+export interface QueryAction {
+  prefix: string;
+  label: (text: string) => string;
+  group: string;
+  icon?: LucideIcon;
+  run: (text: string) => void;
+}
+
+/**
  * Ctrl/Cmd+K command palette (design.md §15). The caller passes only the
  * commands valid in the current context; destructive actions open their
  * normal confirmation instead of running directly.
  */
-export function CommandPalette({ open, onOpenChange, commands }: { open: boolean; onOpenChange: (open: boolean) => void; commands: Command[] }) {
+export function CommandPalette({
+  open,
+  onOpenChange,
+  commands,
+  queryAction,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  commands: Command[];
+  queryAction?: QueryAction;
+}) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const listId = useId();
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const trimmed = query.trim();
+    if (queryAction && trimmed.startsWith(queryAction.prefix)) {
+      const text = trimmed.slice(queryAction.prefix.length).trim();
+      if (!text) return [];
+      return [{ id: 'query-action', label: queryAction.label(text), group: queryAction.group, icon: queryAction.icon, hint: 'Enter', onSelect: () => queryAction.run(text) }];
+    }
+    const q = trimmed.toLowerCase();
     if (!q) return commands;
     return commands.filter((c) => `${c.label} ${c.group} ${c.keywords ?? ''} ${c.hint ?? ''}`.toLowerCase().includes(q));
-  }, [commands, query]);
+  }, [commands, query, queryAction]);
+  const typingQuery = Boolean(queryAction && query.trim().startsWith(queryAction.prefix));
 
   const run = (command: Command | undefined) => {
     if (!command) return;
@@ -74,7 +104,7 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
               aria-controls={listId}
               aria-activedescendant={filtered[active] ? `${listId}-${filtered[active]!.id}` : undefined}
               aria-label="Search commands"
-              placeholder="Type a command or search…"
+              placeholder={queryAction ? `Type a command, or ${queryAction.prefix} and a question…` : 'Type a command or search…'}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -86,7 +116,9 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
             <Kbd>Esc</Kbd>
           </div>
           <ul id={listId} role="listbox" aria-label="Commands" className="min-h-0 overflow-y-auto p-2">
-            {filtered.length === 0 ? <li className="px-3 py-6 text-center text-body text-fg-secondary">No matching commands</li> : null}
+            {filtered.length === 0 ? (
+              <li className="px-3 py-6 text-center text-body text-fg-secondary">{typingQuery ? 'Keep typing your question' : 'No matching commands'}</li>
+            ) : null}
             {filtered.map((command, index) => {
               const Icon = command.icon;
               const header = command.group !== lastGroup ? command.group : null;

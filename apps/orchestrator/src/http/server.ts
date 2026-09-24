@@ -13,6 +13,7 @@ import { registerUsageRoutes } from './usage-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
 import { registerVaultBridgeRoutes } from './vault-bridge-routes.js';
 import { registerConnectedAppRoutes } from './connected-app-routes.js';
+import { registerAskRoutes } from './ask-routes.js';
 import { registerWebSocket } from './ws.js';
 
 const DASHBOARD_CSP = [
@@ -62,6 +63,7 @@ export async function buildServer(
   registerConnectedAppRoutes(app, s);
   registerUsageRoutes(app, s);
   registerLearningRoutes(app, s);
+  registerAskRoutes(app, s);
   registerRemoteRoutes(app, s);
   // Remote commands run through these same routes, in process (docs/systems/remote-node.md).
   s.remote.attachHttp({ inject: (request) => app.inject({ ...request, method: request.method as 'GET' }) });

@@ -6,6 +6,7 @@
 | Workflow engine | [workflow-engine.md](workflow-engine.md) | `apps/orchestrator/src/engine`, `packages/shared/src/workflow.ts`, `workflows/` |
 | Role prompts (templates, placeholders, marker lines, prompt artifacts) | [prompts.md](prompts.md) | `prompts/`, `packages/shared/src/prompts.ts`, `apps/orchestrator/src/engine/context.ts` |
 | Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
+| Ask (read-only questions outside tasks) | [ask.md](ask.md) | `apps/orchestrator/src/ask`, `packages/shared/src/ask.ts`, `apps/dashboard/src/components/ask.tsx` |
 | Learning loop (task reviews, findings, improvements the Chairman adopts) | [learning.md](learning.md) | `apps/orchestrator/src/learning`, `packages/shared/src/learning.ts`, `packages/tools/src/packs/installer.ts` |
 | Agent adapters | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |
 | Security | [security.md](security.md) | `packages/security`, `apps/orchestrator/src/http/security.ts` |

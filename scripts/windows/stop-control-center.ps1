@@ -20,10 +20,29 @@ try {
   Write-Host "The orchestrator did not answer ($($_.Exception.Message))."
 }
 
-for ($i = 0; $i -lt 30 -and (Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
-if (Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue) {
+# After a crash runtime.json can outlive the orchestrator and its PID can be
+# reused by any process. Only a Node process that started shortly before the
+# recorded startedAt is ours (audit F-46).
+function Get-Orchestrator {
+  $process = Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue
+  if (-not $process) { return $null }
+  if ($process.ProcessName -ne 'node') { return $null }
+  if ($runtime.startedAt) {
+    $started = [DateTimeOffset]::Parse($runtime.startedAt).UtcDateTime
+    $gap = ($started - $process.StartTime.ToUniversalTime()).TotalSeconds
+    if ($gap -lt -5 -or $gap -gt 600) { return $null }
+  }
+  return $process
+}
+
+for ($i = 0; $i -lt 30 -and (Get-Orchestrator); $i++) { Start-Sleep -Milliseconds 500 }
+$process = Get-Orchestrator
+if ($process) {
   Write-Host 'Graceful shutdown timed out; stopping the process.'
-  Stop-Process -Id $runtime.pid -Force
+  Stop-Process -Id $process.Id -Force
+  Remove-Item -Force $runtimeFile -ErrorAction SilentlyContinue
+} elseif (Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue) {
+  Write-Host "Process $($runtime.pid) is no longer the orchestrator (its PID was reused); leaving it alone."
   Remove-Item -Force $runtimeFile -ErrorAction SilentlyContinue
 }
 Write-Host 'AI Development Control Center stopped.'

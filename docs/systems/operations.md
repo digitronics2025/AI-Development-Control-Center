@@ -14,7 +14,7 @@ verified_at: 2d516aa
 | Script | Effect |
 |---|---|
 | `start-control-center.ps1 [-NoBrowser]` | Reuses a healthy orchestrator from `runtime.json`, otherwise starts `node apps/orchestrator/dist/main.js` hidden with logs in `<data>\orchestrator.log` (rotated at 10 MB) and waits for `/healthz`; opens the dashboard |
-| `stop-control-center.ps1` | `POST /api/service/shutdown` with the token; force-stops after 15 s |
+| `stop-control-center.ps1` | `POST /api/service/shutdown` with the token; force-stops after 15 s, only if the PID in `runtime.json` is still a Node process started within 10 min before its `startedAt` (a reused PID is left alone) |
 | `install.ps1 [-AutoStart]` | Start-menu shortcuts (start, stop); `-AutoStart` adds a sign-in shortcut with `-NoBrowser`. Per-user, no admin |
 | `uninstall.ps1` | Removes those shortcuts; data is kept |
 

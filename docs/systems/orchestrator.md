@@ -71,7 +71,8 @@ the MyVault bridge's `credential_vault_links`, `vault_bridge_origins`,
 `connected_apps`, `connected_app_tasks`, `connected_app_evidence` (migration 12,
 metadata only; [connected-apps.md](connected-apps.md)), and
 `task_linked_repositories` with `test_runs.repository_id` and
-`task_checkpoints.parts` (migration 13, [multi-repository-tasks.md](multi-repository-tasks.md)). Access goes through
+`task_checkpoints.parts` (migration 13, [multi-repository-tasks.md](multi-repository-tasks.md)), and
+`ask_threads`, `ask_messages` (migration 14, [ask.md](ask.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -82,6 +83,7 @@ before any row is written.
 | Service | `GET health`, `GET overview`, `POST service/shutdown` |
 | Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`) |
 | Chairman | `GET tasks/:id/chairman`, `GET/POST tasks/:id/chairman/messages`, `POST tasks/:id/chairman/actions` ([chairman.md](chairman.md)) |
+| Ask | `GET/POST ask/threads`, `GET/PATCH/DELETE ask/threads/:id`, `POST ask/threads/:id/{messages,cancel}` ([ask.md](ask.md)) |
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |
 | Artifacts | `GET artifacts/:id/content` (≤2 MB), `GET artifacts/:id/download` (text types sent with `charset=utf-8`) |
 | Approvals | `GET approvals?status=`, `POST approvals/:id/{approve,deny}` |
@@ -113,7 +115,8 @@ Control mutation) and the Chairman's `chairman`, `chairman.message`,
 `chairman.decision`, `chairman.action`, `checkpoint`, `usage` (a recorded or
 re-costed attempt; clients refetch usage views), and the tool layer's
 `tool`, `toolExecution`, `taskProcess`, `terminal`, `mcpServer(.deleted)`,
-`credential(.deleted)`, `recovery`, `escalation`, `connectedApp` (never relayed to the cloud). `terminal.output` goes only
+`credential(.deleted)`, `recovery`, `escalation`, `connectedApp` (never relayed to the cloud), and Ask's
+`ask.thread(.deleted)`, `ask.message`, `ask.delta` (never relayed). `terminal.output` goes only
 to clients that sent `subscribeTerminal`, which may then send `terminal.input`
 and `terminal.resize` for it ([pty.md](pty.md)). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log

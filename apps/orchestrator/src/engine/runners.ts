@@ -545,10 +545,13 @@ export class StageRunners {
     const needs = alwaysRequiresApproval(cls) || (cls.level > def.permissionLevel && cls.level > autoLevel);
     if (!needs) return null;
     const shown = redact(commandLine);
-    const gate = approvals.state(task.id, 'command', { command: shown });
+    // A command that always needs a person (dangerous, Level 5, production) is approved for this
+    // stage attempt only: a retry or a fix cycle asks again (audit F-09). Others hold for the task.
+    const match = alwaysRequiresApproval(cls) ? { command: shown, stageId: stage.id } : { command: shown };
+    const gate = approvals.state(task.id, 'command', match);
     if (gate === 'approved') return null;
     publisher.updateStage(stage.id, { status: 'WAITING_APPROVAL', summary: `Waiting for approval: ${shown}` });
-    const pending = approvals.pending(task.id, 'command', { command: shown });
+    const pending = approvals.pending(task.id, 'command', match);
     if (pending) approvals.park(task, pending);
     else
       approvals.request(task, {

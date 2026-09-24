@@ -861,11 +861,20 @@ export class TaskEngine {
   }
 
   /** Permission gate before a stage starts. Returns false when the task must wait. */
+  private approvalSpent(task: TaskRecord, def: StageDefinition): boolean {
+    if (!def.requiresApproval && def.permissionLevel < 5) return false;
+    const approval = this.d.store.findApproval(task.id, 'stage_permission', { stageKey: def.key });
+    if (!approval?.resolvedAt) return false;
+    return this.d.store.listStages(task.id).some((s) => s.stageKey === def.key && s.createdAt >= approval.resolvedAt! && s.status !== 'WAITING_APPROVAL');
+  }
+
   private stageGate(task: TaskRecord, def: StageDefinition): boolean {
     const autoLevel = this.d.tooling.autoApproveLevel(task, this.d.repositories.record(task.repositoryId));
     if (!def.requiresApproval && def.permissionLevel <= autoLevel) return true;
     const state = this.approvals.state(task.id, 'stage_permission', { stageKey: def.key });
-    if (state === 'approved') return true;
+    // A stage the workflow always asks about (or a Level 5 one) is approved for one attempt:
+    // once an instance of it has started since the approval, a retry or a fix cycle asks again (audit F-09).
+    if (state === 'approved' && !this.approvalSpent(task, def)) return true;
     const pending = this.approvals.pending(task.id, 'stage_permission', { stageKey: def.key });
     if (pending) {
       this.approvals.park(task, pending);

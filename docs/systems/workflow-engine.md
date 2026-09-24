@@ -135,6 +135,12 @@ without asking for approval (`skipsForLackOfCommands`).
   `auth` — a provider out of credits would otherwise stop each of its stages in turn.
 - **Directives** are persisted immediately and applied when the next agent stage builds its prompt.
 - **Retry** re-queues the chosen stage; pending approvals are withdrawn.
+- **Approvals and attempts.** An approval for a stage with `requiresApproval`
+  (or a Level 5 stage) covers one attempt: once an instance of that stage has
+  started after the approval, a retry, a fix cycle or a recovery that reaches it
+  asks again. A command approval that needed a typed confirmation (dangerous,
+  Level 5, production) is bound to the stage instance it was asked in. Other
+  approvals (a stage or command above the auto-approve level) hold for the task.
 - **Redirect** (Chairman/chat): `redirect()` stops the running loop, waits for it
   to exit, then writes the new stage and re-queues — never two loops per task.
   `pauseAfterStage` pauses at the next boundary. A stop between two commands of

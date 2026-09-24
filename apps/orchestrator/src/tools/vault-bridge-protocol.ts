@@ -37,7 +37,7 @@ export const BRIDGE_LIMITS = {
   valueChars: 20_000,
 } as const;
 
-export type BridgeErrorCode = 'MALFORMED' | 'WRONG_SESSION' | 'WRONG_DIRECTION' | 'REPLAY' | 'OUT_OF_ORDER' | 'TOO_LARGE' | 'INVALID_CIPHERTEXT' | 'INVALID_KEY' | 'CLOSED';
+export type BridgeErrorCode = 'MALFORMED' | 'WRONG_SESSION' | 'WRONG_DIRECTION' | 'REPLAY' | 'OUT_OF_ORDER' | 'TOO_LARGE' | 'INVALID_CIPHERTEXT' | 'INVALID_KEY' | 'CLOSED' | 'UNTRUSTED_SENDER' | 'WRONG_KEY';
 
 export class BridgeProtocolError extends Error {
   constructor(
@@ -249,6 +249,160 @@ export async function identityFingerprint(identityKey: string): Promise<string> 
   const digest = new Uint8Array(await subtle.digest('SHA-256', fromBase64Url(identityKey)));
   const hex = Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
   return hex.match(/.{4}/g)!.join(' ');
+}
+
+/**
+ * `mvcc-deposit-v1` — a secret the Control Center leaves in MyVault's delivery
+ * box (its Worker) while no bridge session is open. Sealed to MyVault's
+ * long-term delivery key and signed with the Control Center's identity key:
+ *
+ *  - ECDH P-256 between a fresh ephemeral key and the delivery key; HKDF-SHA-256
+ *    salted with a hash of the protocol id, deposit id, vault id and both public
+ *    keys → one AES-256-GCM key; a fresh 96-bit IV; AAD binds protocol, deposit
+ *    id, vault id and delivery key id.
+ *  - ECDSA P-256 / SHA-256 by the identity key over every field, so MyVault
+ *    opens only what a Control Center it pinned sent, and nothing can be moved
+ *    between deposits, vaults or keys.
+ *
+ * The Worker stores it and can read none of it.
+ */
+export const DEPOSIT_PROTOCOL = 'mvcc-deposit-v1';
+export const DEPOSIT_LIMITS = { sealedChars: 60_000 } as const;
+const DEPOSIT_ID = /^[A-Za-z0-9_-]{16,64}$/;
+const KEY_ID = /^[0-9a-f]{16}$/;
+
+export interface SealedDeposit {
+  v: typeof DEPOSIT_PROTOCOL;
+  id: string;
+  vaultId: string;
+  keyId: string;
+  epk: string;
+  iv: string;
+  ct: string;
+  identityKey: string;
+  sig: string;
+}
+
+/** What a deposit carries: one generated secret, as a bridge push would. */
+export interface DepositBody {
+  ccId: string;
+  name: string;
+  kind: string;
+  envVar: string | null;
+  description: string;
+  value: string;
+  fingerprint: string;
+  createdAt: string;
+}
+
+/** The first 16 hex characters of SHA-256 over the raw delivery key. */
+export async function depositKeyId(publicKey: string): Promise<string> {
+  const digest = new Uint8Array(await subtle.digest('SHA-256', fromBase64Url(publicKey)));
+  return Array.from(digest.slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** A delivery key pair to keep: the private half comes back as a JWK for storage inside the vault. */
+export async function generateDepositKeyPair(): Promise<{ privateJwk: webcrypto.JsonWebKey; publicKey: string }> {
+  const pair = (await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])) as webcrypto.CryptoKeyPair;
+  return { privateJwk: await subtle.exportKey('jwk', pair.privateKey), publicKey: toBase64Url(new Uint8Array(await subtle.exportKey('raw', pair.publicKey))) };
+}
+
+export async function importDepositPrivateKey(jwk: webcrypto.JsonWebKey): Promise<CryptoKey> {
+  try {
+    return await subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  } catch {
+    throw new BridgeProtocolError('INVALID_KEY', 'The delivery key is not valid');
+  }
+}
+
+function depositSigned(d: Omit<SealedDeposit, 'sig'>): Uint8Array {
+  return encoder.encode(`${DEPOSIT_PROTOCOL} signed\n${d.id}\n${d.vaultId}\n${d.keyId}\n${d.epk}\n${d.iv}\n${d.ct}\n${d.identityKey}`);
+}
+
+async function depositKey(shared: ArrayBuffer, id: string, vaultId: string, recipientPublicKey: string, epk: string): Promise<CryptoKey> {
+  const salt = await subtle.digest('SHA-256', encoder.encode(`${DEPOSIT_PROTOCOL}\n${id}\n${vaultId}\n${recipientPublicKey}\n${epk}`));
+  const ikm = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+  return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info: encoder.encode(`${DEPOSIT_PROTOCOL} key`) }, ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+function depositAad(id: string, vaultId: string, keyId: string): Uint8Array {
+  return encoder.encode(`${DEPOSIT_PROTOCOL}\n${id}\n${vaultId}\n${keyId}`);
+}
+
+/**
+ * Seal one secret for MyVault. `ephemeralPrivateKey` and `iv` exist for the
+ * test vectors only; a real deposit always draws fresh ones.
+ */
+export async function sealDeposit(input: {
+  id: string;
+  vaultId: string;
+  recipientPublicKey: string;
+  identity: { signingKey: CryptoKey; publicKey: string };
+  body: DepositBody;
+  ephemeral?: { privateKey: CryptoKey; publicKey: string };
+  iv?: Uint8Array;
+}): Promise<SealedDeposit> {
+  if (!DEPOSIT_ID.test(input.id)) throw new BridgeProtocolError('MALFORMED', 'Invalid deposit id');
+  const recipient = await importPeerKey(input.recipientPublicKey);
+  const eph = input.ephemeral ?? (await generateBridgeKeyPair());
+  const shared = await subtle.deriveBits({ name: 'ECDH', public: recipient }, eph.privateKey, 256);
+  const key = await depositKey(shared, input.id, input.vaultId, input.recipientPublicKey, eph.publicKey);
+  const keyId = await depositKeyId(input.recipientPublicKey);
+  const nonce = input.iv ?? globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: depositAad(input.id, input.vaultId, keyId) }, key, encoder.encode(JSON.stringify(input.body))));
+  const unsigned = { v: DEPOSIT_PROTOCOL, id: input.id, vaultId: input.vaultId, keyId, epk: eph.publicKey, iv: toBase64Url(nonce), ct: toBase64Url(ct), identityKey: input.identity.publicKey } as const;
+  const sig = toBase64Url(new Uint8Array(await subtle.sign(IDENTITY_SIGN, input.identity.signingKey, depositSigned(unsigned))));
+  const sealed = { ...unsigned, sig };
+  if (JSON.stringify(sealed).length > DEPOSIT_LIMITS.sealedChars) throw new BridgeProtocolError('TOO_LARGE', 'The deposit is too large');
+  return sealed;
+}
+
+export function parseDeposit(value: unknown): SealedDeposit {
+  const d = value as Partial<SealedDeposit> | null;
+  if (!d || typeof d !== 'object' || d.v !== DEPOSIT_PROTOCOL) throw new BridgeProtocolError('MALFORMED', 'Not a deposit');
+  const text = (x: unknown, max: number) => typeof x === 'string' && x.length > 0 && x.length <= max && B64URL.test(x);
+  if (typeof d.id !== 'string' || !DEPOSIT_ID.test(d.id)) throw new BridgeProtocolError('MALFORMED', 'Invalid deposit id');
+  if (typeof d.vaultId !== 'string' || !/^[\w-]{1,128}$/.test(d.vaultId)) throw new BridgeProtocolError('MALFORMED', 'Invalid vault id');
+  if (typeof d.keyId !== 'string' || !KEY_ID.test(d.keyId)) throw new BridgeProtocolError('MALFORMED', 'Invalid key id');
+  if (!text(d.epk, 200) || !text(d.identityKey, 200) || !text(d.sig, 200) || !text(d.iv, 16) || d.iv!.length !== 16 || !text(d.ct, DEPOSIT_LIMITS.sealedChars)) {
+    throw new BridgeProtocolError('MALFORMED', 'Invalid deposit fields');
+  }
+  return { v: DEPOSIT_PROTOCOL, id: d.id, vaultId: d.vaultId, keyId: d.keyId, epk: d.epk!, iv: d.iv!, ct: d.ct!, identityKey: d.identityKey!, sig: d.sig! };
+}
+
+/**
+ * Open a deposit: only one signed by a trusted identity key, sealed for this
+ * vault and this delivery key. Every failure is a BridgeProtocolError.
+ */
+export async function openDeposit(input: { deposit: unknown; vaultId: string; recipient: { privateKey: CryptoKey; publicKey: string }; trustedIdentityKeys: readonly string[] }): Promise<DepositBody> {
+  const d = parseDeposit(input.deposit);
+  if (!input.trustedIdentityKeys.includes(d.identityKey)) throw new BridgeProtocolError('UNTRUSTED_SENDER', 'The deposit was not sent by a trusted Control Center');
+  let signed: boolean;
+  try {
+    const verifyKey = await subtle.importKey('raw', fromBase64Url(d.identityKey), IDENTITY_ALGORITHM, false, ['verify']);
+    const { sig, ...unsigned } = d;
+    signed = await subtle.verify(IDENTITY_SIGN, verifyKey, fromBase64Url(sig), depositSigned(unsigned));
+  } catch {
+    signed = false;
+  }
+  if (!signed) throw new BridgeProtocolError('UNTRUSTED_SENDER', 'The deposit signature is not valid');
+  if (d.vaultId !== input.vaultId) throw new BridgeProtocolError('WRONG_KEY', 'The deposit is for another vault');
+  if (d.keyId !== (await depositKeyId(input.recipient.publicKey))) throw new BridgeProtocolError('WRONG_KEY', 'The deposit is sealed to another delivery key');
+  const eph = await importPeerKey(d.epk);
+  let body: unknown;
+  try {
+    const shared = await subtle.deriveBits({ name: 'ECDH', public: eph }, input.recipient.privateKey, 256);
+    const key = await depositKey(shared, d.id, d.vaultId, input.recipient.publicKey, d.epk);
+    const plain = await subtle.decrypt({ name: 'AES-GCM', iv: fromBase64Url(d.iv), additionalData: depositAad(d.id, d.vaultId, d.keyId) }, key, fromBase64Url(d.ct));
+    body = JSON.parse(decoder.decode(plain));
+  } catch {
+    throw new BridgeProtocolError('INVALID_CIPHERTEXT', 'The deposit could not be opened');
+  }
+  const b = body as Partial<DepositBody> | null;
+  if (!b || typeof b.ccId !== 'string' || typeof b.name !== 'string' || typeof b.value !== 'string' || typeof b.fingerprint !== 'string') {
+    throw new BridgeProtocolError('MALFORMED', 'The deposit body is not a secret');
+  }
+  return { ccId: b.ccId, name: b.name, kind: typeof b.kind === 'string' ? b.kind : 'other', envVar: typeof b.envVar === 'string' ? b.envVar : null, description: typeof b.description === 'string' ? b.description : '', value: b.value, fingerprint: b.fingerprint, createdAt: typeof b.createdAt === 'string' ? b.createdAt : '' };
 }
 
 /**

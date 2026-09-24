@@ -28,6 +28,7 @@ import type { Bus } from '../bus.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now } from '../store/store.js';
+import type { VaultDepositService } from './vault-deposit.js';
 import type { CredentialBroker } from './credentials.js';
 import type { ProcessManager } from './processes.js';
 import type { ToolStore } from './store.js';
@@ -121,6 +122,8 @@ export interface ToolServiceDeps {
   processes: ProcessManager;
   terminals: TerminalService;
   credentials: CredentialBroker;
+  /** MyVault's delivery box: lets a newly generated secret be saved for MyVault while it is locked. */
+  deposits?: VaultDepositService;
   dataDir: string;
   baseEnv: NodeJS.ProcessEnv;
 }
@@ -485,10 +488,25 @@ export class ToolService {
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {
           const r = await this.d.credentials.generate({ ...input, repositoryIds: scope.repositoryId ? [scope.repositoryId] : [], taskId: scope.taskId });
-          const c = r.credential;
+          // With a MyVault delivery box set up, the new secret is saved for MyVault right away.
+          if (this.d.deposits?.eligible(r.credential.id)) await this.d.deposits.ensureDeposited(r.credential.id, 15_000);
+          const c = this.d.credentials.get(r.credential.id) ?? r.credential;
           return { created: r.created, credential: { id: c.id, name: c.name, kind: c.kind, envVar: c.envVar, fingerprint: c.fingerprint, repositoryIds: c.repositoryIds }, vaultSync: c.vault?.state ?? null };
         },
-        deployGate: async (name, target) => this.d.credentials.deployGate(name, scope.repositoryId, { taskId: scope.taskId, target }),
+        deployGate: async (name, target) => {
+          // A secret on its way to the delivery box is waited for, not refused a moment too early —
+          // and only one this repository may use, so no other task can trigger its delivery.
+          const record = this.d.toolStore.credential(name);
+          const view = record ? this.d.credentials.get(record.id) : null;
+          const inScope = view !== null && (view.repositoryIds === null || (scope.repositoryId !== null && view.repositoryIds.includes(scope.repositoryId)));
+          if (record && inScope && this.d.deposits?.eligible(record.id)) await this.d.deposits.ensureDeposited(record.id);
+          const blocked = this.d.credentials.deployGate(name, scope.repositoryId, { taskId: scope.taskId, target });
+          if (!blocked || !record) return blocked;
+          // Name the box this secret would go to, if its last attempt failed.
+          const origin = this.d.credentials.get(record.id)?.vault?.origin ?? null;
+          const box = this.d.deposits?.summary().find((t) => t.lastError && (origin === null || t.origin === origin));
+          return box ? `${blocked} MyVault’s delivery box: ${box.lastError}` : blocked;
+        },
       },
       privileged: this.privileged,
       protectedPaths: scope.protectedPaths,

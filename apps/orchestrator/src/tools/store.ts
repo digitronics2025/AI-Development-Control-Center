@@ -524,6 +524,74 @@ export class ToolStore {
       .run(publicKey, sealed.ciphertext, sealed.iv, sealed.tag, now());
   }
 
+  // --- MyVault delivery box (migration 10) ---------------------------------
+
+  depositTargets(): DepositTargetRecord[] {
+    return (this.db.prepare('SELECT * FROM vault_deposit_targets ORDER BY updated_at DESC').all() as Row[]).map(depositTarget);
+  }
+
+  depositTarget(origin: string): DepositTargetRecord | null {
+    const r = this.db.prepare('SELECT * FROM vault_deposit_targets WHERE origin = ?').get(origin) as Row | undefined;
+    return r ? depositTarget(r) : null;
+  }
+
+  upsertDepositTarget(t: DepositTargetRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO vault_deposit_targets (origin, vault_id, key_id, public_key, sender_id, token_ciphertext, token_iv, token_tag, last_error, last_error_kind, last_deposit_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(origin) DO UPDATE SET vault_id = excluded.vault_id, key_id = excluded.key_id, public_key = excluded.public_key, sender_id = excluded.sender_id,
+           token_ciphertext = excluded.token_ciphertext, token_iv = excluded.token_iv, token_tag = excluded.token_tag, last_error = excluded.last_error,
+           last_error_kind = excluded.last_error_kind, last_deposit_at = excluded.last_deposit_at, updated_at = excluded.updated_at`,
+      )
+      .run(t.origin, t.vaultId, t.keyId, t.publicKey, t.senderId, t.sealedToken.ciphertext, t.sealedToken.iv, t.sealedToken.tag, t.lastError, t.lastErrorKind, t.lastDepositAt, t.createdAt, t.updatedAt);
+  }
+
+  noteDepositTarget(origin: string, patch: { lastError?: string | null; lastErrorKind?: DepositTargetRecord['lastErrorKind']; lastDepositAt?: string }): void {
+    const current = this.depositTarget(origin);
+    if (current) this.upsertDepositTarget({ ...current, ...patch, updatedAt: now() });
+  }
+
+  removeDepositTarget(origin: string): void {
+    this.db.prepare('DELETE FROM vault_deposit_targets WHERE origin = ?').run(origin);
+  }
+
+  deposits(filter: { status?: DepositRecord['status']; credentialId?: string } = {}): DepositRecord[] {
+    const where: string[] = [];
+    const args: string[] = [];
+    if (filter.status) {
+      where.push('status = ?');
+      args.push(filter.status);
+    }
+    if (filter.credentialId) {
+      where.push('credential_id = ?');
+      args.push(filter.credentialId);
+    }
+    const sql = `SELECT * FROM vault_deposits${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at`;
+    return (this.db.prepare(sql).all(...args) as Row[]).map((r) => ({
+      id: r.id,
+      credentialId: r.credential_id,
+      origin: r.origin,
+      vaultId: r.vault_id,
+      fingerprint: r.fingerprint,
+      status: r.status,
+      receiptStatus: r.receipt_status,
+      detail: r.detail,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  upsertDeposit(d: DepositRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO vault_deposits (id, credential_id, origin, vault_id, fingerprint, status, receipt_status, detail, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, receipt_status = excluded.receipt_status, detail = excluded.detail, updated_at = excluded.updated_at`,
+      )
+      .run(d.id, d.credentialId, d.origin, d.vaultId, d.fingerprint, d.status, d.receiptStatus, d.detail, d.createdAt, d.updatedAt);
+  }
+
   touchOrigin(origin: string, vaultId: string): void {
     this.db.prepare('UPDATE vault_bridge_origins SET vault_id = ?, last_connected_at = ? WHERE origin = ?').run(vaultId, now(), origin);
   }
@@ -540,6 +608,52 @@ export class ToolStore {
       : (this.db.prepare('SELECT * FROM credential_events ORDER BY created_at DESC, rowid DESC LIMIT ?').all(filter.limit ?? 100) as Row[]);
     return rows.map((r) => ({ id: r.id, credentialId: r.credential_id, credentialName: r.credential_name, operation: r.operation, direction: r.direction, status: r.status, taskId: r.task_id, target: r.target, detail: r.detail, createdAt: r.created_at }));
   }
+}
+
+/** Where to leave sealed secrets for one MyVault: its Worker (the trusted origin), delivery key and sender token. */
+export interface DepositTargetRecord {
+  origin: string;
+  vaultId: string;
+  keyId: string;
+  publicKey: string;
+  senderId: string;
+  sealedToken: { ciphertext: string; iv: string; tag: string };
+  lastError: string | null;
+  /** `auth`: MyVault refused the credential — nothing is sent until MyVault offers a new one; `transient`: try again later. */
+  lastErrorKind: 'auth' | 'transient' | null;
+  lastDepositAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One secret left in a delivery box. `sending`: id reserved, not yet confirmed stored; `stored`: in the box; `collected`/`refused`: receipt read. */
+export interface DepositRecord {
+  id: string;
+  credentialId: string;
+  origin: string;
+  vaultId: string;
+  fingerprint: string;
+  status: 'sending' | 'stored' | 'collected' | 'refused';
+  receiptStatus: string | null;
+  detail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function depositTarget(r: Row): DepositTargetRecord {
+  return {
+    origin: r.origin,
+    vaultId: r.vault_id,
+    keyId: r.key_id,
+    publicKey: r.public_key,
+    senderId: r.sender_id,
+    sealedToken: { ciphertext: r.token_ciphertext, iv: r.token_iv, tag: r.token_tag },
+    lastError: r.last_error,
+    lastErrorKind: r.last_error_kind,
+    lastDepositAt: r.last_deposit_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 export interface VaultLinkRecord {

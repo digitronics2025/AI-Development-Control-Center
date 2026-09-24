@@ -3,6 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { z } from 'zod';
 import type { CredentialBroker, VaultAck } from './credentials.js';
 import type { ToolStore } from './store.js';
+import { VaultDepositService, type VaultDepositOptions } from './vault-deposit.js';
 import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, generateBridgeKeyPair, identityFingerprint, newSessionId, signBridgeIdentity, toBase64Url, type BridgeChannel, type SealedEnvelope } from './vault-bridge-protocol.js';
 
 /**
@@ -104,7 +105,16 @@ export interface VaultBridgeOptions {
   maxMs: number;
   maxSessions: number;
   now: () => number;
+  /** The delivery box (vault-deposit.ts): bus for dashboard updates, fetch and timings for MyVault's Worker. */
+  deposits: Partial<VaultDepositOptions>;
 }
+
+const depositOfferSchema = z.object({
+  keyId: z.string().regex(/^[0-9a-f]{16}$/),
+  publicKey: z.string().min(80).max(100).regex(/^[A-Za-z0-9_-]+$/),
+  senderId: z.string().regex(/^[0-9a-f-]{36}$/),
+  token: z.string().min(40).max(200),
+});
 
 const IDENTITY_ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' } as const;
 /** Binds the sealed private half to its public key, so a row cannot pair one key's private half with another's public half. */
@@ -120,13 +130,16 @@ export class VaultBridgeService {
   private readonly sessions = new Map<string, Session>();
   private readonly opts: VaultBridgeOptions;
   private identityLoad: Promise<BridgeIdentity> | null = null;
+  /** Where generated secrets go while no session is open (set up by MyVault through a session). */
+  readonly deposits: VaultDepositService;
 
   constructor(
     private readonly store: ToolStore,
     private readonly broker: CredentialBroker,
     opts: Partial<VaultBridgeOptions> = {},
   ) {
-    this.opts = { idleMs: 10 * 60_000, maxMs: 30 * 60_000, maxSessions: 4, now: Date.now, ...opts };
+    this.opts = { idleMs: 10 * 60_000, maxMs: 30 * 60_000, maxSessions: 4, now: Date.now, deposits: {}, ...opts };
+    this.deposits = new VaultDepositService(store, broker, () => this.identity(), this.opts.deposits);
   }
 
   /**
@@ -157,6 +170,8 @@ export class VaultBridgeService {
 
   async status(): Promise<VaultBridgeStatus> {
     this.sweep();
+    // Someone is looking: check for MyVault's receipts now rather than at the next minute.
+    this.deposits.pollSoon();
     const identity = await this.identity().then(
       (i) => ({ publicKey: i.publicKey, fingerprint: i.fingerprint }),
       () => null,
@@ -164,6 +179,7 @@ export class VaultBridgeService {
     const links = this.store.listVaultLinks();
     return {
       identity,
+      delivery: this.deposits.summary(),
       origins: this.store.listTrustedOrigins(),
       sessions: [...this.sessions.values()].map((s) => ({ id: s.id, origin: s.origin, code: s.channel.code, openedAt: new Date(s.openedAt).toISOString(), expiresAt: new Date(this.expiry(s)).toISOString() })),
       pendingPush: links.filter((l) => l.state === 'pending_push').length,
@@ -182,6 +198,8 @@ export class VaultBridgeService {
     const origin = normalizeVaultOrigin(input);
     this.store.untrustOrigin(origin);
     for (const s of [...this.sessions.values()]) if (s.origin === origin) this.drop(s);
+    // Its delivery box goes with it: nothing more is sealed to a key that address supplied.
+    this.deposits.forgetOrigin(origin);
     return this.status();
   }
 
@@ -261,6 +279,7 @@ export class VaultBridgeService {
 
   closeAll(): void {
     for (const s of [...this.sessions.values()]) this.drop(s);
+    this.deposits.stop();
   }
 
   private expiry(s: Session): number {
@@ -300,8 +319,18 @@ export class VaultBridgeService {
             }),
           );
         }
-        replies.push(await s.channel.seal('snapshot.request', { pushes: s.inFlight.size }));
+        // `delivery` tells MyVault whether its delivery box is set up here; it offers one only when not.
+        replies.push(await s.channel.seal('snapshot.request', { pushes: s.inFlight.size, delivery: this.deposits.offerState(s.origin, s.vaultId) }));
         return replies;
+      }
+      case 'deposit.offer': {
+        const offer = depositOfferSchema.parse(body);
+        try {
+          await this.deposits.acceptOffer({ ...offer, origin: s.origin, vaultId: s.vaultId });
+          return [await s.channel.seal('deposit.accepted', { keyId: offer.keyId, ok: true, detail: null })];
+        } catch (error) {
+          return [await s.channel.seal('deposit.accepted', { keyId: offer.keyId, ok: false, detail: error instanceof Error ? error.message.slice(0, 200) : 'Not accepted' })];
+        }
       }
       case 'credential.ack': {
         const ack = ackSchema.parse(body);

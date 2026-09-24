@@ -1,3 +1,4 @@
+import { runProcess } from '@acc/executor';
 import { redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable, run } from '../detect.js';
@@ -22,6 +23,34 @@ async function gh(ctx: OperationContext, args: string[], summary: (json: any) =>
   }
   return { ok: true, summary: summary(json ?? r.stdout), output: json ?? undefined, stdout: json ? undefined : clip(redact(r.stdout)), networkTargets: ['github.com'] };
 }
+
+/** `gh` with a value on stdin: never argv, never the environment, never a file. */
+async function ghWithStdin(ctx: OperationContext, args: string[], stdin: string | undefined, timeoutMs = 120_000): Promise<{ code: number | null; stdout: string; stderr: string; spawnError: string | null }> {
+  const exe = ctx.detection('gh')?.path ?? 'gh';
+  const out: string[] = [];
+  const err: string[] = [];
+  const handle = runProcess({
+    command: exe,
+    args,
+    cwd: ctx.cwd,
+    env: { ...ctx.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
+    timeoutMs,
+    ...(stdin !== undefined ? { stdin } : {}),
+    onLine: (stream, line) => (stream === 'stdout' ? out : err).push(redact(line)),
+  });
+  const abort = () => void handle.cancel();
+  ctx.signal.addEventListener('abort', abort, { once: true });
+  const result = await handle.done;
+  ctx.signal.removeEventListener('abort', abort);
+  return { code: result.exitCode, stdout: out.join('\n'), stderr: err.join('\n'), spawnError: result.spawnError };
+}
+
+const secretName = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Letters, digits and underscore, not starting with a digit')
+  .refine((n) => !/^GITHUB_/i.test(n), 'GitHub reserves names starting with GITHUB_');
 
 const num = z.number().int().min(1).max(10_000_000);
 const limit = z.number().int().min(1).max(200).default(20);
@@ -116,6 +145,56 @@ export function githubProvider(): ToolProvider {
         level: 3,
         classify: () => ({ reasons: ['Posts to GitHub'], effects: ['network'] }),
         run: (i, ctx) => gh(ctx, ['issue', 'comment', String(i.number), '--body', i.body], () => `Commented on #${i.number}`),
+      }),
+      operation({
+        id: 'github.secret_put',
+        title: 'Set a GitHub Actions secret',
+        description:
+          'Store a credential from the broker as a GitHub Actions secret of this repository (or of one of its deployment environments), by name: the value goes to `gh secret set` on stdin and never appears to you, in arguments or in logs. Level 4; an environment named like production needs your typed approval. A secret made with credential.generate must be saved to MyVault first — with MyVault’s delivery box set up that happens on its own. Success is verified by listing secret names and their update time: GitHub never returns values. Retrying deploys the same value.',
+        input: z.object({
+          credential: z.string().min(1).max(100).regex(/^[\w.-]+$/),
+          secretName,
+          environment: z.string().min(1).max(100).regex(/^[\w.-]+$/).optional(),
+        }),
+        level: 4,
+        classify: (i) =>
+          /prod/i.test(i.environment ?? '')
+            ? { level: 5, production: true, risk: 'elevated', reasons: [`Changes the ${i.environment} secrets on GitHub`], effects: ['infrastructure', 'production', 'network'] }
+            : { level: 4, risk: 'elevated', reasons: [i.environment ? `Changes the ${i.environment} secrets on GitHub` : 'Changes this repository’s GitHub Actions secrets'], effects: ['infrastructure', 'network'] },
+        async run(input, ctx) {
+          if (!ctx.credentials) return failure('UNAVAILABLE', 'Credentials are not available in this session');
+          const where = input.environment ? ['--env', input.environment] : [];
+          const target = `GitHub secret ${input.secretName}${input.environment ? ` (${input.environment})` : ''}`;
+          const blocked = await ctx.credentials.deployGate?.(input.credential, target);
+          if (blocked) return failure('UNAVAILABLE', blocked);
+          const value = await ctx.credentials.value(input.credential);
+          if (value === null) return failure('INVALID_INPUT', `No credential named "${input.credential}" is available to this repository`);
+          const startedAt = Date.now();
+          const set = await ghWithStdin(ctx, ['secret', 'set', input.secretName, ...where], value);
+          if (set.spawnError) return failure('NOT_INSTALLED', 'GitHub CLI is not installed');
+          if (set.code !== 0) {
+            const message = (set.stderr.trim() || set.stdout.trim() || `gh exited with ${set.code}`).slice(0, 500);
+            return failure(/auth login|not logged|HTTP 401|HTTP 403|Resource not accessible/i.test(message) ? 'AUTH_REQUIRED' : 'FAILED', message);
+          }
+          // Presence and a fresh update time are all GitHub can prove: secret values are never readable back.
+          const listed = await ghWithStdin(ctx, ['secret', 'list', ...where, '--json', 'name,updatedAt'], undefined, 60_000);
+          let names: Array<{ name?: string; updatedAt?: string }> = [];
+          try {
+            names = JSON.parse(listed.stdout) as typeof names;
+          } catch {
+            names = [];
+          }
+          const entry = Array.isArray(names) ? names.find((n) => n?.name?.toUpperCase() === input.secretName.toUpperCase()) : undefined;
+          // A minute of clock skew between this machine and GitHub is tolerated.
+          const fresh = entry?.updatedAt ? Date.parse(entry.updatedAt) >= startedAt - 60_000 : false;
+          const output = { credential: input.credential, secretName: input.secretName, environment: input.environment ?? null, verified: Boolean(entry && fresh) };
+          const base = { stdout: clip(set.stdout), stderr: clip(set.stderr, 8000), exitCode: set.code, networkTargets: ['api.github.com'], output };
+          if (!entry || !fresh) {
+            const message = `Deployment unverified: gh reported the secret was set, but ${input.secretName} ${entry ? 'still shows an older update time' : 'is not in the secret list'}. The same value will be used on retry.`;
+            return { ...base, ok: false, summary: message, error: { code: 'FAILED', message } };
+          }
+          return { ...base, ok: true, summary: `Set ${target}`, evidence: [`${target} updated ${entry.updatedAt} (value not readable back by design)`] };
+        },
       }),
     ],
   };

@@ -196,7 +196,8 @@ export type CredentialSource = 'manual' | 'myvault' | 'generated';
 /** Which side owns the value: MyVault for imported items, the Control Center for generated secrets. */
 export type VaultAuthority = 'myvault' | 'control-center';
 
-export const VAULT_LINK_STATES = ['pending_push', 'pending_pull', 'synced', 'conflict', 'missing', 'error', 'detached'] as const;
+/** `deposited`: sealed in MyVault's delivery box — saved for MyVault, waiting to be collected into the vault. */
+export const VAULT_LINK_STATES = ['pending_push', 'pending_pull', 'deposited', 'synced', 'conflict', 'missing', 'error', 'detached'] as const;
 export type VaultLinkState = (typeof VAULT_LINK_STATES)[number];
 
 export interface CredentialVaultLinkView {
@@ -216,7 +217,7 @@ export interface CredentialEventView {
   id: string;
   credentialId: string | null;
   credentialName: string;
-  operation: 'create' | 'generate' | 'import' | 'update_from_vault' | 'push' | 'ack' | 'conflict' | 'missing' | 'detached' | 'resolve' | 'scope' | 'replace' | 'delete' | 'deploy_blocked';
+  operation: 'create' | 'generate' | 'import' | 'update_from_vault' | 'push' | 'ack' | 'conflict' | 'missing' | 'detached' | 'resolve' | 'scope' | 'replace' | 'delete' | 'deploy_blocked' | 'deposit' | 'collected';
   direction: 'to_vault' | 'from_vault' | 'local' | null;
   status: 'ok' | 'failed' | 'pending' | 'blocked';
   taskId: string | null;
@@ -229,6 +230,8 @@ export interface CredentialEventView {
 export interface VaultBridgeStatus {
   /** The key MyVault pins on first connect; null only when the sealed key cannot be opened. */
   identity: { publicKey: string; fingerprint: string } | null;
+  /** MyVault delivery boxes this Control Center may leave generated secrets in (set up by MyVault during a sync). */
+  delivery: Array<{ origin: string; vaultId: string; keyId: string; lastDepositAt: string | null; lastError: string | null; waiting: number }>;
   origins: Array<{ origin: string; vaultId: string | null; trustedAt: string; lastConnectedAt: string | null }>;
   sessions: Array<{ id: string; origin: string; code: string; openedAt: string; expiresAt: string }>;
   pendingPush: number;

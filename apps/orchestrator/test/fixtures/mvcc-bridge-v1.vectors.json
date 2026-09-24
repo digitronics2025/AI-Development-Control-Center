@@ -106,5 +106,61 @@
         "ct": "MYyz61oLNaTkRepBjBHM3_5tlmOFcG4oBDflVpmdnwhx0u50xbvplDmENNPaWdreqF0bZ3Ggq24zO9yDJddmkXepboEsEy8gaK1GgGutEMHipFvSvbmCXeFP7wqCJI6KoOHQapsesl01t0hmVOpO1yZvd_wmTBdS_u1P5hf3-CUGLe-UtHeQcCuwyAugcZZHHhfxUPK29TBRjNabDo4LoICUCVg-RCrdVQhh1whBnQ"
       }
     }
-  ]
+  ],
+  "deposit": {
+    "note": "mvcc-deposit-v1: ciphertext, epk and keyId are reproducible from the fixed keys and IV; the ECDSA signature is randomized, so implementations verify it rather than reproduce it.",
+    "recipient": {
+      "privateJwk": {
+        "key_ops": [
+          "deriveBits"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "cIl6egWkEWJTTFOMwGLE3b67Z_1BXXNnRKff_3jeo40",
+        "y": "CqeFpLWaHrerY68KHuM9X7iHzZDGeAIN6CheVsJLtJA",
+        "crv": "P-256",
+        "d": "3gGQ0I9fq_4YUCi1Gfy6sofs4oAw-MEiBg-yNtmksF0"
+      },
+      "publicKey": "BHCJenoFpBFiU0xTjMBixN2-u2f9QV1zZ0Sn3_943qONCqeFpLWaHrerY68KHuM9X7iHzZDGeAIN6CheVsJLtJA",
+      "keyId": "269f2660a9ba6c3c"
+    },
+    "ephemeral": {
+      "privateJwk": {
+        "key_ops": [
+          "deriveBits"
+        ],
+        "ext": true,
+        "kty": "EC",
+        "x": "8xpy9spHIon6Cmp7MQ7FhzzGKgzNDSdq-Pn2gLRbig4",
+        "y": "3nHZVkrQwq0yudKkZR_LTaI2pITG41BeG1JbaUX1Ync",
+        "crv": "P-256",
+        "d": "wpctbQmKbIEyoPxV6qlQcx4r0E-1mY9r-YSFBSTbJgM"
+      },
+      "publicKey": "BPMacvbKRyKJ-gpqezEOxYc8xioMzQ0navj59oC0W4oO3nHZVkrQwq0yudKkZR_LTaI2pITG41BeG1JbaUX1Ync"
+    },
+    "id": "vector-deposit-00000001",
+    "vaultId": "vector-vault-0000000001",
+    "iv": "CQkJCQkJCQkJCQkJ",
+    "body": {
+      "ccId": "cred-vector-1",
+      "name": "VECTOR_SECRET",
+      "kind": "other",
+      "envVar": "VECTOR_SECRET",
+      "description": "Generated for a test vector",
+      "value": "generated-vector-value",
+      "fingerprint": "82dbc5cf",
+      "createdAt": "2026-09-24T12:00:00.000Z"
+    },
+    "sealed": {
+      "v": "mvcc-deposit-v1",
+      "id": "vector-deposit-00000001",
+      "vaultId": "vector-vault-0000000001",
+      "keyId": "269f2660a9ba6c3c",
+      "epk": "BPMacvbKRyKJ-gpqezEOxYc8xioMzQ0navj59oC0W4oO3nHZVkrQwq0yudKkZR_LTaI2pITG41BeG1JbaUX1Ync",
+      "iv": "CQkJCQkJCQkJCQkJ",
+      "ct": "39DeHxrD3Ysf2OGk65kdaNv1XGviqJAa_jDvqFPMykCX_RAsxjBVvR6-kUlcJcGsPVcc3StNlC0wCJlQuD9KhyouOWa5Lve-VyRWkyv-5_1Eu0Ad3xjXdRU1i-SWo6uAvqfWV8dOJYzkVsGxbDsu8jPuwCm1hyBqg1HlsUiS5Jjjo-IPl20ZFcSB1LevdXve_j4jK-ffbsz06RiuGuIDJGCiwzvQd1TbU2FSp8Axfd9l3XfeCr0J0n-7gDdCPmEYyF4sgUo30OUW2v0DjrBkTdk6ExgZhMy3KZ_we74-LNx_n_3A5QA-tmPKKWGtpVvYM6W5aw",
+      "identityKey": "BCPbanM_W26jXKWGwESkT2FVPaDbOmqP4wLQIK8kJXTVylkjHZmAjmw1UEkBm1zrUEL9tQZHjyENp2JBkG36_2Y",
+      "sig": "8cmrCdHy01PGMvTcwhzJD4AYyXaF4HhvgVYjUixnfbTU8vXOb5nxgZxIZ2yCevuc3ERpLEBjMyrFpK84oezG3A"
+    }
+  }
 }

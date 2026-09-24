@@ -202,3 +202,31 @@ describe('bridge identity migration (v8 → v9)', () => {
     db.close();
   });
 });
+
+/**
+ * MyVault delivery box (docs/plans/secret-delivery-flow.md): migration 10 adds
+ * the delivery targets and the deposit log; a deposit follows its credential.
+ */
+describe('delivery box migration (v9 → v10)', () => {
+  it('adds the delivery tables additively and ties deposits to their credential', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-delivery-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 9);
+    migrate(db, previous);
+    const ts = '2026-09-24T12:00:00.000Z';
+    const key = newCredentialKey();
+    const sealed = sealSecret(key, ['kept', 'value'].join('-'), 'cred-kept');
+    db.prepare(
+      `INSERT INTO credential_references (id, name, kind, env_var, description, repository_ids, ciphertext, iv, tag, fingerprint, created_at, updated_at, last_used_at)
+       VALUES ('cred-kept', 'kept', 'other', NULL, '', '[]', ?, ?, ?, 'abcd1234', ?, ?, NULL)`,
+    ).run(sealed.ciphertext, sealed.iv, sealed.tag, ts, ts);
+    const before = db.prepare('SELECT * FROM credential_references').all();
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 10))).toEqual([10]);
+    expect(db.prepare('SELECT * FROM credential_references').all()).toEqual(before);
+    db.prepare("INSERT INTO vault_deposits (id, credential_id, origin, vault_id, fingerprint, status, created_at, updated_at) VALUES ('dep-1', 'cred-kept', 'https://vault.example', 'v1', 'abcd1234', 'stored', ?, ?)").run(ts, ts);
+    db.prepare("DELETE FROM credential_references WHERE id = 'cred-kept'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM vault_deposits').get()).toEqual({ n: 0 });
+    expect(migrate(db, previous)).toEqual([]);
+    db.close();
+  });
+});

@@ -960,4 +960,42 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // MyVault delivery box (docs/plans/secret-delivery-flow.md): where to leave
+    // a newly generated secret sealed for MyVault while no bridge session is
+    // open, and what was left. The sender token is sealed with the broker key.
+    version: 10,
+    name: 'myvault delivery box',
+    sql: `
+      CREATE TABLE vault_deposit_targets (
+        origin TEXT PRIMARY KEY,
+        vault_id TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        token_ciphertext TEXT NOT NULL,
+        token_iv TEXT NOT NULL,
+        token_tag TEXT NOT NULL,
+        last_error TEXT,
+        last_error_kind TEXT,
+        last_deposit_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE vault_deposits (
+        id TEXT PRIMARY KEY,
+        credential_id TEXT NOT NULL REFERENCES credential_references(id) ON DELETE CASCADE,
+        origin TEXT NOT NULL,
+        vault_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL,
+        receipt_status TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_vault_deposits_status ON vault_deposits(status);
+      CREATE INDEX idx_vault_deposits_credential ON vault_deposits(credential_id);
+    `,
+  },
 ];

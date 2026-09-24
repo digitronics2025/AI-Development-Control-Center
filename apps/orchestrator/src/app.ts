@@ -117,10 +117,10 @@ export function createServices(
   const executionEnv = () => ({ base: baseEnv, billing: settings.get().billingMode });
   const toolStore = new ToolStore(db);
   const credentials = new CredentialBroker(toolStore, bus, fileKeyProvider(config.dataDir));
-  const vaultBridge = new VaultBridgeService(toolStore, credentials);
+  const vaultBridge = new VaultBridgeService(toolStore, credentials, { deposits: { bus } });
   const processes = new ProcessManager(toolStore, bus, executionEnv);
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });
-  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, dataDir: config.dataDir, baseEnv });
+  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, dataDir: config.dataDir, baseEnv });
   const mcp = new McpService(toolStore, bus, tools, credentials);
   const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'));
   const bridge = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', 'acc-mcp.js');

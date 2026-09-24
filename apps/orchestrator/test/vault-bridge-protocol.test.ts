@@ -2,7 +2,26 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { BRIDGE_LIMITS, BridgeProtocolError, deriveBridgeChannel, fromBase64Url, generateBridgeKeyPair, identityFingerprint, newSessionId, signBridgeIdentity, toBase64Url, valueFingerprint, verifyBridgeIdentity, type BridgeChannel, type SealedEnvelope } from '../src/tools/vault-bridge-protocol.js';
+import {
+  BRIDGE_LIMITS,
+  BridgeProtocolError,
+  depositKeyId,
+  deriveBridgeChannel,
+  fromBase64Url,
+  generateBridgeKeyPair,
+  generateDepositKeyPair,
+  identityFingerprint,
+  importDepositPrivateKey,
+  newSessionId,
+  openDeposit,
+  sealDeposit,
+  signBridgeIdentity,
+  toBase64Url,
+  valueFingerprint,
+  verifyBridgeIdentity,
+  type BridgeChannel,
+  type SealedEnvelope,
+} from '../src/tools/vault-bridge-protocol.js';
 import { secretFingerprint } from '@acc/security';
 
 /**
@@ -93,6 +112,47 @@ describe('mvcc-bridge-v1 Control Center identity', () => {
     for (const broken of [{ signature: toBase64Url(flipped) }, { signature: '' }, { signature: 'not base64!' }, { identityKey: '' }, { identityKey: toBase64Url(new Uint8Array(65)) }, { identityKey: vectors.controlCenter.publicKey.slice(0, 40) }]) {
       expect(await verifyBridgeIdentity({ ...signed, ...broken })).toBe(false);
     }
+  });
+});
+
+describe('mvcc-deposit-v1 delivery box', () => {
+  const dv = vectors.deposit;
+  const recipient = async () => ({ privateKey: await importDepositPrivateKey(dv.recipient.privateJwk), publicKey: dv.recipient.publicKey });
+  const identitySigner = async () => ({ signingKey: await subtle.importKey('jwk', vectors.identity.privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']), publicKey: vectors.identity.publicKey });
+
+  it('reproduces the vector ciphertext and opens the committed deposit', async () => {
+    const eph = { privateKey: await subtle.importKey('jwk', dv.ephemeral.privateJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']), publicKey: dv.ephemeral.publicKey };
+    const sealed = await sealDeposit({ id: dv.id, vaultId: dv.vaultId, recipientPublicKey: dv.recipient.publicKey, identity: await identitySigner(), body: dv.body, ephemeral: eph, iv: fromBase64Url(dv.iv) });
+    const { sig, ...rest } = sealed;
+    const { sig: vectorSig, ...vectorRest } = dv.sealed;
+    expect(rest).toEqual(vectorRest);
+    expect(sig).not.toBe(vectorSig); // ECDSA is randomized; both verify.
+    expect(await depositKeyId(dv.recipient.publicKey)).toBe(dv.recipient.keyId);
+    for (const deposit of [dv.sealed, sealed]) {
+      expect(await openDeposit({ deposit, vaultId: dv.vaultId, recipient: await recipient(), trustedIdentityKeys: [vectors.identity.publicKey] })).toEqual(dv.body);
+    }
+  });
+
+  it('opens only what a trusted Control Center sealed for this vault and key', async () => {
+    const r = await recipient();
+    const open = (deposit: unknown, over: Partial<{ vaultId: string; trustedIdentityKeys: string[]; recipient: typeof r }> = {}) =>
+      openDeposit({ deposit, vaultId: dv.vaultId, recipient: r, trustedIdentityKeys: [vectors.identity.publicKey], ...over });
+    await rejects(open(dv.sealed, { trustedIdentityKeys: [] }), 'UNTRUSTED_SENDER');
+    const flipped = fromBase64Url(dv.sealed.ct);
+    flipped[3] = flipped[3]! ^ 1;
+    // Every field is signed: a changed ciphertext, IV or key id fails the signature before anything is decrypted.
+    await rejects(open({ ...dv.sealed, ct: toBase64Url(flipped) }), 'UNTRUSTED_SENDER');
+    await rejects(open({ ...dv.sealed, keyId: '0000000000000000' }), 'UNTRUSTED_SENDER');
+    await rejects(open(dv.sealed, { vaultId: 'another-vault-00000001' }), 'WRONG_KEY');
+    const other = await generateDepositKeyPair();
+    await rejects(open(dv.sealed, { recipient: { privateKey: await importDepositPrivateKey(other.privateJwk), publicKey: other.publicKey } }), 'WRONG_KEY');
+    for (const broken of [null, { ...dv.sealed, v: 'mvcc-deposit-v0' }, { ...dv.sealed, id: 'short' }, { ...dv.sealed, iv: 'AAAA' }]) await rejects(open(broken), 'MALFORMED');
+    // A stranger's key signing honestly is still not a trusted sender.
+    const stranger = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
+    const strangerKey = toBase64Url(new Uint8Array(await subtle.exportKey('raw', stranger.publicKey)));
+    const forged = await sealDeposit({ id: newSessionId(), vaultId: dv.vaultId, recipientPublicKey: dv.recipient.publicKey, identity: { signingKey: stranger.privateKey, publicKey: strangerKey }, body: dv.body });
+    await rejects(open(forged), 'UNTRUSTED_SENDER');
+    await expect(open(forged, { trustedIdentityKeys: [strangerKey] })).resolves.toEqual(dv.body);
   });
 });
 

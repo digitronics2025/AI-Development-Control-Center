@@ -192,6 +192,8 @@ test('Credentials shows source, scope and MyVault state, and never a value', asy
   const connect = page.getByRole('dialog', { name: 'Connect MyVault' });
   const identity = (await api<{ identity: { fingerprint: string } }>(page, 'GET', '/api/vault-bridge/status')).identity;
   await expect(connect.getByTestId('identity-fingerprint')).toHaveText(identity.fingerprint);
+  // No MyVault has set up a delivery box yet: the dialog says what one would do.
+  await expect(connect.getByTestId('delivery-box')).toContainText('Not set up yet');
   await connect.getByRole('button', { name: 'Close' }).first().click();
   await expect(connect).toBeHidden();
 

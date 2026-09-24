@@ -3,6 +3,7 @@ system: credential-broker
 sources:
   - apps/orchestrator/src/tools/credentials.ts
   - apps/orchestrator/src/tools/vault-bridge.ts
+  - apps/orchestrator/src/tools/vault-deposit.ts
   - apps/orchestrator/src/tools/vault-bridge-protocol.ts
   - apps/orchestrator/src/http/vault-bridge-routes.ts
   - apps/dashboard/src/pages/VaultBridgePage.tsx
@@ -43,6 +44,12 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
 - Migration 9: `vault_bridge_identity` — one row (`id = 1`): the bridge
   identity's raw public key and its PKCS#8 private key sealed with
   `sealValue` (see [Identity](#myvault-bridge)).
+- Migration 10 ([Delivery box](#delivery-box)): `vault_deposit_targets` — per
+  MyVault origin: vault id, delivery key id and public key, sender id, the
+  deliver-only token sealed with `sealValue` (AAD `vault-deposit-token:<origin>`),
+  last delivery and last error; `vault_deposits` — each secret left in a box
+  (`sending` / `stored` / `collected` / `refused`, receipt status, redacted
+  detail), deleted with its credential.
 - The 32-byte key: on Windows `<data>/credential-key.dpapi`, protected with
   DPAPI for the current user; elsewhere `<data>/credential-key` with mode 600.
   Loaded lazily; unavailable → `KEY_UNAVAILABLE`, and nothing is imported,
@@ -168,6 +175,66 @@ dashboard's `/vault-bridge` page as a popup and the two ends talk through it.
   `snapshot.part {part, final, items}` → `snapshot.result` after the final
   part; `bye`.
 
+### Delivery box
+
+[vault-deposit.ts](../../apps/orchestrator/src/tools/vault-deposit.ts)
+(plan: [secret-delivery-flow.md](../plans/secret-delivery-flow.md)). Without it,
+a generated secret waits `pending_push` until MyVault is open and syncing, and
+the gate refuses to deploy it — an agent working alone stops there. With it, the
+secret is saved for MyVault at once, even while MyVault is locked, by leaving it
+sealed on MyVault's own Worker.
+
+- **Set up by MyVault**, inside an authenticated bridge session: `snapshot.request`
+  carries `delivery {accepted, keyId, senderId, healthy}` for that origin and
+  vault; MyVault (when its cloud sync is on) answers with `deposit.offer
+  {keyId, publicKey, senderId, token}` — its long-term delivery key and a
+  deliver-only `mvx_…` credential for its Worker — and gets `deposit.accepted
+  {keyId, ok, detail}`. The key id must match the key; the token is sealed at
+  rest. A new offer replaces the target (MyVault revokes the old credential).
+- **Delivery**: when a brand-new generated secret exists (`pending_push`, never
+  agreed, no MyVault item — replacements and conflicts stay on the bridge) and a
+  target exists, it is sealed to the delivery key and signed with the bridge
+  identity (`mvcc-deposit-v1` in
+  [vault-bridge-protocol.ts](../../apps/orchestrator/src/tools/vault-bridge-protocol.ts))
+  and posted to `<origin>/api/v1/deposits`. The deposit id is reserved first
+  (`sending`), so a retry after a lost answer is the same deposit. Once the
+  Worker stored it: deposit `stored`, link `deposited` with
+  `synced_fingerprint = fingerprint` — the value is saved for MyVault (only the
+  vault can open it), so the gate releases it. `credential.generate` waits up to
+  15 s for this; the deploy gate waits up to 20 s for a delivery in progress
+  instead of refusing a moment too early (both in
+  [service.ts](../../apps/orchestrator/src/tools/service.ts)); the dashboard's
+  Generate goes through the same tool path.
+- **Receipts**: MyVault collects deposits while unlocked and leaves a receipt
+  for every deposit — including one it can never open (unknown key, other
+  vault, sender it does not trust). Receipts are read in one
+  `POST /api/v1/deposits/receipts {ids}` per box and check, at most 90 ids (D1
+  binds 100 values per query; the Worker rate-limits per address, and MyVault's
+  own sync from the same address shares that limit): once a minute while any
+  deposit waits, on startup, and whenever the dashboard asks for the bridge
+  status (at most every 10 s). A replacement credential still reads what its
+  predecessors left (the Worker keeps the lineage). `saved`/`unchanged` → link
+  `synced` with MyVault's item id; anything else, or a deposit the box no longer
+  holds → the deposit is `refused` and the secret is held again
+  (`pending_push`, `synced_fingerprint` cleared) for the bridge, with the reason
+  in `lastError`.
+- **Failures** never lose a value. A 401 (credential revoked in MyVault) sets
+  the target's `lastErrorKind` to `auth`: nothing more is sent there — not even
+  retries — until MyVault offers a new credential, which the next session asks
+  for (`healthy: false`). A 429 or an unreachable Worker is `transient`: retried
+  on the next check, stopping at the first failure per box in a pass, and
+  MyVault is not asked for a new credential. The gate's refusal names the
+  error of the box that secret would go to. Removing trust in a MyVault address
+  removes its box and holds back what was waiting in it. `GET
+  /api/vault-bridge/status` lists targets under `delivery` (origin, key id,
+  last delivery, last error, how many wait).
+- **Trust**: the token lets this orchestrator deposit and read its own
+  receipts on that Worker, nothing else; MyVault opens only deposits signed by
+  a Control Center key it pinned. A deposit only ever creates a MyVault item
+  (`cc-<credential id>`); when one already exists MyVault answers `unchanged`
+  or `conflict` and writes nothing. The deploy gate waits for a delivery only
+  for a credential the calling repository may use.
+
 ### Authority and state
 
 | Case | Rule |
@@ -175,6 +242,7 @@ dashboard's `/vault-bridge` page as a popup and the two ends talk through it.
 | New shared item | Imported with `repositoryIds: []` (usable nowhere until assigned), `authority: myvault`, linked by MyVault item id (never by title). |
 | MyVault value changed | The local copy follows it. A local value change is refused server-side (`MANAGED`, 409) until the link is detached. |
 | Generated secret pushed | `synced` only when the ack's fingerprint equals the value pushed; a value changed meanwhile stays `pending_push`. |
+| Generated secret delivered | `deposited` (saved for MyVault, deployable) until the receipt says MyVault saved it (`synced`) or could not (`pending_push` again). A snapshot never marks a `deposited` link missing. |
 | MyVault copy of a generated secret edited | `conflict`; neither side changes. The operator chooses **Keep the Control Center value** (next push may replace exactly that edited copy) or **Use the MyVault value** (`pending_pull`, taken on the next snapshot). |
 | Item deleted or unshared in MyVault | `missing` — only after a complete, in-order snapshot; an interrupted one marks nothing. The local credential stays. A push to an unshared item is answered `detached`. |
 | Local delete | Deletes here only; the MyVault item stays. |

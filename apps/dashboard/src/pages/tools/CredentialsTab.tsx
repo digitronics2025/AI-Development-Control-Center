@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleDashed, CloudUpload, KeyRound, Link2Off, Plus, ShieldQuestion, Sparkles, Trash2, Vault, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleDashed, CloudUpload, KeyRound, Link2Off, PackageCheck, Plus, ShieldQuestion, Sparkles, Trash2, Vault, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import {
   Badge,
@@ -43,6 +43,8 @@ const VAULT_VISUAL: Record<VaultLinkState, StatusVisual> = {
   synced: { label: 'Synced', tone: 'success', icon: CheckCircle2 },
   pending_push: { label: 'Pending MyVault', tone: 'warning', icon: CloudUpload },
   pending_pull: { label: 'Taking MyVault value', tone: 'info', icon: CircleDashed },
+  // Saved for MyVault (sealed on its server); collected into the vault at its next unlock.
+  deposited: { label: 'Delivered to MyVault', tone: 'success', icon: PackageCheck },
   conflict: { label: 'Conflict', tone: 'danger', icon: AlertTriangle },
   missing: { label: 'Missing in MyVault', tone: 'warning', icon: ShieldQuestion },
   detached: { label: 'Detached', tone: 'neutral', icon: Link2Off },
@@ -250,6 +252,23 @@ function ConnectMyVaultDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             )
           ) : null}
           <p className="text-small text-fg-secondary">MyVault remembers this key and refuses a Control Center that answers here with a different one.</p>
+        </section>
+        <section className="flex flex-col gap-1" aria-labelledby="delivery-box" data-testid="delivery-box">
+          <h3 id="delivery-box" className="text-h3">Delivery box</h3>
+          {status.data?.delivery.length ? (
+            status.data.delivery.map((d) => (
+              <div key={d.origin} className="flex flex-col gap-0.5">
+                <span className="wrap-anywhere text-body">{d.origin}</span>
+                <span className={`text-small ${d.lastError ? 'text-danger' : 'text-fg-secondary'}`}>
+                  {d.lastError ?? (d.waiting ? `${d.waiting} secret(s) waiting for MyVault to collect them` : d.lastDepositAt ? <>Last delivery <RelativeTime iso={d.lastDepositAt} /></> : 'Ready')}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p className="text-small text-fg-secondary">
+              Not set up yet. It sets itself up at the next Connect and sync when MyVault has cloud sync on. With it, secrets generated here are saved to MyVault — sealed on its server — even while MyVault is locked, and can be deployed straight away.
+            </p>
+          )}
         </section>
         {status.data?.origins.length ? (
           <section className="flex flex-col gap-2" aria-labelledby="trusted-origins">

@@ -126,8 +126,14 @@ trusted-origin and credential-event tables ([credential-broker.md](credential-br
 Secrets an agent needs but must not see go through `credential.generate`
 (sealed in the orchestrator, returns metadata only) and are used by reference,
 e.g. `cloudflare.secret_put {credential, secretName, environment}`, which feeds
-the value to Wrangler on stdin and refuses a generated value MyVault has not
-saved yet. `CredentialHost` gains optional `generate` and `deployGate` for this.
+the value to Wrangler on stdin, and `github.secret_put {credential, secretName,
+environment?}` ([github.ts](../../packages/tools/src/packs/github.ts)), which
+feeds it to `gh secret set` on stdin and proves the write by the secret list and
+its update time (Level 4; an environment named like production is Level 5). Both
+refuse a generated value MyVault has not saved yet — with MyVault's delivery box
+set up it is saved within seconds, even while MyVault is locked
+([credential-broker.md](credential-broker.md#delivery-box)). `CredentialHost`
+gains optional `generate` and `deployGate` for this.
 
 ## API
 

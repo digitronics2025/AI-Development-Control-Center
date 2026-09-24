@@ -149,7 +149,7 @@ test.describe('Task Detail (design.md §7.3, §18)', () => {
     await expect(page.getByRole('button', { name: 'Resume' }).first()).toBeVisible();
 
     const inspector = page.getByRole('complementary', { name: 'Task inspector' });
-    await inspector.getByLabel('Directive').fill('Do not modify the D1 schema.');
+    await inspector.getByRole('textbox', { name: 'Directive' }).fill('Do not modify the D1 schema.');
     await inspector.getByRole('button', { name: 'Add directive' }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Directive queued' })).toBeVisible();
     await page.getByRole('button', { name: 'Resume' }).first().click();

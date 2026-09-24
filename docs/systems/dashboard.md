@@ -170,7 +170,10 @@ manifest. Plan: [MOBILE_PWA_PLAN.md](../../MOBILE_PWA_PLAN.md).
 - Tests: [pwa.spec.ts](../../apps/dashboard/e2e/pwa.spec.ts) covers the
   manifest, taps at 390 px, a silent socket and a missing chunk. Cloud test 16
   in [cloud.spec.ts](../../apps/dashboard/e2e-cloud/cloud.spec.ts) covers the
-  manifest behind sign-in and the expired banner. Unit tests are
+  manifest behind sign-in and the expired banner. It also asks Chrome for its
+  installability verdict (`Page.getInstallabilityErrors` must be empty) in a
+  real, non-incognito profile, because Chrome reports `in-incognito` for every
+  Playwright test context. Unit tests are
   `realtime.test.ts`, `session.test.ts` and `reload.test.ts`.
 
 ## Quality gates

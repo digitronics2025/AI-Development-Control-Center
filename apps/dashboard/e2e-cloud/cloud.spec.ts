@@ -1,4 +1,7 @@
-import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { chromium, expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import { expectNoAxeViolations, expectNoHorizontalOverflow, trackConsoleErrors, VIEWPORTS } from '../e2e/helpers';
 import { cloudApi, nodeApi, state } from './helpers';
 
@@ -90,7 +93,7 @@ test('5–6: Chairman chat, pause, directive and resume from the cloud', async (
   await page.getByRole('button', { name: 'Pause' }).first().click();
   await expect(page.getByText('Paused', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
   const inspector = page.getByRole('complementary', { name: 'Task inspector' });
-  await inspector.getByLabel('Directive').fill('Keep the webhook signature check.');
+  await inspector.getByRole('textbox', { name: 'Directive' }).fill('Keep the webhook signature check.');
   await inspector.getByRole('button', { name: 'Add directive' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Directive queued' })).toBeVisible();
   await page.getByRole('button', { name: /^Chairman — / }).click();
@@ -229,6 +232,27 @@ test('16: the installable app stays behind sign-in, and an expired sign-in is na
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('crossorigin', 'use-credentials');
+  // Chrome's own verdict, the one DevTools → Application → Manifest shows: the manifest and its
+  // icons fetched through the sign-in, and installable with no service worker at all. Test
+  // contexts are incognito, where Chrome never installs, so this runs in a real profile.
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'acc-install-'));
+  const installable = await chromium.launchPersistentContext(profile, { channel: process.env.PW_CHANNEL ?? 'chrome' });
+  try {
+    await installable.addCookies(await page.context().cookies());
+    const probe = installable.pages()[0] ?? (await installable.newPage());
+    await probe.goto(s.cloudUrl);
+    await expect(probe.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
+    const cdp = await installable.newCDPSession(probe);
+    const appManifest = await cdp.send('Page.getAppManifest');
+    expect(appManifest.url).toMatch(/\/manifest\.webmanifest$/);
+    expect(appManifest.errors).toEqual([]);
+    const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors');
+    expect(installabilityErrors).toEqual([]);
+    expect(await probe.evaluate(() => navigator.serviceWorker?.controller ?? null)).toBeNull();
+  } finally {
+    await installable.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
   await nodeOnline(page);
   // On the phone from here on (the status line moves into the navigation drawer).
   await page.setViewportSize({ width: 390, height: 844 });

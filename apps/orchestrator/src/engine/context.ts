@@ -15,6 +15,7 @@ import {
 import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
 import type { RepositoryRecord, Store, TaskRecord } from '../store/store.js';
+import { agentWorkdir, taskRepositories, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
@@ -104,6 +105,63 @@ export class ContextBuilder {
     ].join('\n');
   }
 
+  /**
+   * What an agent needs to know about a task across repositories
+   * (docs/plans/MULTI_REPO_TASKS_PLAN.md): the workspace layout, and for each
+   * repository its folder, facts, Git status and diff — the diffs sharing one
+   * size bound, paths written from the workspace root.
+   */
+  private async workspaceFacts(task: TaskRecord, units: TaskRepository[], needsDiff: boolean): Promise<{ facts: string; gitStatus: string; diff: string; changedFiles: string; commands: string }> {
+    const verifyKinds = new Set(DEFAULT_VERIFY_COMMAND_KINDS);
+    const facts: string[] = [
+      'This task works in several repositories at once. Your working directory is the task workspace; each repository is a folder in it, checked out on its own task branch:',
+      '',
+      ...units.map((u) => `- ${u.folder}/ — ${u.repo.name}${u.primary ? ' (primary)' : ''}`),
+      '',
+      'Write paths from the workspace root (e.g. `' + (units[1]?.folder ?? 'web') + '/src/…`). Run Git and each repository\'s commands inside its folder, never at the workspace root, which is not a repository. A folder may carry its own AGENTS.md or CLAUDE.md: read the one for a folder before changing files in it.',
+      '',
+    ];
+    const status: string[] = [];
+    const diffs: string[] = [];
+    const changed: string[] = [];
+    const commands: string[] = [];
+    let budget = MAX_DIFF_CHARS;
+    for (const u of units) {
+      const cmds = u.repo.commands.filter((c) => c.enabled).map((c) => `- ${c.name} (${c.kind}): \`${c.command}\``);
+      facts.push(
+        `### ${u.folder}/ — ${u.repo.name}`,
+        '',
+        `- Tooling: ${u.repo.tooling.join(', ') || 'not detected'}`,
+        `- Task branch: ${u.git.taskBranch ?? 'not created yet'}`,
+        `- Baseline commit: ${u.git.baselineCommit ?? 'not recorded yet'}`,
+        cmds.length ? `- Configured commands (run inside ${u.folder}/):\n${cmds.map((c) => `  ${c}`).join('\n')}` : '- Configured commands: none',
+        '',
+      );
+      commands.push(...u.repo.commands.filter((c) => c.enabled && verifyKinds.has(c.kind)).map((c) => `- ${u.folder}/ ${COMMAND_KIND_LABEL[c.kind]}: \`${c.command}\``));
+      try {
+        const entries = (await gitStatus(u.workdir)).slice(0, 40).map((e) => `${e.code} ${u.folder}/${e.path}`);
+        status.push(...(entries.length ? entries : [`${u.folder}/: clean`]));
+      } catch {
+        status.push(`${u.folder}/: not available`);
+      }
+      const baseline = u.git.baselineSnapshotId ? this.store.getSnapshot(u.git.baselineSnapshotId) : null;
+      if (!needsDiff || !baseline) continue;
+      try {
+        const snapshot: GitSnapshot = { branch: baseline.branch, head: baseline.head, files: baseline.files };
+        const files = await changesSince(u.workdir, snapshot);
+        changed.push(...files.map((f) => `- ${u.folder}/${f.path} (${f.status}, task change)`));
+        if (budget > 0) {
+          const { diff: raw, truncated } = await diffSince(u.workdir, snapshot, { maxBytes: budget, prefix: u.folder });
+          budget -= raw.length;
+          if (raw) diffs.push(redact(raw) + (truncated ? '\n[diff truncated]' : ''));
+        }
+      } catch {
+        diffs.push(`(${u.folder}/: diff unavailable)`);
+      }
+    }
+    return { facts: facts.join('\n').trimEnd(), gitStatus: status.join('\n'), diff: diffs.join('\n'), changedFiles: changed.join('\n'), commands: commands.join('\n') };
+  }
+
   private testResults(task: TaskRecord): string {
     const runs = this.store.listTestRuns(task.id);
     if (!runs.length) return '';
@@ -183,12 +241,17 @@ export class ContextBuilder {
     const baseline = task.git.baselineSnapshotId ? this.store.getSnapshot(task.git.baselineSnapshotId) : null;
     const snapshot: GitSnapshot | null = baseline ? { branch: baseline.branch, head: baseline.head, files: baseline.files } : null;
     const workdir = taskWorkdir(task, repo);
+    const units = taskRepositories(this.store, task);
+    const workspace = units.length > 1 ? await this.workspaceFacts(task, units, true) : null;
 
     // Every role gets the diff: the investigator and planner are read-only,
     // but a root-cause return or a re-plan is judged on the work so far.
     let diff = '';
     let changedFiles = '';
-    if (snapshot) {
+    if (workspace) {
+      diff = workspace.diff;
+      changedFiles = workspace.changedFiles;
+    } else if (snapshot) {
       try {
         const { diff: raw, truncated } = await diffSince(workdir, snapshot, { maxBytes: MAX_DIFF_CHARS });
         diff = redact(raw) + (truncated ? '\n[diff truncated]' : '');
@@ -209,7 +272,7 @@ export class ContextBuilder {
 
     let gitStatusText: string;
     try {
-      gitStatusText = (await gitStatus(workdir)).slice(0, 80).map((e) => `${e.code} ${e.path}`).join('\n') || 'clean';
+      gitStatusText = workspace ? workspace.gitStatus : (await gitStatus(workdir)).slice(0, 80).map((e) => `${e.code} ${e.path}`).join('\n') || 'clean';
     } catch {
       gitStatusText = 'not a Git repository';
     }
@@ -223,9 +286,9 @@ export class ContextBuilder {
       stage_name: def.name,
       workflow_name: task.workflow.name,
       request: `# ${task.title}\n\n${task.description}`,
-      repository_name: repo.name,
-      repository_path: workdir,
-      repository_facts: this.repositoryFacts(repo, task),
+      repository_name: workspace ? units.map((u) => u.repo.name).join(', ') : repo.name,
+      repository_path: workspace ? agentWorkdir(task, repo) : workdir,
+      repository_facts: workspace ? workspace.facts : this.repositoryFacts(repo, task),
       git_status: gitStatusText,
       investigation: await this.artifactsOf(task.id, ['investigation']),
       plan: await this.latest(task.id, 'plan'),
@@ -238,15 +301,17 @@ export class ContextBuilder {
       directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
       previous_attempt: this.previousAttempt(task, def, stage),
-      verification_commands: repo.commands
-        .filter((c) => c.enabled && verifyKinds.has(c.kind))
-        .map((c) => `- ${COMMAND_KIND_LABEL[c.kind]}: \`${c.command}\``)
-        .join('\n'),
+      verification_commands: workspace
+        ? workspace.commands
+        : repo.commands
+            .filter((c) => c.enabled && verifyKinds.has(c.kind))
+            .map((c) => `- ${COMMAND_KIND_LABEL[c.kind]}: \`${c.command}\``)
+            .join('\n'),
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
     };
-    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workdir)}\n\n${RUN_CONTEXT}\n\n`;
+    const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workspace ? agentWorkdir(task, repo) : workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);
     // Chairman guidance follows the role template so user-edited templates still receive it.
     const supervisor = guidance ? `\n\n## Chairman guidance (supervisor of this task)\n\n${guidance}\n` : '';

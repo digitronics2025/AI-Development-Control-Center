@@ -292,3 +292,24 @@ describe('finishing a task across repositories', () => {
     expect(existsSync(path.join(t.dataDir, 'workspaces', id))).toBe(false);
   }, 180_000);
 });
+
+describe('agent prompts across repositories', () => {
+  it('names the workspace, every folder with its repository and commands, and the per-folder instructions', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo({ scripts: { test: 'node -e "console.log(\'api tests\')"' } }));
+    const web = await addRepo(t, await makeRepo({ scripts: { lint: 'node -e "0"' } }));
+    const id = await createTask(t, api, 'Prompt both', { linkedRepositoryIds: [web], workflowId: 'quick-change' });
+    await waitForStatus(t, id, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 120_000);
+    const task = t.services.store.getTask(id)!;
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');
+    expect(prompt).toContain(`Working directory: ${path.join(t.dataDir, 'workspaces', id)}`);
+    expect(prompt).toContain(`- ${task.git.folder}/ — ${t.services.store.getRepository(api)!.name} (primary)`);
+    expect(prompt).toContain(`- ${linked.folder}/ — ${t.services.store.getRepository(web)!.name}`);
+    expect(prompt).toContain(`Configured commands (run inside ${task.git.folder}/)`);
+    expect(prompt).toContain(`Configured commands (run inside ${linked.folder}/)`);
+    expect(prompt).toContain('AGENTS.md or CLAUDE.md');
+  }, 180_000);
+});

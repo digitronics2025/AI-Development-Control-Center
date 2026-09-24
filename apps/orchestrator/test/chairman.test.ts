@@ -141,8 +141,17 @@ describe('supervised recovery (plan §7.2)', () => {
   it('D: a regression is rolled back to the checkpoint before the bad change', async () => {
     await patchChairman({ maxRecoveryCycles: 1 });
     const repo = await repoWith("console.log('FAIL test/a.test.js > adds'); console.log((n * 2) + ' failed, 3 passed'); process.exit(1);");
+    // Audit F-10: the rollback rewrites the working tree, so it takes the repository's writer lock.
+    const writers: string[] = [];
+    const acquire = t.services.coordinator.acquireWriter.bind(t.services.coordinator);
+    t.services.coordinator.acquireWriter = (repositoryId, taskId, stageName) => {
+      writers.push(stageName);
+      return acquire(repositoryId, taskId, stageName);
+    };
     const id = await createTask(t, await addRepo(t, repo), 'Regressing work');
     await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    t.services.coordinator.acquireWriter = acquire;
+    expect(writers).toContain('Rollback');
     const first = decisions(id).find((x) => x.strategyFingerprint)!;
     expect(first).toMatchObject({ trigger: 'regression', decision: 'Roll back the last change', health: 'REGRESSING' });
     const rollback = actions(id).find((a) => a.type === 'ROLLBACK_CHECKPOINT')!;

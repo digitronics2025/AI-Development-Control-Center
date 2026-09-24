@@ -66,4 +66,9 @@ failure removes what that attempt made and parks the task. Its checkpoints
 hold one ref per repository (`task_checkpoints.parts`) and restore all or
 nothing ([multi-repository-tasks.md](multi-repository-tasks.md)).
 
+
+A rollback holds the writer lock of every repository it rewrites (like a
+stage), unless the task already holds it or works in its own worktree, so a
+Source Control commit can never land on a half-restored tree.
+
 Last verified: 2026-09-24

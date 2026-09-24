@@ -5,6 +5,7 @@ import { redact } from '@acc/security';
 import type { Bus } from '../bus.js';
 import { EngineError } from '../engine/engine.js';
 import type { Publisher } from '../engine/publisher.js';
+import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
 import type { RepositoryService } from '../services/repositories.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { agentWorkdir, taskRepositories, type TaskRepository } from '../engine/task-repositories.js';
@@ -27,7 +28,29 @@ export class CheckpointService {
     private readonly repositories: RepositoryService,
     private readonly publisher: Publisher,
     private readonly bus: Bus,
+    private readonly coordinator?: RepositoryCoordinator,
   ) {}
+
+  /**
+   * Run a rollback holding the writer lock of every repository it rewrites, so a
+   * Source Control commit can never interleave with a half-restored tree (audit
+   * F-10). A repository this task already holds (a stage is running) is not
+   * taken twice; an isolated task works in its own worktree and needs none.
+   */
+  private async asWriter<T>(task: TaskRecord, fn: () => Promise<T>): Promise<T> {
+    if (!this.coordinator || task.git.isolated) return fn();
+    const repoIds = [...new Set(taskRepositories(this.store, task).map((u) => u.repo.id))];
+    const releases: Array<() => void> = [];
+    try {
+      for (const id of repoIds) {
+        if (this.coordinator.activeWriters(id).some((w) => w.taskId === task.id)) continue;
+        releases.push(await this.coordinator.acquireWriter(id, task.id, 'Rollback'));
+      }
+      return await fn();
+    } finally {
+      for (const release of releases) release();
+    }
+  }
 
   /** The task's working directory (its worktree when isolated), when it has a Git baseline. */
   private async repoPath(task: TaskRecord): Promise<string | null> {
@@ -178,6 +201,10 @@ export class CheckpointService {
   }
 
   async restore(task: TaskRecord, checkpointId?: string): Promise<{ checkpoint: CheckpointRecord; result: RestoreResult }> {
+    return this.asWriter(task, () => this.restoreLocked(task, checkpointId));
+  }
+
+  private async restoreLocked(task: TaskRecord, checkpointId?: string): Promise<{ checkpoint: CheckpointRecord; result: RestoreResult }> {
     const cwd = this.workspaceUnits(task) ? await this.databaseRoot(task) : await this.repoPath(task);
     if (!cwd) throw new EngineError('Rollback needs a Git repository and a recorded baseline; this task has neither.', 'INVALID_STATE');
     const target = checkpointId ? this.chairman.checkpoint(checkpointId) : this.lastChangeTarget(task);

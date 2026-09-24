@@ -144,3 +144,18 @@ describe('F-09: an approval for a stage the workflow always asks about covers on
     await t.api('POST', `/api/tasks/${id}/cancel`);
   }, 120_000);
 });
+
+describe('F-11: an agent a crash left running is stopped before the task resumes', () => {
+  it('kills a leftover execution whose pid still belongs to that run, and leaves a reused pid alone', async () => {
+    const { spawn } = await import('node:child_process');
+    const { processAlive } = await import('../src/chairman/watchdog.js');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    const pid = child.pid!;
+    const startedAt = new Date().toISOString();
+    // A recorded start an hour off is another program that reused the pid: never killed.
+    expect(await t.services.processes.stopLeftoverExecutions([{ pid, startedAt: new Date(Date.now() - 3_600_000).toISOString() }])).toBe(0);
+    expect(processAlive(pid)).toBe(true);
+    expect(await t.services.processes.stopLeftoverExecutions([{ pid, startedAt }, { pid: null, startedAt }])).toBe(1);
+    await waitFor(() => processAlive(pid), (alive) => !alive, 15_000);
+  }, 60_000);
+});

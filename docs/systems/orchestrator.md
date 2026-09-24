@@ -122,8 +122,9 @@ Control reconciliation in the background after `listen`.
 ## Startup
 
 `main.ts` runs `services.recover()` (tool executions left running are marked
-stopped, leftover terminals exited, leftover task processes killed only if
-still the same process; then engine reconciliation, then the Chairman resumes
+stopped, leftover terminals exited, leftover task processes — and agent or
+command processes of executions still marked running — killed only if still
+the same process (creation time within 15 s); then engine reconciliation, then the Chairman resumes
 interrupted supervised tasks and answers pending chat), gives the tool layer
 its listen URL (agent tool sessions need it), refreshes stale tool detection
 and loads stored credentials into the redactor in the background,

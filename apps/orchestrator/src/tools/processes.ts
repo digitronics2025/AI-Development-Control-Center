@@ -264,6 +264,28 @@ export class ProcessManager {
     return { stopped, gone };
   }
 
+  /**
+   * Agent CLIs and repository commands an execution left running when the
+   * orchestrator died (audit F-11): a plain child survives its parent on
+   * Windows, and a resumed task would otherwise run a second agent beside it in
+   * the same working tree. Killed only when the pid still belongs to the process
+   * started then (creation time within 15 s), exactly as for task processes.
+   */
+  async stopLeftoverExecutions(executions: Array<{ pid: number | null; startedAt: string }>): Promise<number> {
+    const withPid = executions.filter((e): e is { pid: number; startedAt: string } => typeof e.pid === 'number' && e.pid > 0);
+    if (!withPid.length) return 0;
+    const alive = await this.processTimes(withPid.map((e) => e.pid));
+    let stopped = 0;
+    for (const e of withPid) {
+      const created = alive.get(e.pid);
+      if (created && Math.abs(new Date(created).getTime() - new Date(e.startedAt).getTime()) < 15_000) {
+        await this.killTree(e.pid);
+        stopped++;
+      }
+    }
+    return stopped;
+  }
+
   private async processTimes(pids: number[]): Promise<Map<number, string>> {
     const map = new Map<number, string>();
     if (!pids.length) return map;

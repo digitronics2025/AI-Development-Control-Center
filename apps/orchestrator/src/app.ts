@@ -139,7 +139,7 @@ export function createServices(
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
-  const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore });
+  const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore, coordinator });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
@@ -210,6 +210,8 @@ export function createServices(
       toolStore.interruptRunningExecutions();
       terminals.reconcileAfterRestart();
       await processes.reconcileAfterRestart().catch(() => undefined);
+      // Before the engine marks them interrupted (and the Chairman resumes the task): stop what they left running.
+      await processes.stopLeftoverExecutions(store.executionsWithStatus('running')).catch(() => 0);
       const result = engine.recover();
       await chairman.onStartup();
       chat.recoverPending();

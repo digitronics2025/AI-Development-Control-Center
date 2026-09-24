@@ -25,6 +25,7 @@ import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { RepositoryService } from '../services/repositories.js';
+import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
 import type { SettingsService } from '../services/settings.js';
 import { now, type Store, type TaskRecord } from '../store/store.js';
 import { CheckpointService } from './checkpoints.js';
@@ -51,6 +52,8 @@ export interface ChairmanDeps {
   context: ContextBuilder;
   /** The tool layer's store (tool calls and recovery attempts as evidence); null without the tool layer. */
   toolStore: EvidenceDeps['tools'];
+  /** Rollbacks rewrite the working tree: they hold the repository's writer lock like a stage (audit F-10). */
+  coordinator?: RepositoryCoordinator;
 }
 
 const BLOCKING_PROVIDER = new Set(['USAGE_LIMIT', 'MODEL_UNAVAILABLE', 'AUTH_FAILURE']);
@@ -76,7 +79,7 @@ export class Chairman implements SupervisorHooks {
     this.outcomes = new OutcomeEvaluator(d.store, this.store, (id, status, summary, health) => this.finishStrategy(id, status, summary, health));
     this.evidence = new ChairmanEvidenceService({ store: d.store, chairman: this.store, artifacts: d.artifacts, agents: d.agents, tools: d.toolStore });
     this.snapshots = new SnapshotService(d.store, this.store, d.views, d.agents);
-    this.checkpoints = new CheckpointService(d.store, this.store, d.repositories, d.engine.publisher, d.bus);
+    this.checkpoints = new CheckpointService(d.store, this.store, d.repositories, d.engine.publisher, d.bus, d.coordinator);
     this.reasoner = new Reasoner(d.agents, d.settings, d.artifacts, d.store);
     this.gateway = new ActionGateway({
       store: d.store,

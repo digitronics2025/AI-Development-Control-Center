@@ -323,11 +323,13 @@ describe('usage API', () => {
   it('requires the token and validates ranges', async () => {
     const res = await t.app.inject({ method: 'GET', url: `/api/usage/overview?${range()}`, headers: { host: '127.0.0.1:4317' } });
     expect(res.statusCode).toBe(401);
+    // The same request with the token is answered: the 401 was the missing token, nothing else.
+    const withToken = await t.app.inject({ method: 'GET', url: `/api/usage/overview?${range()}`, headers: { host: '127.0.0.1:4317', authorization: `Bearer ${TOKEN}` } });
+    expect(withToken.statusCode).toBe(200);
     const backwards = await t.api('GET', `/api/usage/overview?from=${new Date().toISOString()}&to=${new Date(Date.now() - DAY).toISOString()}`);
     expect(backwards.status).toBe(400);
     const tooLong = await t.api('GET', `/api/usage/events?from=2020-01-01T00:00:00.000Z&to=2026-01-01T00:00:00.000Z`);
     expect(tooLong.status).toBe(400);
-    expect(TOKEN).toBeTruthy();
   });
 
   it('serves the overview, breakdowns, anomalies, health and a paginated, filtered event list', async () => {

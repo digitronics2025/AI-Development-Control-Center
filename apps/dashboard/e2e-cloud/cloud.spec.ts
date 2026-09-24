@@ -43,6 +43,7 @@ test('1–2: the cloud dashboard opens without any local token and shows the pai
 });
 
 test('3–4, 8: a task created in the cloud runs on the node through every stage, with logs and artifacts', async ({ page }) => {
+  test.setTimeout(240_000);
   const errors = trackConsoleErrors(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
@@ -60,7 +61,12 @@ test('3–4, 8: a task created in the cloud runs on the node through every stage
   await expect(page.getByRole('heading', { level: 1, name: 'Tidy the README headings from the cloud.' })).toBeVisible();
   const stages = page.getByRole('list', { name: 'Workflow stages' });
   for (const name of ['Investigate', 'Plan', 'Implement', 'Test', 'Review']) await expect(stages).toContainText(name);
-  await expect(page.getByText(/Completed|Failed|Waiting for you/, { exact: false }).first()).toBeVisible({ timeout: 60_000 });
+  // docs-site's test script always exits 1 (scripts/demo.mjs, failingTests), so the task can never
+  // complete; supervised Autopilot (the default) exhausts its recovery cycles and waits for the
+  // operator rather than failing.
+  const taskId = /\/tasks\/(TASK-\d+)/.exec(page.url())![1]!;
+  await expect.poll(async () => (await cloudApi<{ status: string }>(page, 'GET', `/api/tasks/${taskId}`)).status, { timeout: 180_000 }).toBe('WAITING_FOR_USER');
+  await expect(page.getByText('Waiting for user', { exact: true }).first()).toBeVisible();
   await page.getByRole('tab', { name: 'Logs' }).click();
   await page.getByRole('radio', { name: 'Developer' }).click();
   await expect(page.getByRole('log', { name: 'Execution output' })).toBeVisible();

@@ -398,7 +398,8 @@ describe('remote operations', () => {
     await run(repo, ['remote', 'add', 'origin', path.join(os.tmpdir(), 'acc-does-not-exist', 'nope.git')]);
     const result = await fetchRemote(repo, 'origin');
     expect(result.code).not.toBe(0);
-    expect(['NETWORK', 'GIT_FAILED']).toContain(classifyGitOutput(result));
+    // Git answers "Could not read from remote repository" for a path that is not a repository.
+    expect(classifyGitOutput(result)).toBe('NETWORK');
   });
 });
 

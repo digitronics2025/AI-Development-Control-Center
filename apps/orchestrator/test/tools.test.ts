@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { git } from '@acc/git';
+import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
 import { addRepo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
@@ -13,6 +14,9 @@ import { addRepo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, wai
  * processes, repairs in test stages, the verify stage, worktree isolation,
  * terminals, MCP servers and the privileged helper's validation.
  */
+
+/** Without a Chromium-family browser the browser verify test reports skipped, not passed. */
+const browser = await findBrowser();
 
 let t: TestApp;
 let repoPath: string;
@@ -192,9 +196,7 @@ describe('engine integration', () => {
     expect(events).toContain('ENVIRONMENT_DISCOVERED');
   }, 300_000);
 
-  it('verifies the app in a real browser and sends console errors back to the fixer', async () => {
-    const { findBrowser } = await import('@acc/tools');
-    if (!(await findBrowser())) return;
+  it.skipIf(!browser)('verifies the app in a real browser and sends console errors back to the fixer', async () => {
     const port = 20_000 + Math.floor(Math.random() * 20_000);
     const server = `require('http').createServer((q, s) => { s.setHeader('content-type', 'text/html'); s.end(require('fs').readFileSync(__dirname + '/page.html')); }).listen(${port}, '127.0.0.1');\n`;
     const dir = await makeRepo({ files: { 'server.cjs': server, 'page.html': '<!doctype html><meta name="viewport" content="width=device-width"><title>x</title><script>console.error("broken build")</script><h1>App</h1>' } });

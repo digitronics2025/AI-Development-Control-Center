@@ -85,7 +85,20 @@ describe('people: Cloudflare Access on the control host', () => {
     // The dashboard itself, with its CSP.
     const page = await fetch(`${cloud.url}/tasks`, { headers: { cookie: `CF_Authorization=${token}` } });
     expect(page.status).toBe(200);
-    expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(page.headers.get('content-security-policy')).toBe(
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "object-src 'none'",
+      ].join('; '),
+    );
     const html = await page.text();
     expect(html).toContain('<div id="root">');
     expect(html).not.toContain('acc-token');

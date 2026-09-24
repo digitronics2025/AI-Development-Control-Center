@@ -159,7 +159,7 @@ describe('Chairman strategy data on the wire', () => {
         ].join('\n'),
       },
     });
-    const { r, t, nodeId } = await paired([...simAdapters(), new EchoingChairman(`${ENV_SECRET} in ${repoPath}\\src\\add.js`)]);
+    const { r, t } = await paired([...simAdapters(), new EchoingChairman(`${ENV_SECRET} in ${repoPath}\\src\\add.js`)]);
     const current = (await t.api('GET', '/api/settings')).body.chairman;
     expect((await t.api('PATCH', '/api/settings', { chairman: { ...current, agentId: 'echo' } })).status).toBe(200);
     const taskId = await createTask(t, await addRepo(t, repoPath), 'Stalls, then recovers');
@@ -181,7 +181,6 @@ describe('Chairman strategy data on the wire', () => {
     expect(statuses).toEqual(['RUNNING', 'SUCCEEDED']);
     expect(wire).toContain('Cause found near');
     for (const needle of [ENV_SECRET, ...spellings(repoPath)]) expect(wire, `leaked: ${needle}`).not.toContain(needle);
-    expect(nodeId).toBeTruthy();
   });
 });
 
@@ -240,7 +239,9 @@ describe('uploads', () => {
     expect(synced).toMatchObject({ attempts: 1, sensitivity: 'safe_sync' });
     expect(synced!.nextAttemptAt).toBeTruthy();
     const diff = t.services.store.listArtifacts(taskId).find((a) => a.type === 'git-diff');
-    if (diff) expect(t.services.remote.store.syncObject(`artifact:${diff.id}`)).toMatchObject({ status: 'local_only' });
+    // The simulated implementer changes the repository, so a diff always exists; it never leaves the machine.
+    expect(diff).toBeDefined();
+    expect(t.services.remote.store.syncObject(`artifact:${diff!.id}`)).toMatchObject({ status: 'local_only' });
     // The manifest tells the cloud the truth: pending retry, not uploaded.
     const manifests = r.frames.filter((f) => f.type === 'artifact.manifest').map((f) => f.payload as { artifactId: string; status: string });
     expect(manifests.filter((m) => m.artifactId === report.id).map((m) => m.status)).not.toContain('uploaded');

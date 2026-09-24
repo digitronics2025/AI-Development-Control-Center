@@ -80,7 +80,9 @@ describe('artifact and log uploads', () => {
     const logs = await cloud.api('GET', `/api/executions/${execution.id}/logs`, undefined, h());
     expect(logs.status).toBe(200);
     expect(logs.body.length).toBeGreaterThan(0);
-    if (diff) expect((await cloud.api('GET', `/api/artifacts/${diff.id}/content`, undefined, h())).body.error.code).toBe('NODE_OFFLINE');
+    // The simulated implementer changes the repository, so a diff always exists; local-only, so unreadable offline.
+    expect(diff).toBeDefined();
+    expect((await cloud.api('GET', `/api/artifacts/${diff!.id}/content`, undefined, h())).body.error.code).toBe('NODE_OFFLINE');
     await node.services.remote.updatePermissions({ enabled: true });
     await waitFor(() => node.services.remote.status().state, (s) => s === 'connected', 30_000);
   });

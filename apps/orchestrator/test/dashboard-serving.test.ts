@@ -45,6 +45,30 @@ describe('dashboard serving', () => {
     expect(api.body).not.toContain('<html>');
   });
 
+  it('serves the page and every deep link with the exact dashboard CSP', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-dash-'));
+    writeBuild(dir, 'index-a.js', new Date('2026-01-01T00:00:00Z'));
+    t = await createTestApp({ dashboardDir: dir });
+    // Written out rather than imported, so a loosened policy fails here.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self' ws://127.0.0.1:* ws://localhost:*",
+      "frame-ancestors 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+    ].join('; ');
+    for (const url of ['/', '/tasks/TASK-0001']) {
+      const res = await get(url);
+      expect(res.statusCode, url).toBe(200);
+      expect(res.headers['content-security-policy'], url).toBe(csp);
+      expect(res.headers['x-frame-options'], url).toBe('DENY');
+    }
+  });
+
   it('answers 503 rather than a broken page while the build folder is empty', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-dash-'));
     writeBuild(dir, 'index-a.js', new Date('2026-01-01T00:00:00Z'));

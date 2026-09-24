@@ -389,8 +389,8 @@ describe('remote synchronization', () => {
     await run(dir, ['remote', 'add', 'origin', path.join(os.tmpdir(), 'acc-missing-remote', 'x.git')]);
     const repoId = await addRepo(t, dir);
     const res = await post(repoId, 'fetch', {});
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(['NETWORK', 'GIT_FAILED']).toContain(res.body.error.code);
+    expect(res.status).toBe(502);
+    expect(res.body.error.code).toBe('NETWORK');
     expect((await snap(repoId)).lastFetch).toMatchObject({ ok: false });
   });
 });

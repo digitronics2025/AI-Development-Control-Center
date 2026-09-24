@@ -133,7 +133,9 @@ describe('connected apps', () => {
         ['GET', '/api/tool-session/tools'],
       ] as const) {
         const res = await t.api(method, url, undefined, asApp(app.token));
-        expect([401, 403], `${method} ${url}`).toContain(res.status);
+        // The app token is not a credential on these routes: the local-token gate (or, for
+        // /api/tool-session, the tool-session check) answers 401 exactly as for no token.
+        expect(res.status, `${method} ${url}`).toBe(401);
       }
       const ws = await t.app.inject({ method: 'GET', url: `/ws?token=${app.token}`, headers: { host: '127.0.0.1:4317' } });
       expect(ws.statusCode).toBe(401);

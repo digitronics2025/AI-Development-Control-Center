@@ -59,14 +59,16 @@ describe('features through the cloud', () => {
     const taskId = created.body.id as string;
     await waitForStatus(node, taskId, ['COMPLETED'], 90_000);
     const tests = await cloud.api('GET', `/api/tasks/${taskId}/tests`, undefined, h());
-    expect(tests.body.some((r: { status: string }) => r.status === 'PASSED' || r.status === 'passed' || r.status === 'SUCCESS')).toBe(true);
+    expect(tests.body.map((r: { status: string }) => r.status)).toContain('passed');
     const artifacts = (await cloud.api('GET', `/api/tasks/${taskId}/artifacts`, undefined, h())).body as Array<{ id: string; type: string; name: string }>;
     const report = artifacts.find((a) => a.type === 'final-report')!;
     const diff = artifacts.find((a) => a.type === 'git-diff');
     const content = await cloud.api('GET', `/api/artifacts/${report.id}/content`, undefined, h());
     expect(content.status).toBe(200);
     expect(content.body.content).toContain('TASK COMPLETED');
-    if (diff) expect((await cloud.api('GET', `/api/artifacts/${diff.id}/content`, undefined, h())).body.error.code).toBe('REMOTE_FORBIDDEN');
+    // The simulated implementer changes the repository, so a diff always exists; it is never served remotely.
+    expect(diff).toBeDefined();
+    expect((await cloud.api('GET', `/api/artifacts/${diff!.id}/content`, undefined, h())).body.error.code).toBe('REMOTE_FORBIDDEN');
     // Logs of a finished execution are readable live.
     const executions = (await cloud.api('GET', `/api/tasks/${taskId}/executions`, undefined, h())).body as Array<{ id: string }>;
     expect((await cloud.api('GET', `/api/executions/${executions[0]!.id}/logs`, undefined, h())).status).toBe(200);

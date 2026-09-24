@@ -235,6 +235,39 @@ describe('realtime sync', () => {
     for (const ws of clients) ws.close();
   });
 
+  it('redacts a secret printed by a task command before any WebSocket frame carries it (audit F-44)', async () => {
+    // Assembled at runtime: no credential-shaped literal in the repository.
+    const secret = ['gh', 'p_', 'Z'.repeat(36)].join('');
+    // The delay lets the client subscribe to the execution's logs before the first line is printed.
+    const check = `setTimeout(() => { console.log('token ${secret}'); console.log('1 failed, 3 passed (${secret})'); process.exit(1); }, 1500);\n`;
+    const repoId = await addRepo(t, await makeRepo({ scripts: { test: 'node check.js' }, files: { 'check.js': check } }));
+    await t.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (t.app.server.address() as { port: number }).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${TOKEN}`);
+    const frames: string[] = [];
+    const subscribed = new Set<string>();
+    ws.on('message', (raw) => {
+      const text = String(raw);
+      frames.push(text);
+      const m = JSON.parse(text) as ServerMessage;
+      if (m.type === 'execution' && !subscribed.has(m.execution.id)) {
+        subscribed.add(m.execution.id);
+        ws.send(JSON.stringify({ type: 'subscribeLogs', executionId: m.execution.id }));
+      }
+    });
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+
+    const id = await createTask(t, repoId, 'Print a token', { workflowId: 'quick-change', supervised: false, maxFixCycles: 0 });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('WAITING_FOR_USER');
+    const redactedLogFrame = (f: string) => f.includes('"type":"logs"') && f.includes('token [REDACTED]');
+    await waitFor(() => frames, (all) => all.some(redactedLogFrame), 10_000, 'the redacted log line on the socket');
+    // The test failure summary is broadcast too (TEST_FAILED event, test run, task), redacted.
+    expect(frames.some((f) => f.includes('"type":"event"') && f.includes('"TEST_FAILED"') && f.includes('1 failed, 3 passed ([REDACTED])'))).toBe(true);
+    for (const f of frames) expect(f).not.toContain(secret);
+    ws.close();
+  });
+
   it('skips terminal output for a client that stops reading, and closes one that stays stalled (audit F-30)', async () => {
     await t.app.listen({ host: '127.0.0.1', port: 0 });
     const port = (t.app.server.address() as { port: number }).port;

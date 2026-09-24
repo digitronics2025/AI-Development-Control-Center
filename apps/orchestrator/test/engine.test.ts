@@ -130,7 +130,8 @@ describe('discuss first', () => {
     expect(directives[0]?.text).toBe('Plan feedback: Keep the public API unchanged');
     const task = await waitForStatus(t, id, ['WAITING_FOR_USER']);
     expect(task.blocker?.kind).toBe('approval');
-    expect(directives[0]).toBeDefined();
+    // The feedback reached the second planner, not only the directive list.
+    expect(readFileSync(path.join(t.dataDir, 'tasks', id, 'plan-prompt-2.md'), 'utf8')).toContain('Plan feedback: Keep the public API unchanged');
     expect(t.services.store.listDirectives(id)[0]?.status).toBe('applied');
   });
 });

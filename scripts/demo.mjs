@@ -182,6 +182,17 @@ if (seed) {
     if (review && ['done', 'skipped', 'failed'].includes(review.status)) break;
     await new Promise((r) => setTimeout(r, 150));
   }
+  // A task across two repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md), seeded last so the task ids above stay put.
+  const ordersApi = await api('POST', '/api/repositories', { path: makeRepo('orders-api'), name: 'orders-api' });
+  const storefront = await api('POST', '/api/repositories', { path: makeRepo('storefront'), name: 'storefront' });
+  const across = await task({
+    repositoryId: ordersApi.id,
+    linkedRepositoryIds: [storefront.id],
+    workflowId: 'quick-change',
+    supervised: false,
+    description: 'Rename the order status field in the API and the storefront that reads it. [sim:learning-none]',
+  });
+  await waitFor(across.id, ['COMPLETED', 'FAILED']);
 }
 
 // Marker for callers (e.g. the Playwright global setup) that seeding is done.

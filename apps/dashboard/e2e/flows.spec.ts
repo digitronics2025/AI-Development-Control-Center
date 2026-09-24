@@ -264,3 +264,54 @@ test.describe('Settings (design.md §7.8, §18)', () => {
     await expect(page.getByRole('radio', { name: /Subscription Only/ })).toBeChecked();
   });
 });
+
+test.describe('Tasks across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md)', () => {
+  test('New Task adds and removes other repositories, and the draft names them all', async ({ page }, testInfo) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/tasks/new');
+    await page.getByRole('combobox', { name: 'Repository' }).click();
+    await page.getByRole('searchbox').fill('orders-api');
+    await page.keyboard.press('Enter');
+    const also = page.getByRole('combobox', { name: 'Also work in' });
+    await also.click();
+    await page.getByRole('searchbox').fill('storefront');
+    await page.keyboard.press('Enter');
+    const chosen = page.getByRole('list', { name: 'Also work in' });
+    await expect(chosen.getByText('storefront')).toBeVisible();
+    await also.click();
+    await page.getByRole('searchbox').fill('mobile');
+    await page.keyboard.press('Enter');
+    await chosen.getByRole('button', { name: 'Remove mobile-app' }).click();
+    await expect(chosen.getByText('mobile-app')).toHaveCount(0);
+    await page.getByText('Advanced options').click();
+    await expect(page.getByRole('switch', { name: 'Isolate in a worktree' })).toBeChecked();
+    await expect(page.getByRole('switch', { name: 'Isolate in a worktree' })).toBeDisabled();
+    await page.getByLabel('Description').fill('Show the new order status in both places.');
+    await expectNoAxeViolations(page, testInfo);
+    await page.getByRole('button', { name: 'Save Draft' }).click();
+    await expect(page).toHaveURL(/\/tasks\/TASK-\d+/);
+    await expect(page.getByText('orders-api, storefront').first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('the Changes tab shows each repository’s branch and files under its name', async ({ page }, testInfo) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    const { items } = await api<{ items: Array<{ id: string; title: string; repositories: Array<{ name: string }> }> }>(page, 'GET', '/api/tasks?q=order%20status%20field');
+    const task = items.find((t) => t.repositories.length === 2)!;
+    await page.goto(`/tasks/${task.id}?tab=changes`);
+    const files = page.getByRole('list', { name: 'Changed files' });
+    await expect(files.getByText('orders-api', { exact: true })).toBeVisible();
+    await expect(files.getByText('storefront', { exact: true })).toBeVisible();
+    await expect(files.getByRole('button', { name: /sim-output\.md/ })).toHaveCount(2);
+    await files.getByRole('button', { name: /sim-output\.md/ }).nth(1).click();
+    await expect(page.getByRole('heading', { level: 3, name: 'storefront/sim-output.md' })).toBeVisible();
+    await expect(page.getByText(/Task branch/)).toHaveCount(2);
+    await expectNoAxeViolations(page, testInfo);
+    await page.goto('/tasks');
+    await expect(page.getByText('orders-api + 1').first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+});

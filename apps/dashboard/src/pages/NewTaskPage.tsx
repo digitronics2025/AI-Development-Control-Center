@@ -261,49 +261,53 @@ export function NewTaskPage() {
         </Field>
 
         {!cloud && (repositories.data?.length ?? 0) > 1 ? (
-          <Field
-            label="Also work in"
-            optional
-            helper={
-              across
-                ? 'Each repository gets its own isolated copy on a task branch, side by side; the agents change them together. Your folders are not touched.'
-                : 'Add other repositories this change spans, such as a client and its API.'
-            }
-          >
-            <div className="flex flex-col gap-2">
-              {linkedIds.length < MAX_LINKED_REPOSITORIES ? (
-                <Combobox
-                  value={undefined}
-                  onValueChange={(v) => {
-                    if (v && v !== repositoryId && !linkedIds.includes(v)) setLinkedIds((ids) => [...ids, v]);
-                  }}
-                  placeholder="Add a repository"
-                  searchPlaceholder="Search repositories"
-                  options={(repositories.data ?? []).filter((r) => r.id !== repositoryId && !linkedIds.includes(r.id)).map((r) => ({ value: r.id, label: r.name, description: r.path }))}
-                />
-              ) : null}
-              {linkedRepos.length ? (
-                <ul aria-label="Also work in" className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
-                  {linkedRepos.map((r) => (
-                    <li key={r.id} className="flex items-center gap-2 px-3 py-1.5">
-                      <FolderGit2 size={14} className="text-fg-secondary" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate text-body text-fg" title={r.path}>
-                        {r.name}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setLinkedIds((ids) => ids.filter((id) => id !== r.id))}
-                        aria-label={`Remove ${r.name}`}
-                        className="rounded-sm p-1 text-fg-secondary hover:text-fg focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11 pointer-coarse:min-w-11"
-                      >
-                        <X size={14} aria-hidden />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          </Field>
+          <div className="flex flex-col gap-2">
+            <Field
+              label="Also work in"
+              optional
+              helper={
+                linkedIds.length >= MAX_LINKED_REPOSITORIES
+                  ? `A task can work in at most ${MAX_LINKED_REPOSITORIES + 1} repositories.`
+                  : across
+                    ? 'Each repository gets its own isolated copy on a task branch, side by side; the agents change them together. Your folders are not touched.'
+                    : 'Add other repositories this change spans, such as a client and its API.'
+              }
+            >
+              <Combobox
+                value={undefined}
+                onValueChange={(v) => {
+                  if (v && v !== repositoryId && !linkedIds.includes(v) && linkedIds.length < MAX_LINKED_REPOSITORIES) setLinkedIds((ids) => [...ids, v]);
+                }}
+                placeholder="Add a repository"
+                searchPlaceholder="Search repositories"
+                options={
+                  linkedIds.length >= MAX_LINKED_REPOSITORIES
+                    ? []
+                    : (repositories.data ?? []).filter((r) => r.id !== repositoryId && !linkedIds.includes(r.id)).map((r) => ({ value: r.id, label: r.name, description: r.path }))
+                }
+              />
+            </Field>
+            {linkedRepos.length ? (
+              <ul aria-label="Also work in" className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+                {linkedRepos.map((r) => (
+                  <li key={r.id} className="flex items-center gap-2 px-3 py-1.5">
+                    <FolderGit2 size={14} className="text-fg-secondary" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-body text-fg" title={r.path}>
+                      {r.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setLinkedIds((ids) => ids.filter((id) => id !== r.id))}
+                      aria-label={`Remove ${r.name}`}
+                      className="rounded-sm p-1 text-fg-secondary hover:text-fg focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+                    >
+                      <X size={14} aria-hidden />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         ) : null}
 
         <Field

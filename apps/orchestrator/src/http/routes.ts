@@ -22,6 +22,7 @@ import {
   updateAgentSchema,
   updateRepositorySchema,
   updateSettingsSchema,
+  API_BILLING_CONFIRMATION,
   updateTaskSchema,
   unknownPlaceholders,
   type ServiceHealth,
@@ -452,11 +453,16 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   // ----- settings & prompts ---------------------------------------------------------
 
   app.get('/api/settings', async () => s.settings.get());
-  app.patch('/api/settings', async (request) => {
-    const patch = updateSettingsSchema.parse(request.body);
+  app.patch('/api/settings', async (request, reply) => {
+    const { confirmation, ...body } = (request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}) as Record<string, unknown>;
+    const patch = updateSettingsSchema.parse(body);
     if (patch.defaultWorkflowId) s.workflows.get(patch.defaultWorkflowId);
     const before = s.settings.get().billingMode;
-    const next = s.settings.update(request.body as typeof patch); // the raw body: only the keys sent change
+    // Metered billing is chosen by a person who typed the phrase, not by whatever holds the token (audit F-54).
+    if (patch.billingMode === 'api' && before !== 'api' && confirmation !== API_BILLING_CONFIRMATION) {
+      return reply.code(422).send({ error: { code: 'CONFIRMATION_REQUIRED', message: `Type ${API_BILLING_CONFIRMATION} to switch to Explicit API Mode.` } });
+    }
+    const next = s.settings.update(body as typeof patch); // the raw body: only the keys sent change
     // Billing mode changes what "connected" means; re-verify every agent.
     if (patch.billingMode && patch.billingMode !== before) void s.agents.refresh();
     return next;

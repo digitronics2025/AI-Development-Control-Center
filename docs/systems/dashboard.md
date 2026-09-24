@@ -84,9 +84,11 @@ bare `/vault-bridge` page is MyVault's popup relay, rendered outside the Shell �
 see [credential-broker.md](credential-broker.md)),
 Usage & Costs (`/usage`: Overview, Tasks, Models, Agents, Providers, Budgets,
 Attempts; `/usage/tasks/:id` cost ledger; a live Usage panel in the task
-inspector — see [usage.md](usage.md)), Settings (10 sections, including Repositories; Workflows
+inspector — see [usage.md](usage.md)), Settings (12 sections, including Repositories; Workflows
 edits the role prompt templates with the placeholder list and an unknown-placeholder
-warning, see [prompts.md](prompts.md)). Routes are
+warning, see [prompts.md](prompts.md); a settings broadcast replaces the draft only
+when there are no unsaved edits, otherwise a "changed elsewhere" banner offers Load
+or Keep; the API-billing dialog's typed phrase is sent to and checked by the server). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed.

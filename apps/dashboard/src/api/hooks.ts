@@ -287,7 +287,7 @@ export function useUpdateSettings() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: Partial<Settings>) => api.patch<Settings>('/api/settings', patch),
+    mutationFn: (patch: Partial<Settings> & { confirmation?: string }) => api.patch<Settings>('/api/settings', patch),
     onSuccess: (settings) => qc.setQueryData(keys.settings, settings),
   });
 }

@@ -308,6 +308,8 @@ export const settingsSchema = z.object({
 export type Settings = z.infer<typeof settingsSchema>;
 
 export const updateSettingsSchema = settingsSchema.partial();
+/** Typed by the operator, and checked by the server, to switch to metered API billing (audit F-54). */
+export const API_BILLING_CONFIRMATION = 'API BILLING';
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
 
 export const updateAgentSchema = agentSettingsSchema.partial();

@@ -128,7 +128,7 @@ File names: a push takes its file list from `git log --name-only -z`, so no
 name is quoted or split. Patch headers are read by `patchHeaderPath`
 ([source-control.ts](../../packages/git/src/source-control.ts)), which
 un-C-quotes names with quotes, backslashes or control characters and settles
-unquoted names containing ` b/`; a header it cannot read still has its added
+unquoted names that contain a space before `b/`; a header it cannot read still has its added
 lines scanned, and is left out of AI context. **Limit:** a binary file has no
 added lines, so it is checked by name only.
 

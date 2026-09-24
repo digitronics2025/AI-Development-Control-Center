@@ -52,9 +52,9 @@ export function AskPage() {
           }
         />
       ) : (
-        <div className="grid min-h-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
           {isCompactUp || !showingConversation ? (
-            <nav aria-label="Conversations" className="flex min-h-0 flex-col gap-1 lg:max-h-[calc(100dvh-var(--topbar-height)-150px)] lg:overflow-y-auto" tabIndex={list.length ? 0 : undefined}>
+            <nav aria-label="Conversations" className="flex min-h-0 min-w-0 flex-col gap-1 lg:max-h-[calc(100dvh-var(--topbar-height)-150px)] lg:overflow-y-auto" tabIndex={list.length ? 0 : undefined}>
               {threads.isLoading ? (
                 <>
                   <Skeleton className="h-12" />
@@ -118,7 +118,7 @@ function Conversation({ threadId, onBack, onCreated, onDeleted }: { threadId: st
   }, [renaming, title]);
 
   return (
-    <section aria-label={title} className="flex min-h-0 flex-col rounded-lg border border-border-subtle bg-surface lg:h-[calc(100dvh-var(--topbar-height)-150px)]">
+    <section aria-label={title} className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border-subtle bg-surface lg:h-[calc(100dvh-var(--topbar-height)-150px)]">
       <header className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-3">
         {onBack ? <IconButton icon={ArrowLeft} label="Back to conversations" onClick={onBack} /> : null}
         <h2 className="min-w-0 flex-1 truncate text-h3 font-semibold text-fg">{title}</h2>

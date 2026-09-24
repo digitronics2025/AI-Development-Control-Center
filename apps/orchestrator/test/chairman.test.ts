@@ -136,7 +136,7 @@ describe('supervised recovery (plan §7.2)', () => {
     expect(again.limits?.maxRecoveryCycles).toBe(3);
     expect(decisions(id).filter((x) => x.strategyFingerprint).at(-1)!.decision).toBe('Hand Fix to codex');
     expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'fix').at(-1)!.agentId).toBe('codex');
-  });
+  }, 180_000); // several full recovery cycles: ~25 s alone, far longer when the whole suite shares the machine
 
   it('D: a regression is rolled back to the checkpoint before the bad change', async () => {
     await patchChairman({ maxRecoveryCycles: 1 });

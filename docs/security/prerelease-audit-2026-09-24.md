@@ -15,6 +15,85 @@ held uncommitted, docs-only edits in four files (`docs/plans/private-browser-con
 The code audited is exactly `e075366`; documentation claims were checked against
 the committed (`HEAD`) versions; the four files were neither stashed nor touched.
 
+## Status — 2026-09-24, after the fix session
+
+Every finding F-01 … F-54 has a fix commit with a test that fails without it
+(where a test is possible). The findings below keep their original text as the
+record of what was found at `e075366`.
+
+| Findings | Commit |
+|---|---|
+| F-01 | `b0e4766` |
+| F-02, F-12, F-13, F-52 | `6e801d3` |
+| F-03 | `60500ef` |
+| F-04 | `8e89966` |
+| F-05 | `0a7f343` |
+| F-06 | `69297ae` |
+| F-07 | `211b2ef` |
+| F-08, F-36 | `9df28d2` |
+| F-09 | `eacf085` |
+| F-10, F-11 | `39537d1` |
+| F-14 | `51357d4` |
+| F-15 | `7679468` |
+| F-16, F-31 | `23147fc`, `fed464e` |
+| F-17 | `dc6d0be` |
+| F-18 | `f2a8d96` (+ GitHub environments `staging`/`production` with required review, main only) |
+| F-19 | `bcd1e05` |
+| F-20, F-50 | `3b9e477` |
+| F-21 | `25daab4`, `aad2be2` (another session: evidence stays on this computer) |
+| F-22, F-27, F-28, F-39 … F-43, F-51 | `c500e60` |
+| F-23 | `5b09a98` |
+| F-24, F-48, F-53 (extension) | `fad8030` |
+| F-25 | `f8be670` |
+| F-29 | `3683946` |
+| F-30 | `a0e5a8a` |
+| F-32, F-33, F-34, F-35 | `a30e43d` |
+| F-37, F-38 | `947e899` |
+| F-44 | `862d110` |
+| F-45 | `a915def` |
+| F-46 | `3ec1317` |
+| F-47 | `b14836a` |
+| F-49, F-53 (dashboard) | `5af8d89` |
+| F-54, F-26 | `55ee739` |
+| §5 drift, I-09 | `4385491` and the docs in each commit above |
+| I-06, I-11 | `976693d` |
+
+### Found while fixing
+
+- A redirect, or a kept-open browser page, could reach the Control Center's own
+  address from an agent's `http.request`/`web.read`/`browser.*` call. Every
+  redirect hop is now judged, and agent browser contexts abort requests to the
+  orchestrator (with F-31).
+- The migration runner trusted the version number alone (F-29); it now also
+  checks the name and a SQL fingerprint of every applied migration.
+- GitHub CI on `main` was red for F-17's reason (no Wrangler on the runner); the
+  fix lands with the push of these commits.
+
+### Decisions taken
+
+- **Security findings in this repository:** the report is pushed only after the
+  must-fix list is closed, the cloud Worker carries the cloud fixes and the local
+  orchestrator runs the fixed build.
+- **Releases:** both paths are real now: the workflow is gated (main, green CI,
+  owner review) and holds no secrets yet; the operator's shell remains the
+  documented release path until secrets are provisioned through secret-custody.
+- **Private Browser evidence:** stays on this computer (F-21).
+
+### What still needs a person
+
+- **The agent isolation model** (F-02): the hardening layers are in, but a
+  boundary the operating system enforces (a separate account, an AppContainer, or
+  Codex's sandbox as the only runner at Level ≥ 2) is a design decision.
+- **The operator's `CLOUDFLARE_API_TOKEN` at user scope** (F-03): agents no
+  longer inherit it, but it still sits in the user environment. Storing it under
+  Tools → Credentials (kind Cloudflare) and removing the user-scope variable
+  finishes the job.
+- **I-01:** personal addresses and the production target map in the public
+  `wrangler.jsonc`; I-05: the privileged helper's data-folder override under UAC
+  needs a person at the prompt.
+- **An independent review of `mvcc-bridge-v1` and `mvcc-deposit-v1`**, as stated
+  above.
+
 ## Verdict
 
 **Not yet release-ready.** The loopback boundary holds against foreign websites,

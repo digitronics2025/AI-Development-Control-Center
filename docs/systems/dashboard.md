@@ -62,7 +62,7 @@ new `data-theme` before any check.
 ## Pages
 
 Home (System Health marks a signed-in agent whose last run reported it
-cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New Task (execution policy, isolated worktree), Task Detail
+cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New Task (execution policy, isolated worktree; typing `/` in the description opens the skill picker — [SlashTextarea](../../packages/ui/src/components/slash-textarea.tsx), `useSkills`, design.md §8.3 — and a line under the field names the skills the text requests; the Directive box on Task Detail has the same picker via `useSkillPicker`), Task Detail
 (Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary

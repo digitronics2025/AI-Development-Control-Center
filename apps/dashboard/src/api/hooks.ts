@@ -18,6 +18,7 @@ import type {
   Repository,
   RepositoryAutomationStatus,
   ServiceHealth,
+  SkillCatalogView,
   Settings,
   TaskChanges,
   TaskDetail,
@@ -180,6 +181,17 @@ export function useAgents() {
   return useQuery({ queryKey: keys.agents, queryFn: ({ signal }) => api.get<AgentInfo[]>('/api/agents', signal) });
 }
 
+/** Skills for the New Task slash picker; reused for a minute like the orchestrator's own list. */
+export function useSkills(repositoryId: string | undefined) {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.skills(repositoryId ?? ''),
+    queryFn: ({ signal }) => api.get<SkillCatalogView>(`/api/skills?repositoryId=${encodeURIComponent(repositoryId ?? '')}`, signal),
+    enabled: Boolean(repositoryId),
+    staleTime: 60_000,
+  });
+}
+
 export function useRepositories() {
   const api = useApi();
   return useQuery({ queryKey: keys.repositories, queryFn: ({ signal }) => api.get<Repository[]>('/api/repositories', signal) });
@@ -307,7 +319,14 @@ export function useAgentMutations() {
   return {
     refreshAll: useMutation({ mutationFn: () => api.post<AgentInfo[]>('/api/agents/refresh'), onSuccess: set }),
     refreshOne: useMutation({ mutationFn: (id: string) => api.post<AgentInfo>(`/api/agents/${id}/refresh`), onSuccess: set }),
-    update: useMutation({ mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => api.patch<AgentInfo>(`/api/agents/${id}`, patch), onSuccess: set }),
+    update: useMutation({
+      mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => api.patch<AgentInfo>(`/api/agents/${id}`, patch),
+      // Enabling an agent or its CLI customisations changes which skills it loads.
+      onSuccess: (agent) => {
+        set(agent);
+        void qc.invalidateQueries({ queryKey: ['skills'] });
+      },
+    }),
     addModel: useMutation({
       mutationFn: ({ id, modelId, label }: { id: string; modelId: string; label?: string }) => api.post<AgentInfo>(`/api/agents/${id}/models`, { modelId, label }),
       onSuccess: set,

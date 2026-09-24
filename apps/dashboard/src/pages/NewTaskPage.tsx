@@ -16,8 +16,8 @@ import {
   SegmentedControl,
   Select,
   Skeleton,
+  SlashTextarea,
   Switch,
-  Textarea,
   formatBytes,
   useFeedback,
   useHotkey,
@@ -42,6 +42,7 @@ import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime, useSelectedNode } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
+import { RequestedSkills, useSkillPicker } from '../components/skill-picker';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -94,6 +95,7 @@ export function NewTaskPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const repo = repositories.data?.find((r) => r.id === repositoryId);
+  const skillPicker = useSkillPicker(repositoryId, description);
   const effectiveWorkflowId = workflowId ?? repo?.defaultWorkflowId ?? settings.data?.defaultWorkflowId ?? 'normal-development';
   const effectiveMode = mode ?? settings.data?.defaultMode ?? 'discuss';
   const workflow = workflows.data?.find((w) => w.id === effectiveWorkflowId);
@@ -245,13 +247,24 @@ export function NewTaskPage() {
           />
         </Field>
 
-        <Field label="Description" error={errors.description} helper="What should change, and how will you know it worked? Be specific about constraints.">
-          <Textarea
+        <Field
+          label="Description"
+          error={errors.description}
+          helper={
+            <>
+              What should change, and how will you know it worked? Be specific about constraints.
+              {skillPicker.available ? ' Type / to add a skill.' : null}
+              <RequestedSkills names={skillPicker.requested} />
+            </>
+          }
+        >
+          <SlashTextarea
             value={description}
-            onChange={(e) => {
-              setDescription(e.target.value);
+            onValueChange={(next) => {
+              setDescription(next);
               if (errors.description) setErrors((x) => ({ ...x, description: '' }));
             }}
+            {...skillPicker.textareaProps}
             placeholder="e.g. Add contact sync to the settings screen. Inspect the current architecture first and choose the safest approach."
           />
         </Field>

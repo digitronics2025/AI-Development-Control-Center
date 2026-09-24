@@ -5,6 +5,8 @@ sources:
   - packages/agent-claude/**
   - packages/agent-codex/**
   - packages/executor/**
+  - apps/orchestrator/src/services/skills.ts
+  - packages/shared/src/skills.ts
 verified_at: 892299f
 ---
 
@@ -78,9 +80,47 @@ Every prompt carries a short "Skills" section
 
 **Tripwire:** these guarantees rest on the CLI's permission semantics. After
 every Claude Code update run `pnpm verify:agents --only claude --claude-model
-haiku --skills` (5 real probes; exits 1 on any mismatch). A CLI too old for
+haiku --skills` (5 real probes plus the skill-list checks below; exits 1 on any mismatch). A CLI too old for
 `--tools` fails the run with "unknown option", classified `MODEL_UNAVAILABLE`
 (update the CLI).
+
+### Skill list and requested skills
+
+`AgentAdapter.listSkills(options, cwd)` (optional) says which skills a CLI
+loads in a repository. [SkillCatalog](../../apps/orchestrator/src/services/skills.ts)
+merges it over the enabled agents, cached 60 s per repository and per agent
+settings; `GET /api/skills?repositoryId=` serves it (remote read op
+`skill.list`).
+
+- **Claude Code** asks the CLI itself: `claude -p` with stdin `/skills` is
+  handled locally — 0 turns, $0, no tokens, ~2.5 s — and its init event names
+  every skill (`fix-bug`, `dx:fix-issue`, built-ins like `update-config`) and
+  every plugin folder. Hooks are off for the lookup
+  (`--settings {"disableAllHooks":true}`), with `--tools ""` and
+  `--strict-mcp-config`; `--setting-sources project,local` when user config is
+  off, as in a run. Descriptions are read from the repository's, the user's and
+  each plugin's SKILL.md files (a plugin manifest's `skills` path is honoured);
+  a reported name without a readable file is listed with none (`builtin`, or
+  `plugin`). Rebuilding the list from folders and `claude plugin list --json`
+  was tried first and was wrong in both directions (link stubs and plugins the
+  CLI does not load; skills-dir plugins, synced plugins shown `enabled:false`
+  under the sanitised environment, manifest skill paths) — do not go back to it.
+- **Simulated agents** list the repository's `.claude/skills` (demo, e2e).
+- **Codex** lists none yet.
+
+The New Task description and the Directive box accept `/name` (the slash picker,
+[dashboard.md](dashboard.md)). `requestedSkills()`
+([skills.ts](../../packages/shared/src/skills.ts)) keeps only `/name` tokens
+that are real skill names in the description and in the directives a stage
+receives — `/api/tasks`, URLs and `and/or` never count — and
+every stage prompt then gets "## Requested skills" (name, description, and the
+rule: run it in the stage whose job it matches; the implementation stage when
+none clearly does; at most once per stage; a refusal is an operator decision).
+The description and directives stay the record; there is no separate task field.
+
+`pnpm verify:agents --skills` also compares the picker's list with the CLI's
+(791 = 791 on 2026-09-24, 741 with a description) and checks that the `/skills`
+lookup still uses no model turn.
 
 Codex loads `~/.codex/skills` and `~/.agents/skills` itself;
 `--ignore-user-config` skips only `config.toml`. Its sandbox, not a tool

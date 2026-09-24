@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Button, Checkbox, ConfirmDialog, Dialog, Field, Input, Select, Textarea, useFeedback } from '@acc/ui';
+import { Button, Checkbox, ConfirmDialog, Dialog, Field, Input, Select, SlashTextarea, useFeedback } from '@acc/ui';
 import { ROLE_LABEL, type PartialAssignment, type TaskDetail } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useTaskCommand } from '../../api/hooks';
 import { useConnection } from '../../app/runtime';
 import { AssignmentPicker } from '../../components/assignment-picker';
+import { RequestedSkills, useSkillPicker } from '../../components/skill-picker';
 import { useAgentNames } from '../../components/agents';
 
 /**
@@ -13,6 +14,7 @@ import { useAgentNames } from '../../components/agents';
  */
 export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; onDone?: () => void; autoFocus?: boolean }) {
   const [text, setText] = useState('');
+  const skillPicker = useSkillPicker(task.repositoryId, text);
   const [pause, setPause] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const command = useTaskCommand(task.id);
@@ -43,8 +45,18 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
         );
       }}
     >
-      <Field label="Directive" error={error} helper="Applied at the next safe boundary: the next agent stage receives it with its instructions.">
-        <Textarea autoFocus={autoFocus} value={text} onChange={(e) => setText(e.target.value)} className="min-h-24" placeholder="e.g. Do not modify the D1 schema." />
+      <Field
+        label="Directive"
+        error={error}
+        helper={
+          <>
+            Applied at the next safe boundary: the next agent stage receives it with its instructions.
+            {skillPicker.available ? ' Type / to add a skill.' : null}
+            <RequestedSkills names={skillPicker.requested} />
+          </>
+        }
+      >
+        <SlashTextarea autoFocus={autoFocus} value={text} onValueChange={setText} className="min-h-24" placeholder="e.g. Do not modify the D1 schema." {...skillPicker.textareaProps} />
       </Field>
       {running ? (
         <Checkbox checked={pause} onCheckedChange={setPause} label="Pause the current stage now" description="Stops the running stage; it runs again with this directive when you resume." />

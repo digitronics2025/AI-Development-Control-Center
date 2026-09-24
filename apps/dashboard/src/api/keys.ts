@@ -18,6 +18,8 @@ export const keys = {
   artifactContent: (id: string) => ['artifact', id] as const,
   approvals: (status: 'pending' | 'all') => ['approvals', status] as const,
   agents: ['agents'] as const,
+  /** Skills the agents would load in a repository (New Task slash picker). */
+  skills: (repositoryId: string) => ['skills', repositoryId] as const,
   repositories: ['repositories'] as const,
   repository: (id: string) => ['repository', id] as const,
   repositoryAutomation: ['repository-automation'] as const,

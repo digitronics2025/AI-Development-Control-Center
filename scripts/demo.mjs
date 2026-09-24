@@ -34,7 +34,7 @@ if (!existsSync(main)) {
   process.exit(1);
 }
 
-function makeRepo(name, { dirty = false, failingTests = false } = {}) {
+function makeRepo(name, { dirty = false, failingTests = false, skills = {} } = {}) {
   const dir = path.join(reposDir, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -49,6 +49,11 @@ function makeRepo(name, { dirty = false, failingTests = false } = {}) {
     JSON.stringify({ name, private: true, scripts: { lint: 'node -e "console.log(\'lint ok\')"', test, build: 'node -e "console.log(\'built\')"' } }, null, 2),
   );
   writeFileSync(path.join(dir, 'README.md'), `# ${name}\n`);
+  // Repository skills, laid out as Claude Code expects: the New Task slash picker lists them.
+  for (const [skill, description] of Object.entries(skills)) {
+    mkdirSync(path.join(dir, '.claude', 'skills', skill), { recursive: true });
+    writeFileSync(path.join(dir, '.claude', 'skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: ${description}\n---\n\n${description}.\n`);
+  }
   git('add', '-A');
   git('commit', '-qm', 'init');
   if (dirty) writeFileSync(path.join(dir, 'NOTES.md'), 'work in progress\n');
@@ -140,7 +145,7 @@ const api = async (method, p, body) => {
 
 if (seed) {
   const shop = await api('POST', '/api/repositories', { path: makeRepo('demo-shop', { dirty: true }), name: 'demo-shop' });
-  const billing = await api('POST', '/api/repositories', { path: makeRepo('billing-api'), name: 'billing-api' });
+  const billing = await api('POST', '/api/repositories', { path: makeRepo('billing-api', { skills: { 'audit-refunds': 'Check refund code paths for missing audit entries', 'release-notes': 'Draft release notes from the commits since the last tag' } }), name: 'billing-api' });
   const mobile = await api('POST', '/api/repositories', { path: makeRepo('mobile-app'), name: 'mobile-app' });
   const docs = await api('POST', '/api/repositories', { path: makeRepo('docs-site', { failingTests: true }), name: 'docs-site' });
   await api('POST', '/api/repositories', { path: makeSourceControlRepo('api-gateway'), name: 'api-gateway' });

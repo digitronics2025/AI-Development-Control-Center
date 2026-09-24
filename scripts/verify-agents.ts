@@ -13,11 +13,12 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter } from '@acc/agent-sdk';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
-import { detectApiCredentials, Redactor } from '@acc/security';
+import { detectApiCredentials, Redactor, sanitizeEnv } from '@acc/security';
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(`--${name}`);
@@ -163,5 +164,94 @@ async function verifySkills() {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+  await verifySkillCatalog(adapter.adapter);
+}
+
+/**
+ * The slash picker's list against the CLI's own: every name the Control Center
+ * offers must be one Claude Code actually loads in this repository (it reports
+ * them in its init event). Uses the operator's real configuration.
+ */
+async function verifySkillCatalog(adapter: AgentAdapter) {
+  const repo = process.cwd();
+  const listed = await adapter.listSkills!({ ...options, loadUserConfig: true }, repo);
+  const executable = (await adapter.detect(options)).executablePath;
+  if (!executable) return;
+  const reported = await new Promise<string[] | null>((resolve) => {
+    const child = spawn(executable, ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--model', 'haiku', '--tools', '', '--strict-mcp-config'], {
+      cwd: repo,
+      env: sanitizeEnv(process.env, 'subscription').env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let buffer = '';
+    let settled = false;
+    const timer = setTimeout(() => finish(null), 60_000);
+    const finish = (value: string[] | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      resolve(value);
+    };
+    child.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      for (const line of buffer.split('\n').slice(0, -1)) {
+        try {
+          const event = JSON.parse(line) as { type?: string; subtype?: string; skills?: string[] };
+          if (event.type === 'system' && event.subtype === 'init') return finish(Array.isArray(event.skills) ? event.skills : null);
+        } catch {
+          /* not JSON */
+        }
+      }
+    });
+    child.on('exit', () => finish(null));
+    child.stdin.end('Reply with OK.');
+  });
+  if (!reported) {
+    console.log('FAIL  the CLI reported no skill list to compare with');
+    failures++;
+    return;
+  }
+  const cli = new Set(reported);
+  const phantom = listed.filter((s) => !cli.has(s.name)).map((s) => s.name);
+  const unlisted = reported.filter((name) => !listed.some((s) => s.name === name));
+  console.log(`info  picker lists ${listed.length} skills; Claude Code reports ${reported.length} in ${repo}`);
+  if (unlisted.length) console.log(`info  loaded by the CLI but not listed (${unlisted.length}): ${unlisted.slice(0, 15).join(', ')}${unlisted.length > 15 ? ', …' : ''}`);
+  const ok = phantom.length === 0;
+  console.log(`${ok ? 'pass' : 'FAIL'}  every skill the picker offers is one the CLI loads${ok ? '' : ` — not loaded: ${phantom.slice(0, 15).join(', ')}`}`);
+  if (!ok) failures++;
+  console.log(`info  ${listed.filter((s) => s.description).length} of ${listed.length} listed skills have a description`);
+
+  // The listing itself must stay free: `/skills` is answered locally, with no model turn.
+  const free = await new Promise<{ turns: unknown; cost: unknown } | null>((resolve) => {
+    const child = spawn(executable, ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--tools', '', '--strict-mcp-config', '--settings', JSON.stringify({ disableAllHooks: true })], {
+      cwd: repo,
+      env: sanitizeEnv(process.env, 'subscription').env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let text = '';
+    const timer = setTimeout(() => child.kill(), 60_000);
+    child.stdout.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+    child.on('exit', () => {
+      clearTimeout(timer);
+      const result = text
+        .split('\n')
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { type?: string; num_turns?: unknown; total_cost_usd?: unknown };
+          } catch {
+            return null;
+          }
+        })
+        .find((event) => event?.type === 'result');
+      resolve(result ? { turns: result.num_turns, cost: result.total_cost_usd } : null);
+    });
+    child.stdin.end('/skills');
+  });
+  const freeOk = free?.turns === 0 && free?.cost === 0;
+  console.log(`${freeOk ? 'pass' : 'FAIL'}  the /skills lookup uses no model turn${freeOk ? '' : ` — ${JSON.stringify(free)}`}`);
+  if (!freeOk) failures++;
 }
 process.exit(failures ? 1 : 0);

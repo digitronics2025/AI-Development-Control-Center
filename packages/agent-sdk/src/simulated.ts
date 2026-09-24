@@ -1,6 +1,7 @@
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
+import type { AgentCapabilities, ModelDescriptor, SkillInfo } from '@acc/shared';
+import { scanSkillDirectory } from './skills.js';
 import type {
   AgentAdapter,
   AgentUsageReport,
@@ -11,6 +12,7 @@ import type {
   AgentExecutionInput,
   AgentExecutionResult,
   AgentHealth,
+  AgentRuntimeOptions,
   RawAgentResult,
 } from './contract.js';
 
@@ -139,6 +141,11 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       modelSelection: true,
       effortSelection: true,
     };
+  }
+
+  /** Like Claude Code: the repository's own `.claude/skills` (the demo and e2e rely on it). */
+  async listSkills(_options: AgentRuntimeOptions, cwd: string): Promise<SkillInfo[]> {
+    return scanSkillDirectory(path.join(cwd, '.claude', 'skills'), 'project');
   }
 
   async listModels(): Promise<ModelDescriptor[]> {

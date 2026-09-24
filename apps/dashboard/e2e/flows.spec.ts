@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { api, setTheme, trackConsoleErrors } from './helpers';
+import { api, expectNoAxeViolations, setTheme, trackConsoleErrors } from './helpers';
 
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage();
@@ -29,6 +29,55 @@ test.describe('New Task (design.md §7.2, §18)', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Add an audit log for refunds.' })).toBeVisible();
     expect(errors).toEqual([]);
   });
+});
+
+test.describe('New Task slash picker (design.md §8.3)', () => {
+  test.afterAll(async ({ browser }) => {
+    // The theme is a server setting: put back the dark theme the rest of this file expects.
+    const page = await browser.newPage();
+    await page.goto('/');
+    await setTheme(page, 'dark');
+    await page.close();
+  });
+
+  for (const theme of ['dark', 'light'] as const) {
+    test(`typing / lists the repository's skills and inserts one, keyboard only (${theme})`, async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto('/tasks/new');
+      await setTheme(page, theme);
+      await page.getByRole('combobox', { name: 'Repository' }).click();
+      await page.getByRole('searchbox').fill('billing');
+      await page.keyboard.press('Enter');
+      await expect(page.getByText('Type / to add a skill.')).toBeVisible();
+
+      const description = page.getByLabel('Description');
+      await description.click();
+      await description.pressSequentially('Audit refunds with /re');
+      const list = page.getByRole('listbox', { name: 'Skills' });
+      await expect(list).toBeVisible();
+      // Names starting with the typed text first; a description match follows.
+      await expect(list.getByRole('option')).toHaveText([/\/release-notes/, /\/audit-refunds/]);
+      await expectNoAxeViolations(page, testInfo);
+
+      await page.keyboard.press('ArrowDown');
+      await expect(list.getByRole('option', { name: /audit-refunds/ })).toHaveAttribute('aria-selected', 'true');
+      await page.keyboard.press('Enter');
+      await expect(list).toBeHidden();
+      await expect(description).toHaveValue('Audit refunds with /audit-refunds ');
+      await expect(page.getByTestId('requested-skills')).toHaveText('Skills requested: /audit-refunds');
+
+      // Escape closes the list and keeps the text; a path is never offered or requested.
+      await description.pressSequentially('then /rel');
+      await expect(list).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(list).toBeHidden();
+      await expect(description).toHaveValue('Audit refunds with /audit-refunds then /rel');
+      await description.pressSequentially('ease-notes and check /api/refunds');
+      await expect(page.getByTestId('requested-skills')).toHaveText('Skills requested: /audit-refunds, /release-notes');
+      expect(errors).toEqual([]);
+    });
+  }
 });
 
 test.describe('Task Detail (design.md §7.3, §18)', () => {

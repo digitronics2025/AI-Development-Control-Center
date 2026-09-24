@@ -6,6 +6,7 @@ import type {
   ErrorClass,
   ModelDescriptor,
   PermissionLevel,
+  SkillInfo,
 } from '@acc/shared';
 
 export interface AgentDetectionResult {
@@ -172,6 +173,11 @@ export interface AgentAdapter {
   healthCheck(options: AgentRuntimeOptions): Promise<AgentHealth>;
   getCapabilities(): Promise<AgentCapabilities>;
   listModels(options: AgentRuntimeOptions): Promise<ModelDescriptor[]>;
+  /**
+   * Skills this CLI would load in `cwd`, named as it invokes them. Optional: an
+   * agent that cannot report its skills lists none (docs/systems/agents.md#skills).
+   */
+  listSkills?(options: AgentRuntimeOptions, cwd: string): Promise<SkillInfo[]>;
 
   execute(input: AgentExecutionInput): Promise<AgentExecutionHandle>;
   cancel(executionId: string): Promise<void>;

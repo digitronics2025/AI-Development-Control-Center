@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { addWorktree, changesSince, commitPaths, createCheckpoint, isGitRepository, removeWorktree, repositoryStatus, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
-import { DEFAULT_AUTO_APPROVE_LEVEL, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
+import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
 import {
   assessVerification,
   classifyFailure,
@@ -24,6 +24,7 @@ import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
+import type { SkillCatalog } from '../services/skills.js';
 import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import type { McpService } from '../tools/mcp.js';
 import type { ProcessManager } from '../tools/processes.js';
@@ -62,6 +63,8 @@ export interface EngineToolingDeps {
   artifacts: ArtifactService;
   agents: AgentRegistry;
   mcp: McpService | null;
+  /** Skills the agents would load; null in tests that build tooling by hand. */
+  skills?: SkillCatalog | null;
   dataDir: string;
   /** Built stdio MCP bridge agents launch; null in development without a build. */
   bridgePath: string | null;
@@ -251,6 +254,8 @@ export class EngineTooling {
   async promptSections(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): Promise<string> {
     const parts: string[] = [];
     parts.push(SKILLS_PROMPT_SECTION);
+    const requested = await this.requestedSkillsSection(task, def, repo);
+    if (requested) parts.push(requested);
     if (['investigator', 'planner', 'implementer'].includes(def.role)) {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);
@@ -258,6 +263,38 @@ export class EngineTooling {
     const tools = this.toolsPromptSection(task, def, repo);
     if (tools) parts.push(tools);
     return parts.length ? `\n\n${parts.join('\n\n')}\n` : '';
+  }
+
+  /**
+   * "## Requested skills": the skills the operator named as `/name` in the task
+   * description (the New Task slash picker), with where each belongs. Only real
+   * skill names count, so a path such as `/api/tasks` is never read as one.
+   */
+  async requestedSkillsSection(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): Promise<string> {
+    // The description and the directives this stage receives (the Directive box has the same picker).
+    const directives = this.d.store
+      .listDirectives(task.id)
+      .filter((d) => d.state === 'active' && d.kind !== 'routing' && (d.scope === 'CURRENT_TASK' || d.appliedStageKey === def.key))
+      .map((d) => d.text);
+    const text = [task.description, ...directives].join('\n');
+    if (!this.d.skills || !text.includes('/')) return '';
+    const catalog = await this.d.skills.list(repo.path).catch(() => null);
+    if (!catalog) return '';
+    const byName = new Map(catalog.skills.map((s) => [s.name, s]));
+    const names = requestedSkills(text, new Set(byName.keys()));
+    if (!names.length) return '';
+    return [
+      '## Requested skills',
+      '',
+      'The operator asked for these skills by name (`/name` in the task or a directive):',
+      ...names.map((name) => {
+        const description = byName.get(name)?.description;
+        return `- \`${name}\`${description ? ` — ${description}` : ''}`;
+      }),
+      '',
+      `You are the ${def.role} in stage "${def.name}". Run a requested skill with your skill mechanism (the Skill tool in Claude Code) in the stage whose job it matches: skills that change code in implementation or fix stages; review, audit and check skills in review or verification stages; investigation and planning skills in those stages. When no stage clearly fits, the implementation stage runs it.`,
+      "Run each at most once in this stage and name in your report the skills you ran. A skill this stage's limits refuse is an operator decision: report it, do not work around it.",
+    ].join('\n');
   }
 
   /** Free a port only when this task's own process holds it; say who holds it otherwise. */

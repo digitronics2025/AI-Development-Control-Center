@@ -3,7 +3,8 @@
 //   FAKE_CLAUDE_AUTH            subscription | apikey | none
 //   FAKE_CLAUDE_APIKEY_SOURCE   value reported in the init event (default "none")
 //   FAKE_CLAUDE_SCENARIO        ok | usage | hang | error | long | crash | skill
-import { writeFileSync } from 'node:fs';
+//   FAKE_CLAUDE_SKILLS_JSON     file with { skills, plugins } for the `/skills` lookup (default none)
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const out = (event) => process.stdout.write(JSON.stringify(event) + '\n');
@@ -36,6 +37,15 @@ if (args[0] === '-p') {
   process.stdin.on('end', () => {
     const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'ok';
     if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd() }));
+    if (prompt.trim() === '/skills') {
+      // The local /skills command: an init event naming skills and plugin folders, then a 0-turn result (as 2.1.280 does).
+      const listed = process.env.FAKE_CLAUDE_SKILLS_JSON ? JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SKILLS_JSON, 'utf8')) : { skills: [], plugins: [] };
+      out({ type: 'system', subtype: 'init', session_id: 'sess-skills', model: 'claude-test', apiKeySource: 'none', claude_code_version: '9.9.9', ...listed });
+      // FAKE_CLAUDE_SKILLS_SPENDS=1: a CLI that sent /skills to the model.
+      const spent = process.env.FAKE_CLAUDE_SKILLS_SPENDS === '1';
+      out({ type: 'result', subtype: 'success', is_error: false, num_turns: spent ? 1 : 0, total_cost_usd: spent ? 0.001 : 0, result: '' });
+      process.exit(0);
+    }
     out({
       type: 'system',
       subtype: 'init',

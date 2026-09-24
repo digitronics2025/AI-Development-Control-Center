@@ -18,6 +18,7 @@ import {
   promptTemplateUpdateSchema,
   rerouteSchema,
   retrySchema,
+  skillQuerySchema,
   updateAgentSchema,
   updateRepositorySchema,
   updateSettingsSchema,
@@ -352,6 +353,12 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   // ----- agents -------------------------------------------------------------------
 
   app.get('/api/agents', async () => s.agents.list());
+  app.get('/api/skills', async (request, reply) => {
+    const { repositoryId } = skillQuerySchema.parse(request.query);
+    const repo = s.store.getRepository(repositoryId);
+    if (!repo) return sendError(reply, 404, 'NOT_FOUND', 'Repository not found');
+    return s.skills.list(repo.path);
+  });
   app.post('/api/agents/refresh', async () => s.agents.refresh());
   app.post('/api/agents/:id/refresh', async (request) => {
     const { id } = idParam.parse(request.params);

@@ -45,21 +45,33 @@ const HEALTH_TTL_MS = 5 * 60 * 1000;
  */
 export const PROTOCOL_MAX_LINE_LENGTH = 32 * 1024 * 1024;
 
+export interface CaptureOptions {
+  /** Defaults to the home folder. */
+  cwd?: string;
+  /** Written to stdin, then closed. */
+  stdin?: string;
+  /** Raise for JSON output: longer lines are otherwise split for display. */
+  maxLineLength?: number;
+}
+
 /** Run a short-lived CLI command (version, auth status) and capture its output. */
 export async function capture(
   executable: string,
   args: string[],
   env: NodeJS.ProcessEnv,
   timeoutMs = 20_000,
+  extra: CaptureOptions = {},
 ): Promise<CaptureResult> {
   const out: string[] = [];
   const err: string[] = [];
   const handle = runProcess({
     command: executable,
     args,
-    cwd: os.homedir(),
+    cwd: extra.cwd ?? os.homedir(),
     env,
     timeoutMs,
+    ...(extra.maxLineLength ? { maxLineLength: extra.maxLineLength } : {}),
+    ...(extra.stdin !== undefined ? { stdin: extra.stdin } : {}),
     onLine: (stream, line) => (stream === 'stdout' ? out : err).push(line),
   });
   const result = await handle.done;
@@ -96,6 +108,14 @@ export abstract class CliAgentAdapter implements AgentAdapter {
 
   protected async resolveExecutable(options: AgentRuntimeOptions): Promise<string | null> {
     return which(options.executablePath || this.binaryName, options.baseEnv);
+  }
+
+  /** Run a short CLI subcommand with the same resolved program and sanitised environment as a run; null when the CLI is missing. */
+  protected async captureCli(options: AgentRuntimeOptions, args: string[], timeoutMs?: number, extra?: CaptureOptions): Promise<CaptureResult | null> {
+    const executable = await this.resolveExecutable(options);
+    if (!executable) return null;
+    const { env } = sanitizeEnv(options.baseEnv, options.billingMode);
+    return capture(executable, args, env, timeoutMs, extra);
   }
 
   async detect(options: AgentRuntimeOptions): Promise<AgentDetectionResult> {

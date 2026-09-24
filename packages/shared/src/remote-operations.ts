@@ -122,6 +122,7 @@ export const REMOTE_OPERATIONS: readonly RemoteOperation[] = [
   c('approval.deny', 'POST', '/api/approvals/:id/deny', { body: approvalDecisionSchema, precondition: 'approval', ttlSeconds: APPROVAL_TTL }),
   // agents
   r('agent.list', 'GET', '/api/agents', { offline: true }),
+  r('skill.list', 'GET', '/api/skills'),
   c('agent.refreshAll', 'POST', '/api/agents/refresh', { body: emptyBody }),
   c('agent.refresh', 'POST', '/api/agents/:id/refresh', { body: emptyBody }),
   c('agent.update', 'PATCH', '/api/agents/:id', { body: updateAgentSchema }),

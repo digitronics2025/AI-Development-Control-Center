@@ -5,9 +5,13 @@ import {
   CliAgentAdapter,
   dollars,
   epochSecondsToIso,
+  mergeSkills,
+  PROTOCOL_MAX_LINE_LENGTH,
+  scanSkillDirectory,
   tokenCount,
   type AgentExecutionInput,
   type AgentHealth,
+  type AgentRuntimeOptions,
   type AgentUsageLine,
   type AgentUsageReport,
   type ParserContext,
@@ -15,9 +19,57 @@ import {
   type StreamParser,
 } from '@acc/agent-sdk';
 import { writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { AgentCapabilities, ModelDescriptor, PermissionLevel } from '@acc/shared';
+import type { AgentCapabilities, ModelDescriptor, PermissionLevel, SkillInfo } from '@acc/shared';
+
+/** Skill names and plugin folders from a `claude -p` init event; null when none was printed. */
+export function readInitEvent(stdout: string): { skills: string[]; plugins: Array<{ name: string; path: string }> } | null {
+  for (const line of stdout.split('\n')) {
+    if (!line.includes('"init"')) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; subtype?: string; skills?: unknown; plugins?: unknown };
+      if (event.type !== 'system' || event.subtype !== 'init' || !Array.isArray(event.skills)) continue;
+      const skills = event.skills.filter((s): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200);
+      const plugins = (Array.isArray(event.plugins) ? event.plugins : [])
+        .filter((p): p is { name: string; path: string } => typeof p?.name === 'string' && typeof p?.path === 'string' && path.isAbsolute(p.path));
+      return { skills, plugins };
+    } catch {
+      /* not JSON */
+    }
+  }
+  return null;
+}
+
+/** True when a lookup's result event shows no model turn and no cost; a missing result counts as free (nothing was sent). */
+export function lookupWasFree(stdout: string): boolean {
+  for (const line of stdout.split('\n')) {
+    if (!line.includes('"result"')) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; num_turns?: unknown; total_cost_usd?: unknown };
+      if (event.type !== 'result') continue;
+      return (event.num_turns ?? 0) === 0 && (event.total_cost_usd ?? 0) === 0;
+    } catch {
+      /* not JSON */
+    }
+  }
+  return true;
+}
+
+/** A plugin's skill folders: its manifest's `skills` (a path or list), else `skills/`. */
+async function pluginSkillFolders(root: string): Promise<string[]> {
+  try {
+    const manifest = JSON.parse(await readFile(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')) as { skills?: unknown };
+    const declared = (Array.isArray(manifest.skills) ? manifest.skills : [manifest.skills]).filter((p): p is string => typeof p === 'string');
+    const base = path.resolve(root);
+    // Only folders inside the plugin: a manifest cannot point the scan elsewhere.
+    if (declared.length) return declared.map((p) => path.resolve(base, p)).filter((p) => p === base || p.startsWith(base + path.sep));
+  } catch {
+    /* no manifest: the default layout */
+  }
+  return [path.join(root, 'skills')];
+}
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -201,6 +253,8 @@ export function claudeUsage(event: Record<string, any>, sessionId: string | null
 export class ClaudeCodeAdapter extends CliAgentAdapter {
   readonly id = 'claude';
   readonly displayName = 'Claude Code';
+  /** Set when a `/skills` lookup used a model turn; listing then stays off (see listSkills). */
+  private skillLookupSpends = false;
   readonly usageCapabilities: ProviderUsageCapabilities = {
     provider: 'anthropic',
     tokenUsage: true,
@@ -275,6 +329,44 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
       source: 'builtin' as const,
       description: m.description,
     }));
+  }
+
+  /**
+   * The skills Claude Code loads in `cwd`, as the CLI itself reports them: a
+   * `claude -p` session given the local `/skills` command answers without a
+   * model call (0 turns, 0 tokens — measured on 2.1.280) and its init event
+   * names every skill and plugin folder. Hooks are off for this lookup, and
+   * with user config off it sees only what `--setting-sources project,local`
+   * sees, like a run. Descriptions come from each SKILL.md; a name the CLI
+   * reports without a readable file is listed without one.
+   */
+  async listSkills(options: AgentRuntimeOptions, cwd: string): Promise<SkillInfo[]> {
+    if (this.skillLookupSpends) return [];
+    const userConfig = options.loadUserConfig !== false;
+    // --model haiku only bounds the cost if a future CLI ever sends `/skills` to the model; the guard below stops that.
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--model', 'haiku', '--tools', '', '--strict-mcp-config', '--settings', JSON.stringify({ disableAllHooks: true })];
+    if (!userConfig) args.push('--setting-sources', 'project,local');
+    const run = await this.captureCli(options, args, 30_000, { cwd, stdin: '/skills', maxLineLength: PROTOCOL_MAX_LINE_LENGTH });
+    if (run && !lookupWasFree(run.stdout)) {
+      // The listing must never cost a model turn: stop asking for the life of this process.
+      this.skillLookupSpends = true;
+      return [];
+    }
+    const init = run ? readInitEvent(run.stdout) : null;
+    if (!init) return [];
+    const configDir = options.baseEnv.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    const known = mergeSkills(
+      await scanSkillDirectory(path.join(cwd, '.claude', 'skills'), 'project'),
+      userConfig ? await scanSkillDirectory(path.join(configDir, 'skills'), 'user') : [],
+      ...(await Promise.all(init.plugins.map((plugin) => pluginSkillFolders(plugin.path).then((dirs) => Promise.all(dirs.map((dir) => scanSkillDirectory(dir, 'plugin', plugin.name))))))).flat(),
+    );
+    const byName = new Map(known.map((skill) => [skill.name, skill]));
+    return init.skills.map((name) => {
+      const found = byName.get(name);
+      if (found) return found;
+      const plugin = name.includes(':') ? name.slice(0, name.indexOf(':')) : null;
+      return { name, description: null, source: plugin ? 'plugin' : 'builtin', plugin };
+    });
   }
 
   /**

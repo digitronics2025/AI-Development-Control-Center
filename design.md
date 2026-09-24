@@ -640,6 +640,10 @@ Default form order:
 5. Attachments
 6. Start action
 
+The description accepts `/skill-name`: typing `/` opens the slash picker (§8.3).
+A requested skill runs in the stage whose job it matches. The Directive box on
+Task Detail offers the same picker.
+
 Advanced section collapsed by default:
 - role overrides,
 - agent,
@@ -1399,6 +1403,24 @@ Use searchable combobox for:
 - large agent/model lists.
 
 Use simple select for very short fixed choices.
+
+### Slash picker in a text area
+
+Where free text reaches an agent (the New Task description), typing `/` at the
+start of the text or after a space opens a listbox of the agent's skills under
+the field, like Claude Code's chat:
+
+- filters as the user types after `/`; names that start with the typed text come first,
+- each row: skill name, one-line description, and where it comes from
+  (repository, yours, or the plugin name) in secondary text,
+- Arrow keys move, Enter or Tab inserts `/name `, Escape closes and keeps the text,
+  Ctrl/Cmd + Enter still submits the form,
+- focus stays in the text area (`aria-autocomplete="list"`,
+  `aria-activedescendant`); the list is a `listbox`,
+- loading and empty rows say so in words; no list at all when the agent reports none,
+- a line under the field names the skills the text requests, so a typo is visible.
+
+Picked skills are text in the description, not separate form state.
 
 ## 8.4 Segmented control
 

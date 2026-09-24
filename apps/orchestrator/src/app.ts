@@ -12,6 +12,7 @@ import { migrate, openDatabase, type Db } from './db/database.js';
 import { ContextBuilder } from './engine/context.js';
 import { TaskEngine } from './engine/engine.js';
 import { TaskViews } from './engine/views.js';
+import { SkillCatalog } from './services/skills.js';
 import { AgentRegistry } from './services/agents.js';
 import { ArtifactService } from './services/artifacts.js';
 import { PromptService } from './services/prompts.js';
@@ -67,6 +68,8 @@ export interface AppServices {
   /** MyVault bridge sessions (memory only) and trusted origins. */
   vaultBridge: VaultBridgeService;
   mcp: McpService;
+  /** Skills the enabled agents would load, per repository (docs/systems/agents.md#skills). */
+  skills: SkillCatalog;
   tooling: EngineTooling;
   privileged: PrivilegedHelper;
   usage: UsageService;
@@ -121,7 +124,8 @@ export function createServices(
   const mcp = new McpService(toolStore, bus, tools, credentials);
   const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'));
   const bridge = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', 'acc-mcp.js');
-  const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
+  const skills = new SkillCatalog(agents);
+  const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
   const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baseEnv: options.baseEnv });
   const gitOperations = new GitOperationStore(db);
@@ -160,6 +164,7 @@ export function createServices(
     bus,
     settings,
     agents,
+    skills,
     repositories,
     workflows,
     prompts,

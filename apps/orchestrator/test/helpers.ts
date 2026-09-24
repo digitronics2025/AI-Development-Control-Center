@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SimulatedAgentAdapter, type AgentAdapter } from '@acc/agent-sdk';
@@ -121,6 +121,14 @@ export function waitForStatus(t: TestApp, taskId: string, statuses: TaskStatus[]
     timeoutMs,
     `${taskId} to reach ${statuses.join('/')}`,
   );
+}
+
+/** A repository with one project skill, as Claude Code lays it out. */
+export async function repoWithSkill(name = 'file-census', description = 'Count the files in this repository'): Promise<string> {
+  const repo = await makeRepo();
+  mkdirSync(path.join(repo, '.claude', 'skills', name), { recursive: true });
+  writeFileSync(path.join(repo, '.claude', 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nBody\n`);
+  return repo;
 }
 
 export async function addRepo(t: TestApp, repoPath: string): Promise<string> {

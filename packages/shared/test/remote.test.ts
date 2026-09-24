@@ -109,6 +109,7 @@ describe('operation catalog', () => {
 
   it('matches literal segments before parameters and decodes parameters', () => {
     expect(matchRemoteOperation('POST', '/api/agents/refresh')?.operation.op).toBe('agent.refreshAll');
+    expect(matchRemoteOperation('GET', '/api/skills')?.operation).toMatchObject({ op: 'skill.list', kind: 'read' });
     expect(matchRemoteOperation('POST', '/api/agents/codex/refresh')).toMatchObject({ operation: { op: 'agent.refresh' }, params: { id: 'codex' } });
     expect(matchRemoteOperation('GET', '/api/tasks/TASK-0001')).toMatchObject({ operation: { op: 'task.get' }, params: { id: 'TASK-0001' } });
     expect(matchRemoteOperation('DELETE', '/api/agents/claude/models/opus%404')?.params).toEqual({ id: 'claude', modelId: 'opus@4' });

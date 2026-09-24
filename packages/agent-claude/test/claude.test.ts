@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AgentGuardError, type AgentExecutionInput } from '@acc/agent-sdk';
-import { ClaudeCodeAdapter, claudeToolPolicy } from '../src/index.js';
+import { ClaudeCodeAdapter, claudeToolPolicy, lookupWasFree, readInitEvent } from '../src/index.js';
 
 const fixture = path.resolve(import.meta.dirname, '../../../tests/fixtures', process.platform === 'win32' ? 'fake-claude.cmd' : 'fake-claude');
 
@@ -150,6 +150,91 @@ describe('ClaudeCodeAdapter', () => {
     const handle = await adapter.execute(run);
     setTimeout(() => void adapter.cancel(run.executionId), 500);
     expect((await handle.done).status).toBe('cancelled');
+  });
+});
+
+describe('ClaudeCodeAdapter.listSkills', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-skills-'));
+  const skill = (dir: string, name: string, description: string) => {
+    mkdirSync(path.join(dir, name), { recursive: true });
+    writeFileSync(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nBody\n`);
+  };
+  const repo = path.join(root, 'repo');
+  const config = path.join(root, 'config');
+  const pluginDefault = path.join(root, 'plugins', 'dx');
+  const pluginManifest = path.join(root, 'plugins', 'ui-kit');
+  skill(path.join(repo, '.claude', 'skills'), 'repo-check', 'Repository skill');
+  skill(path.join(config, 'skills'), 'fix-bug', 'User skill');
+  skill(path.join(config, 'skills'), 'not-loaded', 'On disk but the CLI does not report it');
+  skill(path.join(pluginDefault, 'skills'), 'review-pr', 'Plugin skill');
+  skill(path.join(pluginManifest, 'custom', 'skills'), 'palette', 'Declared by the manifest');
+  mkdirSync(path.join(pluginManifest, '.claude-plugin'), { recursive: true });
+  writeFileSync(path.join(pluginManifest, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'ui-kit', skills: './custom/skills/' }));
+  const listing = path.join(root, 'skills.json');
+  writeFileSync(
+    listing,
+    JSON.stringify({
+      skills: ['repo-check', 'fix-bug', 'dx:review-pr', 'ui-kit:palette', 'update-config', 'other:missing'],
+      plugins: [
+        { name: 'dx', path: pluginDefault },
+        { name: 'ui-kit', path: pluginManifest },
+        { name: 'agents-md', path: 'builtin' },
+      ],
+    }),
+  );
+
+  it('lists exactly the skills the CLI reports, with descriptions from their files', async () => {
+    const argsFile = path.join(root, 'args.json');
+    const skills = await new ClaudeCodeAdapter().listSkills(input({ env: { CLAUDE_CONFIG_DIR: config, FAKE_CLAUDE_SKILLS_JSON: listing, FAKE_ARGS_FILE: argsFile }, loadUserConfig: true }), repo);
+    expect(skills.map((s) => `${s.source}:${s.name}:${s.description ?? '-'}`)).toEqual([
+      'project:repo-check:Repository skill',
+      'user:fix-bug:User skill',
+      'plugin:dx:review-pr:Plugin skill',
+      'plugin:ui-kit:palette:Declared by the manifest',
+      'builtin:update-config:-',
+      'plugin:other:missing:-',
+    ]);
+    // The lookup never runs hooks, tools or personal MCP servers, and runs in the repository.
+    const { args, cwd } = JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[]; cwd: string };
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+    expect(args).toContain('--strict-mcp-config');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({ disableAllHooks: true });
+    expect(args).not.toContain('--setting-sources');
+    expect(cwd.toLowerCase()).toBe(repo.toLowerCase());
+  });
+
+  it('asks the CLI as an isolated run would when user config is off', async () => {
+    const argsFile = path.join(root, 'args-isolated.json');
+    await new ClaudeCodeAdapter().listSkills(input({ env: { FAKE_CLAUDE_SKILLS_JSON: listing, FAKE_ARGS_FILE: argsFile }, loadUserConfig: false }), repo);
+    const { args } = JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] };
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('project,local');
+  });
+
+  it('stops listing for good if the lookup ever costs a model turn', async () => {
+    const adapter = new ClaudeCodeAdapter();
+    const argsFile = path.join(root, 'args-spend.json');
+    const env = { FAKE_CLAUDE_SKILLS_JSON: listing, FAKE_CLAUDE_SKILLS_SPENDS: '1', FAKE_ARGS_FILE: argsFile };
+    expect(await adapter.listSkills(input({ env }), repo)).toEqual([]);
+    rmSync(argsFile);
+    expect(await adapter.listSkills(input({ env }), repo)).toEqual([]);
+    expect(existsSync(argsFile), 'no second lookup is started').toBe(false);
+    expect(lookupWasFree('{"type":"result","num_turns":0,"total_cost_usd":0}')).toBe(true);
+  });
+
+  it('never scans outside a plugin, whatever its manifest says', async () => {
+    const outside = path.join(root, 'plugins', 'escape');
+    skill(path.join(root, 'plugins', 'escape-sibling', 'skills'), 'stolen', 'Outside the plugin');
+    mkdirSync(path.join(outside, '.claude-plugin'), { recursive: true });
+    writeFileSync(path.join(outside, '.claude-plugin', 'plugin.json'), JSON.stringify({ skills: ['../escape-sibling/skills', '../../'] }));
+    const escapeListing = path.join(root, 'skills-escape.json');
+    writeFileSync(escapeListing, JSON.stringify({ skills: ['escape:stolen'], plugins: [{ name: 'escape', path: outside }] }));
+    const skills = await new ClaudeCodeAdapter().listSkills(input({ env: { FAKE_CLAUDE_SKILLS_JSON: escapeListing } }), repo);
+    expect(skills).toEqual([{ name: 'escape:stolen', description: null, source: 'plugin', plugin: 'escape' }]);
+  });
+
+  it('lists nothing when the CLI is missing or prints no init event', async () => {
+    expect(await new ClaudeCodeAdapter().listSkills(input({ executablePath: path.join(root, 'no-such-claude.exe') }), repo)).toEqual([]);
+    expect(readInitEvent('{"type":"result"}\nnot json')).toBeNull();
   });
 });
 

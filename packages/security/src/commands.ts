@@ -66,13 +66,23 @@ const PATTERNS: Pattern[] = [
   { test: /\bdd\s+.*\bof=\/dev\//i, risk: 'dangerous', level: 5, reason: 'Writes directly to a device', effects: ['filesystem'] },
   { test: /\bchmod\s+(?:-R\s+)?[0-7]*777\s+\/(?:\s|$)|\bchown\s+-R\s+\S+\s+\/(?:\s|$)/i, risk: 'dangerous', level: 5, reason: 'Changes ownership or permissions of the whole system', effects: ['filesystem', 'privilege'] },
   // ---- Git history --------------------------------------------------------------------------
-  { test: /\bgit\s+clean\s+-[a-z]*f/i, risk: 'dangerous', level: 5, reason: 'Deletes untracked files', effects: ['git', 'filesystem'] },
+  // `git clean` with a force flag anywhere (`-fd`, `-d -f`, `--force`) deletes untracked files (audit F-13).
+  { test: /\bgit\s+clean\b(?=[^;&|]*\s(?:-[a-z]*f[a-z]*|--force)(?:\s|$))/i, risk: 'dangerous', level: 5, reason: 'Deletes untracked files', effects: ['git', 'filesystem'] },
   { test: /\bgit\s+reset\s+--hard\b/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
-  { test: /\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)|\bgit\s+restore\s+(?:--\S+\s+)*\.(?:\s|$)/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
+  { test: /\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)|\bgit\s+restore\s+(?:--\S+\s+)*\.(?:\s|$)|\bgit\s+(?:checkout|switch)\b[^;&|]*\s(?:-f|--force|--discard-changes)(?:\s|$)/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
   { test: /\bgit\s+push\b.*(?:\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S+)/i, risk: 'dangerous', level: 5, reason: 'Force push rewrites remote history', effects: ['git', 'network'] },
-  { test: /\bgit\s+push\b.*\s--delete\b|\bgit\s+push\s+\S+\s+:\S+/i, risk: 'dangerous', level: 5, reason: 'Deletes a remote branch', effects: ['git', 'network'] },
+  { test: /\bgit\s+push\b.*\s(?:--delete|-d|--mirror|--prune)\b|\bgit\s+push\s+\S+\s+:\S+/i, risk: 'dangerous', level: 5, reason: 'Deletes remote branches', effects: ['git', 'network'] },
   { test: /\bgit\s+(?:filter-branch|filter-repo)\b|\bgit\s+rebase\b|\bgit\s+commit\b.*--amend\b/i, risk: 'dangerous', level: 5, reason: 'Rewrites Git history', effects: ['git'] },
-  { test: /\bgit\s+branch\s+(?:\S+\s+)*-D\b|\bgit\s+stash\s+(?:drop|clear)\b|\bgit\s+update-ref\s+-d\b/i, risk: 'dangerous', level: 5, reason: 'Deletes Git data that may not be recoverable', effects: ['git'] },
+  {
+    // `-D`, `--delete --force`, `-d -f`, `-df` (audit F-13); a stash drop/clear; a deleted ref; a worktree removed with its changes.
+    test: /\bgit\s+branch\b[^;&|]*\s(?:-[a-z]*D[a-z]*|-[a-z]*d[a-z]*f[a-z]*|-[a-z]*f[a-z]*d[a-z]*)(?:\s|$)|\bgit\s+branch\b(?=[^;&|]*\s(?:-d|--delete)(?:\s|$))(?=[^;&|]*\s(?:-f|--force)(?:\s|$))|\bgit\s+stash\s+(?:drop|clear)\b|\bgit\s+update-ref\s+-d\b|\bgit\s+worktree\s+remove\b[^;&|]*\s(?:-f|--force)(?:\s|$)/,
+    risk: 'dangerous',
+    level: 5,
+    reason: 'Deletes Git data that may not be recoverable',
+    effects: ['git'],
+  },
+  { test: /\bgit\s+restore\b(?![^;&|]*\s(?:--staged|-S)(?:\s|$))|\bgit\s+restore\b(?=[^;&|]*\s(?:--worktree|-W)(?:\s|$))|\bgit\s+checkout\s+(?:\S+\s+)?--\s+\S/i, risk: 'elevated', level: 3, reason: 'Discards uncommitted changes to files', effects: ['git', 'filesystem'] },
+  { test: /\b(?:rimraf|del-cli)\b|\bshutil\.rmtree\b|\brmSync\s*\([^)]*recursive|\bfs(?:\.promises)?\.rm\s*\([^)]*recursive/i, risk: 'dangerous', level: 5, reason: 'Recursive deletion', effects: ['filesystem'] },
   // ---- Databases ----------------------------------------------------------------------------
   { test: /\bdrop\s+(?:table|database|schema|index|view)\b/i, risk: 'dangerous', level: 5, reason: 'Drops database objects', effects: ['database'] },
   { test: /\btruncate\s+(?:table\s+)?\w+/i, risk: 'dangerous', level: 5, reason: 'Truncates a table', effects: ['database'] },
@@ -104,6 +114,7 @@ const PATTERNS: Pattern[] = [
   { test: /\bStop-Process\b.*-(?:Name|ProcessName)\b|^taskkill(?:\.exe)?\b.*\/im\b|^(?:pkill|killall)\b/i, risk: 'elevated', level: 4, reason: 'Stops processes by name, which can hit unrelated programs', effects: ['process'] },
   // ---- Elevated: leaves the machine -----------------------------------------------------------
   { test: /\bgit\s+push\b/i, risk: 'elevated', level: 3, reason: 'Pushes to a remote', effects: ['git', 'network'] },
+  { test: /\bgh\s+(?:secret|variable)\s+(?:set|delete|remove)\b/i, risk: 'elevated', level: 4, reason: 'Changes CI secrets or variables on GitHub', effects: ['credentials', 'network'] },
   { test: /\bgh\s+(?:pr|release|issue)\s+(?:create|merge|close|edit|delete|comment)\b|\bgh\s+repo\s+(?:create|delete|edit)\b|\bgh\s+api\b.*-X\s*(?:POST|PUT|PATCH|DELETE)\b/i, risk: 'elevated', level: 3, reason: 'Changes GitHub state', effects: ['network'] },
   { test: /\b(?:npm|pnpm|yarn)\s+publish\b/i, risk: 'elevated', level: 4, reason: 'Publishes a package', effects: ['network'] },
   { test: /\bwrangler\s+(?:deploy|publish|pages\s+deploy|versions\s+deploy|rollback|secret\s+put|kv\s+(?:key\s+)?put|r2\s+object\s+put|queues\s+create)\b/i, risk: 'elevated', level: 4, reason: 'Changes Cloudflare resources', effects: ['infrastructure', 'network'] },
@@ -134,7 +145,10 @@ const READ_ONLY_WORDS = new Set([
   'ping', 'tasklist', 'get-date', 'date', 'uname', 'printenv', 'get-childitem', 'tree', 'measure-object', 'sort-object', 'select-object', 'where-object',
   'format-table', 'format-list', 'convertto-json', 'convertfrom-json', 'out-string', 'get-filehash', 'du', 'df', 'stat', 'file', 'uptime', 'free', 'top',
 ]);
-const READ_ONLY_GIT = /^git\s+(?:status|diff|log|show|rev-parse|ls-files|ls-tree|blame|describe|shortlog|cat-file|remote(?:\s+-v|\s+show\s+\S+)?|branch(?:\s+(?:-a|-r|-v|-vv|--list|--show-current|--contains\s+\S+))*|tag(?:\s+(?:-l|--list))?|config\s+--(?:get|list|l)\b|reflog(?:\s+show)?|worktree\s+list|stash\s+list)(?:\s|$)/i;
+// Subcommands that only read take any arguments; the listing forms of commands that can also
+// write (branch, tag, remote, config, reflog, worktree, stash) must be the whole segment (audit F-13).
+const READ_ONLY_GIT =
+  /^git\s+(?:(?:status|diff|log|show|rev-parse|ls-files|ls-tree|blame|describe|shortlog|cat-file)(?:\s|$)|(?:branch(?:\s+(?:-a|-r|-v|-vv|--all|--remotes|--list|--show-current|--contains\s+\S+|--merged(?:\s+\S+)?|--no-merged(?:\s+\S+)?))*|tag(?:\s+(?:-l|--list)(?:\s+\S+)?)?|remote(?:\s+-v|\s+show\s+\S+|\s+get-url\s+\S+)?|config\s+(?:--get|--get-all|--list|-l)(?:\s+\S+)?|reflog(?:\s+show(?:\s+\S+)?)?|worktree\s+list|stash\s+list)\s*$)/i;
 const READ_ONLY_TOOL = /^(?:node|npm|pnpm|yarn|npx|python|python3|py|pip|pip3|uv|java|javac|gradle|adb|docker|wrangler|gh|code|dotnet|go|cargo|rustc|git|pwsh|powershell)(?:\.exe)?\s+(?:--version|-v|-V|version|help|--help)\s*$|^(?:npm|pnpm)\s+(?:ls|list|why|outdated|view|info|config\s+get|root|bin)\b|^pip3?\s+(?:list|show|freeze)\b|^gh\s+(?:auth\s+status|pr\s+(?:list|view|status|diff|checks)|issue\s+(?:list|view)|repo\s+view|run\s+(?:list|view))\b|^adb\s+(?:devices|logcat\s+-d)\b|^docker\s+(?:ps|images|inspect|logs|version|info)\b|^wrangler\s+(?:whoami|deployments\s+list|d1\s+list|tail)\b/i;
 
 function segmentReadOnly(segment: string): boolean {
@@ -162,11 +176,48 @@ function note(acc: Accumulator, risk: CommandRisk, level: PermissionLevel, reaso
   for (const e of effects) acc.effects.add(e);
 }
 
+/**
+ * The Control Center's own secrets and API (audit F-02): its data folder, the
+ * files that hold its token and keys, and its listen address. A command that
+ * names one of them is Level 5 — agents are refused, a person must confirm — so
+ * an agent running as the operator cannot read the token and drive the API.
+ */
+const SELF_DEFAULTS = [
+  /AIDevControlCenter/i,
+  /[\\/]ai-control-center[\\/]/i,
+  /\bauth-token\b/i,
+  /\bprivileged-key\b/i,
+  /\bcredential-key(?:\.dpapi)?\b/i,
+  /\b(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):4317\b/i,
+];
+let selfReferences: RegExp[] = [...SELF_DEFAULTS];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Teach the classifier this orchestrator's actual data folder and port (set once at start). */
+export function setSelfReferences(self: { dataDir?: string | null; port?: number | null }): void {
+  const extra: RegExp[] = [];
+  if (self.dataDir) {
+    const parts = self.dataDir.replace(/[\\/]+$/, '').split(/[\\/]+/).map(escapeRegExp);
+    if (parts.length > 1) extra.push(new RegExp(parts.join('[\\\\/]+'), 'i'));
+  }
+  if (self.port && Number.isInteger(self.port)) extra.push(new RegExp(`\\b(?:127\\.0\\.0\\.1|localhost|\\[::1\\]|0\\.0\\.0\\.0):${self.port}\\b`, 'i'));
+  selfReferences = [...SELF_DEFAULTS, ...extra];
+}
+
+/** True when the text names the Control Center's own data folder, key/token files or listen address. */
+export function referencesSelf(text: string): boolean {
+  return selfReferences.some((r) => r.test(text));
+}
+
 function analyse(text: string, acc: Accumulator, depth: number): void {
   if (depth > 4) {
     note(acc, 'elevated', 4, 'Deeply nested shells', ['code-execution']);
     return;
   }
+  if (selfReferences.some((r) => r.test(text))) note(acc, 'dangerous', 5, "Reaches the Control Center's own token, data folder or API", ['credentials']);
   // Encoded PowerShell is judged by what it decodes to.
   for (const decoded of decodeEncodedCommands(text)) {
     note(acc, 'elevated', 4, 'Runs an encoded PowerShell command', ['code-execution']);

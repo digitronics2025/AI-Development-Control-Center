@@ -65,16 +65,28 @@ persistence, code-execution) and `readOnly`; a read-only command (git
 status/diff/log, `Get-ChildItem`, `Get-NetTCPConnection`, `--version`…, no
 redirection, substitution or method calls) is Level 1.
 
-Dangerous (Level 5): recursive deletes in any shell, disk formatting,
-destroying backups, history rewrites (`reset --hard`, force push, rebase,
-`commit --amend`, `branch -D`), `DROP`/`TRUNCATE`/unscoped `DELETE`,
+Dangerous (Level 5): anything that names the Control Center's own data
+folder, token or key files, or its listen address (`AIDevControlCenter`,
+`auth-token`, `privileged-key`, `credential-key`, `127.0.0.1:4317`; the real
+folder and port are set at start with `setSelfReferences`) — and
+`ToolService.invoke` refuses **any** agent tool call whose input names them, so an
+agent running as the operator cannot read the token and act as the operator;
+recursive deletes in any shell (including `rimraf`, `shutil.rmtree`,
+recursive `rmSync`), disk formatting,
+destroying backups, history rewrites and Git data loss (`reset --hard`, `clean` with any force
+flag, force/mirror push, rebase, `commit --amend`, `branch -D` /
+`--delete --force`, `worktree remove --force`, `checkout -f`), `DROP`/`TRUNCATE`/unscoped `DELETE`,
 infrastructure destruction, download-and-execute (`iwr … | iex`,
 `curl … | sh`), elevation (`Start-Process -Verb RunAs`, `sudo`, `runas`),
 Defender tampering, shutdown/boot changes, deleting services or registry data,
 and anything targeting production. Level 4: registry writes,
 `Set-ExecutionPolicy`, scheduled/startup jobs, service start/stop, firewall,
 system package installs, `Invoke-Expression`/dynamic code, remote commands,
-stopping processes by name, reading stored credentials, deploys. Level 5 always
+stopping processes by name, reading stored credentials, deploys, `gh
+secret|variable set|delete`. Level 3: `git restore <path>` / `git checkout --
+<path>` (discard changes to files). The listing forms of `git branch`, `tag`,
+`remote`, `config`, `reflog`, `worktree` and `stash` are read-only only when
+they are the whole command (`git branch new` or `git tag v1` is not). Level 5 always
 needs an approval with a typed confirmation (the task ID).
 
 ## Chairman ([chairman.md](chairman.md))

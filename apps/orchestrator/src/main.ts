@@ -4,7 +4,7 @@ import { createServices } from './app.js';
 import { loadConfig } from './config.js';
 import { buildServer } from './http/server.js';
 import { reconcileGitOperations } from './source-control/reconcile.js';
-import { detectAmbientCredentials } from '@acc/security';
+import { detectAmbientCredentials, setSelfReferences } from '@acc/security';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -19,6 +19,8 @@ async function main(): Promise<void> {
   const port = typeof address === 'object' && address ? address.port : config.port;
   const url = `http://${config.host === '::1' ? '[::1]' : config.host}:${port}`;
 
+  // Commands and tool calls that name this data folder or this port are Level 5 (audit F-02).
+  setSelfReferences({ dataDir: config.dataDir, port });
   // Agent stages reach the tool layer's MCP bridge through this address.
   services.tooling.setListenUrl(url);
   // Tool health is cached for hours; detect only what is stale, in the background.

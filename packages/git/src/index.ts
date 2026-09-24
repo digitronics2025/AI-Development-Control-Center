@@ -326,19 +326,21 @@ export async function changesSince(cwd: string, baseline: GitSnapshot): Promise<
 export async function diffSince(
   cwd: string,
   baseline: GitSnapshot,
-  options: { path?: string; maxBytes?: number } = {},
+  options: { path?: string; maxBytes?: number; prefix?: string | null } = {},
 ): Promise<{ diff: string; truncated: boolean }> {
   const base = baseline.head ?? EMPTY_TREE;
   const maxBytes = options.maxBytes ?? 2_000_000;
   const pathArgs = options.path ? ['--', options.path] : [];
-  const tracked = await git(cwd, ['diff', '--no-color', '-M', base, ...pathArgs]);
+  // A folder prefix (a/web/src/x.ts) makes one patch of several repositories apply from their common parent.
+  const prefixArgs = options.prefix ? [`--src-prefix=a/${options.prefix}/`, `--dst-prefix=b/${options.prefix}/`] : [];
+  const tracked = await git(cwd, ['diff', '--no-color', '-M', ...prefixArgs, base, ...pathArgs]);
   let diff = tracked.code === 0 ? tracked.stdout : '';
   const untracked = (await status(cwd)).filter(
     (e) => e.code === '??' && (!options.path || e.path === options.path),
   );
   for (const entry of untracked) {
     if (diff.length > maxBytes) break;
-    const result = await git(cwd, ['diff', '--no-color', '--no-index', '--', process.platform === 'win32' ? 'NUL' : '/dev/null', entry.path]);
+    const result = await git(cwd, ['diff', '--no-color', '--no-index', ...prefixArgs, '--', process.platform === 'win32' ? 'NUL' : '/dev/null', entry.path]);
     // --no-index exits 1 when files differ; that is the expected case.
     if (result.stdout) diff += (diff && !diff.endsWith('\n') ? '\n' : '') + result.stdout;
   }

@@ -20,6 +20,19 @@ export interface ReportInput {
   executionLines?: string[];
   /** Re-checks the operator attached from Private Browser (docs/systems/connected-apps.md): informational, never a pass. */
   browserRechecks?: string[];
+  /** A task across repositories: each one with its folder and Git record, primary first. */
+  repositories?: Array<{ name: string; path: string; folder: string | null; git: TaskRecord['git'] }>;
+}
+
+/** The Git lines of one repository's task branch. */
+function gitLines(task: TaskRecord, git: TaskRecord['git']): string[] {
+  const owner = taskIdFromBranch(git.baselineBranch);
+  const stackedOn = owner !== task.id ? owner : null;
+  return [
+    `- Baseline: ${git.baselineBranch ?? '—'} @ ${git.baselineCommit?.slice(0, 10) ?? '—'}${stackedOn ? ` (${stackedOn}'s branch — merge ${stackedOn} first)` : ''}`,
+    `- Task branch: ${git.taskBranch ?? 'none (worked on the current branch)'}${git.isolated ? ' — worked in an isolated worktree; your working tree was not touched. Merge the branch to take the change.' : ''}`,
+    `- Commits: ${git.commits.length ? git.commits.map((c) => c.slice(0, 10)).join(', ') : 'none — changes are uncommitted for your review'}`,
+  ];
 }
 
 const MAX_OPERATOR_ITEMS = 10;
@@ -100,8 +113,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   for (const item of input.gateLimitations ?? []) if (!limitations.includes(item)) limitations.push(item);
 
   const taskFiles = files?.filter((f) => f.origin !== 'preexisting') ?? [];
-  const owner = taskIdFromBranch(task.git.baselineBranch);
-  const stackedOn = owner !== task.id ? owner : null;
+  const multi = (input.repositories?.length ?? 0) > 1 ? input.repositories! : null;
   const finalStatus: FinalStatus = limitations.length === 0 ? 'READY' : 'NEEDS_USER_ACTION';
 
   const lines = [
@@ -109,7 +121,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '',
     `**${task.id} · ${task.title}**`,
     '',
-    `- Repository: ${repo.name} (${repo.path})`,
+    ...(multi ? [`- Repositories: ${multi.map((r) => `${r.name} (${r.path}) as ${r.folder}/`).join(', ')}`] : [`- Repository: ${repo.name} (${repo.path})`]),
     `- Workflow: ${task.workflow.name}`,
     `- Mode: ${task.mode === 'discuss' ? 'Discuss First' : 'Autopilot'}`,
     '',
@@ -175,9 +187,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '',
     '## Git',
     '',
-    `- Baseline: ${task.git.baselineBranch ?? '—'} @ ${task.git.baselineCommit?.slice(0, 10) ?? '—'}${stackedOn ? ` (${stackedOn}'s branch — merge ${stackedOn} first)` : ''}`,
-    `- Task branch: ${task.git.taskBranch ?? 'none (worked on the current branch)'}${task.git.isolated ? ' — worked in an isolated worktree; your working tree was not touched. Merge the branch to take the change.' : ''}`,
-    `- Commits: ${task.git.commits.length ? task.git.commits.map((c) => c.slice(0, 10)).join(', ') : 'none — changes are uncommitted for your review'}`,
+    ...(multi ? multi.flatMap((r) => [`### ${r.name} (${r.folder}/)`, '', ...gitLines(task, r.git), '']) : gitLines(task, task.git)),
     '',
     '## Remaining limitations',
     '',

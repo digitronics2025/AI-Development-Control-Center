@@ -33,7 +33,7 @@ import type { ToolScope, ToolService } from '../tools/service.js';
 import type { ToolStore } from '../tools/store.js';
 import type { TerminalService } from '../tools/terminals.js';
 import type { Publisher } from './publisher.js';
-import { agentWorkdir } from './task-repositories.js';
+import { agentWorkdir, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
@@ -383,32 +383,35 @@ export class EngineTooling {
    * (completed), or keep it in a checkpoint ref (cancelled), then remove the
    * worktree. The branch stays for you to merge.
    */
-  async finalizeWorktree(task: TaskRecord, repo: RepositoryRecord, outcome: 'completed' | 'cancelled'): Promise<Partial<TaskRecord['git']>> {
-    const dir = task.git.worktreePath;
+  async finalizeWorktree(task: TaskRecord, repo: RepositoryRecord, outcome: 'completed' | 'cancelled', gitRecord: TaskRecord['git'] = task.git, label: string | null = null): Promise<Partial<TaskRecord['git']>> {
+    // A task across repositories finalizes each repository's worktree with its own Git record.
+    const git = gitRecord;
+    const who = label ? `${label}: ` : '';
+    const dir = git.worktreePath;
     if (!dir) return {};
     const patch: Partial<TaskRecord['git']> = {};
     try {
-      const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
+      const baseline = git.baselineSnapshotId ? this.d.store.getSnapshot(git.baselineSnapshotId) : null;
       const files = baseline && existsSync(dir) ? await changesSince(dir, baseline) : [];
       const pending = files.filter((f) => f.origin === 'task').map((f) => f.path);
       if (pending.length && outcome === 'completed') {
         const commit = await commitPaths(dir, pending, `${task.id}: ${task.title}\n\nRemaining changes, committed when the task completed (AI Development Control Center).`);
         if (commit) {
-          patch.commits = [...task.git.commits, commit];
-          this.event(task.id, 'GIT_COMMIT', `Committed ${pending.length} remaining file(s) on ${task.git.taskBranch} (${commit.slice(0, 10)})`, { commit, files: pending });
+          patch.commits = [...git.commits, commit];
+          this.event(task.id, 'GIT_COMMIT', `${who}Committed ${pending.length} remaining file(s) on ${git.taskBranch} (${commit.slice(0, 10)})`, { commit, files: pending, repositoryId: repo.id });
         }
       } else if (pending.length) {
         const ref = `refs/acc/worktree-backup/${task.id}`;
         const cp = await createCheckpoint(dir, ref, `${task.id}: uncommitted work when the task was cancelled`);
-        this.event(task.id, 'CHECKPOINT_CREATED', `Kept ${pending.length} uncommitted file(s) in ${ref} (${cp.commit.slice(0, 10)}) before removing the worktree`, { ref, commit: cp.commit });
+        this.event(task.id, 'CHECKPOINT_CREATED', `${who}Kept ${pending.length} uncommitted file(s) in ${ref} (${cp.commit.slice(0, 10)}) before removing the worktree`, { ref, commit: cp.commit });
       }
       const removed = await removeWorktree(repo.path, dir, { force: outcome === 'cancelled' || pending.length > 0 });
       if (removed) {
         patch.worktreePath = null;
-        this.event(task.id, 'WORKTREE_REMOVED', `Worktree removed; the work is on branch ${task.git.taskBranch}${outcome === 'completed' ? ' — merge it from Source Control' : ''}`, { branch: task.git.taskBranch });
+        this.event(task.id, 'WORKTREE_REMOVED', `${who}Worktree removed; the work is on branch ${git.taskBranch}${outcome === 'completed' ? ' — merge it from Source Control' : ''}`, { branch: git.taskBranch, repositoryId: repo.id });
       }
     } catch (error) {
-      this.event(task.id, 'WORKTREE_REMOVED', `The worktree could not be cleaned up: ${redact((error as Error).message).slice(0, 200)}. It is kept at ${dir}.`, {});
+      this.event(task.id, 'WORKTREE_REMOVED', `${who}The worktree could not be cleaned up: ${redact((error as Error).message).slice(0, 200)}. It is kept at ${dir}.`, {});
     }
     return patch;
   }
@@ -453,9 +456,25 @@ export class EngineTooling {
     if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow')) observed.add('browser');
     if (ok('http.') || ok('verify.web')) observed.add('http');
     if (ok('android.launch')) observed.add('device');
-    const type = projectType(repo.tooling);
-    const assessment = assessVerification(type, { passedKinds, observed });
-    return { type, satisfied: assessment.satisfied.map((c) => c.label), missing: assessment.missing.map((c) => `${c.label}${c.advisory ? ' (optional)' : ''}`) };
+    const units = taskRepositories(this.d.store, task);
+    if (units.length <= 1) {
+      const type = projectType(repo.tooling);
+      const assessment = assessVerification(type, { passedKinds, observed });
+      return { type, satisfied: assessment.satisfied.map((c) => c.label), missing: assessment.missing.map((c) => `${c.label}${c.advisory ? ' (optional)' : ''}`) };
+    }
+    // Across repositories: each is assessed on its own checks; one with none configured says so.
+    const out = { types: [] as string[], satisfied: [] as string[], missing: [] as string[] };
+    for (const unit of units) {
+      const label = unit.folder ?? unit.repo.name;
+      const kinds = new Set<CommandKind>(testRuns.filter((r) => r.status === 'passed' && r.repositoryId === unit.repo.id && (r.stageId === lastTests?.id || r.kind === 'e2e')).map((r) => r.kind));
+      const type = projectType(unit.repo.tooling);
+      const assessment = assessVerification(type, { passedKinds: kinds, observed });
+      out.types.push(`${label}: ${type}`);
+      out.satisfied.push(...assessment.satisfied.map((c) => `${label}: ${c.label}`));
+      if (!unit.repo.commands.some((c) => c.enabled)) out.missing.push(`${label}: no checks configured`);
+      out.missing.push(...assessment.missing.map((c) => `${label}: ${c.label}${c.advisory ? ' (optional)' : ''}`));
+    }
+    return { type: out.types.join(', '), satisfied: out.satisfied, missing: out.missing };
   }
 
   /** Short account of tool activity for the final report. */

@@ -232,3 +232,63 @@ describe('App check across repositories', () => {
     expect(t.services.processes.list(taskId).every((p) => !['running', 'healthy', 'starting'].includes(p.status))).toBe(true);
   }, 240_000);
 });
+
+describe('finishing a task across repositories', () => {
+  it('completion finalizes every worktree, removes the workspace and reports each repository', async () => {
+    const { existsSync, readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { git } = await import('@acc/git');
+    t = await createTestApp();
+    const apiPath = await makeRepo();
+    const webPath = await makeRepo();
+    const api = await addRepo(t, apiPath);
+    const web = await addRepo(t, webPath);
+    const id = await createTask(t, api, 'Finish both', { linkedRepositoryIds: [web], workflowId: 'quick-change' });
+    const done = await waitForStatus(t, id, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 120_000);
+    expect(done.status, JSON.stringify(done.blocker)).toBe('COMPLETED');
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    expect(done.git.workspacePath).toBeNull();
+    expect(existsSync(path.join(t.dataDir, 'workspaces', id))).toBe(false);
+    expect(done.git.worktreePath).toBeNull();
+    expect(linked.git.worktreePath).toBeNull();
+    for (const [repo, branch] of [[apiPath, done.git.taskBranch!], [webPath, linked.git.taskBranch!]] as const) {
+      expect((await git(repo, ['worktree', 'list', '--porcelain'])).stdout.match(/^worktree /gm)).toHaveLength(1);
+      // The remaining work was committed on the branch when the task completed.
+      expect((await git(repo, ['diff', '--name-only', `main..${branch}`])).stdout).toContain('sim-output.md');
+    }
+    const patch = readFileSync(path.join(t.dataDir, 'tasks', id, 'git-diff.patch'), 'utf8');
+    expect(patch).toContain(`b/${done.git.folder}/sim-output.md`);
+    expect(patch).toContain(`b/${linked.folder}/sim-output.md`);
+    const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
+    expect(report).toContain('- Repositories: ');
+    expect(report).toContain(`- ${done.git.folder}/sim-output.md`);
+    expect(report).toContain(`- ${linked.folder}/sim-output.md`);
+    expect(report).toContain(`- Task branch: ${linked.git.taskBranch}`);
+  }, 180_000);
+
+  it('cancelling keeps each repository’s uncommitted work in a backup ref and removes the worktrees', async () => {
+    const { existsSync, writeFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { git } = await import('@acc/git');
+    t = await createTestApp();
+    const apiPath = await makeRepo();
+    const webPath = await makeRepo();
+    const api = await addRepo(t, apiPath);
+    const web = await addRepo(t, webPath);
+    const id = await createTask(t, api, 'Cancel both [sim:slow]', { linkedRepositoryIds: [web], workflowId: 'quick-change' });
+    await waitFor(() => t!.services.store.getTask(id)!.git.workspacePath, (v) => Boolean(v), 30_000, 'workspace');
+    const task = t.services.store.getTask(id)!;
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    writeFileSync(path.join(task.git.worktreePath!, 'draft.md'), 'api draft\n');
+    writeFileSync(path.join(linked.git.worktreePath!, 'draft.md'), 'web draft\n');
+    expect((await t.api('POST', `/api/tasks/${id}/cancel`)).status).toBeLessThan(300);
+    await waitForStatus(t, id, ['CANCELLED']);
+    for (const repo of [apiPath, webPath]) {
+      const ref = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/acc/worktree-backup/${id}`]);
+      expect(ref.code).toBe(0);
+      expect((await git(repo, ['show', `refs/acc/worktree-backup/${id}:draft.md`])).stdout).toMatch(/draft/);
+      expect((await git(repo, ['worktree', 'list', '--porcelain'])).stdout.match(/^worktree /gm)).toHaveLength(1);
+    }
+    expect(existsSync(path.join(t.dataDir, 'workspaces', id))).toBe(false);
+  }, 180_000);
+});

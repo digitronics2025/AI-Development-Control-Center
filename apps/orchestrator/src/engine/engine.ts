@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { rmdir } from 'node:fs/promises';
@@ -21,6 +21,7 @@ import {
   type PartialAssignment,
   type StageDefinition,
   type StageInstance,
+  type ChangedFile,
   type PermissionLevel,
   type TaskBlocker,
   type TaskDetail,
@@ -41,7 +42,7 @@ import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
 import type { EngineTooling } from './tooling.js';
-import { isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
+import { inFolder, isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
@@ -323,7 +324,9 @@ export class TaskEngine {
     for (const a of this.d.store.cancelPendingApprovals(id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
     const repo = this.d.store.getRepository(current.repositoryId);
     await this.d.tooling.cleanup(current, repo, 'task cancelled').catch(() => []);
-    const gitPatch = repo && current.git.worktreePath ? await this.d.tooling.finalizeWorktree(current, repo, 'cancelled') : {};
+    const multi = isMultiRepository(this.d.store, current);
+    if (multi) await this.finalizeWorkspace(current, 'cancelled');
+    const gitPatch = !multi && repo && current.git.worktreePath ? await this.d.tooling.finalizeWorktree(current, repo, 'cancelled') : {};
     this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, pauseAfterStage: false, finishedAt: now(), ...(Object.keys(gitPatch).length ? { git: { ...this.task(id).git, ...gitPatch } } : {}) });
     this.publisher.event(id, 'TASK_CANCELLED', 'Task cancelled');
     this.supervisor?.onTerminal(id);
@@ -1051,6 +1054,27 @@ export class TaskEngine {
     return true;
   }
 
+  /**
+   * End a task across repositories: each repository's worktree is finalized
+   * (remaining work committed on its branch, or kept in a backup ref when
+   * cancelled) and removed, then the empty workspace folder. A worktree that
+   * cannot be removed is kept, and so is the workspace; the report says where.
+   */
+  private async finalizeWorkspace(task: TaskRecord, outcome: 'completed' | 'cancelled'): Promise<TaskRecord> {
+    for (const unit of taskRepositories(this.d.store, task)) {
+      if (!unit.git.worktreePath) continue;
+      const patch = await this.d.tooling.finalizeWorktree(this.task(task.id), unit.repo, outcome, unit.git, unit.repo.name);
+      if (Object.keys(patch).length) this.publisher.updateRepositoryGit(task.id, unit.repo.id, patch);
+    }
+    const workspace = this.task(task.id).git.workspacePath;
+    if (workspace) {
+      await rmdir(workspace).catch(() => undefined);
+      if (!existsSync(workspace)) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, workspacePath: null } });
+      else this.publisher.event(task.id, 'WORKTREE_REMOVED', `The task workspace is kept at ${workspace} because a worktree in it could not be removed.`);
+    }
+    return this.task(task.id);
+  }
+
   /** Decide the next step from a stage outcome. Returns true to keep looping. */
   private async handleOutcome(taskId: string, def: StageDefinition, stage: StageInstance, outcome: StageOutcome, control: RunControl): Promise<boolean> {
     const task = this.task(taskId);
@@ -1220,10 +1244,28 @@ export class TaskEngine {
 
   private async complete(task: TaskRecord, gateLimitations: string[] = []): Promise<void> {
     const repo = this.d.repositories.record(task.repositoryId);
+    const units = taskRepositories(this.d.store, task);
+    const multi = units.length > 1;
     const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
     const workdir = taskWorkdir(task, repo);
-    let files = null;
-    if (baseline) {
+    let files: ChangedFile[] | null = null;
+    if (multi) {
+      // One patch for the whole task: every repository's diff, paths under its folder.
+      files = [];
+      const parts: string[] = [];
+      for (const unit of units) {
+        const unitBaseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
+        if (!unitBaseline) continue;
+        try {
+          files.push(...(await changesSince(unit.workdir, unitBaseline)).map((f) => ({ ...f, path: inFolder(unit.folder, f.path), repositoryId: unit.repo.id })));
+          const { diff, truncated } = await diffSince(unit.workdir, unitBaseline, { maxBytes: 5_000_000, prefix: unit.folder });
+          if (diff) parts.push(truncated ? `${diff}\n[truncated]` : diff);
+        } catch (error) {
+          this.publisher.event(task.id, 'FILE_CHANGED', `${unit.repo.name}: final diff could not be captured: ${(error as Error).message}`);
+        }
+      }
+      await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: parts.map((d) => (d.endsWith('\n') ? d : `${d}\n`)).join('') });
+    } else if (baseline) {
       try {
         files = await changesSince(workdir, baseline);
         const { diff, truncated } = await diffSince(workdir, baseline, { maxBytes: 5_000_000 });
@@ -1241,14 +1283,31 @@ export class TaskEngine {
     );
     // Nothing the task started outlives it; an isolated task's work lands on its branch.
     const cleanup = await this.d.tooling.cleanup(task, repo, 'task completed');
-    if (task.git.worktreePath) {
+    if (multi) {
+      task = await this.finalizeWorkspace(task, 'completed');
+    } else if (task.git.worktreePath) {
       const git = await this.d.tooling.finalizeWorktree(task, repo, 'completed');
       if (Object.keys(git).length) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, ...git } });
       task = this.task(task.id);
     }
     const testRuns = this.d.store.listTestRuns(task.id);
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
-    const report = buildFinalReport({ task, repo, stages, testRuns, files, testsSkipped, deployed, operatorItems, gateLimitations, verification, browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'browser-report' && a.name.startsWith('browser-recheck-')).map((a) => a.name), executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)] });
+    const repositories = multi ? taskRepositories(this.d.store, task).map((u) => ({ name: u.repo.name, path: u.repo.path, folder: u.folder, git: u.git })) : undefined;
+    const report = buildFinalReport({
+      task,
+      repo,
+      stages,
+      testRuns,
+      files,
+      testsSkipped,
+      deployed,
+      operatorItems,
+      gateLimitations,
+      verification,
+      repositories,
+      browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'browser-report' && a.name.startsWith('browser-recheck-')).map((a) => a.name),
+      executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)],
+    });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
     const completion = { status: 'COMPLETED' as const, finalStatus: report.finalStatus, blocker: null, finishedAt, currentStageKey: COMPLETE };

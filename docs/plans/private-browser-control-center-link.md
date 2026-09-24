@@ -2,7 +2,7 @@
 title: Private Browser → Control Center link — report a page problem, get a task, check the fix in the same browser
 source: conversation 2026-09-24 (plan drafted as PRIVATE_BROWSER_LINK_PLAN.md, not saved at the time; /implement-plan invoked on it)
 created: 2026-09-24
-status: in-progress
+status: done
 ---
 
 # Private Browser → Control Center link
@@ -252,9 +252,9 @@ them:
 - [x] T2. Similar-issue sweep — done when: the other prefix-bypass routes, other token stores and other attachment writers were searched for the same pattern — check: `manual: list what was searched and what was found`
 - [x] T3. Lint and tests green — done when: both repositories' full gates exit 0 on the final tree — check: `pnpm check` (CC) and `npm run check` (PB worktree)
 - [x] T4. Docs synced per the repo's rules — done when: the system docs in both repositories reflect the change with today's Last verified — check: `git diff --stat docs/`
-- [ ] T5. Committed path-scoped and pushed (CC only; PB committed locally, not pushed) — done when: `git status` shows none of this work uncommitted, and the CC push succeeded — check: `git log origin/main..HEAD --oneline`
-- [ ] T6. Confirmed live where the push deploys — done when: CC push does not deploy (a local app); the live orchestrator restart in step 19 is the live check — check: `manual: step 19 evidence`
-- [ ] T7. A claim registered for this change — done when: a claim is registered, or this step says why there is none — check: `manual: name the claim or say why none`
+- [x] T5. Committed path-scoped and pushed (CC only; PB committed locally, not pushed) — done when: `git status` shows none of this work uncommitted, and the CC push succeeded — check: `git log origin/main..HEAD --oneline`
+- [x] T6. Confirmed live where the push deploys — done when: CC push does not deploy (a local app); the live orchestrator restart in step 19 is the live check — check: `manual: step 19 evidence`
+- [x] T7. A claim registered for this change — done when: a claim is registered, or this step says why there is none — check: `manual: name the claim or say why none`
 
 ## Ledger
 
@@ -285,3 +285,6 @@ them:
 - 2026-09-24 21:00 — T2 — searched: every /api prefix bypass in security.ts (tool-session keeps its own session-token check), every token column in migrations (only connected_apps.token_hash), every fenceEvidence caller (chairman evidence, learning reviewer, connected apps — all fenced), every browser outbound fetch (ai-provider and update-service set redirect:error on a later line; the favicon fetch in main.ts follows redirects by design, not this work). Nothing else to change
 - 2026-09-24 21:00 — T3 — CC pnpm check on origin/main e075366 + the hello fix in the clean worktree: 60 files / 726 tests, exit 0; PB unit 265 + Electron control-center spec 2 + typecheck after the fix (full PB gate: step 16)
 - 2026-09-24 21:00 — T4 — CC docs: connected-apps.md (new), security.md, orchestrator.md, dashboard.md, workflow-engine.md, README index, design.md §7.11; PB docs: control-center-link.md (new), ai-consent, browser-shell, ipc-contract, renderer-ui, README index, root README, follow-ups; PB verified_at bumped where re-read (renderer-ui left: older unreviewed drift)
+- 2026-09-24 21:15 — T5 — CC: 2974d34 and f0b9130 pushed to main (path-scoped; the README row went in as its own hunk); PB: fd1555b, 30268c7, 90100b5, 09631d5 on feat/control-center-link, committed locally, upstream unset, NOT pushed (pushing PB main publishes a release — the operator decides)
+- 2026-09-24 21:15 — T6 — the CC push deploys nothing; the live orchestrator was updated to f0b9130 so it answers the tokenless hello the browser now expects: stop script, backup backups/acc.db.before-connected-apps-hello-20260924-1606 (+wal/shm), dist copied from the clean worktree build, start script. After: /healthz ok, 6 tasks intact (5 COMPLETED, 1 CANCELLED), schema 12, a live tokenless hello verified against the identity key; earlier: the app route with the local token 401, with a page Origin 403
+- 2026-09-24 21:15 — T7 — this repo keeps no claims register (no docs/claims*); the standing downstream probes are tests/electron/control-center.spec.ts in Private Browser (real app against a stand-in signing with the shared vectors) and the scratch live run recorded in step 18; the first real pairing happens when the operator installs a Private Browser build containing feat/control-center-link

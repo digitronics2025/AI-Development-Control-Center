@@ -85,8 +85,9 @@
         "ENVIRONMENT": "production",
         "CONTROL_HOSTS": "acc.dr-badawi-abdalsalam.com",
         "RELAY_HOSTS": "acc-relay.dr-badawi-abdalsalam.com",
-        "ACCESS_TEAM_DOMAIN": "",
-        "ACCESS_AUD": ""
+        "ACCESS_TEAM_DOMAIN": "sparkling-breeze-b580.cloudflareaccess.com",
+        "ACCESS_AUD": "b67b2db85bf96454315dea9509bc0fdcb52cb52ba115ff93b2c6e5c80b4f84b2",
+        "ALLOWED_EMAILS": "contact@tenten.ma"
       }
     }
   }

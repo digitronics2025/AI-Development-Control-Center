@@ -53,7 +53,8 @@ the engine.
    Chairman agent* is on and the reasoner is available, `Reasoner.review`
    (same read-only runner as recovery, usage step `learning`). The prompt
    (`Role: chairman`, `Mode: learning`) carries a legend of the signal kinds,
-   the signals, the final report
+   the signals (id, kind and key in the list; each detail, which quotes agent
+   and tool output, inside an `<untrusted_evidence>` fence), the final report
    fenced as `<untrusted_evidence>`, the catalog, up to 25 skills ranked by
    shared words (installed + marketplace), live lessons and open findings (for
    `sameAs`), and a quality bar: a lesson is one habit written as an

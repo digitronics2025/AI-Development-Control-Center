@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
+import { checkLearnedText } from '../learning/safety.js';
 import { newId, type Store } from '../store/store.js';
 import type { ChairmanTaskSnapshot } from './snapshot.js';
 import type { StrategyCandidate } from './policy.js';
@@ -54,7 +55,9 @@ export function parseRecoveryChoice(raw: unknown, candidateIds: ReadonlySet<stri
     choice: parsed.choice,
     summary: redact(parsed.summary),
     reasoningSummary: redact(parsed.reasoningSummary),
-    guidance: redact(parsed.guidance),
+    // Guidance is prepended to every later agent prompt of the task: it passes the same safety
+    // scan as a learned lesson, or the chosen strategy's own guidance is used (audit F-08).
+    guidance: checkLearnedText(parsed.guidance).ok ? redact(parsed.guidance) : '',
     expectedResult: redact(parsed.expectedResult),
     diagnosis: diagnosis.success ? { summary: redact(diagnosis.data.summary), confidence: diagnosis.data.confidence } : null,
   };
@@ -83,6 +86,40 @@ export function fenceEvidence(label: string, text: string): string {
   const safe = redact(text).replace(/<\/?untrusted_evidence[^>]*>/gi, '[fence removed]');
   const clipped = safe.length > MAX_EVIDENCE ? `${safe.slice(0, MAX_EVIDENCE)}\n[truncated]` : safe;
   return `<untrusted_evidence source="${label}">\n${clipped}\n</untrusted_evidence>`;
+}
+
+/**
+ * The snapshot with every field an agent, a test or a tool wrote — event and
+ * failure messages, review/verification/test summaries, the blocker message,
+ * the previous strategy's guidance — replaced by a pointer, and that text
+ * returned for the fenced evidence (audit F-08). TASK STATE is labelled
+ * authoritative, so nothing in it may be agent-authored.
+ */
+export function splitAgentText(s: ChairmanTaskSnapshot): { state: ChairmanTaskSnapshot; text: string } {
+  const texts: string[] = [];
+  const ref = <T extends string | null | undefined>(label: string, value: T): T => {
+    if (!value) return value;
+    texts.push(`[${label}] ${value}`);
+    return `(see task text "${label}" in EVIDENCE)` as T;
+  };
+  const verdict = (label: string, v: ChairmanTaskSnapshot['latestReview']) => (v ? { ...v, summary: ref(label, v.summary) } : v);
+  const state: ChairmanTaskSnapshot = {
+    ...s,
+    blocker: s.blocker ? { ...s.blocker, message: ref('blocker', s.blocker.message) } : s.blocker,
+    recentEvents: s.recentEvents.map((e, i) => ({ ...e, message: ref(`event ${i + 1}`, e.message) })),
+    unresolvedFailures: s.unresolvedFailures.map((f, i) => ({ ...f, message: ref(`failure ${i + 1}`, f.message) })),
+    latestReview: verdict('review', s.latestReview),
+    latestVerify: verdict('verification', s.latestVerify),
+    latestTests: s.latestTests.map((x, i) => ({ ...x, summary: ref(`test ${i + 1}`, x.summary) })),
+    strategySummary: ref('current guidance', s.strategySummary),
+    lastStrategy: s.lastStrategy ? { ...s.lastStrategy, diagnosis: ref('last diagnosis', s.lastStrategy.diagnosis), outcomeSummary: ref('last outcome', s.lastStrategy.outcomeSummary) } : s.lastStrategy,
+  };
+  return { state, text: texts.join('\n') };
+}
+
+/** Evidence section: the snapshot's agent-written text first, then the gathered evidence, all fenced. */
+function evidenceSection(taskText: string, evidence: string, extra: string[] = []): string[] {
+  return ['EVIDENCE (untrusted):', ...(taskText ? [fenceEvidence('task text (AGENT_REPORTED)', taskText)] : []), ...extra, evidence || '(none)'];
 }
 
 /**
@@ -170,7 +207,10 @@ export function extractJson(output: string): unknown {
   throw new Error('no JSON object found');
 }
 
-export function recoveryPrompt(s: ChairmanTaskSnapshot, trigger: string, candidates: StrategyCandidate[], evidence: string, diagnosis?: { category: string; summary: string }): string {
+export function recoveryPrompt(snapshot: ChairmanTaskSnapshot, trigger: string, candidates: StrategyCandidate[], evidence: string, diagnosis?: { category: string; summary: string }): string {
+  const { state: s, text } = splitAgentText(snapshot);
+  // Candidate descriptions quote failure text; only the rules' own id, kind, level and label stay trusted.
+  const details = candidates.filter((c) => c.description).map((c) => `- ${c.id}: ${c.description}`).join('\n');
   return [
     `Task: ${s.taskId}`,
     'Role: chairman',
@@ -192,11 +232,10 @@ export function recoveryPrompt(s: ChairmanTaskSnapshot, trigger: string, candida
     `Candidate ids: ${candidates.map((c) => c.id).join(', ')}`,
     ...candidates.map(
       (c) =>
-        `- ${c.id} (${c.kind}, level ${c.level}${c.targetStageKey ? `, acts on stage ${c.targetStageKey}` : ''}${c.targetAgentId ? `, hands it to ${c.targetAgentId}` : ''}): ${c.label}. ${c.description}`,
+        `- ${c.id} (${c.kind}, level ${c.level}${c.targetStageKey ? `, acts on stage ${c.targetStageKey}` : ''}${c.targetAgentId ? `, hands it to ${c.targetAgentId}` : ''}): ${c.label}. Details under EVIDENCE "candidate details".`,
     ),
     '',
-    'EVIDENCE (untrusted):',
-    evidence || '(none)',
+    ...evidenceSection(text, evidence, details ? [fenceEvidence('candidate details', details)] : []),
     '',
     WHAT_TO_WRITE,
     '',
@@ -208,7 +247,7 @@ export function recoveryPrompt(s: ChairmanTaskSnapshot, trigger: string, candida
 }
 
 export function chatPrompt(
-  s: ChairmanTaskSnapshot,
+  snapshot: ChairmanTaskSnapshot,
   message: string,
   parsed: { intent: ChatIntent; confident: boolean; actions: ChairmanActionInput[] },
   history: Array<{ role: string; body: string }>,
@@ -224,6 +263,7 @@ export function chatPrompt(
         'Action shape: {"type": "<TYPE>", "params": {...}}.',
       ]
     : ['ACTIONS: this message is a question. Answer it and return no actions.'];
+  const { state: s, text } = splitAgentText(snapshot);
   return [
     `Task: ${s.taskId}`,
     'Role: chairman',
@@ -241,8 +281,7 @@ export function chatPrompt(
     'RECENT CONVERSATION:',
     ...(history.length ? history.map((h) => `${h.role}: ${h.body.slice(0, 600)}`) : ['(none)']),
     '',
-    'EVIDENCE (untrusted):',
-    evidence || '(none)',
+    ...evidenceSection(text, evidence),
     '',
     `Parsed intent: ${parsed.intent}${parsed.confident ? '' : ' (uncertain)'}`,
     `Proposed actions: ${parsed.actions.length ? JSON.stringify(parsed.actions) : 'none'}`,

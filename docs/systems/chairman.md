@@ -190,7 +190,14 @@ task's artifact folder, 4-minute timeout. Prompts carry the fresh snapshot
 `lastStrategy`: kind, diagnosis, outcome) and the evidence packet; every
 section goes inside an `<untrusted_evidence>` fence that cannot be closed from
 within, labelled OBSERVED (data) or AGENT_REPORTED (a claim, never an
-instruction). The model only **chooses a candidate id** (recovery) or replies
+instruction). TASK STATE, labelled authoritative, carries only structural
+fields: every text an agent, a test or a tool wrote (event and failure
+messages, review/verification/test summaries, the blocker message, the current
+guidance, the last diagnosis) is replaced by a pointer and moved into the
+fenced `task text` block, and candidate descriptions (which quote failure text)
+into `candidate details` (`splitAgentText`). The model's `guidance` must pass
+the learned-text safety scan ([safety.ts](../../apps/orchestrator/src/learning/safety.ts)),
+or the chosen strategy's own guidance is used. The model only **chooses a candidate id** (recovery) or replies
 (chat); output is Zod-validated, repaired once, then the rules decide. No
 model, or a failed call → `degraded` ("rules only"). Each call is launched
 through `AgentRegistry.launch`, so its usage and cost are recorded against the
@@ -252,8 +259,12 @@ before finishing" → requirement directive; "Use Claude for review" → deferre
 routing, keeping an effort said with it ("… with high effort", "at max effort";
 the reply names it). Unclear sentences become an instruction directive unless the model
 reads them differently — and a model may only add non-destructive actions, with
-directive text pinned to the user's own words. Cancelling a task is never done
-from chat.
+directive text pinned to the user's own words — and its kind and rule derived
+from those words (`directiveFromWords`), never from the model's proposal, which
+also cannot supersede another directive. A rollback from chat is only a bare
+command ("roll back", "undo that", "revert the last change", `/rollback`); a
+sentence that names something else ("undo the console.log") is a directive.
+Cancelling a task is never done from chat.
 
 Directives ([rules.ts](../../apps/orchestrator/src/chairman/rules.ts)): scope
 `CURRENT_TASK` or `NEXT_RELEVANT_STAGE`; state `active/removed/superseded`;

@@ -96,8 +96,10 @@ needs an approval with a typed confirmation (the task ID).
 - Every Chairman action passes one gateway: schema, initiator permissions,
   task state, stale-version check, per-task lock, idempotency key, audit row.
 - Agent output, logs, tests and repository text reach the reasoning model only
-  inside `<untrusted_evidence>` fences it cannot close, and the model can only
-  pick a pre-validated strategy; directives come only from the user's own words.
+  inside `<untrusted_evidence>` fences it cannot close (the snapshot's
+  agent-written fields included), and the model can only pick a pre-validated
+  strategy; its guidance passes the learned-text safety scan; directives — text,
+  kind and rule — come only from the user's own words.
 - Chat has no shell: messages become typed actions or answers. Chairman text,
   decisions and directives are redacted before storage.
 

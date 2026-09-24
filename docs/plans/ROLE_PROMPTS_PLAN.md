@@ -1,6 +1,6 @@
 # Role prompt templates v4 — plan
 
-Status: proposed · 2026-09-24 · no schema change (prompt versions are content rows)
+Status: done · 2026-09-24 · shipped in a22bf3e, released to the live orchestrator the same day · no schema change (prompt versions are content rows)
 
 ## 1. Goal
 

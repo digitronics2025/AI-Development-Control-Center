@@ -33,8 +33,17 @@ function out(result: GitResult, summary: string, output?: unknown): OperationRes
   };
 }
 
-function protectedHits(ctx: OperationContext, list: readonly string[]): string[] {
-  return list.filter((p) => ctx.protectedPaths.includes(p.replace(/\\/g, '/')));
+const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+
+/** A pathspec as a repository-relative, forward-slash path ('' = the whole tree), compared the way the file system does. */
+function repoRelative(ctx: OperationContext, spec: string): string {
+  const relative = path.isAbsolute(spec) ? path.relative(ctx.cwd, spec) : spec;
+  const normalized = path.posix
+    .normalize(relative.replace(/\\/g, '/'))
+    .replace(/^\.\/?/, '')
+    .replace(/\/+$/, '');
+  const clean = normalized === '.' ? '' : normalized;
+  return caseInsensitive ? clean.toLowerCase() : clean;
 }
 
 const folder = z
@@ -69,6 +78,24 @@ function inFolder(op: ToolOperation): ToolOperation {
     },
   };
 }
+
+/**
+ * Pathspecs that would touch a file holding the user's own pre-existing work
+ * (audit F-05): the file itself, any folder above it, or the whole tree. Every
+ * path-taking call also passes `--literal-pathspecs`, so globs and pathspec
+ * magic are plain names and cannot reach past this check.
+ */
+function protectedHits(ctx: OperationContext, list: readonly string[]): string[] {
+  if (!ctx.protectedPaths.length) return [];
+  const protectedSet = ctx.protectedPaths.map((p) => repoRelative(ctx, p));
+  return list.filter((spec) => {
+    const s = repoRelative(ctx, spec);
+    if (s === '' || s === '..' || s.startsWith('../')) return true;
+    return protectedSet.some((p) => p === s || p.startsWith(`${s}/`));
+  });
+}
+
+const LITERAL = '--literal-pathspecs';
 
 export function gitProvider(): ToolProvider {
   return {
@@ -225,7 +252,9 @@ export function gitProvider(): ToolProvider {
         input: z.object({ paths: paths.min(1) }),
         level: 2,
         async run(input, ctx) {
-          return out(await git(ctx.cwd, ['add', '--', ...input.paths]), `Staged ${input.paths.length} path(s)`, undefined);
+          const hits = protectedHits(ctx, input.paths);
+          if (hits.length) return failure('PROTECTED_PATH', `Refusing to stage your own uncommitted work: ${hits.join(', ')}`);
+          return out(await git(ctx.cwd, [LITERAL, 'add', '--', ...input.paths]), `Staged ${input.paths.length} path(s)`, undefined);
         },
       }),
       operation({
@@ -237,9 +266,9 @@ export function gitProvider(): ToolProvider {
         async run(input, ctx) {
           const hits = protectedHits(ctx, input.paths);
           if (hits.length) return failure('PROTECTED_PATH', `Refusing to commit your own uncommitted work: ${hits.join(', ')}`);
-          const add = await git(ctx.cwd, ['add', '--', ...input.paths]);
+          const add = await git(ctx.cwd, [LITERAL, 'add', '--', ...input.paths]);
           if (add.code !== 0) return out(add, 'git add failed');
-          const r = await git(ctx.cwd, ['commit', '-m', input.message, '--', ...input.paths], { timeoutMs: 300_000 });
+          const r = await git(ctx.cwd, [LITERAL, 'commit', '-m', input.message, '--', ...input.paths], { timeoutMs: 300_000 });
           if (r.code !== 0) return out(r, '');
           const sha = (await git(ctx.cwd, ['rev-parse', 'HEAD'])).stdout.trim();
           return { ...out(r, `Committed ${input.paths.length} path(s) as ${sha.slice(0, 10)}`, { sha }), filesChanged: input.paths };
@@ -256,7 +285,7 @@ export function gitProvider(): ToolProvider {
           const hits = protectedHits(ctx, input.paths);
           if (hits.length) return failure('PROTECTED_PATH', `Refusing to discard your own uncommitted work: ${hits.join(', ')}`);
           if (input.paths.some((p) => p === '.' || p === '*' || p === ':/')) return failure('INVALID_INPUT', 'List files explicitly; restoring everything is not a tool operation');
-          return { ...out(await git(ctx.cwd, ['restore', ...(input.staged ? ['--staged'] : []), '--', ...input.paths]), `Restored ${input.paths.length} path(s)`), filesChanged: input.paths };
+          return { ...out(await git(ctx.cwd, [LITERAL, 'restore', ...(input.staged ? ['--staged'] : []), '--', ...input.paths]), `Restored ${input.paths.length} path(s)`), filesChanged: input.paths };
         },
       }),
       operation({

@@ -95,7 +95,11 @@ needs an approval with a typed confirmation (the task ID).
   checks apply as everywhere.
 - Every path a tool touches is confined to the task's roots after resolving
   links ([paths.ts](../../packages/tools/src/paths.ts)); files holding the
-  user's pre-existing work are refused for writes, commits and restores.
+  user's pre-existing work are refused for writes, commits and restores. For
+  `git.stage`/`git.commit`/`git.restore` a pathspec is refused when it is the
+  protected file, any folder above it or the whole tree (case-insensitive on
+  Windows, absolute paths made relative), and Git runs with
+  `--literal-pathspecs`, so globs and pathspec magic are plain names.
 - Connected apps ([connected-apps.md](connected-apps.md)): `/api/connected-app/*`
   skips the local token and refuses any `Origin`; each route accepts only a
   paired app's token (stored as a SHA-256 hash), which opens nothing else.

@@ -64,6 +64,8 @@ export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<voi
   const token = await page.evaluate(() => document.querySelector<HTMLMetaElement>('meta[name="acc-token"]')?.content ?? '');
   const res = await page.request.patch('/api/settings', { data: { theme }, headers: { authorization: `Bearer ${token}` } });
   expect(res.ok()).toBe(true);
+  // The page learns the new setting over the WebSocket; checks made before it is painted see the old theme.
+  await page.waitForFunction((t) => document.documentElement.dataset.theme === t && document.documentElement.dataset.themeSwitching === undefined, theme);
 }
 
 export async function api<T = unknown>(page: Page, method: 'GET' | 'POST' | 'PATCH', path: string, data?: unknown): Promise<T> {

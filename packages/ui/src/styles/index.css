@@ -184,6 +184,15 @@
   }
 }
 
+/* A theme change applies at once: without this, every hover and focus transition
+   animates from the old palette, leaving a moment of mixed, low-contrast colours. */
+:root[data-theme-switching],
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -51,6 +51,14 @@ values for Dark and Light and a VS Code mapping. Tailwind's default palette is
 removed, so only semantic colours exist (`bg-surface`, `text-fg-secondary`,
 `bg-danger-muted`…). Contrast rules are in design.md §4.2.
 
+A theme change applies at once: [theme.ts](../../apps/dashboard/src/app/theme.ts)
+sets `data-theme-switching` on `<html>` for two frames and
+[index.css](../../packages/ui/src/styles/index.css) turns transitions off while
+it is present. Otherwise every `transition-colors` control animated from the old
+palette, and an accessibility scan taken in that moment (CI, Chairman e2e)
+measured mixed, low-contrast colours. The e2e `setTheme` helper waits for the
+new `data-theme` before any check.
+
 ## Pages
 
 Home (System Health marks a signed-in agent whose last run reported it

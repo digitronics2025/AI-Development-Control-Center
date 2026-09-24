@@ -26,7 +26,13 @@ export function useThemeController(preference: ThemePreference | undefined, host
   const resolved: ResolvedTheme =
     host === 'vscode' ? 'vscode' : preference === 'light' ? 'light' : preference === 'system' ? (prefersLight ? 'light' : 'dark') : 'dark';
   useEffect(() => {
-    document.documentElement.dataset.theme = resolved;
+    const root = document.documentElement;
+    if (root.dataset.theme !== resolved) {
+      // Suspend transitions until the new palette has been painted (see styles/index.css).
+      root.dataset.themeSwitching = '';
+      root.dataset.theme = resolved;
+      requestAnimationFrame(() => requestAnimationFrame(() => delete root.dataset.themeSwitching));
+    }
     if (host === 'web') {
       try {
         window.localStorage.setItem(STORAGE_KEY, resolved);

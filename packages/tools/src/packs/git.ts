@@ -16,6 +16,8 @@ import { failure, operation, type OperationContext, type OperationResult, type T
 
 const ref = z.string().min(1).max(250).regex(/^[^\s~^:?*[\\]+$|^HEAD(?:[~^]\d*)*$/, 'Not a valid Git ref');
 const paths = z.array(z.string().min(1).max(1000)).max(500);
+/** `git bisect`'s verdict: "<sha> is the first bad commit" (Git ≤ 2.52) or "…first 'bad' commit" (2.55). SHA-1 or SHA-256. */
+const FIRST_BAD = /^([0-9a-f]{40}|[0-9a-f]{64}) is the first '?bad'? commit/m;
 
 function out(result: GitResult, summary: string, output?: unknown): OperationResult {
   const ok = result.code === 0;
@@ -292,11 +294,15 @@ export function gitProvider(): ToolProvider {
             const deadline = Date.now() + input.timeoutSec * 1000;
             const log: string[] = [];
             let first: string | null = null;
+            let previous: string | null = null;
             // Drive the loop ourselves: `git bisect run` re-parses the command through sh, which breaks Windows command lines.
             for (let i = 0; i < 64 && step.code === 0 && Date.now() < deadline; i++) {
-              first = /^([0-9a-f]{40}) is the first bad commit/m.exec(step.stdout)?.[1] ?? null;
+              first = FIRST_BAD.exec(step.stdout)?.[1] ?? null;
               if (first) break;
               const head = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+              // Bisect no longer moving means it finished in words this parser does not know: never re-test one commit.
+              if (head === previous) break;
+              previous = head;
               const test = await runShell({ commandLine: input.command, cwd: dir, env: ctx.env, timeoutMs: Math.max(5000, deadline - Date.now()) }).done;
               const verdict = test.timedOut ? 'skip' : test.exitCode === 0 ? 'good' : test.exitCode === 125 ? 'skip' : 'bad';
               log.push(`${head.slice(0, 10)} ${verdict}`);

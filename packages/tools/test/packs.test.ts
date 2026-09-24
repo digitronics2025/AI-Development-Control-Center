@@ -136,10 +136,32 @@ describe('git pack', () => {
     writeFileSync(path.join(repo, 'wip.txt'), 'uncommitted');
     const command = process.platform === 'win32' ? 'if exist flag.txt (exit 1) else (exit 0)' : 'test ! -f flag.txt';
     const r = await call('git.bisect', { good, bad, command }, c);
-    expect(r.ok).toBe(true);
+    expect(r.ok, JSON.stringify(r).slice(0, 3000)).toBe(true);
     expect((r.output as any).firstBadCommit).toBe(bad);
     expect(readFileSync(path.join(repo, 'wip.txt'), 'utf8')).toBe('uncommitted');
     expect((await git(repo, ['worktree', 'list'])).stdout.trim().split('\n')).toHaveLength(1);
+  }, 60_000);
+
+  it('searches several commits and tests each one at most once', async () => {
+    const c = ctx(repo);
+    const commit = async (file: string, message: string) => {
+      writeFileSync(path.join(repo, file), message);
+      await git(repo, ['add', file]);
+      await git(repo, ['commit', '-m', message]);
+      return (await git(repo, ['rev-parse', 'HEAD'])).stdout.trim();
+    };
+    const good = await commit('a.txt', 'one');
+    await commit('b.txt', 'two');
+    const culprit = await commit('broken.txt', 'three breaks it');
+    await commit('c.txt', 'four');
+    const bad = await commit('d.txt', 'five');
+    const command = process.platform === 'win32' ? 'if exist broken.txt (exit 1) else (exit 0)' : 'test ! -f broken.txt';
+    const r = await call('git.bisect', { good, bad, command }, c);
+    expect(r.ok, JSON.stringify(r).slice(0, 2000)).toBe(true);
+    expect((r.output as any).firstBadCommit).toBe(culprit);
+    const tested = ((r.output as any).steps as string[]).map((s) => s.split(' ')[0]);
+    expect(new Set(tested).size).toBe(tested.length);
+    expect(tested.length).toBeLessThanOrEqual(3);
   }, 60_000);
 });
 

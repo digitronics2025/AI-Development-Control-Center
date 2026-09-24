@@ -147,6 +147,13 @@ credential, checkpoint and session routes in their own docs. Realtime:
   so the first call to a capability can take a second longer.
 - `page.evaluate` code in the browser pack reaches DOM globals through
   `globalThis`; the package compiles without DOM types on purpose.
+- `git.bisect` ([packs/git.ts](../../packages/tools/src/packs/git.ts)) drives the
+  bisect loop itself and reads Git's verdict from its words, which changed:
+  Git 2.55 prints `is the first 'bad' commit` (quoted), older Git `is the first
+  bad commit`. Before both were accepted, Git 2.55 left the verdict unread and
+  the loop re-ran the test command on the same commit until its 64-step cap;
+  the loop now also stops as soon as bisect stops moving. The whole suite has
+  been run against a portable Git 2.55 (GitHub's Windows runners use it).
 - `node-pty`, `playwright-core`, `better-sqlite3` and `axe-core` stay external
   to the orchestrator bundle and must be dependencies of `@acc/orchestrator`.
 

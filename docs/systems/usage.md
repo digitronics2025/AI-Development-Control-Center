@@ -186,6 +186,8 @@ Implemented in [budgets.ts](../../apps/orchestrator/src/usage/budgets.ts).
   `AGENT`, `TASK` (period `total` only).
 - **Periods:** local day, Monday week or month.
 - **States:** `ok`, `warning`, `critical`, `exceeded`, from the thresholds.
+- **Amount:** at least one nano-dollar (`amountUsd >= 1e-9`); a smaller one would
+  round to zero. A zero amount already stored reads as `exceeded`.
 - **Policies:** `WARN_ONLY` (the default) and `STOP_NEW_RUNS`. A model budget stops
   only runs that request that model explicitly. Nothing is ever switched to a
   cheaper model.

@@ -41,7 +41,7 @@ import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
 import type { EngineTooling } from './tooling.js';
-import { isMultiRepository, strictestPolicy, taskRepositories, workspaceFolders, type TaskRepository } from './task-repositories.js';
+import { isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import type { TaskViews } from './views.js';
@@ -707,9 +707,12 @@ export class TaskEngine {
         const queued = this.d.store.listTasks({ statuses: ['QUEUED'], limit: 500 }).sort((a, b) => a.seq - b.seq);
         for (const task of queued) {
           if (this.runners.has(task.id)) continue;
-          const holder = isReadOnlyWorkflow(task.workflow) ? null : this.repositoryHolder(task);
-          if (holder) {
-            const message = `Waiting for ${holder.id} (${holder.status.toLowerCase().replace(/_/g, ' ')}) in the same repository`;
+          const held = isReadOnlyWorkflow(task.workflow) ? null : this.repositoryHolder(task);
+          if (held) {
+            const { holder, repositoryId } = held;
+            // Name the shared repository when either task works in more than one.
+            const where = isMultiRepository(this.d.store, task) || isMultiRepository(this.d.store, holder) ? ` (${this.d.store.getRepository(repositoryId)?.name ?? repositoryId})` : '';
+            const message = `Waiting for ${holder.id} (${holder.status.toLowerCase().replace(/_/g, ' ')}) in the same repository${where}`;
             if (task.blocker?.message !== message) this.publisher.updateTask(task.id, { blocker: { kind: 'queued', message } });
             continue;
           }
@@ -724,13 +727,23 @@ export class TaskEngine {
   /**
    * The task holding a repository: one that is running, or one that has
    * already started changing files (it has a baseline) and is not finished.
-   * Read-only workflows never hold a repository.
+   * Read-only workflows never hold a repository. A task across repositories
+   * waits for any task sharing one of them, and holds all of them.
    */
-  private repositoryHolder(task: TaskRecord): TaskRecord | null {
-    const others = this.d.store
-      .listTasks({ repositoryId: task.repositoryId, limit: 1000 })
-      .filter((t) => t.id !== task.id && !['DRAFT', 'QUEUED', ...TERMINAL_TASK_STATUSES].includes(t.status) && !isReadOnlyWorkflow(t.workflow));
-    return others.find((t) => t.status === 'RUNNING' || this.runners.has(t.id)) ?? others.find((t) => t.git.baselineSnapshotId) ?? null;
+  private repositoryHolder(task: TaskRecord): { holder: TaskRecord; repositoryId: string } | null {
+    const candidates: Array<{ holder: TaskRecord; repositoryId: string }> = [];
+    for (const repositoryId of taskRepositoryIds(this.d.store, task)) {
+      for (const t of this.d.store.listTasks({ repositoryId, limit: 1000 })) {
+        if (t.id === task.id || ['DRAFT', 'QUEUED', ...TERMINAL_TASK_STATUSES].includes(t.status) || isReadOnlyWorkflow(t.workflow)) continue;
+        candidates.push({ holder: t, repositoryId });
+      }
+    }
+    return candidates.find((c) => c.holder.status === 'RUNNING' || this.runners.has(c.holder.id)) ?? candidates.find((c) => c.holder.git.baselineSnapshotId) ?? null;
+  }
+
+  /** Refresh the cached Git status of every repository a task works in. */
+  private invalidateRepositories(task: TaskRecord): void {
+    for (const id of taskRepositoryIds(this.d.store, task)) this.d.repositories.invalidate(id);
   }
 
   private launch(task: TaskRecord): void {
@@ -746,7 +759,7 @@ export class TaskEngine {
       })
       .finally(() => {
         this.runners.delete(task.id);
-        this.d.repositories.invalidate(task.repositoryId);
+        this.invalidateRepositories(task);
         // Background processes live only while the loop does; a paused or waiting task restarts them if it needs them.
         const after = this.d.store.getTask(task.id);
         if (after && !['RUNNING', 'QUEUED'].includes(after.status)) void this.d.tooling.stopProcesses(task.id, `task ${after.status.toLowerCase().replace(/_/g, ' ')}`);
@@ -829,7 +842,7 @@ export class TaskEngine {
         }
       } finally {
         releaseWriter?.();
-        this.d.repositories.invalidate(repo.id);
+        this.invalidateRepositories(task);
       }
       if (!(await this.handleOutcome(taskId, def, stage, outcome, control))) return;
     }

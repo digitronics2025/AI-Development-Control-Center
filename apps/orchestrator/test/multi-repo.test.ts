@@ -154,3 +154,20 @@ describe('task workspace', () => {
     expect(t.services.store.getTask(id)!.git.workspacePath).not.toBeNull();
   });
 });
+
+describe('scheduling across repositories', () => {
+  it('a task in a linked repository waits for the task across repositories, then starts', async () => {
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const webPath = await makeRepo();
+    const web = await addRepo(t, webPath);
+    const multi = await createTask(t, api, 'Across [sim:slow]', { linkedRepositoryIds: [web], workflowId: 'quick-change' });
+    await waitForStatus(t, multi, ['RUNNING']);
+    const single = await createTask(t, web, 'Only web', { workflowId: 'quick-change' });
+    const waiting = await waitFor(() => t!.services.store.getTask(single)!, (x) => x.blocker?.kind === 'queued', 30_000, 'queued blocker');
+    expect(waiting.status).toBe('QUEUED');
+    expect(waiting.blocker!.message).toBe(`Waiting for ${multi} (running) in the same repository (${t.services.store.getRepository(web)!.name})`);
+    await waitForStatus(t, multi, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 120_000);
+    await waitFor(() => t!.services.store.getTask(single)!.status, (s) => s !== 'QUEUED', 60_000, 'single task to start');
+  }, 180_000);
+});

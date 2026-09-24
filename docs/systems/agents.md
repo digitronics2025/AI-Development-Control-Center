@@ -170,7 +170,10 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 Role `ask` answers "Simulated answer to: <question>" and names the repository
-and any task it was shown ([ask.md](ask.md)).
+and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`
+in the question makes it call that capability through its tool session
+(`ACC_TOOL_URL`/`ACC_TOOL_SESSION` from `toolBridge.env`) and report OK or
+REFUSED with the summary.
 
 ## Observed on the operator's machine (2026-09-24)
 

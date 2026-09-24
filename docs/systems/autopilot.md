@@ -39,6 +39,10 @@ above the mode's ceiling → **approval** (operator/engine) or **deny** (agent)
 → outside the stage's profile → **escalate**: allowed and recorded →
 otherwise **allow**.
 
+A read-only session (Ask, [ask.md](ask.md)) is decided before all of that:
+off its allow-list, not declared a read (`writes !== false`), or dangerous →
+**deny**; otherwise **allow**, whatever the level. Nothing is escalated.
+
 ## Privileged helper
 
 The orchestrator never runs elevated. [privileged-helper.ps1](../../scripts/windows/privileged-helper.ps1)

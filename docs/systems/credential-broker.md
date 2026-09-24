@@ -64,6 +64,10 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
    `envFor(kinds)`: the first in-scope credential of each kind injected as its
    variable (`CREDENTIAL_KIND_ENV`), plus `CLOUDFLARE_ACCOUNT_ID` when stored.
    `http.request {auth: {credential}}` uses one by name as a header.
+   A read-only session (Ask, [ask.md](ask.md)) uses `envForPinned` instead:
+   exactly the credential named in Settings → Ask for each kind, whatever its
+   repository scope (choosing it there is its scope), still held back while
+   MyVault has not saved it — or none, never another credential of the kind.
 3. Every value handed out, imported or generated is first registered with the
    shared redactor; all stored values are registered at startup.
 4. The variables the broker manages are stripped from every inherited

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { newCredentialKey, openSecret, sealSecret, secretFingerprint } from '@acc/security';
 import { createServices } from '../src/app.js';
 import type { OrchestratorConfig } from '../src/config.js';
-import { migrate, openDatabase, schemaVersion } from '../src/db/database.js';
+import { migrate, MigrationMismatchError, openDatabase, schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
 import { ROOT, simAdapters, TOKEN } from './helpers.js';
 
@@ -267,6 +267,30 @@ describe('multi-repository tasks migration (v12 → v13)', () => {
     db.prepare("DELETE FROM tasks WHERE id = 'TASK-0001'").run();
     expect(db.prepare('SELECT COUNT(*) AS n FROM task_linked_repositories').get()).toEqual({ n: 0 });
     expect(migrate(db, previous)).toEqual([]);
+    db.close();
+  });
+});
+
+/** Audit F-29: a shipped migration that was renamed, renumbered or edited is refused before anything runs. */
+describe('migration identity', () => {
+  it('refuses a database whose applied migrations differ from the code, and fingerprints older rows once', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-identity-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const first = MIGRATIONS.filter((m) => m.version <= 2);
+    migrate(db, first);
+    // A row written before fingerprints existed takes the code's fingerprint on the next start.
+    db.prepare('UPDATE schema_migrations SET checksum = NULL WHERE version = 1').run();
+    expect(migrate(db, first)).toEqual([]);
+    expect((db.prepare('SELECT checksum FROM schema_migrations WHERE version = 1').get() as { checksum: string | null }).checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const renamed = first.map((m) => (m.version === 2 ? { ...m, name: 'something else' } : m));
+    expect(() => migrate(db, renamed)).toThrow(MigrationMismatchError);
+    const edited = first.map((m) => (m.version === 2 ? { ...m, sql: `${m.sql}\nCREATE TABLE sneaky (id TEXT);` } : m));
+    expect(() => migrate(db, edited)).toThrow(/was changed after this database applied it/);
+    // Neither refusal ran anything or applied the next migration.
+    expect(() => migrate(db, [...edited, ...MIGRATIONS.filter((m) => m.version === 3)])).toThrow(MigrationMismatchError);
+    expect(schemaVersion(db)).toBe(2);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'sneaky'").get()).toBeUndefined();
     db.close();
   });
 });

@@ -121,6 +121,14 @@ Control reconciliation in the background after `listen`.
 
 ## Startup
 
+Before anything else, `migrate` ([database.ts](../../apps/orchestrator/src/db/database.ts))
+checks every migration this database already applied against the code: a
+different name or a changed SQL fingerprint (`schema_migrations.checksum`,
+sha256) stops startup with `MigrationMismatchError` instead of running on a
+renumbered or edited migration. Rows applied before fingerprints existed take
+the code's fingerprint once. Versions the code does not know (an older binary
+on a newer database) are left alone.
+
 `main.ts` runs `services.recover()` (tool executions left running are marked
 stopped, leftover terminals exited, leftover task processes — and agent or
 command processes of executions still marked running — killed only if still

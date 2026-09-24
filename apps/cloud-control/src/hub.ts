@@ -12,7 +12,7 @@ import {
 } from '@acc/shared';
 import type { Env } from './env.js';
 import { log, nowIso } from './http.js';
-import { CloudStore, commandFromRow, commandView } from './store.js';
+import { CloudStore, commandFromRow, commandView, waitFromRow } from './store.js';
 
 /**
  * The realtime hub (docs/systems/cloud-control.md §Hub). One instance per
@@ -168,11 +168,16 @@ export class WorkspaceHub extends DurableObject<Env> {
     const a = this.attachment(ws);
     if (!a) return;
     if (a.kind === 'node') {
-      const previous = this.nodeQueues.get(a.nodeId) ?? Promise.resolve();
-      const next = previous.then(() => this.onNodeMessage(ws, this.attachment(ws) as Extract<Attachment, { kind: 'node' }>, message));
+      // One rejected frame must not poison the node's queue for the rest of this object's life (audit F-39),
+      // and frames of a socket that was closed meanwhile are not handled (audit F-22).
+      const previous = (this.nodeQueues.get(a.nodeId) ?? Promise.resolve()).catch(() => undefined);
+      const next = previous.then(() => (ws.readyState === WebSocket.OPEN ? this.onNodeMessage(ws, this.attachment(ws) as Extract<Attachment, { kind: 'node' }>, message) : undefined));
       this.nodeQueues.set(a.nodeId, next);
-      await next;
-      if (this.nodeQueues.get(a.nodeId) === next) this.nodeQueues.delete(a.nodeId);
+      try {
+        await next;
+      } finally {
+        if (this.nodeQueues.get(a.nodeId) === next) this.nodeQueues.delete(a.nodeId);
+      }
     }
     else this.onBrowserMessage(ws, a, message);
   }
@@ -277,7 +282,13 @@ export class WorkspaceHub extends DurableObject<Env> {
   private async onNodeMessage(ws: WebSocket, a: Extract<Attachment, { kind: 'node' }>, text: string): Promise<void> {
     const parsed = parseNodeFrame(text);
     if (!parsed.ok) {
-      if (parsed.code === 'NODE_UPDATE_REQUIRED') ws.close(4026, parsed.message.slice(0, 120));
+      if (parsed.code === 'NODE_UPDATE_REQUIRED') {
+        try {
+          ws.close(4026, parsed.message.slice(0, 120));
+        } catch {
+          /* already closing */
+        }
+      }
       log('warn', 'node.frame.rejected', { nodeId: a.nodeId, code: parsed.code });
       return;
     }
@@ -287,6 +298,16 @@ export class WorkspaceHub extends DurableObject<Env> {
       await this.handleNodeFrame(ws, a, f);
     } catch (error) {
       log('error', 'node.frame.failed', { nodeId, type: f.type, message: (error as Error).message });
+      // A batch that was not stored must be sent again: acking the next one would move the cursor past
+      // it and the node would drop both (audit F-22). Closing makes the node reconnect and resend from
+      // the cloud's cursor; later frames of this socket are skipped.
+      if (f.type === 'event.batch') {
+        try {
+          ws.close(1011, 'Could not store events; reconnect and resend');
+        } catch {
+          /* already closing */
+        }
+      }
     }
   }
 
@@ -450,23 +471,35 @@ export class WorkspaceHub extends DurableObject<Env> {
    * commands after every reconnect.
    */
   async deliver(command: RemoteCommand, waitMs = 20_000): Promise<CommandWait> {
-    const sent = this.sendNode(command.nodeId, { type: 'command.available', payload: { command } });
-    if (sent) await this.store.transition(command.id, command.nodeId, 'delivered');
-    const current = await this.store.command(command.id);
-    const pending = (): CommandWait => ({ status: current?.status ?? 'pending', command: commandView(current!) });
-    if (!sent || waitMs <= 0) return pending();
-    return new Promise<CommandWait>((resolve) => {
-      const timer = setTimeout(() => {
-        const list = this.commandWaiters.get(command.id)?.filter((r) => r !== done) ?? [];
+    const fromStore = async (): Promise<CommandWait> => {
+      const row = await this.store.command(command.id);
+      if (!row) throw new Error(`command ${command.id} vanished`);
+      return waitFromRow(row);
+    };
+    if (waitMs <= 0) {
+      if (this.sendNode(command.nodeId, { type: 'command.available', payload: { command } })) await this.store.transition(command.id, command.nodeId, 'delivered');
+      return fromStore();
+    }
+    // The waiter exists before the node can answer: a result that arrives while the delivery is still
+    // being recorded is not missed, and a wait that times out answers with whatever the row holds by
+    // then — outcome or error included (audit F-40).
+    return new Promise<CommandWait>((resolve, reject) => {
+      let finished = false;
+      const done = (w: CommandWait) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        const list = this.commandWaiters.get(command.id)?.filter((x) => x !== done) ?? [];
         if (list.length) this.commandWaiters.set(command.id, list);
         else this.commandWaiters.delete(command.id);
-        void this.store.command(command.id).then((row) => resolve({ status: row?.status ?? 'pending', command: commandView(row ?? current!) }));
-      }, waitMs);
-      const done = (w: CommandWait) => {
-        clearTimeout(timer);
         resolve(w);
       };
+      const fallback = () => void fromStore().then(done, (error: unknown) => (finished ? undefined : ((finished = true), reject(error))));
+      const timer = setTimeout(fallback, waitMs);
       this.commandWaiters.set(command.id, [...(this.commandWaiters.get(command.id) ?? []), done]);
+      const sent = this.sendNode(command.nodeId, { type: 'command.available', payload: { command } });
+      if (!sent) return fallback();
+      void this.store.transition(command.id, command.nodeId, 'delivered').catch(() => undefined);
     });
   }
 

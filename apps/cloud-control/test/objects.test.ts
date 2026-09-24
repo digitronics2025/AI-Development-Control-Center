@@ -139,6 +139,14 @@ describe('objects in R2', () => {
     const listed = await cloud.api('GET', `/api/cloud/logs/${node.nodeId}/exec-1`);
     expect(listed.body).toEqual([{ chunk_index: 0, first_seq: 0, last_seq: 1, sha256: chunkSha, size: chunk.length }]);
     expect((await cloud.api('GET', `/api/cloud/logs/${node.nodeId}/exec-1?chunk=0`)).body).toBe('line 1\nline 2\n');
+
+    // Audit F-51: a malformed name header is a 400, not an internal error.
+    expect((await put('art-5', { 'x-acc-sha256': sha, 'x-acc-sensitivity': 'safe_sync', 'x-acc-name': '%E0%A4%A' })).status).toBe(400);
+
+    // Audit F-28: once the node is revoked, its stored files are no longer served.
+    expect((await cloud.api('POST', `/api/cloud/nodes/${node.nodeId}/revoke`)).status).toBe(200);
+    expect((await fetch(`${cloud.url}/api/cloud/artifacts/${node.nodeId}/art-1`, { headers: { 'cf-access-jwt-assertion': await cloud.signer.token() } })).status).toBe(404);
+    expect((await cloud.api('GET', `/api/cloud/logs/${node.nodeId}/exec-1`)).status).toBe(404);
   });
 });
 

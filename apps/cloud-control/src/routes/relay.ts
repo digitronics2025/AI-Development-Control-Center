@@ -157,7 +157,13 @@ async function upload(request: Request, env: Env, store: CloudStore, target: { k
   if (target.kind === 'artifact') {
     const sensitivity = (request.headers.get('x-acc-sensitivity') ?? '') as ArtifactSensitivity;
     if (!ARTIFACT_SENSITIVITIES.includes(sensitivity) || sensitivity === 'local_only') throw new HttpError(403, 'REMOTE_FORBIDDEN', 'Local-only artifacts are never uploaded.');
-    const name = decodeURIComponent(request.headers.get('x-acc-name') ?? 'artifact').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 200);
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(request.headers.get('x-acc-name') ?? 'artifact');
+    } catch {
+      throw new HttpError(400, 'REMOTE_INVALID', 'x-acc-name is not valid percent-encoding.'); // not a 500 (audit F-51)
+    }
+    const name = decoded.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 200);
     const key = `nodes/${node.id}/artifacts/${target.id}/${sha256}`;
     try {
       await env.ARTIFACTS.put(key, request.body, { sha256, httpMetadata: { contentType }, customMetadata: { nodeId: node.id, taskId } });

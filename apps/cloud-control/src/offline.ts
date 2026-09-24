@@ -118,17 +118,29 @@ export async function offlineRead(db: D1Database, nodeId: string, op: string, pa
       // History from the uploaded chunks: "<at> <stream> <text>" per line.
       const chunks = await db.prepare('SELECT r2_key FROM log_chunks WHERE node_id = ? AND execution_id = ? ORDER BY chunk_index').bind(nodeId, params.id).all<{ r2_key: string }>();
       if (!chunks.results.length || !objects) return { status: 503, body: { error: { code: 'NODE_OFFLINE', message: 'The node is offline and this log is not stored in the cloud yet.' } } };
-      const lines: Array<{ executionId: string; seq: number; stream: string; text: string; at: string }> = [];
-      for (const c of chunks.results) {
+      // Read only the chunks the answer needs — from the end for a tail, from the start up to the
+      // limit otherwise — instead of every chunk of a long execution into memory (audit F-41).
+      const tail = Math.min(10_000, Math.max(0, Number(query.tail ?? 0) || 0));
+      const limit = Math.min(10_000, Number(query.limit ?? 1000) || 1000);
+      const want = tail > 0 ? tail : limit;
+      const order = tail > 0 ? [...chunks.results].reverse() : chunks.results;
+      const parts: string[][] = [];
+      let count = 0;
+      for (const c of order) {
+        if (count >= want) break;
         const object = await objects.get(c.r2_key);
-        for (const raw of (await object?.text())?.split('\n') ?? []) {
-          if (!raw) continue;
-          const [at, stream, ...rest] = raw.split(' ');
-          lines.push({ executionId: params.id!, seq: lines.length, stream: stream ?? 'stdout', text: rest.join(' '), at: at ?? '' });
-        }
+        const raw = ((await object?.text()) ?? '').split('\n').filter(Boolean);
+        if (tail > 0) parts.unshift(raw);
+        else parts.push(raw);
+        count += raw.length;
       }
-      const tail = Number(query.tail ?? 0);
-      return { status: 200, body: tail > 0 ? lines.slice(-tail) : lines.slice(0, Number(query.limit ?? 1000) || 1000) };
+      const flat = parts.flat();
+      const picked = tail > 0 ? flat.slice(-tail) : flat.slice(0, limit);
+      const lines = picked.map((raw, seq) => {
+        const [at, stream, ...rest] = raw.split(' ');
+        return { executionId: params.id!, seq, stream: stream ?? 'stdout', text: rest.join(' '), at: at ?? '' };
+      });
+      return { status: 200, body: lines };
     }
     default:
       return null;

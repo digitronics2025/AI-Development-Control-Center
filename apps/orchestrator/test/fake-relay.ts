@@ -51,7 +51,9 @@ export class FakeRelay {
       const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
       const nodeId = this.sessions.get(token);
       if (req.url !== '/node/v1/connect' || !nodeId || this.nodes.get(nodeId)?.revoked) {
-        socket.write(`HTTP/1.1 ${nodeId ? 403 : 401} Refused\r\nconnection: close\r\n\r\n`);
+        // As the real relay does: a JSON body naming the reason (NODE_REVOKED for a revoked node).
+        const body = JSON.stringify({ error: { code: nodeId ? 'NODE_REVOKED' : 'UNAUTHORIZED', message: 'Refused' } });
+        socket.write(`HTTP/1.1 ${nodeId ? 403 : 401} Refused\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
         socket.destroy();
         return;
       }

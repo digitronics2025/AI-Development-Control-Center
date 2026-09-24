@@ -129,15 +129,40 @@ export class RemoteConnection {
     });
     socket.on('unexpected-response', (_req, res) => {
       const status = res.statusCode ?? 0;
-      res.resume();
       socket.removeAllListeners('close');
       socket.on('error', () => undefined);
-      socket.terminate();
-      if (this.socket !== socket) return;
+      if (this.socket !== socket) {
+        res.resume();
+        socket.terminate();
+        return;
+      }
       this.socket = null;
-      const retry = this.hooks.onError(Object.assign(new Error(`Relay refused the connection (${status})`), { status }));
-      if (retry && this.state !== 'stopped') this.schedule();
-      else this.state = 'stopped';
+      // The relay names why in a JSON body (NODE_REVOKED, …): only that code, never a bare
+      // status, may stop the node for good (audit F-27). Read at most 4 KB of it.
+      let body = '';
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(bodyTimer);
+        socket.terminate();
+        let code = '';
+        try {
+          code = String((JSON.parse(body) as { error?: { code?: unknown } }).error?.code ?? '');
+        } catch {
+          /* not the relay's JSON: a proxy or firewall answered */
+        }
+        const retry = this.hooks.onError(Object.assign(new Error(`Relay refused the connection (${status}${code ? ` ${code}` : ''})`), { status, code }));
+        if (retry && this.state !== 'stopped') this.schedule();
+        else this.state = 'stopped';
+      };
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => {
+        if (body.length < 4096) body += chunk.slice(0, 4096 - body.length);
+      });
+      res.once('end', settle);
+      res.once('error', settle);
+      const bodyTimer = setTimeout(settle, 5_000);
     });
     socket.on('error', (error) => {
       if (this.socket !== socket) return;

@@ -14,6 +14,7 @@ import {
   type PublicJwk,
   type RemoteCommand,
 } from '@acc/shared';
+import type { CommandWait } from './hub.js';
 import { nowIso } from './http.js';
 
 /**
@@ -495,6 +496,10 @@ export class CloudStore {
     const day = 86_400_000;
     const cut = (days: number) => new Date(Date.now() - days * day).toISOString();
     const oldObjects = await this.db.prepare("SELECT r2_key FROM artifact_manifests WHERE r2_key IS NOT NULL AND created_at < ? UNION ALL SELECT r2_key FROM log_chunks WHERE created_at < ?").bind(cut(90), cut(90)).all<{ r2_key: string }>();
+    // A node revoked 30 days ago takes its cloud copies with it: mirror, events, usage, files (audit F-28).
+    const gone = "(SELECT id FROM nodes WHERE revoked_at IS NOT NULL AND revoked_at < ?)";
+    const goneObjects = await this.db.prepare(`SELECT r2_key FROM artifact_manifests WHERE r2_key IS NOT NULL AND node_id IN ${gone} UNION ALL SELECT r2_key FROM log_chunks WHERE node_id IN ${gone}`).bind(cut(30), cut(30)).all<{ r2_key: string }>();
+    await this.db.batch(['cloud_tasks', 'cloud_task_events', 'cloud_entities', 'cloud_usage_events', 'artifact_manifests', 'log_chunks', 'node_repositories'].map((table) => this.db.prepare(`DELETE FROM ${table} WHERE node_id IN ${gone}`).bind(cut(30))));
     await this.db.batch([
       this.db.prepare('DELETE FROM cloud_task_events WHERE at < ?').bind(cut(90)),
       this.db.prepare("DELETE FROM remote_commands WHERE finished_at IS NOT NULL AND finished_at < ?").bind(cut(30)),
@@ -506,7 +511,7 @@ export class CloudStore {
       this.db.prepare('DELETE FROM audit_events WHERE at < ?').bind(cut(400)),
       this.db.prepare('DELETE FROM repository_leases WHERE released_at IS NOT NULL AND released_at < ?').bind(cut(30)),
     ]);
-    return { r2Keys: oldObjects.results.map((r) => r.r2_key) };
+    return { r2Keys: [...oldObjects.results, ...goneObjects.results].map((r) => r.r2_key) };
   }
 }
 
@@ -565,6 +570,18 @@ export interface CommandRow {
   error_message: string | null;
   task_id: string | null;
   lease_fingerprint: string | null;
+}
+
+/** What a command row says as the answer to a wait: its outcome or error when it has finished. */
+export function waitFromRow(row: CommandRow): CommandWait {
+  const view = commandView(row);
+  if (row.status !== 'succeeded' && row.status !== 'failed') return { status: row.status, command: view };
+  return {
+    status: row.status,
+    command: view,
+    ...(row.result_status ? { outcome: { httpStatus: row.result_status, body: row.result_body ? JSON.parse(row.result_body) : null } } : {}),
+    ...(row.error_code ? { error: { code: row.error_code, message: row.error_message ?? '' } } : {}),
+  };
 }
 
 export function commandView(r: CommandRow): CloudCommandView {

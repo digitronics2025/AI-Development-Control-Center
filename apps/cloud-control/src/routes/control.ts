@@ -19,7 +19,7 @@ import type { Env } from '../env.js';
 import type { CommandWait, RpcReply } from '../hub.js';
 import { clientIp, DASHBOARD_CSP, fromBase64url, HttpError, isoIn, json, log, randomToken, readJson } from '../http.js';
 import { offlineRead } from '../offline.js';
-import { CloudStore, commandView, type CommandRow } from '../store.js';
+import { CloudStore, commandView, waitFromRow } from '../store.js';
 
 /**
  * The control hostname: the dashboard, the cloud API and browser realtime,
@@ -178,8 +178,13 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
     return json(await store.listAudit(limit));
   }
 
+  // A revoked node's stored files are no longer served (audit F-28); the daily retention removes them after 30 days.
+  const refuseRevoked = async (nodeId: string) => {
+    if ((await store.node(nodeId))?.revokedAt) throw new HttpError(404, 'NODE_REVOKED', 'This node was revoked; its stored files are no longer served.');
+  };
   match = m(/^\/api\/cloud\/artifacts\/(node_[A-Za-z0-9_-]{16,64})\/([A-Za-z0-9._:-]{1,200})$/);
   if (request.method === 'GET' && match) {
+    await refuseRevoked(match[1]!);
     const manifest = await store.manifest(match[1]!, match[2]!);
     if (!manifest || manifest.status !== 'uploaded' || !manifest.r2_key || manifest.sensitivity === 'local_only') throw new HttpError(404, 'NOT_FOUND', 'This artifact is not stored in the cloud.');
     const object = await env.ARTIFACTS.get(manifest.r2_key);
@@ -195,9 +200,13 @@ async function cloudApi(request: Request, env: Env, url: URL, identity: AccessId
     });
   }
   match = m(/^\/api\/cloud\/tasks\/(node_[A-Za-z0-9_-]{16,64})\/([A-Za-z0-9._:-]{1,200})\/artifacts$/);
-  if (request.method === 'GET' && match) return json(await store.manifestsForTask(match[1]!, match[2]!));
+  if (request.method === 'GET' && match) {
+    await refuseRevoked(match[1]!);
+    return json(await store.manifestsForTask(match[1]!, match[2]!));
+  }
   match = m(/^\/api\/cloud\/logs\/(node_[A-Za-z0-9_-]{16,64})\/([A-Za-z0-9._:-]{1,200})$/);
   if (request.method === 'GET' && match) {
+    await refuseRevoked(match[1]!);
     const chunks = await store.logChunks(match[1]!, match[2]!);
     const index = url.searchParams.get('chunk');
     if (index === null) return json(chunks.map(({ r2_key: _k, ...c }) => c));
@@ -412,18 +421,6 @@ async function bindPrecondition(request: Request, store: CloudStore, nodeId: str
     return { kind: 'taskVersion', taskId: params.id, version };
   }
   return null;
-}
-
-/** What an earlier command with the same key produced, in the shape a live wait would give. */
-function waitFromRow(row: CommandRow): CommandWait {
-  const view = commandView(row);
-  if (row.status !== 'succeeded' && row.status !== 'failed') return { status: row.status, command: view };
-  return {
-    status: row.status,
-    command: view,
-    ...(row.result_status ? { outcome: { httpStatus: row.result_status, body: row.result_body ? JSON.parse(row.result_body) : null } } : {}),
-    ...(row.error_code ? { error: { code: row.error_code, message: row.error_message ?? '' } } : {}),
-  };
 }
 
 function commandResponse(w: CommandWait): Response {

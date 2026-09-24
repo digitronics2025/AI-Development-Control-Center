@@ -54,8 +54,10 @@ requests and keeps a sanitized, offline-readable copy of history. Plan:
 
 [connection.ts](../../apps/orchestrator/src/remote/connection.ts): backoff from
 1 s doubling to 60 s with ±20 % jitter, reset after 30 s of stable connection,
-a ping every 30 s. A refused session with `NODE_REVOKED`/`NODE_NOT_FOUND` or a
-close code `4003` stops retrying (`revoked`); `426`/`4026` or a welcome that
+a ping every 30 s. A refused session or WebSocket upgrade whose JSON body says
+`NODE_REVOKED`/`NODE_NOT_FOUND`, or a close code `4003`, stops retrying
+(`revoked`); a bare 403 without that code (a firewall or proxy) is `offline` and
+retried; `426`/`4026` or a welcome that
 requires a newer protocol stops with `update-required`.
 
 Every cloud message is checked against its own payload schema
@@ -68,7 +70,10 @@ States (`RemoteLinkState`): `unpaired`, `disabled`, `connecting`, `connected`,
 
 On `session.welcome` the node: moves its outbox sequence past the cloud's
 `ackedSeq` (after a database restore), drops what the cloud already stored,
-schedules a full resync if the cloud's cursor went backwards, sends
+schedules a full resync if the cloud's cursor went backwards — or went past
+anything this database ever issued (this database was restored: its pending
+rows reuse numbers the cloud already took, so they are dropped and resent by the
+resync), sends
 `node.capabilities` and `node.snapshot` (repositories with fingerprints),
 enqueues a full resync when required, flushes the outbox, replays unreported
 command results, then sends `sync.request` for pending commands. If the link
@@ -168,7 +173,8 @@ cutover drill, where a task finished while off stayed `RUNNING` in the cloud).
 Remote terminals need the node's `remote_terminals` permission (typed
 confirmation in Settings) and, on the cloud side, `x-acc-confirm: open-terminal`
 plus a sign-in younger than one hour. A terminal opened by a cloud command gets
-a grant (10 min idle, 30 min maximum); only granted terminals accept cloud
+a grant (10 min without keystrokes or output the cloud is watching, 30 min
+maximum); only granted terminals accept cloud
 keystrokes or send output to the cloud. Every line is classified when Enter
 arrives, against this machine's auto-approve level: a line above it, or one that
 always needs approval (dangerous, production), is cancelled with Ctrl+C and a

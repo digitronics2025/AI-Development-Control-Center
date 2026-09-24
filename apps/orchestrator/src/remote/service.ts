@@ -403,8 +403,10 @@ export class RemoteNodeService {
 
   private onConnectError(error: Error): boolean {
     const status = (error as { status?: number }).status ?? (error instanceof RelayError ? error.status : 0);
-    const code = error instanceof RelayError ? error.code : '';
-    if (code === 'NODE_REVOKED' || code === 'NODE_NOT_FOUND' || status === 403) {
+    const code = error instanceof RelayError ? error.code : String((error as { code?: unknown }).code ?? '');
+    // Only the relay's own verdict ends the link for good: a bare 403 (a firewall rule, a bot check,
+    // a proxy) is a connection problem and is retried with backoff (audit F-27).
+    if (code === 'NODE_REVOKED' || code === 'NODE_NOT_FOUND') {
       this.setState('revoked', 'The cloud revoked this node. Pair it again to restore remote control.');
       void this.grants.revokeAll();
       this.connection = null;
@@ -524,8 +526,11 @@ export class RemoteNodeService {
       return;
     }
     const local = this.store.syncState();
-    // The cloud lost events this node already dropped (restored from backup): send everything again.
-    if (payload.ackedSeq < local.ackedSeq) this.store.setResyncRequired(true);
+    // The cloud lost events this node already dropped (its copy restored from backup): send everything again.
+    // The other way round — the cloud acknowledged more than this database ever issued — this database was
+    // restored: its pending rows reuse numbers the cloud already took, so they are dropped below and the
+    // full resync sends their content again (audit F-22).
+    if (payload.ackedSeq < local.ackedSeq || payload.ackedSeq > this.store.lastIssuedSeq()) this.store.setResyncRequired(true);
     this.store.ensureSequenceAtLeast(payload.ackedSeq);
     this.store.acknowledge(Math.min(payload.ackedSeq, this.store.lastIssuedSeq()));
     this.sentSeq = payload.ackedSeq;
@@ -623,6 +628,7 @@ export class RemoteNodeService {
     }
     const clean = this.egress.message(message, (terminalId) => this.terminalSubscriptions.has(terminalId) && config.remoteTerminals && this.grants.has(terminalId));
     if (!clean) return;
+    if (message.type === 'terminal.output') this.grants.touch(message.terminalId);
     if (MIRRORED_MESSAGE_TYPES.has(message.type)) {
       this.store.enqueue(entityKey(message), 'message', clean);
       if (message.type === 'task') this.scheduleDetail(message.task.id);
@@ -748,7 +754,7 @@ export class RemoteNodeService {
 
   private report(report: CommandReport): void {
     if (report.kind === 'result') this.send({ type: 'command.result', payload: { commandId: report.commandId, outcome: report.outcome, replayed: report.replayed } });
-    else this.send({ type: 'command.failed', payload: { commandId: report.commandId, code: String(report.code).slice(0, 60), message: report.message.slice(0, 2000), status: report.status } });
+    else this.send({ type: 'command.failed', payload: { commandId: report.commandId, code: String(report.code).slice(0, 60), message: this.egress.scrub(report.message).slice(0, 2000), status: report.status } });
   }
 
   private async answerRpc(request: Extract<CloudFrame, { type: 'rpc.request' }>['payload']): Promise<void> {

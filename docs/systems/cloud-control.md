@@ -25,7 +25,7 @@ evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 | Piece | What it is |
 |---|---|
 | Worker `acc-cloud-control` (+ `-staging`) | [src/index.ts](../../apps/cloud-control/src/index.ts): routes by hostname; serves the dashboard build as Static Assets with `run_worker_first` so every request is authenticated first |
-| D1 `acc-control-production` / `acc-control-staging` | nodes, pairing codes, commands, the task mirror, usage, manifests, leases, audit ([0001_control_plane.sql](../../apps/cloud-control/migrations/0001_control_plane.sql), 14 tables) |
+| D1 `acc-control-production` / `acc-control-staging` | nodes, pairing codes, commands, the task mirror, usage, manifests, leases, audit ([0001_control_plane.sql](../../apps/cloud-control/migrations/0001_control_plane.sql), 13 tables) |
 | R2 `acc-artifacts-production` / `-staging` | private; artifact bytes and log chunks uploaded by nodes |
 | Durable Object `WorkspaceHub` | [src/hub.ts](../../apps/cloud-control/src/hub.ts): one object, holds every node and browser WebSocket (Hibernation API, tags `node`, `node:<id>`, `browser`) |
 | Rate limits | pairing 20/min, unauthenticated requests 60/min per IP, actions 300/min per person |
@@ -33,7 +33,8 @@ evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
 Hostnames (dr-badawi-abdalsalam.com): production `acc.` (people) and
 `acc-relay.` (machines); staging `acc-staging.` and `acc-relay-staging.`.
-`workers_dev` and `preview_urls` are off; any other hostname gets 404.
+`workers_dev` and `preview_urls` are off; any other hostname gets 404 (only
+`/health`, which reveals nothing, answers on every hostname).
 
 ## Two hostnames, two trust boundaries
 
@@ -109,7 +110,9 @@ picks an online node that has the same repository by fingerprint, preferring
   undelivered or running command and no unfinished (or not yet mirrored) task a
   command started — checked after each command, each finished task and every
   heartbeat. The
-  request waits briefly for the result; a command still running answers 202
+  request waits briefly for the result (the waiter is registered before the
+  node is told, so a fast answer is never missed, and a wait that times out
+  answers with what the command row holds by then); a command still running answers 202
   with `x-acc-command-status`. A new task may be queued for an offline node
   (`x-acc-queue: 1`); anything else needs the node online.
 - Opening a remote terminal also needs `x-acc-confirm: open-terminal` and a
@@ -142,7 +145,10 @@ chunk deletes its previous R2 object, a failed re-upload keeps the stored
 copy's hash, and an artifact the node marks `local_only` is deleted from R2 and
 no longer served. Artifact bytes, log chunks and
 task events: 90 days. Finished commands, expired pairing codes and released
-leases: 30 days. Usage events and audit: 400 days.
+leases: 30 days. Usage events and audit: 400 days. A revoked node's stored
+artifacts and logs are no longer served at once, and 30 days after revocation
+its task mirror, events, entities, usage, repositories, manifests, log chunks
+and R2 objects are deleted.
 
 ## Dashboard in cloud mode
 
@@ -176,7 +182,8 @@ full local and cloud suites on Windows; releases are manual
 
 The machine owns the truth: the task database, files, diffs, credentials and
 the local token never leave it. The cloud holds what the node chose to send —
-sanitized task and event mirrors, repository names and fingerprints (no paths),
+sanitized task and event mirrors, repository records (name, fingerprint,
+configured command lines and dev URL — redacted, never a path),
 agents, usage, manifests, `safe_sync` artifact bytes and log chunks — plus its
 own records (nodes, pairing codes, commands, leases, audit). Losing the cloud
 loses no work; restoring an older D1 makes the node resend everything

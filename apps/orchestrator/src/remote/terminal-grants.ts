@@ -49,6 +49,16 @@ export class TerminalGrants {
     }
   }
 
+  /**
+   * Output the cloud is watching counts as activity: a long build watched from
+   * the cloud is not idle (audit F-43). Only a live grant is extended, never
+   * past its maximum lifetime.
+   */
+  touch(terminalId: string): void {
+    const g = this.grants.get(terminalId);
+    if (g && this.valid(g)) g.lastInputAt = this.now();
+  }
+
   has(terminalId: string): boolean {
     const g = this.grants.get(terminalId);
     return Boolean(g && this.valid(g));

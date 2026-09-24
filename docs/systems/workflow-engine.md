@@ -94,9 +94,14 @@ Verification coverage as operator-observed evidence, never as a pass
 ([connected-apps.md](connected-apps.md)). A reviewer/verifier stage with `verdict: false` still records an
 advisory verdict (it does not route); a FAIL makes the report
 `NEEDS_USER_ACTION` (used by the built-in Staged Review workflow). The final
-status is `READY` only when the last test stage passed (not skipped), the last
+status is `READY` only when the last *finished* test stage (a cancelled or
+interrupted instance does not count) passed with at least one passing command
+and came after the last successful implementer/fixer stage, the last
 review/verification passed, and no file mixes pre-existing user work with task
-changes; otherwise `NEEDS_USER_ACTION`. Lines starting `NEEDS OPERATOR:` in the
+changes; otherwise `NEEDS_USER_ACTION` with the reason (`No test stage ran.`,
+`Tests have not run since the last change.` …) — the same rule the supervised
+completion gate applies ([report.ts](../../apps/orchestrator/src/engine/report.ts),
+[gate.ts](../../apps/orchestrator/src/chairman/gate.ts)). Lines starting `NEEDS OPERATOR:` in the
 latest verification (or, when none ran, the latest review) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).

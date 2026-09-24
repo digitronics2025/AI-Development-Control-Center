@@ -88,7 +88,10 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const { task, repo, stages, testRuns, files } = input;
   const limitations: string[] = [];
 
-  const lastTestStage = [...stages].reverse().find((s) => s.kind === 'tests');
+  // The test run that counts is the last one that finished — a cancelled or interrupted
+  // instance proves nothing — and it must come after the last change (audit F-06, as gate.ts).
+  const lastTestStage = [...stages].reverse().find((s) => s.kind === 'tests' && (s.status === 'SUCCESS' || s.status === 'FAILED' || s.status === 'SKIPPED'));
+  const lastWrite = [...stages].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
   const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id) : [];
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
   const failed = latestRuns.filter((r) => r.status === 'failed').length;
@@ -97,8 +100,11 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const hasTestsStage = task.workflow.stages.some((s) => s.kind === 'tests');
 
   if (input.testsSkipped) limitations.push('Verification commands were skipped with your approval; the change is not verified by tests.');
-  if (hasTestsStage && !lastTestStage) limitations.push('No test stage ran.');
+  if (hasTestsStage && !lastTestStage && !input.testsSkipped) limitations.push('No test stage ran.');
   if (failed > 0) limitations.push(`${failed} verification command(s) failed in the last run.`);
+  else if (lastTestStage?.status === 'FAILED') limitations.push('The last test stage failed.');
+  if (lastTestStage?.status === 'SUCCESS' && latestRuns.length && passed === 0) limitations.push('No verification command passed in the last test run.');
+  if (lastTestStage && lastWrite && lastWrite.createdAt > lastTestStage.createdAt) limitations.push('Tests have not run since the last change.');
   const lastVerifyStage = [...stages].reverse().find((s) => s.kind === 'verify' && s.status !== 'SKIPPED' && s.status !== 'CANCELLED');
   if (lastVerifyStage?.status === 'FAILED') limitations.push(`The last browser/HTTP verification failed: ${lastVerifyStage.errorMessage ?? 'see browser-verification.md'}`);
   const mixed = files?.filter((f) => f.origin === 'both') ?? [];

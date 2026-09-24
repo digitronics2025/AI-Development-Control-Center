@@ -81,3 +81,37 @@ describe('F-54: switching to API billing needs the typed phrase on the server', 
     expect(back.body.billingMode).toBe('subscription');
   });
 });
+
+describe('F-06: READY needs a passing test run after the last change', async () => {
+  const { buildFinalReport } = await import('../src/engine/report.js');
+  const at = (m: number) => new Date(Date.UTC(2026, 8, 24, 12, m)).toISOString();
+  const stage = (id: string, role: string, kind: string, status: string, m: number) => ({ id, role, kind, status, createdAt: at(m), name: id, summary: null, verdict: null, errorMessage: null }) as never;
+  const run = (stageId: string, status: string) => ({ id: `${stageId}-run`, stageId, kind: 'test', name: 'test', status, durationMs: 1, summary: null }) as never;
+  const task = {
+    id: 'TASK-0001', title: 'x', description: 'x', mode: 'autopilot', supervised: false, fixCycles: 0, maxFixCycles: 3, recoveryCycle: 0,
+    git: { baselineBranch: 'main', baselineCommit: null, taskBranch: null, isolated: false, commits: [] }, workflow: { name: 'W', stages: [{ key: 'test', kind: 'tests' }] },
+  } as never;
+  const repo = { name: 'r', path: '/r' } as never;
+  const report = (stages: never[], testRuns: never[]) => buildFinalReport({ task, repo, stages, testRuns, files: [], testsSkipped: false, deployed: 'none' });
+
+  it('is READY when the last finished test stage passed after the last write', () => {
+    expect(report([stage('impl', 'implementer', 'agent', 'SUCCESS', 1), stage('t1', 'tester', 'tests', 'SUCCESS', 2)], [run('t1', 'passed')]).finalStatus).toBe('READY');
+  });
+
+  it('ignores a cancelled test instance and asks for action when no run finished after the change', () => {
+    const r = report([stage('impl', 'implementer', 'agent', 'SUCCESS', 1), stage('t1', 'tester', 'tests', 'CANCELLED', 2)], [run('t1', 'not_run')]);
+    expect(r.finalStatus).toBe('NEEDS_USER_ACTION');
+    expect(r.limitations).toContain('No test stage ran.');
+  });
+
+  it('asks for action when a fixer changed files after the last passing run', () => {
+    const r = report([stage('impl', 'implementer', 'agent', 'SUCCESS', 1), stage('t1', 'tester', 'tests', 'SUCCESS', 2), stage('fix', 'fixer', 'agent', 'SUCCESS', 3)], [run('t1', 'passed')]);
+    expect(r.finalStatus).toBe('NEEDS_USER_ACTION');
+    expect(r.limitations).toContain('Tests have not run since the last change.');
+  });
+
+  it('asks for action when the last run passed nothing', () => {
+    const r = report([stage('impl', 'implementer', 'agent', 'SUCCESS', 1), stage('t1', 'tester', 'tests', 'SUCCESS', 2)], [run('t1', 'not_run')]);
+    expect(r.finalStatus).toBe('NEEDS_USER_ACTION');
+  });
+});

@@ -111,6 +111,17 @@ export interface TaskRecord {
   updatedAt: string;
 }
 
+/** A repository a task works in besides its primary one (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+export interface LinkedRepositoryRecord {
+  taskId: string;
+  repositoryId: string;
+  /** 1-based order after the primary. */
+  position: number;
+  /** Its folder in the task workspace. */
+  folder: string;
+  git: TaskGitRecord;
+}
+
 export interface RepositoryRecord {
   id: string;
   name: string;
@@ -310,6 +321,7 @@ const toApproval = (r: Row): ApprovalRecord => ({
 
 const toTestRun = (r: Row): TestRun => ({
   id: r.id,
+  repositoryId: r.repository_id ?? null,
   taskId: r.task_id,
   stageId: r.stage_id,
   executionId: r.execution_id,
@@ -518,8 +530,13 @@ export class Store {
     this.db.prepare('DELETE FROM repositories WHERE id = ?').run(id);
   }
 
+  /** Tasks that work in this repository, as their primary or a linked repository. */
   countTasksForRepository(id: string): number {
-    return (this.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE repository_id = ?').get(id) as Row).n;
+    return (
+      this.db
+        .prepare('SELECT COUNT(*) AS n FROM tasks WHERE repository_id = ? OR id IN (SELECT task_id FROM task_linked_repositories WHERE repository_id = ?)')
+        .get(id, id) as Row
+    ).n;
   }
 
   // ----- agents & models ---------------------------------------------------
@@ -731,8 +748,9 @@ export class Store {
       params.push(...filter.statuses);
     }
     if (filter.repositoryId) {
-      where.push('repository_id = ?');
-      params.push(filter.repositoryId);
+      // A task works in its primary repository and any linked ones.
+      where.push('(repository_id = ? OR id IN (SELECT task_id FROM task_linked_repositories WHERE repository_id = ?))');
+      params.push(filter.repositoryId, filter.repositoryId);
     }
     if (filter.before) {
       where.push('updated_at < ?');
@@ -745,6 +763,26 @@ export class Store {
     }
     const sql = `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY updated_at DESC, seq DESC LIMIT ?`;
     return (this.db.prepare(sql.replace(/LIKE \?/g, "LIKE ? ESCAPE '\\'")).all(...params, filter.limit ?? 50) as Row[]).map(toTask);
+  }
+
+  // ----- linked repositories (multi-repository tasks) ----------------------
+
+  insertLinkedRepositories(rows: LinkedRepositoryRecord[]): void {
+    const insert = this.db.prepare('INSERT INTO task_linked_repositories (task_id, repository_id, position, folder, git) VALUES (?, ?, ?, ?, ?)');
+    this.db.transaction(() => {
+      for (const r of rows) insert.run(r.taskId, r.repositoryId, r.position, r.folder, json(r.git));
+    })();
+  }
+
+  listLinkedRepositories(taskId: string): LinkedRepositoryRecord[] {
+    const rows = this.db.prepare('SELECT * FROM task_linked_repositories WHERE task_id = ? ORDER BY position').all(taskId) as Row[];
+    return rows.map((r) => ({ taskId: r.task_id, repositoryId: r.repository_id, position: r.position, folder: r.folder, git: { ...EMPTY_GIT, ...parse(r.git, {}) } }));
+  }
+
+  updateLinkedRepositoryGit(taskId: string, repositoryId: string, git: TaskGitRecord): void {
+    this.db.prepare('UPDATE task_linked_repositories SET git = ? WHERE task_id = ? AND repository_id = ?').run(json(git), taskId, repositoryId);
+    // A Git change is a material change of the task: clients refetch on the version bump.
+    this.db.prepare('UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?').run(now(), taskId);
   }
 
   countTasksByStatus(): Record<string, number> {
@@ -1089,10 +1127,10 @@ export class Store {
   insertTestRun(t: TestRun): void {
     this.db
       .prepare(
-        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at, repository_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(t.id, t.taskId, t.stageId, t.executionId, t.name, t.kind, t.command, t.status, t.exitCode, t.durationMs, t.summary, t.startedAt, t.finishedAt);
+      .run(t.id, t.taskId, t.stageId, t.executionId, t.name, t.kind, t.command, t.status, t.exitCode, t.durationMs, t.summary, t.startedAt, t.finishedAt, t.repositoryId ?? null);
   }
 
   updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt'>>): TestRun {

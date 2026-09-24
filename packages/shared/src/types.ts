@@ -269,6 +269,8 @@ export interface TestRun {
   summary: string | null;
   startedAt: Iso | null;
   finishedAt: Iso | null;
+  /** The repository the command ran in; null for a single-repository task (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+  repositoryId?: string | null;
 }
 
 export interface ChangedFile {

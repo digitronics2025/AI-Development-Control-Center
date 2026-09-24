@@ -230,3 +230,43 @@ describe('delivery box migration (v9 → v10)', () => {
     db.close();
   });
 });
+
+/**
+ * Multi-repository tasks (docs/plans/MULTI_REPO_TASKS_PLAN.md): migration 13
+ * adds the linked-repository table and two nullable columns; every existing
+ * task, test run and checkpoint reads back byte-identical.
+ */
+describe('multi-repository tasks migration (v12 → v13)', () => {
+  it('adds linked repositories additively and leaves existing rows unchanged', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-multi-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 12);
+    migrate(db, previous);
+    const ts = '2026-09-24T12:00:00.000Z';
+    db.prepare("INSERT INTO repositories (id, name, path, created_at, updated_at) VALUES ('r1', 'api', ?, ?, ?), ('r2', 'web', ?, ?, ?)").run(path.join(dataDir, 'api'), ts, ts, path.join(dataDir, 'web'), ts, ts);
+    db.prepare(
+      `INSERT INTO tasks (id, seq, title, description, repository_id, workflow_id, workflow_snapshot, mode, status, current_stage_key, auto_approve_level, max_fix_cycles, fix_cycles, git, created_at, updated_at)
+       VALUES ('TASK-0001', 1, 'Old', 'Before linked repositories', 'r1', 'quick-change', '{}', 'autopilot', 'COMPLETED', 'complete', 3, 3, 0, '{"baselineCommit":"abc","isolated":true}', ?, ?)`,
+    ).run(ts, ts);
+    db.prepare("INSERT INTO test_runs (id, task_id, name, kind, command, status) VALUES ('tr1', 'TASK-0001', 'test', 'test', 'pnpm test', 'passed')").run();
+    db.prepare("INSERT INTO task_checkpoints (id, task_id, seq, label, reason, commit_hash, ref, created_at) VALUES ('cp1', 'TASK-0001', 1, 'l', 'r', 'c', 'refs/acc/checkpoints/TASK-0001/1', ?)").run(ts);
+    const before = {
+      tasks: db.prepare('SELECT * FROM tasks').all(),
+      runs: db.prepare('SELECT * FROM test_runs').all(),
+      checkpoints: db.prepare('SELECT * FROM task_checkpoints').all(),
+    };
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 13))).toEqual([13]);
+    expect(db.prepare('SELECT * FROM tasks').all()).toEqual(before.tasks);
+    expect(db.prepare('SELECT * FROM test_runs').all()).toEqual(before.runs.map((r) => ({ ...(r as object), repository_id: null })));
+    expect(db.prepare('SELECT * FROM task_checkpoints').all()).toEqual(before.checkpoints.map((r) => ({ ...(r as object), parts: null })));
+    expect(db.prepare('SELECT COUNT(*) AS n FROM task_linked_repositories').get()).toEqual({ n: 0 });
+    // One folder per task; a repository in use cannot be deleted; a task's rows go with it.
+    db.prepare("INSERT INTO task_linked_repositories (task_id, repository_id, position, folder, git) VALUES ('TASK-0001', 'r2', 1, 'web', '{}')").run();
+    expect(() => db.prepare("INSERT INTO task_linked_repositories (task_id, repository_id, position, folder, git) VALUES ('TASK-0001', 'r1', 2, 'web', '{}')").run()).toThrow();
+    expect(() => db.prepare("DELETE FROM repositories WHERE id = 'r2'").run()).toThrow();
+    db.prepare("DELETE FROM tasks WHERE id = 'TASK-0001'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM task_linked_repositories').get()).toEqual({ n: 0 });
+    expect(migrate(db, previous)).toEqual([]);
+    db.close();
+  });
+});

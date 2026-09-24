@@ -1122,4 +1122,26 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_connected_app_evidence_task ON connected_app_evidence(task_id);
     `,
   },
+  {
+    // Multi-repository tasks (docs/plans/MULTI_REPO_TASKS_PLAN.md): the
+    // repositories a task works in besides its primary one (tasks.repository_id,
+    // whose Git state stays in tasks.git). Each linked repository keeps its own
+    // Git record. Additive only; single-repository tasks have no rows here.
+    version: 13,
+    name: 'multi-repository tasks',
+    sql: `
+      CREATE TABLE task_linked_repositories (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        repository_id TEXT NOT NULL REFERENCES repositories(id),
+        position INTEGER NOT NULL,
+        folder TEXT NOT NULL,
+        git TEXT NOT NULL,
+        PRIMARY KEY (task_id, repository_id),
+        UNIQUE (task_id, folder)
+      );
+      CREATE INDEX idx_task_linked_repository ON task_linked_repositories(repository_id);
+      ALTER TABLE test_runs ADD COLUMN repository_id TEXT;
+      ALTER TABLE task_checkpoints ADD COLUMN parts TEXT;
+    `,
+  },
 ];

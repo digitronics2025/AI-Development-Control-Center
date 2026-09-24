@@ -232,6 +232,38 @@ describe('realtime sync', () => {
     }
     for (const ws of clients) ws.close();
   });
+
+  it('skips terminal output for a client that stops reading, and closes one that stays stalled (audit F-30)', async () => {
+    await t.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (t.app.server.address() as { port: number }).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${TOKEN}`);
+    const chunks: number[] = [];
+    let closed = false;
+    ws.on('message', (raw) => {
+      const m = JSON.parse(String(raw)) as ServerMessage;
+      if (m.type === 'terminal.output') chunks.push(m.cursor);
+    });
+    ws.on('close', () => (closed = true));
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    ws.send(JSON.stringify({ type: 'subscribeTerminal', terminalId: 'term-x' }));
+    await new Promise((r) => setTimeout(r, 100));
+    const socket = (ws as unknown as { _socket: import('node:net').Socket })._socket;
+    socket.pause();
+    const mb = 'x'.repeat(1024 * 1024);
+    for (let i = 1; i <= 24; i++) t.services.bus.publish({ type: 'terminal.output', terminalId: 'term-x', data: mb, cursor: i * mb.length });
+    socket.resume();
+    await waitFor(() => chunks.length, (n) => n > 0, 10_000, 'the buffered chunks');
+    await new Promise((r) => setTimeout(r, 500));
+    // Some chunks were skipped rather than queued without limit; the viewer refetches the gap by cursor.
+    expect(chunks.length).toBeLessThan(24);
+    expect(closed).toBe(false);
+
+    socket.pause();
+    const big = { type: 'hello', version: mb, serverTime: '', startedAt: '' } as ServerMessage;
+    for (let i = 0; i < 48 && !closed; i++) t.services.bus.publish(big);
+    socket.resume();
+    await waitFor(() => closed, (c) => c, 10_000, 'the stalled socket to close');
+  });
 });
 
 describe('real adapters through the engine (fake CLIs)', () => {

@@ -3,8 +3,10 @@ import type { WebSocket } from 'ws';
 import type { ClientMessage, ServerMessage } from '@acc/shared';
 import type { AppServices } from '../app.js';
 
-/** Drop log batches for a client whose socket is this far behind; it refetches on demand. */
+/** Drop log batches and terminal output for a client whose socket is this far behind; both refetch by cursor. */
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+/** A client this far behind is not reading at all: close it, and it resynchronises on reconnect (audit F-30). */
+const STALLED_BYTES = 32 * 1024 * 1024;
 
 /**
  * Realtime hub (PLAN §24). Every state message goes to every client; log
@@ -18,12 +20,21 @@ export function registerWebSocket(app: FastifyInstance, s: AppServices): void {
     const terminalSubscriptions = new Set<string>();
     const send = (message: ServerMessage) => {
       if (socket.readyState !== socket.OPEN) return;
+      if (socket.bufferedAmount > STALLED_BYTES) {
+        request.log.warn({ buffered: socket.bufferedAmount }, 'realtime client stopped reading; closing it');
+        socket.terminate();
+        return;
+      }
       if (message.type === 'logs') {
         if (!logSubscriptions.has(message.executionId)) return;
         if (socket.bufferedAmount > MAX_BUFFERED_BYTES) return;
       }
       // Terminal output reaches only the clients showing that terminal.
-      if (message.type === 'terminal.output' && !terminalSubscriptions.has(message.terminalId)) return;
+      if (message.type === 'terminal.output') {
+        if (!terminalSubscriptions.has(message.terminalId)) return;
+        // The PTY keeps a cursor-addressed history: a viewer that falls behind fills the gap from it.
+        if (!message.notice && socket.bufferedAmount > MAX_BUFFERED_BYTES) return;
+      }
       socket.send(JSON.stringify(message));
     };
     const unsubscribe = s.bus.subscribe(send);

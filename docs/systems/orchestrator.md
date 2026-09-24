@@ -109,7 +109,10 @@ re-costed attempt; clients refetch usage views), and the tool layer's
 to clients that sent `subscribeTerminal`, which may then send `terminal.input`
 and `terminal.resize` for it ([pty.md](pty.md)). Log lines (`logs`) go only to clients that sent
 `subscribeLogs` for that execution; slow clients (>8 MB buffered) skip log
-batches and refetch. Log lines are batched every 150 ms or 250 lines.
+batches and `terminal.output` chunks and refetch (the terminal view spots the
+cursor gap and reads `/output?since=`). A client more than 32 MB behind is not
+reading at all and is closed; it resynchronises on reconnect. Log lines are
+batched every 150 ms or 250 lines.
 
 ## Coordination
 

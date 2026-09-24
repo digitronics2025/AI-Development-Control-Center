@@ -50,19 +50,32 @@ export function TerminalView({ terminal }: { terminal: TerminalSession }) {
       }
     };
     // Catch up with what the terminal printed before this view opened, then stream.
+    // The server skips output for a viewer that falls behind; a gap between the
+    // cursor shown and the start of the next chunk is filled from the history.
+    let catchingUp = false;
+    const catchUp = () => {
+      catchingUp = true;
+      void api
+        .get<{ output: string; cursor: number }>(`/api/terminals/${terminal.id}/output?since=${cursor}`)
+        .then((r) => {
+          if (disposed) return;
+          if (r.cursor > cursor) {
+            term.write(r.output);
+            cursor = r.cursor;
+          }
+        }, () => undefined)
+        .finally(() => {
+          catchingUp = false;
+        });
+    };
     const unsubscribe = realtime.subscribeTerminal(terminal.id, (data, next, notice) => {
       if (notice) return void term.write(data);
-      if (next <= cursor) return;
+      if (next <= cursor || catchingUp) return;
+      if (next - data.length > cursor) return catchUp();
       term.write(data);
       cursor = next;
     });
-    void api.get<{ output: string; cursor: number }>(`/api/terminals/${terminal.id}/output?since=0`).then((r) => {
-      if (disposed) return;
-      if (r.cursor > cursor) {
-        term.write(r.output);
-        cursor = r.cursor;
-      }
-    }, () => undefined);
+    catchUp();
     const input = term.onData((data) => realtime.sendTerminalInput(terminal.id, data));
     const observer = new ResizeObserver(() => fitNow());
     observer.observe(host.current);

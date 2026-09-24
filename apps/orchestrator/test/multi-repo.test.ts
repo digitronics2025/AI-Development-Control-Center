@@ -171,3 +171,64 @@ describe('scheduling across repositories', () => {
     await waitFor(() => t!.services.store.getTask(single)!.status, (s) => s !== 'QUEUED', 60_000, 'single task to start');
   }, 180_000);
 });
+
+describe('stages across repositories', () => {
+  it('Full Autopilot runs each repository’s checks in its folder and commits on every task branch', async () => {
+    const { git } = await import('@acc/git');
+    t = await createTestApp();
+    const apiPath = await makeRepo({ scripts: { test: 'node -e "console.log(\'3 passed\')"' } });
+    const webPath = await makeRepo({ scripts: { test: 'node -e "console.log(\'5 passed\')"', lint: 'node -e "0"' } });
+    const api = await addRepo(t, apiPath);
+    const web = await addRepo(t, webPath);
+    const id = await createTask(t, api, 'Change both sides', { linkedRepositoryIds: [web], workflowId: 'full-autopilot' });
+    const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 120_000);
+    expect(done.status, JSON.stringify(done.blocker)).toBe('COMPLETED');
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    const apiFolder = done.git.folder!;
+    const runs = t.services.store.listTestRuns(id).filter((r) => r.kind !== 'other');
+    expect(runs.filter((r) => r.repositoryId === api).length).toBeGreaterThanOrEqual(1);
+    expect(runs.filter((r) => r.repositoryId === api).every((r) => r.name.startsWith(`${apiFolder} · `))).toBe(true);
+    expect(runs.filter((r) => r.repositoryId === web).length).toBeGreaterThanOrEqual(2);
+    expect(runs.filter((r) => r.repositoryId === web).every((r) => r.name.startsWith(`${linked.folder} · `))).toBe(true);
+    expect(runs.every((r) => r.status === 'passed')).toBe(true);
+    // One commit per repository, each carrying that repository's change.
+    expect(done.git.commits.length).toBeGreaterThanOrEqual(1);
+    expect(linked.git.commits.length).toBeGreaterThanOrEqual(1);
+    for (const [repo, branch] of [[apiPath, done.git.taskBranch!], [webPath, linked.git.taskBranch!]] as const) {
+      const files = await git(repo, ['diff', '--name-only', `main..${branch}`]);
+      expect(files.stdout).toContain('sim-output.md');
+    }
+    expect(t.services.store.listEvents(id).filter((e) => e.type === 'GIT_COMMIT').length).toBeGreaterThanOrEqual(2);
+  }, 180_000);
+});
+
+describe('App check across repositories', () => {
+  it('starts, checks and stops each repository’s app in turn', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    t = await createTestApp();
+    const server = (port: number) => `require('http').createServer((q, s) => { s.setHeader('content-type', 'text/plain'); s.end('ok'); }).listen(${port}, '127.0.0.1');\n`;
+    const ports = [20_000 + Math.floor(Math.random() * 10_000), 30_000 + Math.floor(Math.random() * 10_000)];
+    const ids: string[] = [];
+    for (const port of ports) {
+      const id = await addRepo(t, await makeRepo({ files: { 'server.cjs': server(port) } }));
+      await t.api('PATCH', `/api/repositories/${id}`, { runtime: { devCommand: 'node server.cjs', devUrl: `http://127.0.0.1:${port}`, verifyPaths: ['/'], verifyMode: 'http', readyTimeoutSec: 30 } });
+      ids.push(id);
+    }
+    t.services.workflows.save('app-only', {
+      name: 'App only',
+      stages: [
+        { key: 'implement', name: 'Implement', role: 'implementer', permissionLevel: 2, next: 'app' },
+        { key: 'app', name: 'App check', role: 'tester', kind: 'verify', permissionLevel: 2, next: 'complete' },
+      ],
+    });
+    const taskId = await createTask(t, ids[0]!, 'Check both apps', { linkedRepositoryIds: [ids[1]], workflowId: 'app-only', supervised: false });
+    const done = await waitForStatus(t, taskId, ['COMPLETED', 'WAITING_FOR_USER', 'FAILED'], 180_000);
+    expect(done.status, JSON.stringify(done.blocker)).toBe('COMPLETED');
+    const checks = t.services.store.listTestRuns(taskId).filter((r) => r.kind === 'e2e');
+    expect(checks.map((r) => [r.repositoryId, r.status])).toEqual([[ids[0], 'passed'], [ids[1], 'passed']]);
+    const report = readFileSync(path.join(t.dataDir, 'tasks', taskId, 'browser-verification.md'), 'utf8');
+    for (const port of ports) expect(report).toContain(`127.0.0.1:${port}`);
+    expect(t.services.processes.list(taskId).every((p) => !['running', 'healthy', 'starting'].includes(p.status))).toBe(true);
+  }, 240_000);
+});

@@ -805,7 +805,7 @@ export class TaskEngine {
       if (!def) throw new Error(`Workflow snapshot has no stage "${key}"`);
 
       const repo = this.d.repositories.record(task.repositoryId);
-      if (!skipsForLackOfCommands(def, repo) && !this.stageGate(task, def)) return;
+      if (!skipsForLackOfCommands(def, taskRepositories(this.d.store, task).map((r) => r.repo)) && !this.stageGate(task, def)) return;
 
       // A stage that can edit files waits for any Source Control mutation in
       // flight, and Source Control refuses to mutate while it runs — unless the
@@ -1306,7 +1306,7 @@ export class TaskEngine {
       // skipped; asking for approval of it is noise.
       const def = approval.kind === 'stage_permission' && approval.stageKey ? this.d.views.stageDef(task, approval.stageKey) : null;
       const repo = def ? store.getRepository(task.repositoryId) : null;
-      if (def && repo && skipsForLackOfCommands(def, repo)) {
+      if (def && repo && skipsForLackOfCommands(def, taskRepositories(store, task).map((r) => r.repo))) {
         const cancelled = store.resolveApproval(approval.id, 'cancelled', `${def.name} has no command configured and will be skipped`);
         this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(cancelled) });
         store.updateTask(task.id, { status: 'QUEUED', blocker: null });

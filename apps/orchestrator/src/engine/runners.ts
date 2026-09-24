@@ -32,7 +32,7 @@ import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { testFailureSummary, testPassSummary } from './test-summary.js';
 import type { EngineTooling } from './tooling.js';
-import { agentWorkdir } from './task-repositories.js';
+import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 /** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
@@ -137,11 +137,31 @@ export function requiredKinds(store: Store, taskId: string): CommandKind[] {
   return [...kinds];
 }
 
-/** An optional command stage with nothing configured is skipped, so it must never ask for approval. */
-export function skipsForLackOfCommands(def: StageDefinition, repo: RepositoryRecord): boolean {
-  if (def.kind === 'verify') return !repo.runtime.devUrl;
-  return def.kind === 'command' && def.optional && stageCommands(def, repo).length === 0;
+/**
+ * An optional command stage with nothing configured is skipped, so it must
+ * never ask for approval. `repos` is every repository the task works in.
+ */
+export function skipsForLackOfCommands(def: StageDefinition, repos: RepositoryRecord | RepositoryRecord[]): boolean {
+  const all = Array.isArray(repos) ? repos : [repos];
+  if (def.kind === 'verify') return !all.some((r) => r.runtime.devUrl);
+  return def.kind === 'command' && def.optional && all.every((r) => stageCommands(def, r).length === 0);
 }
+
+/**
+ * Where a task's engine-run work happens, one entry per repository: for a
+ * single-repository task exactly one, with no folder, so names and messages
+ * read as they always did (docs/plans/MULTI_REPO_TASKS_PLAN.md).
+ */
+interface RepoUnit {
+  repo: RepositoryRecord;
+  workdir: string;
+  /** The repository's folder in the task workspace; null for a single-repository task. */
+  folder: string | null;
+  git: TaskRecord['git'];
+}
+
+/** "web · test" in a multi-repository task, plain "test" otherwise. */
+const unitLabel = (unit: Pick<RepoUnit, 'folder'>, name: string): string => (unit.folder ? `${unit.folder} · ${name}` : name);
 
 export interface RunnerDeps {
   store: Store;
@@ -357,7 +377,11 @@ export class StageRunners {
     const { store, publisher, approvals } = this.d;
     const extra = [...task.extraCheckKinds, ...requiredKinds(store, task.id)];
     const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extra : [])]);
-    const commands = stageCommands(def, repo, extra);
+    // Every repository runs its own commands in its own folder.
+    const units = this.units(task, repo);
+    const repoNames = units.map((u) => u.repo.name).join(', ');
+    const jobs = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
+    const commands = jobs.map((j) => j.command);
     // One-shot requests are consumed by the stage that runs them.
     if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
 
@@ -365,7 +389,7 @@ export class StageRunners {
       const wanted = [...kinds].map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ');
       if (def.kind === 'command' && def.optional) {
         publisher.updateStage(stage.id, { status: 'SKIPPED', summary: `No ${wanted} command configured`, finishedAt: now() });
-        publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: no ${wanted} command configured for ${repo.name}`, {}, stage.id);
+        publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: no ${wanted} command configured for ${repoNames}`, {}, stage.id);
         return { kind: 'skipped', stageId: stage.id };
       }
       if (def.kind === 'tests') {
@@ -387,28 +411,28 @@ export class StageRunners {
             action: 'Continue without verification commands',
             permissionLevel: def.permissionLevel,
             risk: 'elevated',
-            reason: `${repo.name} has no enabled ${wanted} commands, so the change cannot be verified.`,
+            reason: `${repoNames} ${units.length > 1 ? 'have' : 'has'} no enabled ${wanted} commands, so the change cannot be verified.`,
             riskExplanation: 'Approving lets the task continue without tests; its report will say it is unverified. Prefer adding commands in Repositories → Commands, then Retry stage.',
             environment: repo.path,
           });
         return { kind: 'blocked', stageId: stage.id };
       }
-      return this.failStage(stage, 'COMMAND_FAILURE', `No ${wanted} command is configured for ${repo.name}`);
+      return this.failStage(stage, 'COMMAND_FAILURE', `No ${wanted} command is configured for ${repoNames}`);
     }
 
     // Classify every command before running any of them.
-    const workdir = taskWorkdir(task, repo);
-    for (const command of commands) {
-      const blocked = this.gateCommand(task, def, stage, repo, command.name, command.command);
+    for (const job of jobs) {
+      const blocked = this.gateCommand(task, def, stage, job.unit.repo, job.name, job.command.command, job.unit.workdir);
       if (blocked) return blocked;
     }
 
-    const runs: TestRun[] = commands.map((c) => ({
+    const runs: TestRun[] = jobs.map(({ unit, command: c, name }) => ({
       id: newId(),
       taskId: task.id,
       stageId: stage.id,
       executionId: null,
-      name: c.name,
+      name,
+      ...(unit.folder ? { repositoryId: unit.repo.id } : {}),
       kind: c.kind,
       command: redact(c.command),
       status: 'not_run',
@@ -423,14 +447,15 @@ export class StageRunners {
       this.publishTestRun(run);
     }
     publisher.updateStage(stage.id, { status: 'RUNNING' });
-    publisher.event(task.id, 'TEST_STARTED', `${def.name} started: ${commands.map((c) => c.name).join(', ')}`, { count: commands.length }, stage.id);
+    publisher.event(task.id, 'TEST_STARTED', `${def.name} started: ${jobs.map((j) => j.name).join(', ')}`, { count: commands.length }, stage.id);
 
     const { env } = sanitizeEnv(this.d.baseEnv, this.d.settings.get().billingMode);
     const report: string[] = [];
     let failure: string | null = null;
 
-    for (let i = 0; i < commands.length; i++) {
-      const command = commands[i]!;
+    for (let i = 0; i < jobs.length; i++) {
+      const { command, unit, name } = jobs[i]!;
+      const { workdir } = unit;
       const run = runs[i]!;
       if (control.stopReason) break;
       this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now() }));
@@ -448,7 +473,7 @@ export class StageRunners {
         for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !control.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
           attempted.push(plan.strategy);
           const row = this.d.tooling.recordRepair(task, stage.id, command.command, classified, plan, attempted.length);
-          const result = await this.applyRepair(task, stage, repo, workdir, plan, env, control);
+          const result = await this.applyRepair(task, stage, unit.repo, workdir, plan, env, control);
           this.d.tooling.finishRepair(row.id, result.ok, result.detail);
           if (result.ok) {
             repairs.push(plan.description.replace(/, then run it again$/, ''));
@@ -474,13 +499,13 @@ export class StageRunners {
           finishedAt: now(),
         }),
       );
-      report.push(`${exec.passed ? '✓' : '✕'} ${command.name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
+      report.push(`${exec.passed ? '✓' : '✕'} ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
       if (exec.passed) {
-        publisher.event(task.id, 'TEST_PASSED', `${command.name} passed${repairedNote}`, { executionId: exec.executionId, durationMs: exec.result.durationMs }, stage.id);
+        publisher.event(task.id, 'TEST_PASSED', `${name} passed${repairedNote}`, { executionId: exec.executionId, durationMs: exec.result.durationMs }, stage.id);
       } else {
-        publisher.event(task.id, 'TEST_FAILED', `${command.name} failed${summary ? ` · ${summary}` : ''}`, { executionId: exec.executionId }, stage.id);
-        report.push('', `Output of ${command.name} (last lines):`, ...exec.tail, '');
-        failure = `${command.name} failed${summary ? `: ${summary}` : ''}`;
+        publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}`, { executionId: exec.executionId }, stage.id);
+        report.push('', `Output of ${name} (last lines):`, ...exec.tail, '');
+        failure = `${name} failed${summary ? `: ${summary}` : ''}`;
         break;
       }
     }
@@ -513,9 +538,9 @@ export class StageRunners {
    * Approval gate for one command the engine is about to run. Returns the
    * blocked outcome when the task must wait for a person, or null to go on.
    */
-  private gateCommand(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, name: string, commandLine: string): StageOutcome | null {
+  private gateCommand(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, name: string, commandLine: string, workdir: string = taskWorkdir(task, repo)): StageOutcome | null {
     const { approvals, publisher } = this.d;
-    const cls = classifyCommand(expandPackageScripts(taskWorkdir(task, repo), commandLine));
+    const cls = classifyCommand(expandPackageScripts(workdir, commandLine));
     const autoLevel = this.d.tooling.autoApproveLevel(task, repo);
     const needs = alwaysRequiresApproval(cls) || (cls.level > def.permissionLevel && cls.level > autoLevel);
     if (!needs) return null;
@@ -635,27 +660,63 @@ export class StageRunners {
   // ---------------------------------------------------------------------------
 
   async runVerify(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
-    const { store, publisher } = this.d;
-    const runtime = repo.runtime;
-    if (!runtime.devUrl) {
-      publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'No app runtime configured for this repository', finishedAt: now() });
+    const { publisher } = this.d;
+    const units = this.units(task, repo).filter((u) => u.repo.runtime.devUrl);
+    if (!units.length) {
+      const multi = this.units(task, repo).length > 1;
+      publisher.updateStage(stage.id, { status: 'SKIPPED', summary: `No app runtime configured for ${multi ? 'these repositories' : 'this repository'}`, finishedAt: now() });
       publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: set how to start the app in Repositories → ${repo.name} → Runtime to verify it in a browser`, {}, stage.id);
       return { kind: 'skipped', stageId: stage.id };
     }
-    if (runtime.devCommand) {
-      const blocked = this.gateCommand(task, def, stage, repo, 'start the app', runtime.devCommand);
+    for (const unit of units) {
+      if (!unit.repo.runtime.devCommand) continue;
+      const blocked = this.gateCommand(task, def, stage, unit.repo, unitLabel(unit, 'start the app'), unit.repo.runtime.devCommand, unit.workdir);
       if (blocked) return blocked;
     }
-    const label = runtime.verifyMode === 'browser' ? 'Browser verification' : 'HTTP verification';
-    const run: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: label, kind: 'e2e', command: redact(runtime.devCommand ?? runtime.devUrl), status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
+    // Apps are started and checked one at a time; each is stopped before the next starts.
+    const reports: string[][] = [];
+    const passed: string[] = [];
+    publisher.updateStage(stage.id, { status: 'RUNNING' });
+    // One report for the stage, covering every app checked so far.
+    const writeReport = () => this.d.artifacts.write(task.id, { name: 'browser-verification.md', type: 'browser-report', content: reports.map((l) => l.join('\n')).join('\n\n'), stageId: stage.id, stageKey: def.key });
+    for (const unit of units) {
+      const r = await this.verifyApp(task, def, stage, unit, control);
+      reports.push(r.report);
+      if (r.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: control.stopReason ?? 'cancel' };
+      if (r.kind === 'failed') {
+        await writeReport();
+        publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'TEST_FAILURE', errorMessage: redact(r.message), summary: redact(r.message), finishedAt: now() });
+        publisher.event(task.id, 'STAGE_FAILED', `${def.name} failed: ${r.message}`, {}, stage.id);
+        return { kind: 'tests_failed', stageId: stage.id, message: redact(r.message) };
+      }
+      passed.push(r.summary);
+    }
+    await writeReport();
+    publisher.updateStage(stage.id, { status: 'SUCCESS', summary: redact(passed.join(' · ')).slice(0, 240), finishedAt: now() });
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed`, {}, stage.id);
+    return { kind: 'success', stageId: stage.id };
+  }
+
+  /** Start one repository's app, check it with `verify.web`, stop it. */
+  private async verifyApp(
+    task: TaskRecord,
+    def: StageDefinition,
+    stage: StageInstance,
+    unit: RepoUnit,
+    control: RunControl,
+  ): Promise<{ kind: 'passed'; summary: string; report: string[] } | { kind: 'failed'; message: string; report: string[] } | { kind: 'stopped'; report: string[] }> {
+    const { store, publisher } = this.d;
+    const repo = unit.repo;
+    const runtime = repo.runtime as typeof repo.runtime & { devUrl: string };
+    const label = unitLabel(unit, runtime.verifyMode === 'browser' ? 'Browser verification' : 'HTTP verification');
+    const run: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: label, ...(unit.folder ? { repositoryId: repo.id } : {}), kind: 'e2e', command: redact(runtime.devCommand ?? runtime.devUrl), status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
     store.insertTestRun(run);
     this.publishTestRun(run);
     const executionId = newId();
     const startedAt = now();
-    store.insertExecution({ id: executionId, taskId: task.id, stageId: stage.id, kind: 'tool', agentId: null, model: null, effort: null, command: `verify.web ${redact(runtime.devUrl)}`, cwd: taskWorkdir(task, repo), status: 'running', exitCode: null, errorClass: null, errorMessage: null, pid: null, startedAt, finishedAt: null, durationMs: null });
+    store.insertExecution({ id: executionId, taskId: task.id, stageId: stage.id, kind: 'tool', agentId: null, model: null, effort: null, command: `verify.web ${redact(runtime.devUrl)}`, cwd: unit.workdir, status: 'running', exitCode: null, errorClass: null, errorMessage: null, pid: null, startedAt, finishedAt: null, durationMs: null });
     this.publishExecution(executionId);
     this.publishTestRun(store.updateTestRun(run.id, { executionId }));
-    publisher.updateStage(stage.id, { status: 'RUNNING' });
     publisher.event(task.id, 'VERIFICATION', `${label} started: ${runtime.verifyPaths.join(', ')} on ${runtime.devUrl}`, { executionId }, stage.id);
 
     const sink = new LogSink(store, this.d.bus, task.id, executionId);
@@ -666,7 +727,7 @@ export class StageRunners {
       capability: 'verify.web',
       input: { startCommand: runtime.devCommand ?? undefined, url: runtime.devUrl, paths: runtime.verifyPaths, readyTimeoutSec: runtime.readyTimeoutSec, mode: runtime.verifyMode },
       origin: 'engine',
-      scope: this.d.tooling.scope(task, repo, { level: def.permissionLevel, stageId: stage.id }),
+      scope: this.d.tooling.scope(task, repo, { level: def.permissionLevel, stageId: stage.id, cwd: unit.workdir }),
       preApproved: true,
       signal: controller.signal,
       timeoutMs: def.timeoutSec * 1000,
@@ -682,7 +743,7 @@ export class StageRunners {
     if (controller.signal.aborted && control.stopReason) {
       this.finishExecution(executionId, 'cancelled', { startedAt });
       this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now() }));
-      return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
+      return { kind: 'stopped', report: [] };
     }
     const reportLines = [
       `# ${label}`,
@@ -696,20 +757,12 @@ export class StageRunners {
       ...(problems.length ? ['', '## Problems', '', ...problems.map((p) => `- ${p}`)] : []),
       ...(r.artifacts?.length ? ['', '## Screenshots', '', ...r.artifacts.map((a) => `- ${a.name}`)] : []),
     ];
-    await this.d.artifacts.write(task.id, { name: 'browser-verification.md', type: 'browser-report', content: reportLines.join('\n'), stageId: stage.id, stageKey: def.key });
     const durationMs = Date.now() - new Date(startedAt).getTime();
     this.finishExecution(executionId, r.ok ? 'succeeded' : 'failed', { exitCode: r.ok ? 0 : 1, errorClass: r.ok ? null : 'TEST_FAILURE', errorMessage: r.ok ? null : r.summary, startedAt });
     this.publishTestRun(store.updateTestRun(run.id, { status: r.ok ? 'passed' : 'failed', exitCode: r.ok ? 0 : 1, durationMs, summary: redact(r.summary).slice(0, 400), finishedAt: now() }));
     publisher.event(task.id, 'VERIFICATION', `${label} ${r.ok ? 'passed' : 'failed'}: ${r.summary}`, { executionId, ok: r.ok }, stage.id);
-    if (!r.ok) {
-      const message = `${label} failed: ${problems[0] ?? r.summary}`;
-      publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'TEST_FAILURE', errorMessage: redact(message), summary: redact(message), finishedAt: now() });
-      publisher.event(task.id, 'STAGE_FAILED', `${def.name} failed: ${message}`, {}, stage.id);
-      return { kind: 'tests_failed', stageId: stage.id, message: redact(message) };
-    }
-    publisher.updateStage(stage.id, { status: 'SUCCESS', summary: redact(r.summary).slice(0, 240), finishedAt: now() });
-    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed`, {}, stage.id);
-    return { kind: 'success', stageId: stage.id };
+    if (!r.ok) return { kind: 'failed', message: `${label} failed: ${problems[0] ?? r.summary}`, report: reportLines };
+    return { kind: 'passed', summary: unit.folder ? `${unit.folder}: ${r.summary}` : r.summary, report: reportLines };
   }
 
   // ---------------------------------------------------------------------------
@@ -718,33 +771,51 @@ export class StageRunners {
 
   async runGit(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord): Promise<StageOutcome> {
     const { store, publisher } = this.d;
-    const baseline = task.git.baselineSnapshotId ? store.getSnapshot(task.git.baselineSnapshotId) : null;
-    if (!baseline) {
+    const units = this.units(task, repo)
+      .map((unit) => ({ unit, baseline: unit.git.baselineSnapshotId ? store.getSnapshot(unit.git.baselineSnapshotId) : null }))
+      .filter((u) => u.baseline);
+    if (!units.length) {
       publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'Not a Git repository or no baseline recorded', finishedAt: now() });
       publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: no Git baseline`, {}, stage.id);
       return { kind: 'skipped', stageId: stage.id };
     }
+    let current: RepoUnit | null = null;
     try {
-      const workdir = taskWorkdir(task, repo);
-      const files = await changesSince(workdir, baseline);
-      const own = files.filter((f) => f.origin === 'task').map((f) => f.path);
-      const mixed = files.filter((f) => f.origin === 'both').map((f) => f.path);
-      const commit = await commitPaths(workdir, own, `${task.id}: ${task.title}\n\nCreated by AI Development Control Center (${def.name}).`);
-      if (!commit) {
+      const made: Array<{ commit: string; files: number; folder: string | null }> = [];
+      for (const { unit, baseline } of units) {
+        current = unit;
+        const files = await changesSince(unit.workdir, baseline!);
+        const own = files.filter((f) => f.origin === 'task').map((f) => f.path);
+        const mixed = files.filter((f) => f.origin === 'both').map((f) => f.path);
+        const commit = await commitPaths(unit.workdir, own, `${task.id}: ${task.title}\n\nCreated by AI Development Control Center (${def.name}).`);
+        if (!commit) continue;
+        const git = unit.folder ? taskRepositories(store, store.getTask(task.id)!).find((r) => r.repo.id === unit.repo.id)!.git : store.getTask(task.id)!.git;
+        if (unit.folder) publisher.updateRepositoryGit(task.id, unit.repo.id, { commits: [...git.commits, commit] });
+        else store.updateTask(task.id, { git: { ...git, commits: [...git.commits, commit] } });
+        made.push({ commit, files: own.length, folder: unit.folder });
+        publisher.event(
+          task.id,
+          'GIT_COMMIT',
+          `${unit.folder ? `${unit.repo.name}: c` : 'C'}ommitted ${own.length} file${own.length === 1 ? '' : 's'} on ${unit.git.taskBranch ?? 'the current branch'} (${commit.slice(0, 10)})`,
+          { commit, files: own, ...(unit.folder ? { repositoryId: unit.repo.id } : {}) },
+          stage.id,
+        );
+        if (mixed.length) {
+          publisher.event(task.id, 'FILE_CHANGED', `${mixed.length} file(s) containing your pre-existing work were left uncommitted: ${mixed.map((f) => inFolder(unit.folder, f)).join(', ')}`, { files: mixed }, stage.id);
+        }
+      }
+      current = null;
+      if (!made.length) {
         publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'Nothing to commit', finishedAt: now() });
         publisher.event(task.id, 'STAGE_SKIPPED', `${def.name}: nothing to commit`, {}, stage.id);
         return { kind: 'skipped', stageId: stage.id };
       }
-      const current = store.getTask(task.id)!;
-      store.updateTask(task.id, { git: { ...current.git, commits: [...current.git.commits, commit] } });
-      publisher.updateStage(stage.id, { status: 'SUCCESS', summary: `Committed ${own.length} file(s) as ${commit.slice(0, 10)}`, finishedAt: now() });
-      publisher.event(task.id, 'GIT_COMMIT', `Committed ${own.length} file${own.length === 1 ? '' : 's'} on ${task.git.taskBranch ?? 'the current branch'} (${commit.slice(0, 10)})`, { commit, files: own }, stage.id);
-      if (mixed.length) {
-        publisher.event(task.id, 'FILE_CHANGED', `${mixed.length} file(s) containing your pre-existing work were left uncommitted: ${mixed.join(', ')}`, { files: mixed }, stage.id);
-      }
+      const summary = made.map((m) => `${m.folder ? `${m.folder}: ` : ''}${m.files} file(s) as ${m.commit.slice(0, 10)}`).join('; ');
+      publisher.updateStage(stage.id, { status: 'SUCCESS', summary: `Committed ${summary}`, finishedAt: now() });
       return { kind: 'success', stageId: stage.id };
     } catch (error) {
-      const message = `Git commit failed: ${(error as Error).message}`;
+      const failedIn = current?.folder ? ` in ${current.repo.name}` : '';
+      const message = `Git commit failed${failedIn}: ${(error as Error).message}`;
       // A rejecting pre-commit hook (a docs guard, a linter) names something an
       // agent can fix, so a stage with a failure route treats it like a failed
       // test: the fix stage sees the message in its test results and the
@@ -757,6 +828,13 @@ export class StageRunners {
       }
       return this.failStage(stage, 'COMMAND_FAILURE', message);
     }
+  }
+
+  /** Every repository the task works in, primary first; for a single-repository task just `repo`. */
+  private units(task: TaskRecord, repo: RepositoryRecord): RepoUnit[] {
+    const all = taskRepositories(this.d.store, task);
+    if (all.length <= 1) return [{ repo, workdir: taskWorkdir(task, repo), folder: null, git: task.git }];
+    return all.map((r) => ({ repo: r.repo, workdir: r.workdir, folder: r.folder, git: r.git }));
   }
 
   failStage(stage: StageInstance, errorClass: ErrorClass, message: string): StageOutcome {

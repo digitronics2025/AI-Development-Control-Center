@@ -67,6 +67,7 @@ export class TaskViews {
       title: task.title,
       repositoryId: task.repositoryId,
       repositoryName: repo?.name ?? 'Unknown repository',
+      repositories: [{ id: task.repositoryId, name: repo?.name ?? 'Unknown repository', folder: task.git.folder ?? null, primary: true }],
       workflowId: task.workflowId,
       workflowName: task.workflow.name,
       mode: task.mode,

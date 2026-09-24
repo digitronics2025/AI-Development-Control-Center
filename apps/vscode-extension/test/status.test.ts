@@ -11,6 +11,7 @@ const base: TaskSummary = {
   title: 'Do things',
   repositoryId: 'r',
   repositoryName: 'repo',
+  repositories: [{ id: 'r', name: 'repo', folder: null, primary: true }],
   workflowId: 'normal-development',
   workflowName: 'Normal Development',
   mode: 'autopilot',

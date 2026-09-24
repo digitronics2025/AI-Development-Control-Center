@@ -143,27 +143,46 @@ export const taskOverridesSchema = z.object({
 });
 export type TaskOverrides = z.infer<typeof taskOverridesSchema>;
 
-export const createTaskSchema = z.object({
-  title: z.string().max(120).optional(),
-  description: z.string().min(1, 'Describe the task').max(20000),
-  repositoryId: z.string().min(1, 'Choose a repository'),
-  workflowId: slugSchema,
-  mode: z.enum(TASK_MODES),
-  overrides: taskOverridesSchema.optional(),
-  autoApproveUpToLevel: permissionLevelSchema.optional(),
-  maxFixCycles: z.number().int().min(0).max(10).optional(),
-  attachments: z
-    .array(z.object({ name: z.string().min(1).max(200), contentBase64: z.string().max(14_000_000) }))
-    .max(10)
-    .optional(),
-  start: z.boolean().default(true),
-  /** Chairman supervision; defaults to on for Autopilot tasks when enabled in Settings. */
-  supervised: z.boolean().optional(),
-  /** Execution policy for this task; defaults to the repository's, then Settings. */
-  policyMode: z.enum(POLICY_MODES).optional(),
-  /** Run in an isolated worktree even if the repository uses a task branch. */
-  worktree: z.boolean().optional(),
-});
+/** A task works in its repository plus at most this many linked ones (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+export const MAX_LINKED_REPOSITORIES = 7;
+
+export const createTaskSchema = z
+  .object({
+    title: z.string().max(120).optional(),
+    description: z.string().min(1, 'Describe the task').max(20000),
+    repositoryId: z.string().min(1, 'Choose a repository'),
+    /** Other repositories the task also works in; each gets its own isolated worktree next to the primary's. */
+    linkedRepositoryIds: z.array(z.string().min(1)).max(MAX_LINKED_REPOSITORIES, `A task can work in at most ${MAX_LINKED_REPOSITORIES + 1} repositories`).optional(),
+    workflowId: slugSchema,
+    mode: z.enum(TASK_MODES),
+    overrides: taskOverridesSchema.optional(),
+    autoApproveUpToLevel: permissionLevelSchema.optional(),
+    maxFixCycles: z.number().int().min(0).max(10).optional(),
+    attachments: z
+      .array(z.object({ name: z.string().min(1).max(200), contentBase64: z.string().max(14_000_000) }))
+      .max(10)
+      .optional(),
+    start: z.boolean().default(true),
+    /** Chairman supervision; defaults to on for Autopilot tasks when enabled in Settings. */
+    supervised: z.boolean().optional(),
+    /** Execution policy for this task; defaults to the repository's, then Settings. */
+    policyMode: z.enum(POLICY_MODES).optional(),
+    /** Run in an isolated worktree even if the repository uses a task branch. */
+    worktree: z.boolean().optional(),
+  })
+  .superRefine((input, ctx) => {
+    const linked = input.linkedRepositoryIds ?? [];
+    if (!linked.length) return;
+    if (linked.includes(input.repositoryId)) {
+      ctx.addIssue({ code: 'custom', path: ['linkedRepositoryIds'], message: 'The task repository is already included; choose other repositories to also work in' });
+    }
+    if (new Set(linked).size !== linked.length) {
+      ctx.addIssue({ code: 'custom', path: ['linkedRepositoryIds'], message: 'Each repository can be added only once' });
+    }
+    if (input.worktree === false) {
+      ctx.addIssue({ code: 'custom', path: ['worktree'], message: 'A task across several repositories always runs in isolated worktrees' });
+    }
+  });
 export type CreateTaskInput = z.input<typeof createTaskSchema>;
 
 export const updateTaskSchema = z.object({

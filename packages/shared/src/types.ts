@@ -62,6 +62,19 @@ export interface TaskGitInfo {
   worktreePath?: string | null;
   /** The task ran in a worktree (kept after it is removed, so views diff the branch instead). */
   isolated?: boolean;
+  /** Multi-repository tasks: the task workspace folder holding one worktree per repository; null once removed. */
+  workspacePath?: string | null;
+  /** Multi-repository tasks: this repository's folder inside the workspace. */
+  folder?: string | null;
+}
+
+/** One repository a task works in (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
+export interface TaskRepositoryRef {
+  id: string;
+  name: string;
+  /** Its folder in the task workspace; null for a single-repository task. */
+  folder: string | null;
+  primary: boolean;
 }
 
 export interface TaskAttachment {
@@ -78,6 +91,8 @@ export interface TaskSummary {
   title: string;
   repositoryId: string;
   repositoryName: string;
+  /** Every repository the task works in, primary first; one entry for a single-repository task. */
+  repositories: TaskRepositoryRef[];
   workflowId: string;
   workflowName: string;
   mode: TaskMode;
@@ -263,6 +278,8 @@ export interface ChangedFile {
   deletions: number | null;
   /** task = created by this task; preexisting = user work present at baseline; both = user file the task also touched. */
   origin: 'task' | 'preexisting' | 'both';
+  /** The repository the path belongs to (paths are relative to it); set on multi-repository tasks. */
+  repositoryId?: string;
 }
 
 export interface TaskChanges {
@@ -273,6 +290,12 @@ export interface TaskChanges {
   files: ChangedFile[];
   preexistingWarning: boolean;
   totals: { files: number; additions: number; deletions: number };
+  /** The repository these changes are in (multi-repository tasks). */
+  repositoryId?: string;
+  repositoryName?: string;
+  folder?: string | null;
+  /** Multi-repository tasks: one entry per repository, primary first. The flat fields above are the primary's. */
+  repositories?: TaskChanges[];
 }
 
 export interface RepositoryStatus {

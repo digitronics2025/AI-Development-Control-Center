@@ -66,7 +66,7 @@ function AgentSettingsDrawer({ agent, open, onOpenChange }: { agent: AgentInfo; 
         <div className="flex items-start justify-between gap-4">
           <div className="flex flex-col">
             <span className="text-body font-semibold text-fg">Load my CLI customisations</span>
-            <span className="text-small text-fg-secondary">Your own hooks, skills and MCP servers. Turn off for faster, isolated runs.</span>
+            <span className="text-small text-fg-secondary">Your own hooks, skills and plugins. Personal MCP servers are never loaded into runs; add one under Tools → MCP servers to use it through the Control Center. Turn off for faster, isolated runs.</span>
           </div>
           <Switch aria-label="Load my CLI customisations" checked={agent.settings.loadUserConfig} onCheckedChange={(v) => update({ loadUserConfig: v }, 'Saved')} />
         </div>

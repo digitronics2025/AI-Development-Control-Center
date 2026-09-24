@@ -41,6 +41,8 @@ const RULES: Array<{ errorClass: ErrorClass; patterns: RegExp[] }> = [
     patterns: [
       /model[^\n]{0,80}(?:not found|does not exist|not available|unavailable|not supported)/i,
       /requires a newer version/i,
+      // A CLI older than the flags the adapter passes: same remedy, update the CLI (Open Agents).
+      /^error: unknown option '--/im,
       /unknown model/i,
       /invalid model/i,
       /no such model/i,

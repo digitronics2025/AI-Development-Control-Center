@@ -43,11 +43,49 @@ removed when the run ends.
 
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
-- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local --strict-mcp-config]`
-- Permission mapping (`claudeToolPolicy`): L1 `dontAsk` + read-only tools; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Force push, `git reset --hard`, `git clean`, `rm -rf` are always denied.
+- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] --strict-mcp-config [--mcp-config <acc>]`
+- Permission mapping (`claudeToolPolicy`): L1 `dontAsk` + read-only tools; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Force push, `git reset --hard`, `git clean`, `rm -rf` are always denied. `Skill` is allowed at every level.
+- Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Bash, Skill, ToolSearch, TodoWrite`; L2+ adds `Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
+- `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.
 - Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
 - Usage limits: `rate_limit_event` with `status: rejected`, or `api_error_status: 429`.
+
+## Skills
+
+With **Load my CLI customisations** on, a run loads the operator's skills,
+hooks and plugins (`--setting-sources` is left at the CLI default); off, only
+the repository's own (`project,local`). Skills run inside the stage's
+limits, measured with real runs on Claude Code 2.1.280:
+
+| Case | Result |
+|---|---|
+| Plain skill, any level | runs |
+| Skill declaring `allowed-tools`, any level | runs (before `Skill` was allowed it was refused: "no approval surface") |
+| Skill granting `Bash`/`Write` at L1 | refused (`dontAsk`; `Write` does not exist) |
+| Skill granting a command the stage denies | refused (deny wins) |
+| Skill granting `WebFetch` or a personal MCP tool | the tool does not exist in the run |
+
+**Why the tool set is closed:** a skill's `allowed-tools` pre-approves any
+tool that *exists*. With `Skill` allowed on Claude Code's open tool set, a
+skill at L2 could run `WebFetch` and personal MCP tools, which bypasses
+`ToolService.invoke`. `--tools` + `--strict-mcp-config` remove them.
+
+Stage logs name skills: `[tool] Skill fix-bug`, `permission denied: Skill
+ship-it`, and the init line ends `· N skills`; skill `args` are never logged.
+Every prompt carries a short "Skills" section
+([tooling.ts](../../apps/orchestrator/src/engine/tooling.ts) `SKILLS_PROMPT_SECTION`).
+
+**Tripwire:** these guarantees rest on the CLI's permission semantics. After
+every Claude Code update run `pnpm verify:agents --only claude --claude-model
+haiku --skills` (5 real probes; exits 1 on any mismatch). A CLI too old for
+`--tools` fails the run with "unknown option", classified `MODEL_UNAVAILABLE`
+(update the CLI).
+
+Codex loads `~/.codex/skills` and `~/.agents/skills` itself;
+`--ignore-user-config` skips only `config.toml`. Its sandbox, not a tool
+list, bounds it. Not yet observed in a run (the ChatGPT workspace is out of
+credits).
 
 ## Usage reporting
 
@@ -99,7 +137,9 @@ Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
   rejected ("requires a newer version of Codex") → `MODEL_UNAVAILABLE`; other
   models return "workspace is out of credits" → `USAGE_LIMIT`. Update Codex and
   restore credits, or reroute Codex roles to Claude Code in Settings.
-- Loading the user's own Claude customisations costs ~150k cached tokens per
-  run; turn off **Load my CLI customisations** per agent for leaner runs.
+- Loading the user's own Claude customisations cost ~150k cached tokens per
+  run while personal MCP servers were loaded; with `--strict-mcp-config` and the
+  closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
+  **Load my CLI customisations** per agent for leaner runs.
 
 Last verified: 2026-09-24

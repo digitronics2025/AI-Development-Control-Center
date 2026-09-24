@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { currentBranch, git } from '@acc/git';
+import { SKILLS_PROMPT_SECTION } from '../src/engine/tooling.js';
 import { addRepo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 let t: TestApp;
@@ -57,6 +58,8 @@ describe('normal development workflow', () => {
     // Every prompt tells the agent it is a subagent whose reply is a task record, not a chat answer.
     const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');
     expect(prompt).toContain('You are running as a subagent of the AI Development Control Center');
+    // Every stage is told how skills and outside tools behave in a Control Center run.
+    expect(prompt).toContain(SKILLS_PROMPT_SECTION);
   });
 
   it('reports operator decisions named by the verifier instead of calling the task ready', async () => {

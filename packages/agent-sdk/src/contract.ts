@@ -30,7 +30,7 @@ export interface AgentRuntimeOptions {
   baseEnv: NodeJS.ProcessEnv;
   /** Explicit executable path from settings; otherwise PATH lookup. */
   executablePath?: string | null;
-  /** Load the user's own CLI customisations (hooks, skills, MCP servers). */
+  /** Load the user's own CLI customisations (hooks, skills, plugins). Personal MCP servers are never loaded. */
   loadUserConfig?: boolean;
 }
 

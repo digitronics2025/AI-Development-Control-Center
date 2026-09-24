@@ -213,7 +213,7 @@ export const approvalDecisionSchema = z.object({
 export const agentSettingsSchema = z.object({
   enabled: z.boolean().default(true),
   executablePath: z.string().max(1000).nullable().default(null),
-  /** Load the user's own CLI customisations (hooks, skills, MCP). */
+  /** Load the user's own CLI customisations (hooks, skills, plugins). Personal MCP servers are never loaded. */
   loadUserConfig: z.boolean().default(true),
 });
 export type AgentSettings = z.infer<typeof agentSettingsSchema>;

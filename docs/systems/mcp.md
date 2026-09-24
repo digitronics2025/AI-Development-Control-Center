@@ -36,6 +36,12 @@ capability id with `.` → `__` (`network__port_owner`); two meta tools,
 `acc_find_capability` and `acc_call_capability`, reach capabilities that are
 not listed (escalation, [autopilot.md](autopilot.md)).
 
+**Personal MCP servers are never loaded into agent runs.** Claude Code
+always gets `--strict-mcp-config`, so servers from the operator's own or
+plugin config do not start in a run; their tools would bypass the policy
+above. To give agents an outside server, register it in the gateway below
+(Tools → MCP servers); agents reach it through `acc_call_capability`.
+
 **Your own MCP client.** `node apps/orchestrator/dist/acc-mcp.js --repository <path> [--profile web-development]`
 reads the local API token and `runtime.json` from the data folder and opens
 an operator session for that registered repository, e.g.
@@ -61,4 +67,4 @@ A real stdio fixture server was registered, health-checked, its tools
 discovered, called through the policy (`mcp.echo_fixture.echo`) and removed;
 the bridge was driven by a real MCP client over an in-memory transport.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

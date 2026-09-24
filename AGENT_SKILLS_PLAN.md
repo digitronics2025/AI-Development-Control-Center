@@ -1,6 +1,6 @@
 # Agent Skills Plan: let stage agents use the operator's skills safely
 
-Status: proposed · 2026-09-24 · Claude Code 2.1.280, Codex 0.156.1 on the operator's PC
+Status: implemented 2026-09-24 — checklist and evidence in [docs/plans/agent-skills.md](docs/plans/agent-skills.md) · Claude Code 2.1.280, Codex 0.156.1 on the operator's PC
 
 ## What was measured (the ground this plan stands on)
 

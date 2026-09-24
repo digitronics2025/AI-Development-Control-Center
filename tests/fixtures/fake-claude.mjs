@@ -2,7 +2,7 @@
 // Test double for the Claude Code CLI. Behaviour is chosen by environment variables:
 //   FAKE_CLAUDE_AUTH            subscription | apikey | none
 //   FAKE_CLAUDE_APIKEY_SOURCE   value reported in the init event (default "none")
-//   FAKE_CLAUDE_SCENARIO        ok | usage | hang | error | long
+//   FAKE_CLAUDE_SCENARIO        ok | usage | hang | error | long | crash | skill
 import { writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -44,6 +44,7 @@ if (args[0] === '-p') {
       permissionMode: args[args.indexOf('--permission-mode') + 1],
       apiKeySource: process.env.FAKE_CLAUDE_APIKEY_SOURCE ?? 'none',
       claude_code_version: '9.9.9',
+      ...(scenario === 'skill' ? { skills: ['docs-systems', 'fix-bug', 'ship-it'] } : {}),
     });
     if (scenario === 'hang' || (process.env.FAKE_CLAUDE_APIKEY_SOURCE ?? 'none') !== 'none') {
       setInterval(() => {}, 1000);
@@ -73,6 +74,13 @@ if (args[0] === '-p') {
       // What it read mentions credits and has a line 429; neither is why it failed.
       out({ type: 'user', message: { content: [{ type: 'tool_result', content: "429\tif (/out of credits/.test(text)) return 'USAGE_LIMIT';" }] } });
       process.exit(3);
+    }
+    if (scenario === 'skill') {
+      // One skill runs; one is refused by the stage policy. Skill args are free text and must never be logged.
+      out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill: 'fix-bug', args: 'private-args-text' } }] } });
+      out({ type: 'user', message: { content: [{ type: 'tool_result', content: 'Launching skill: fix-bug' }] } });
+      out({ type: 'result', subtype: 'success', is_error: false, result: 'Done', permission_denials: [{ tool_name: 'Skill', tool_input: { skill: 'ship-it', args: 'private-args-text' } }] });
+      process.exit(0);
     }
     if (scenario === 'usage') {
       out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1790122800, rateLimitType: 'five_hour' } });

@@ -42,20 +42,31 @@ const DEPLOY = ['wrangler deploy', 'wrangler publish', 'npm publish', 'pnpm publ
   (cmd) => `Bash(${cmd}:*)`,
 );
 
+/**
+ * Built-in tools that exist in a run (`--tools`). The set is closed on purpose: a
+ * skill's `allowed-tools` can pre-approve any tool that exists, so a tool outside
+ * this set (WebFetch, Agent, PowerShell…) must not exist at all. `ToolSearch`
+ * reaches the Control Center's deferred MCP tools.
+ */
+const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Skill', 'ToolSearch', 'TodoWrite'];
+const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
+
 /** Map a stage permission level to Claude Code's permission mode and tool policy. */
-export function claudeToolPolicy(level: PermissionLevel): { mode: string; allowed: string[]; denied: string[] } {
+export function claudeToolPolicy(level: PermissionLevel): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
   if (level <= 1) {
-    return { mode: 'dontAsk', allowed: [...READ_TOOLS, ...READ_ONLY_BASH], denied: [...WRITE_TOOLS, ...ALWAYS_DENIED] };
+    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill', ...READ_ONLY_BASH], denied: [...WRITE_TOOLS, ...ALWAYS_DENIED] };
   }
-  const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash'];
-  if (level === 2) return { mode: 'acceptEdits', allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
-  if (level === 3) return { mode: 'acceptEdits', allowed, denied: [...ALWAYS_DENIED, ...DEPLOY] };
-  return { mode: 'acceptEdits', allowed, denied: ALWAYS_DENIED };
+  const tools = [...BASE_TOOLS, ...EDIT_TOOLS];
+  const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash', 'Skill'];
+  if (level === 2) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
+  if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY] };
+  return { mode: 'acceptEdits', tools, allowed, denied: ALWAYS_DENIED };
 }
 
 function summarizeToolInput(input: Record<string, unknown> | undefined): string {
   if (!input) return '';
-  const value = input.command ?? input.file_path ?? input.path ?? input.pattern ?? input.url ?? input.description;
+  // A skill is named by `skill`; its `args` are free text and never logged.
+  const value = input.skill ?? input.command ?? input.file_path ?? input.path ?? input.pattern ?? input.url ?? input.description;
   const text = typeof value === 'string' ? value : '';
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > 300 ? `${flat.slice(0, 297)}...` : flat;
@@ -297,6 +308,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
       'none',
       '--permission-mode',
       policy.mode,
+      '--tools',
+      policy.tools.join(','),
       '--allowedTools',
       policy.allowed.join(','),
       '--disallowedTools',
@@ -304,7 +317,10 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     ];
     if (input.model !== 'default') args.push('--model', input.model);
     if (input.effort !== 'default') args.push('--effort', input.effort);
-    if (input.loadUserConfig === false) args.push('--setting-sources', 'project,local', '--strict-mcp-config');
+    if (input.loadUserConfig === false) args.push('--setting-sources', 'project,local');
+    // Personal MCP servers never join a run: their tools would skip the Control Center's policy.
+    // Only the Control Center's own server (--mcp-config) is loaded.
+    args.push('--strict-mcp-config');
     if (mcpConfig) args.push('--mcp-config', mcpConfig);
     return args;
   }
@@ -333,7 +349,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
             if (event.subtype === 'init') {
               sessionId = event.session_id ?? null;
               initModel = typeof event.model === 'string' ? event.model : null;
-              emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}`.trim());
+              const skills = Array.isArray(event.skills) ? ` · ${event.skills.length} skills` : '';
+              emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}${skills}`.trim());
               // Runtime tripwire: the CLI itself says where its credentials came from.
               const source = event.apiKeySource;
               if (input.billingMode === 'subscription' && source && source !== 'none') {

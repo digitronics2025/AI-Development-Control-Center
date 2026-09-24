@@ -35,6 +35,15 @@ import { taskWorkdir } from './workdir.js';
 
 const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
 
+/** How the operator's own skills and outside tools behave inside a Control Center run (docs/systems/agents.md). */
+export const SKILLS_PROMPT_SECTION = [
+  '## Skills',
+  '',
+  "The operator's installed skills are available in this run; use one when it fits the work.",
+  "This stage's limits still apply to everything a skill does. A skill or tool that is refused is an operator decision: report it, do not work around it.",
+  "The operator's personal MCP servers are not connected here. Where a skill expects one (a browser, Cloudflare, Android), use the matching Control Center tool when this run has them; otherwise report that step as not verified.",
+].join('\n');
+
 export interface AgentToolBridge {
   command: string;
   args: string[];
@@ -238,9 +247,10 @@ export class EngineTooling {
     return attempt;
   }
 
-  /** Extra prompt sections: the environment report (first stages) and the tools this run has. */
+  /** Extra prompt sections: the environment report (first stages), skills, and the tools this run has. */
   async promptSections(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): Promise<string> {
     const parts: string[] = [];
+    parts.push(SKILLS_PROMPT_SECTION);
     if (['investigator', 'planner', 'implementer'].includes(def.role)) {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);

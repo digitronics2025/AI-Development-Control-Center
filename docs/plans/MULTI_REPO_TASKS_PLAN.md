@@ -2,7 +2,7 @@
 title: One task can work across several repositories, each in its own isolated worktree inside one task workspace
 source: conversation 2026-09-24 (operator request; plan written after a read-only investigation of the codebase)
 created: 2026-09-24
-status: in-progress
+status: done
 ---
 
 # Multi-repository tasks
@@ -643,7 +643,7 @@ task page. It would:
 - [x] T3. Gates green — done when: `pnpm check` and `pnpm build && pnpm e2e` pass on the full suite, or a failure is shown to be another session's — check: `pnpm check && pnpm build && pnpm e2e`
 - [x] T4. Docs synced per the repo's rules — done when: step 15's files reflect the shipped code — check: `git diff --stat docs/`
 - [x] T5. Committed path-scoped and pushed — done when: `git status` shows none of this work uncommitted and the push succeeded — check: `git log origin/main..HEAD --oneline`
-- [ ] T6. Live on this machine — done when: `acc.db` is backed up, the orchestrator restarted, the live database reports schema version 12 and the dashboard shows the "Also work in" field (no deploy on push for this repo) — check: `manual: schema version and dashboard observation recorded in the Ledger`
+- [x] T6. Live on this machine — done when: `acc.db` is backed up, the orchestrator restarted, the live database reports schema version 12 and the dashboard shows the "Also work in" field (no deploy on push for this repo) — check: `manual: schema version and dashboard observation recorded in the Ledger`
 - [x] T7. A claim registered for this change — done when: the repo's claims register holds an entry, or this step says why there is none — check: `manual: name the claim, or the reason` → no change needed: this repository has no claims register (docs/ holds plans and systems only); the observable outcome is covered by T6 and by the real run recorded at step 14
 
 ## Ledger
@@ -684,3 +684,4 @@ task page. It would:
 - 2026-09-24 — T4 — docs: multi-repository-tasks.md (plus the T1 corrections: credentials at the root, Git at the root, resume, strays, offline filter, additive fields), pointers in workflow-engine, checkpoints, git, tool-system, credential-broker, chairman, dashboard, orchestrator, remote-node, the systems index and PLAN.md §15/§26
 - 2026-09-24 — T5 — pushed the branch as HEAD:main: origin/main c532247..e9aa595, 18 commits, all multi-repository work (checked: no audit commit among them); git log origin/main..HEAD is empty and the worktree is clean. The audit session was told to rebase its local commits onto it and asked to choose the moment for the live restart
 - 2026-09-24 — T7 — no claims register exists in this repository; closed without change
+- 2026-09-24 — T6 — the audit session (ai-development-control-center-f7) rebased onto this work, ran its full gate (827 tests) and e2e (105 passed), backed up acc.db to backups/acc.db.before-audit-fixes-20260924-1743 and restarted the live orchestrator at 17:43Z. Checked here: the live acc.db (read-only) reports schema version 13 with task_linked_repositories present; /healthz ok; Playwright MCP on http://127.0.0.1:4317/tasks/new shows "Also work in (optional)", choosing a repository adds it to "Repositories added" with the isolation help text, Remove takes it off, 0 console errors; no task was created. The VS Code Simple Browser preview was requested but its receipt did not update (last receipt 2026-09-15), so the visible preview is not confirmed — only the Playwright check is

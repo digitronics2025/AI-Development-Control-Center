@@ -582,7 +582,9 @@ describe('watchdog (plan §16)', () => {
   });
 
   it('stops a silent worker and a dead one, and the stage recovers', async () => {
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Stuck [sim:slow]');
+    // [sim:hang] runs until cancelled: under load a merely slow run could finish between the two
+    // dead-process checks and the second would find nothing to stop (audit F-17).
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Stuck [sim:hang]');
     await waitFor(() => t.services.store.latestStage(id, 'investigate'), (s) => s?.status === 'RUNNING', 20_000);
     const acted = await t.services.watchdog.tick(Date.now() + 3 * 60 * 60_000);
     expect(acted[0]).toContain('Watchdog:');

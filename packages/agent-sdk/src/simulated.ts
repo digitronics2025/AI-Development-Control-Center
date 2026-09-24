@@ -28,6 +28,7 @@ import type {
  *   [sim:usage-limit]        implementer hits a usage limit on its first run
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
+ *   [sim:hang]               every run keeps working until it is cancelled (watchdog tests)
  *   [sim:needs-operator]     verifier passes but names an operator decision
  *   [sim:needs-decision]     implementer stops with BLOCKED ON OPERATOR until a directive says ANSWER:
  *   [sim:verify-plan-mismatch] verifier rejects once: the work misses the request
@@ -180,8 +181,9 @@ export class SimulatedAgentAdapter implements AgentAdapter {
     const taskId = /^Task: (TASK-\d+)/m.exec(input.prompt)?.[1] ?? 'TASK';
     const has = (marker: string) => input.prompt.includes(`[sim:${marker}]`);
     const slow = has('slow');
-    const steps = slow ? 6 : 3;
-    const stepMs = slow ? Math.max(this.delayMs, 900) : this.delayMs;
+    const hang = has('hang');
+    const steps = hang ? 3600 : slow ? 6 : 3;
+    const stepMs = hang ? 1000 : slow ? Math.max(this.delayMs, 900) : this.delayMs;
     const startedAt = new Date();
     const emit = (text: string) => input.onLine?.('stdout', text);
 

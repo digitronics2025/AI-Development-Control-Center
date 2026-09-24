@@ -1,6 +1,6 @@
 import { ArrowLeft, ListChecks } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
   Banner,
   Button,
@@ -31,6 +31,11 @@ export function UsageTaskPage() {
   useBreadcrumb([{ label: 'Usage & Costs', to: '/usage?tab=tasks' }, { label: id }]);
   const ledger = useUsageTaskLedger(id);
   const [selected, setSelected] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+  // The router's own history works in the VS Code WebView (a MemoryRouter), where window.history does not;
+  // opened directly there is nothing to go back to, so Back leads to the task list.
+  const back = () => void (location.key === 'default' ? navigate('/usage?tab=tasks') : navigate(-1));
   const shell = 'flex flex-col gap-5 px-4 py-5 sm:px-5 md:px-6 xl:px-8';
   if (ledger.isLoading) {
     return (
@@ -70,7 +75,7 @@ export function UsageTaskPage() {
           </span>
         }
         actions={
-          <Button icon={ArrowLeft} onClick={() => history.back()}>
+          <Button icon={ArrowLeft} onClick={back}>
             Back
           </Button>
         }

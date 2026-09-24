@@ -279,7 +279,7 @@ test('the task page shows the report, changes, real test output and evidence', a
   expect(errors).toEqual([]);
 });
 
-test('Source Control, the task list and usage agree with the task', async ({ page }) => {
+test('Source Control, the task list and usage agree with the task', async ({ page }, testInfo) => {
   const errors = trackConsoleErrors(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
@@ -291,6 +291,9 @@ test('Source Control, the task list and usage agree with the task', async ({ pag
   const history = page.getByRole('list', { name: 'Commit history' });
   await expect(history.getByRole('listitem').first()).toContainText(taskId);
   await expect(history).toContainText('Initial shop');
+  // A task-attributed row: the task link sits beside the row button, not inside it (audit F-49).
+  await expect(history.getByRole('listitem').first().getByRole('link', { name: taskId })).toBeVisible();
+  await expectNoAxeViolations(page, testInfo);
 
   await page.goto('/tasks');
   const row = page.getByRole('row').filter({ hasText: taskId });

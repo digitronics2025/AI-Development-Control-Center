@@ -392,9 +392,14 @@ export function CredentialsTab() {
     setError(null);
     setEditing('new');
   };
+  // The typed secret does not outlive the form: cleared on save and on close (audit F-53).
+  const closeEditor = () => {
+    setEditing(null);
+    setForm((f) => ({ ...f, value: '' }));
+  };
   const save = () => {
     setError(null);
-    const done = { onSuccess: () => { toast(editing === 'new' ? 'Credential stored' : 'Value replaced'); setEditing(null); }, onError: (e: unknown) => setError(errorMessage(e)) };
+    const done = { onSuccess: () => { toast(editing === 'new' ? 'Credential stored' : 'Value replaced'); closeEditor(); }, onError: (e: unknown) => setError(errorMessage(e)) };
     if (editing === 'new') mutations.create.mutate({ name: form.name.trim(), kind: form.kind, envVar: form.envVar.trim() || null, description: form.description.trim(), value: form.value }, done);
     else if (editing) mutations.replace.mutate({ id: editing.id, value: form.value }, done);
   };
@@ -479,12 +484,12 @@ export function CredentialsTab() {
       <GenerateDialog open={generating} onOpenChange={setGenerating} repos={repos} />
       <Dialog
         open={editing !== null}
-        onOpenChange={(o) => !o && setEditing(null)}
+        onOpenChange={(o) => !o && closeEditor()}
         title={editing === 'new' ? 'Add a credential' : `Replace the value of ${editing?.name ?? ''}`}
         description="The value is not shown again after you save it."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setEditing(null)}>
+            <Button variant="ghost" onClick={closeEditor}>
               Cancel
             </Button>
             <Button variant="primary" onClick={save} loading={mutations.create.isPending || mutations.replace.isPending} disabled={!form.value || (editing === 'new' && !/^[\w.-]+$/.test(form.name.trim()))}>

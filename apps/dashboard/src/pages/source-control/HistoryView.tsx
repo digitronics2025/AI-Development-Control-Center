@@ -27,7 +27,7 @@ function Attribution({ commit }: { commit: HistoryCommit }) {
   if (!a) return null;
   if (a.kind === 'task') {
     return (
-      <Link to={`/tasks/${a.taskId}`} onClick={(e) => e.stopPropagation()} className="inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border border-accent px-1.5 text-small font-semibold text-fg hover:bg-elevated focus-visible:outline-2 focus-visible:outline-focus" title={a.taskTitle}>
+      <Link to={`/tasks/${a.taskId}`} className="inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border border-accent px-1.5 text-small font-semibold text-fg hover:bg-elevated focus-visible:outline-2 focus-visible:outline-focus" title={a.taskTitle}>
         <Bot size={12} aria-hidden />
         {a.taskId}
       </Link>
@@ -155,9 +155,14 @@ export function HistoryView({ repositoryId, active }: { repositoryId: string; ac
                 <span className="min-w-0 truncate">{c.authorName}</span>
                 <RelativeTime iso={c.authoredAt} className="shrink-0" />
                 {c.parents.length > 1 ? <span className="shrink-0">merge</span> : null}
-                <Attribution commit={c} />
               </span>
             </button>
+            {/* A sibling of the row button, not inside it: a link within a button is not reachable on its own (audit F-49). */}
+            {c.attribution ? (
+              <span className="flex shrink-0 items-center pr-2">
+                <Attribution commit={c} />
+              </span>
+            ) : null}
           </li>
         ))}
       </ol>

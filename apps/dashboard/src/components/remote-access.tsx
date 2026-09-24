@@ -64,7 +64,8 @@ export function RemoteAccessPanel() {
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
-            void run(m.pair.mutateAsync({ relayUrl: relayUrl.trim(), code: code.trim(), label: label.trim() }), 'Paired with the cloud');
+            // A used pairing code is worthless, but it is still a secret: do not keep it once paired (audit F-53).
+            void run(m.pair.mutateAsync({ relayUrl: relayUrl.trim(), code: code.trim(), label: label.trim() }).then(() => setCode('')), 'Paired with the cloud');
           }}
         >
           {error ? (

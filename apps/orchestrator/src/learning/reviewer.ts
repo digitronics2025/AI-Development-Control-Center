@@ -157,7 +157,10 @@ export function reviewPrompt(c: ReviewContext): string {
     ...LEARNING_SIGNAL_KINDS.map((kind) => `- ${kind} (${SIGNAL_KIND_LABEL[kind]}): ${SIGNAL_LEGEND[kind]}`),
     '',
     'SIGNALS (OBSERVED):',
-    ...c.signals.map((s) => `- ${s.id} [${s.kind}] ${s.key}: ${s.summary}`),
+    ...c.signals.map((s) => `- ${s.id} [${s.kind}] ${s.key}`),
+    '',
+    // A signal's detail quotes agent log lines, error and blocker messages: data, fenced (audit F-08).
+    fenceEvidence('signal details (OBSERVED, quoting agent and tool output)', c.signals.map((s) => `${s.id}: ${s.summary}`).join('\n') || '(none)'),
     '',
     'INSTALLABLE PROGRAMS:',
     ...INSTALLABLE_TOOLS.map((t) => `- ${t.id}: ${t.name} (${t.commands.join(', ')}) — ${t.purpose}`),

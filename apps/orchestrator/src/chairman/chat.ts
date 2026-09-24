@@ -14,7 +14,7 @@ import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { Store, TaskRecord } from '../store/store.js';
 import type { Chairman } from './chairman.js';
-import { classifyMessage, INTERPRETABLE_ACTIONS, type IntentContext, type ParsedMessage } from './intent.js';
+import { classifyMessage, directiveFromWords, INTERPRETABLE_ACTIONS, type IntentContext, type ParsedMessage } from './intent.js';
 import { activeDirectives } from './snapshot.js';
 
 export interface ChatDeps {
@@ -230,7 +230,11 @@ export class ChairmanChat {
 /** A directive a model proposes must carry the user's own words, not text it composed from evidence. */
 function pinDirectiveText(action: ChairmanActionInput, text: string): ChairmanActionInput {
   if (action.type !== 'ADD_DIRECTIVE') return action;
-  return { ...action, params: { ...action.params, text } };
+  // The text, its kind and its rule all come from the operator's words; the model chooses only
+  // that a directive is meant, and cannot replace another one (audit F-36).
+  const { supersedes: _supersedes, ...params } = action.params;
+  const { kind, rule } = directiveFromWords(text);
+  return { ...action, params: { ...params, text, kind, rule } };
 }
 
 export function describeAction(action: ChairmanAction): string {

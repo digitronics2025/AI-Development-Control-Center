@@ -236,6 +236,18 @@ export function classifyMessage(raw: string, ctx: IntentContext): ParsedMessage 
   return result('DIRECTIVE', [{ type: 'ADD_DIRECTIVE', params: { text: original, kind: 'instruction', scope: 'CURRENT_TASK', rule } }], { confident: false });
 }
 
+/**
+ * The kind and machine-checkable rule of a directive, derived only from the
+ * operator's own words — never taken from a model's proposal (audit F-36).
+ */
+export function directiveFromWords(text: string): { kind: 'constraint' | 'instruction' | 'requirement'; rule: ReturnType<typeof deriveRule> } {
+  const rule = deriveRule(text);
+  if (rule?.type === 'require_check') return { kind: 'requirement', rule };
+  const t = clean(text).toLowerCase();
+  if (/^(do not|don't|dont|never|avoid|no need to|stop (modifying|changing|touching|editing))\b/.test(t)) return { kind: 'constraint', rule };
+  return { kind: 'instruction', rule };
+}
+
 /** Actions a model may add when interpreting an ambiguous sentence: nothing that discards work. */
 export const INTERPRETABLE_ACTIONS: ReadonlySet<ChairmanActionInput['type']> = new Set([
   'ADD_DIRECTIVE',

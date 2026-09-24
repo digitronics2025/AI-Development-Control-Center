@@ -50,7 +50,8 @@ Agent stages get a scoped Control Center tool session over MCP
 ([mcp.md](mcp.md)); before the first stage the environment is discovered
 ([tool-system.md](tool-system.md#environment-discovery)). The execution policy
 ([autopilot.md](autopilot.md)) caps the auto-approve level for stage gates and
-command approvals. Background processes stop whenever the loop exits in a
+command approvals. Background processes stop, and browser pages the task left open
+close ([browser-and-web.md](browser-and-web.md)), whenever the loop exits in a
 state other than running or queued; completion and cancellation also close
 terminals, remove the worktree and add "Verification coverage" (the checks
 the project type calls for, plus any browser, HTTP or device evidence the

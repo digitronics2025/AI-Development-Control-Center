@@ -106,4 +106,20 @@ Verified against the operator's account on 2026-09-24.
 - Page text, logs and evaluate results pass through `redact` in the pack;
   the service only redacts `summary`, `stdout` and `stderr`.
 
+
+## Network guards ([net-guard.ts](../../packages/tools/src/net-guard.ts))
+
+- `http.request`, `web.read` and `web.search` follow redirects by hand, one
+  hop at a time (at most 5). A hop into the Control Center's own address, from a
+  remote site into this machine, or to a non-http(s) URL is refused (`DENIED`).
+  `http.request` reports a redirect to another origin instead of following it
+  (`output.redirectedTo`), so that host is classified on its own; a 303, or a
+  301/302 after a non-GET, continues as a GET without a body; credentials never
+  follow a request to another origin. curl runs without `-L`.
+- Response bodies are read up to 16 MB (`http.request`), 8 MB (`web.read`) and
+  4 MB (`web.search`); curl has `--max-filesize`.
+- Every browser context the tools create aborts any request to the Control
+  Center's own address (`guardBrowserContext`): its dashboard page carries the
+  local token.
+
 Last verified: 2026-09-24

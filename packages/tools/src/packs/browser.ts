@@ -4,6 +4,7 @@ import path from 'node:path';
 import { credentialFreeEnv, redact } from '@acc/security';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { z } from 'zod';
+import { guardBrowserContext } from '../net-guard.js';
 import { resolveInside } from '../paths.js';
 import { missing, operation, type OperationContext, type OperationResult, type ResultImage, type ToolDetection, type ToolOperation, type ToolProvider } from '../sdk.js';
 
@@ -136,6 +137,7 @@ async function saveScreenshot(ctx: OperationContext, page: Page, name: string, i
 async function checkAt(ctx: OperationContext, browser: Browser, input: { url: string; waitUntil: 'load' | 'domcontentloaded' | 'networkidle'; settleMs: number; sameOriginOnly: boolean; screenshot: boolean; timeoutSec: number }, viewport: ViewportName, images?: ResultImage[]): Promise<PageObservation> {
   const vp = VIEWPORTS[viewport];
   const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, isMobile: vp.isMobile, hasTouch: vp.isMobile, deviceScaleFactor: 1 });
+  await guardBrowserContext(context);
   try {
     const page = await context.newPage();
     const origin = new URL(input.url).origin;
@@ -383,6 +385,7 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
               acceptDownloads: true,
               ...(stateFile && existsSync(stateFile) ? { storageState: stateFile } : {}),
             });
+            await guardBrowserContext(context);
             context.setDefaultTimeout(Math.min(30_000, input.timeoutSec * 1000));
             const log: string[] = [];
             const artifacts: Array<{ id: string; name: string }> = [];
@@ -434,6 +437,7 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
           return withBrowser(async (browser) => {
             const vp = VIEWPORTS[input.viewport];
             const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
+            await guardBrowserContext(context);
             try {
               const page = await context.newPage();
               await page.goto(input.url, { waitUntil: 'load', timeout: 30_000 });

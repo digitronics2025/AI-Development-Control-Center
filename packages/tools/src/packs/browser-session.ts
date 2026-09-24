@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { redact } from '@acc/security';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright-core';
 import { z } from 'zod';
+import { guardBrowserContext } from '../net-guard.js';
 import { resolveInside } from '../paths.js';
 import { failure, operation, type OperationContext, type OperationResult, type ResultImage, type ToolOperation } from '../sdk.js';
 import { captureScreenshot, httpUrl, isLoopback, launch, sessionFile, sessionName, VIEWPORTS } from './browser.js';
@@ -390,6 +391,7 @@ export function browserPageOperations(): ToolOperation[] {
           acceptDownloads: false,
           ...(stateFile ? { storageState: stateFile } : {}),
         });
+        await guardBrowserContext(context);
         const p: OpenPage = { id: `pg-${randomBytes(4).toString('hex')}`, owner, context, page: await context.newPage(), visible, log: [], reported: 0, dialogs: 'dismiss', lastUsed: Date.now() };
         pages.set(p.id, p);
         startSweeper();
@@ -525,6 +527,7 @@ export function browserPageOperations(): ToolOperation[] {
         const browser = await launch();
         try {
           const context = await browser.newContext({ acceptDownloads: false });
+          await guardBrowserContext(context);
           const page = await context.newPage();
           const response = await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: input.timeoutSec * 1000 });
           await page.waitForLoadState('networkidle', { timeout: 3_000 }).catch(() => undefined);

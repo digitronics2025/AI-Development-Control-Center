@@ -3,6 +3,7 @@ import path from 'node:path';
 import { redact } from '@acc/security';
 import { z } from 'zod';
 import { detectExecutable, run } from '../detect.js';
+import { guardedFetch, MAX_RESPONSE_BYTES, readCapped, RedirectRefused } from '../net-guard.js';
 import { resolveInside } from '../paths.js';
 import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 
@@ -113,8 +114,10 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
   ctx.signal.addEventListener('abort', onAbort, { once: true });
   const started = performance.now();
   try {
-    const res = await fetch(input.url, { method: input.method, headers, body, signal: controller.signal, redirect: 'follow' });
-    const buffer = Buffer.from(await res.arrayBuffer());
+    // Redirects are followed by hand: to another origin they are reported, not followed, so the
+    // production gate and the Control Center guard judge every host this request reaches (audit F-31).
+    const { res, url: answeredBy, redirectedTo } = await guardedFetch(input.url, { method: input.method, headers, body, signal: controller.signal }, { crossOrigin: 'stop' });
+    const { buffer, truncated } = await readCapped(res);
     const latencyMs = Math.round(performance.now() - started);
     const text = buffer.toString('utf8');
     let json: unknown;
@@ -129,14 +132,15 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
     const shownBody = redact(text.length > 64 * 1024 ? `${text.slice(0, 64 * 1024)}\n[… ${text.length - 64 * 1024} more bytes]` : text);
     return {
       ok: problems.length === 0,
-      summary: `${input.method} ${redact(input.url)} → ${res.status} in ${latencyMs}ms${problems.length ? ` · ${problems[0]}` : ''}`,
-      output: { status: res.status, headers: safeHeaders(res.headers), body: shownBody, json: json === undefined ? undefined : JSON.parse(redact(JSON.stringify(json))), latencyMs, bytes: buffer.length, problems },
+      summary: `${input.method} ${redact(input.url)} → ${res.status} in ${latencyMs}ms${redirectedTo ? ` · redirects to ${redact(redirectedTo)} (another host: not followed — request it directly so it is judged on its own)` : ''}${truncated ? ' · body cut at 16 MB' : ''}${problems.length ? ` · ${problems[0]}` : ''}`,
+      output: { status: res.status, url: redact(answeredBy), redirectedTo: redirectedTo ? redact(redirectedTo) : null, headers: safeHeaders(res.headers), body: shownBody, json: json === undefined ? undefined : JSON.parse(redact(JSON.stringify(json))), latencyMs, bytes: buffer.length, truncated, problems },
       evidence: [`${input.method} ${redact(input.url)} → ${res.status} (${latencyMs}ms)${problems.length ? ` · ${problems.join('; ')}` : ''}`],
       networkTargets: [new URL(input.url).host],
       ...(problems.length ? { error: { code: 'FAILED' as const, message: problems.join('; ') } } : {}),
     };
   } catch (error) {
     const aborted = controller.signal.aborted;
+    if (error instanceof RedirectRefused) return failure('DENIED', `${input.method} ${redact(input.url)}: ${error.message} (${redact(error.location)})`, { networkTargets: [new URL(input.url).host] });
     return failure(aborted ? (ctx.signal.aborted ? 'CANCELLED' : 'TIMEOUT') : 'FAILED', `${input.method} ${redact(input.url)} failed: ${aborted ? `no answer within ${input.timeoutSec}s` : redact((error as Error & { cause?: Error }).cause?.message ?? (error as Error).message)}`, {
       networkTargets: [new URL(input.url).host],
     });
@@ -155,7 +159,8 @@ async function viaCurl(input: RequestInput, ctx: OperationContext): Promise<Oper
   const config = Object.entries({ ...input.headers, ...(auth as Record<string, string>), ...(input.json !== undefined ? { 'content-type': 'application/json' } : {}) })
     .map(([k, v]) => `header = "${k}: ${v.replace(/"/g, '\\"')}"`)
     .join('\n');
-  const args = ['-sS', '-L', '-X', input.method, '--max-time', String(input.timeoutSec), '-K', '-', '-w', '\n%{http_code} %{time_total}', input.url];
+  // No -L: curl would follow a redirect to any host with the same method and body (audit F-31).
+  const args = ['-sS', '--max-filesize', String(MAX_RESPONSE_BYTES), '-X', input.method, '--max-time', String(input.timeoutSec), '-K', '-', '-w', '\n%{http_code} %{time_total}', input.url];
   const data = input.json !== undefined ? JSON.stringify(input.json) : input.body;
   const r = await run(exe, data !== undefined ? [...args.slice(0, -1), '--data-binary', data, input.url] : args, { cwd: ctx.cwd, env: ctx.env, stdin: config, timeoutMs: (input.timeoutSec + 5) * 1000 });
   if (r.spawnError) return failure('NOT_INSTALLED', 'curl is not installed');

@@ -184,7 +184,8 @@ sign-in is older than one hour.
 [uploads.ts](../../apps/orchestrator/src/remote/uploads.ts). Each new artifact
 gets a sync policy once (`defaultArtifactSensitivity` in
 [remote.ts](../../packages/shared/src/remote.ts)): `git-diff`, `staged-diff`,
-`environment`, `task-json` and `tool-output` are `local_only`; others are
+`environment`, `task-json`, `tool-output` and `operator-evidence` (Private Browser
+re-checks, [connected-apps.md](connected-apps.md)) are `local_only`; others are
 `safe_sync` unless larger than 25 MB. The cloud receives a manifest either way,
 the bytes only for `safe_sync`/`user_shared`. A finished execution's log becomes
 chunks of at most 1 MB of whole lines. Text is scrubbed and redacted again right

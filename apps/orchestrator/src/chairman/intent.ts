@@ -109,7 +109,11 @@ function parseCommand(text: string, original: string, ctx: IntentContext): Parse
   if (/^(resume|unpause|restart the task)\b/.test(t)) return result('COMMAND', [{ type: 'RESUME_TASK', params: {} }]);
   if (/^(continue|carry on|go on|go ahead|keep going|proceed)\b/.test(t)) return result('COMMAND', [{ type: 'CONTINUE', params: {} }]);
 
-  if (/\b(roll ?back|revert|undo)\b/.test(t) && !/^(do not|don't|never)\b/.test(t)) {
+  // A rollback discards the stage's work, so only a bare command is one: "roll back",
+  // "undo that", "revert the last (bad) change/attempt/stage/checkpoint". A sentence that
+  // names something else ("undo the console.log", "revert the lockfile change") is an
+  // instruction to the agent, not a rollback (audit F-07).
+  if (/^(?:roll ?back|revert|undo)(?:\s+(?:it|that|this|everything|all of it|(?:the\s+|your\s+|my\s+)?(?:(?:last|latest|previous|most recent)\s+)?(?:bad\s+|broken\s+|failed\s+)?(?:change|changes|attempt|fix|stage|step|edit|edits|checkpoint)))?(?:\s+(?:please|now))?$/.test(t)) {
     return result('COMMAND', [{ type: 'ROLLBACK_CHECKPOINT', params: {} }]);
   }
   if (/\b(create|make|take|save|add)\b.*\b(checkpoint|save point|restore point)\b/.test(t)) {

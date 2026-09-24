@@ -425,7 +425,7 @@ function normalizeSources(list: readonly AskSource[]): AskSource[] {
 }
 
 function lookupOf(e: ToolExecution): AskLookup {
-  return { id: e.id, capability: e.capability, summary: e.summary, status: e.status, live: e.capability.startsWith(LIVE_PREFIX), durationMs: e.durationMs, startedAt: e.startedAt };
+  return { id: e.id, capability: e.capability, summary: e.summary, status: e.status, live: e.capability.startsWith(LIVE_PREFIX) && e.status === 'succeeded', durationMs: e.durationMs, startedAt: e.startedAt };
 }
 
 function titleFrom(question: string): string {

@@ -149,6 +149,13 @@ Checked against the real APIs on 2026-09-24 (`ACC_LIVE_DATA=1` in
 [live-data.test.ts](../../packages/tools/test/live-data.test.ts)): D1
 catalogue, schema and read on a production database, KV keys, R2 list and
 get through the REST API, and every GitHub read including a failed run's log.
+The whole Ask path against the real APIs is
+[ask-live.test.ts](../../apps/orchestrator/test/ask-live.test.ts) (same switch;
+a throwaway orchestrator whose own credential store holds the keys, deleted
+afterwards): Check access, a live D1 count through the session, a delete and
+the writable `cloudflare.d1_query` both refused, and a classic GitHub token
+with write scopes refused on every call. Only a lookup that succeeded is
+marked `live`.
 
 ## HTTP ([ask-routes.ts](../../apps/orchestrator/src/http/ask-routes.ts))
 

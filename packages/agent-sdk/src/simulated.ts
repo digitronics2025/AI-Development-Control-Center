@@ -28,6 +28,7 @@ import type {
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
  *   [sim:needs-operator]     verifier passes but names an operator decision
+ *   [sim:needs-decision]     implementer stops with BLOCKED ON OPERATOR until a directive says ANSWER:
  *   [sim:verify-plan-mismatch] verifier rejects once: the work misses the request
  *   [sim:chairman-down]      the Chairman's reasoning agent always crashes
  *   [sim:chairman-bad-json]  the Chairman answers without JSON once
@@ -251,6 +252,12 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           break;
         case 'implementer':
         case 'fixer': {
+          if (has('needs-decision') && !/ANSWER:/.test(input.prompt)) {
+            output =
+              '## Summary\n\nBlocked. No code was changed: the two tests expect opposite results for the same input.\n\n' +
+              'BLOCKED ON OPERATOR: Which rounding rule is right — halves up (till) or halves to even (accounts)? I recommend halves up.';
+            break;
+          }
           const file = path.join(input.cwd, 'sim-output.md');
           await appendFile(file, `- ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
           base.filesChanged = ['sim-output.md'];

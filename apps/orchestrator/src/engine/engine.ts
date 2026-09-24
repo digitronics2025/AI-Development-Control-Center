@@ -416,6 +416,11 @@ export class TaskEngine {
       if (old && old.taskId === id && old.state === 'active') this.d.bus.publish({ type: 'directive', directive: this.d.store.retireDirective(old.id, 'superseded', directive.id) });
     }
     if (input.pause && task.status === 'RUNNING') await this.pause(id);
+    // Answering the question a stage stopped on is what the operator was asked to do: continue with the answer.
+    if (task.status === 'WAITING_FOR_USER' && task.blocker?.kind === 'decision' && directive.kind !== 'routing' && !input.pause) {
+      this.publisher.event(id, 'TASK_RESUMED', 'Your answer was recorded; the stage runs again with it');
+      await this.resume(id);
+    }
     return directive;
   }
 
@@ -1007,6 +1012,13 @@ export class TaskEngine {
         return this.handleError(task, def, stage, outcome, control);
       case 'blocked':
         return false;
+      case 'needs_operator': {
+        // Not a failure: no fix loop or recovery can settle a question only the operator may answer.
+        const message = outcome.questions.length === 1 ? outcome.questions[0]! : outcome.questions.map((q, i) => `(${i + 1}) ${q}`).join(' ');
+        this.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'decision', message, stageKey: def.key }, pauseRequested: false, pauseAfterStage: false });
+        this.publisher.event(task.id, 'TASK_WAITING', `${def.name} needs your decision: ${message.length > 300 ? `${message.slice(0, 299)}…` : message}`, { questions: outcome.questions }, stage.id);
+        return false;
+      }
       case 'stopped':
         if (outcome.reason === 'watchdog') {
           // A stuck or dead worker is a failed attempt, not a pause.

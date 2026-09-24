@@ -61,6 +61,28 @@ test.beforeAll(async ({ browser }) => {
   await page.close();
 });
 
+test.describe('Decisions only the operator can make', () => {
+  test('a stage that needs your decision stops with the question; Answer continues the task', async ({ page }, testInfo) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/');
+    const id = await newTask(page, "console.log('9 passed');", 'Round prices [sim:needs-decision]');
+    await page.goto(`/tasks/${id}`);
+    const banner = page.getByRole('alert').filter({ hasText: 'Implement needs your decision' });
+    await expect(banner).toBeVisible({ timeout: 60_000 });
+    await expect(banner).toContainText('Which rounding rule is right');
+    await page.getByRole('button', { name: 'Answer', exact: true }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Answer the question' });
+    await expect(dialog).toContainText('Which rounding rule is right');
+    await expectNoAxeViolations(page, testInfo);
+    await dialog.getByLabel('Your answer').fill('ANSWER: round halves up everywhere.');
+    await dialog.getByRole('button', { name: 'Answer and continue' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Answer recorded; the task continues' })).toBeVisible();
+    await expect(page.getByText('Completed', { exact: true }).first()).toBeVisible({ timeout: 90_000 });
+    expect(errors).toEqual([]);
+  });
+});
+
 test.describe('Chairman (plan §7.7)', () => {
   test('recovers automatically: exhausted fixes start a recovery cycle and the task still completes', async ({ page }) => {
     test.setTimeout(180_000);

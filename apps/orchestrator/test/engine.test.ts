@@ -273,6 +273,24 @@ describe('live control', () => {
     expect(ran.every((s) => s.agentId === 'codex')).toBe(true);
   });
 
+  it('stops on a question only the operator can answer, then continues with the answer', async () => {
+    for (const supervised of [false, true]) {
+      const id = await createTask(t, await addRepo(t, await makeRepo()), 'Round prices [sim:needs-decision]', { supervised });
+      const waiting = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+      expect(waiting.blocker).toMatchObject({ kind: 'decision', stageKey: 'implement', message: expect.stringContaining('Which rounding rule is right') });
+      // No tests, fix loop or recovery ran around a question no agent may settle.
+      const keys = t.services.store.listStages(id).map((s) => s.stageKey);
+      expect(keys).toEqual(['investigate', 'plan', 'implement']);
+      expect(t.services.store.latestStage(id, 'implement')!.status).toBe('PAUSED');
+      expect(waiting.recoveryCycle).toBe(0);
+      // Answering is the whole job: the directive resumes the task, and the stage runs again with it.
+      expect((await t.api('POST', `/api/tasks/${id}/directives`, { text: 'ANSWER: round halves up everywhere.' })).status).toBe(200);
+      const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+      expect(done.status).toBe('COMPLETED');
+      expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'implement').map((s) => s.status)).toEqual(['PAUSED', 'SUCCESS']);
+    }
+  });
+
   it('queues a directive while running and applies it at the next agent boundary', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Slow work [sim:slow]');
     await waitFor(() => t.services.store.latestStage(id, 'investigate'), (s) => s?.status === 'RUNNING', 20_000);

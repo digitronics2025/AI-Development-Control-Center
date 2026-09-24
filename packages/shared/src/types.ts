@@ -38,7 +38,8 @@ export interface ResolvedAssignment {
 
 export interface TaskBlocker {
   /** hard_blocker and limit are set by the Chairman on supervised tasks. */
-  kind: 'approval' | 'error' | 'usage' | 'auth' | 'fix_limit' | 'interrupted' | 'tests_missing' | 'queued' | 'hard_blocker' | 'limit';
+  /** `decision`: a work stage said the task cannot be done right without the operator's answer (`BLOCKED ON OPERATOR:`). */
+  kind: 'approval' | 'error' | 'usage' | 'auth' | 'fix_limit' | 'interrupted' | 'tests_missing' | 'queued' | 'hard_blocker' | 'limit' | 'decision';
   message: string;
   errorClass?: ErrorClass;
   approvalId?: string;

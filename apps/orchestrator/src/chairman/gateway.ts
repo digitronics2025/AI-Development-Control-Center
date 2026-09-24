@@ -108,6 +108,21 @@ export class ActionGateway {
 
   constructor(private readonly d: GatewayDeps) {}
 
+  /**
+   * The stage's current effort, when every model of the new agent offers it:
+   * handing a careful stage (planning, review at "high") to another agent
+   * should not quietly drop it to the CLI default. Effort names differ
+   * between agents, so anything the new agent does not list is left out.
+   */
+  private carriedEffort(task: TaskRecord, stageKey: string, agentId: string): string | undefined {
+    const def = this.d.views.stageDef(task, stageKey);
+    if (!def || def.kind !== 'agent') return undefined;
+    const effort = this.d.views.assignmentFor(task, def).effort;
+    if (!effort || effort === 'default') return undefined;
+    const models = this.d.store.listModels(agentId);
+    return models.length > 0 && models.every((m) => m.efforts.includes(effort)) ? effort : undefined;
+  }
+
   /** Serialise work per task. The loop itself never waits here (it already owns the task). */
   private async locked<T>(taskId: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(taskId) ?? Promise.resolve();
@@ -287,8 +302,18 @@ export class ActionGateway {
         engine.removeDirective(task.id, action.params.directiveId);
         return 'Directive removed; later stages no longer receive it';
       case 'CHANGE_AGENT':
-        engine.setAssignment(task.id, { stageKey: action.params.stageKey, agentId: action.params.agentId, model: action.params.model, effort: action.params.effort, applyToRole: action.params.applyToRole }, who);
-        return `${this.d.views.stageDef(task, action.params.stageKey)?.name ?? action.params.stageKey} will run on ${action.params.agentId}`;
+        engine.setAssignment(
+          task.id,
+          {
+            stageKey: action.params.stageKey,
+            agentId: action.params.agentId,
+            model: action.params.model,
+            effort: action.params.effort ?? this.carriedEffort(task, action.params.stageKey, action.params.agentId),
+            applyToRole: action.params.applyToRole,
+          },
+          who,
+        );
+        return `${this.d.views.stageDef(task, action.params.stageKey)?.name ?? action.params.stageKey} will run on ${action.params.agentId}${action.params.effort ? ` at ${action.params.effort} effort` : ''}`;
       case 'CHANGE_MODEL':
         engine.setAssignment(task.id, { stageKey: action.params.stageKey, model: action.params.model }, who);
         return `Model set to ${action.params.model}`;

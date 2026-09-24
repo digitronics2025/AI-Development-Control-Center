@@ -35,6 +35,21 @@ export function extractOperatorItems(...outputs: Array<string | null | undefined
 }
 
 /**
+ * `BLOCKED ON OPERATOR: …` lines from a work stage (investigator, planner,
+ * implementer, fixer): the task cannot be done right without the operator's
+ * answer, so it stops instead of testing, fixing and recovering around a
+ * question no agent may settle (see prompts/implementer.md).
+ */
+export function extractOperatorBlockers(output: string | null | undefined): string[] {
+  const items = new Set<string>();
+  for (const match of (output ?? '').matchAll(/^[\s>*+-]*\**BLOCKED ON OPERATOR:?\**:?\s*(.+)$/gim)) {
+    const text = match[1]!.replace(/\*\*/g, '').trim();
+    if (text) items.add(text.length > 600 ? `${text.slice(0, 599)}…` : text);
+  }
+  return [...items].slice(0, MAX_OPERATOR_ITEMS);
+}
+
+/**
  * The operator decisions to report. The verifier reads the review before it
  * writes, so when a verification exists its list is the current one; taking
  * both listed the same concern twice in different words. Without a

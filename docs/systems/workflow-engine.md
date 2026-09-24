@@ -76,6 +76,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
+| a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
 
 **Supervised tasks** (Autopilot with the Chairman on) differ: a test or
 verdict failure asks the Chairman, which keeps the local fix loop while it
@@ -96,6 +97,20 @@ changes; otherwise `NEEDS_USER_ACTION`. Lines starting `NEEDS OPERATOR:` in the
 latest verification (or, when none ran, the latest review) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
+
+**Decisions** ([report.ts](../../apps/orchestrator/src/engine/report.ts)
+`extractOperatorBlockers`, [runners.ts](../../apps/orchestrator/src/engine/runners.ts)).
+The investigator, planner, implementer and fixer prompts tell the agent to
+change nothing and end with `BLOCKED ON OPERATOR: <decision, options,
+recommendation>` when the goal cannot be met correctly without the operator —
+contradictory requirements or tests, a forbidden action, missing access. The
+task stops on blocker `decision`; adding a directive (the answer: task page
+**Answer**, the directive dialog, or plain words to the Chairman) resumes it at
+once and the stage runs again with it. Found in a real run: before this, an
+implementer that honestly refused "reported success" with no change, and the
+supervised task spent two recovery cycles and 13 agent runs to end on a
+generic hard blocker; now it stops at Investigate after one run with the
+question and options.
 
 An optional `command` stage with no matching command configured is skipped
 without asking for approval (`skipsForLackOfCommands`).

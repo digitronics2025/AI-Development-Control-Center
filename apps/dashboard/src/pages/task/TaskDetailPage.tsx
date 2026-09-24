@@ -84,6 +84,7 @@ function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: Tas
     tests_missing: 'No verification commands',
     queued: 'Queued',
     hard_blocker: 'The Chairman needs you',
+    decision: `${stageDef?.name ?? 'A stage'} needs your decision`,
     limit: 'Paused at a limit',
   };
   const tone = blocker.kind === 'queued' ? 'info' : blocker.kind === 'error' && task.status === 'FAILED' ? 'danger' : 'warning';
@@ -114,6 +115,7 @@ function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: Tas
               Add directive
             </Button>
           ) : null}
+
         </>
       }
     >
@@ -225,7 +227,7 @@ export function TaskDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {!isMobile ? <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} /> : null}
+          {!isMobile ? <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} onAnswer={() => setDirectiveOpen(true)} /> : null}
           <ChairmanButton overview={chairman.data} onOpen={() => setChairmanOpen(true)} compact={isMobile} />
           {!isWide ? (
             <Button icon={SlidersHorizontal} onClick={() => setInspectorOpen(true)}>
@@ -339,7 +341,7 @@ export function TaskDetailPage() {
 
       {isMobile ? (
         <div className="fixed inset-x-0 bottom-0 z-20 flex justify-end gap-2 border-t border-border-subtle bg-canvas px-4 py-3">
-          <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} />
+          <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} onAnswer={() => setDirectiveOpen(true)} />
         </div>
       ) : null}
 

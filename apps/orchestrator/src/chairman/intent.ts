@@ -79,19 +79,23 @@ const result = (intent: ChatIntent, actions: ChairmanActionInput[], extra: Parti
 function parseCommand(text: string, original: string, ctx: IntentContext): ParsedMessage | null {
   const t = text.replace(/[.!]+$/, '');
 
-  // Routing: "use Claude for review", "switch review to Codex", "let Codex handle the fix".
+  // Routing: "use Claude for review", "switch review to Codex", "let Codex handle the fix",
+  // optionally with an effort: "use Claude for review with high effort" (never silently dropped).
+  const effortPhrase = /[,;]?\s*(?:(?:with|at|on|using)\s+)?(?:an?\s+)?(low|medium|high|xhigh|max|ultra)\s+effort\b|[,;]?\s*(?:with\s+)?effort\s*(?:of|=|:)?\s*(low|medium|high|xhigh|max|ultra)\b/.exec(t);
+  const effort = effortPhrase ? (effortPhrase[1] ?? effortPhrase[2])! : undefined;
+  const routed = effortPhrase ? t.replace(effortPhrase[0], '').trim() : t;
   const routing =
-    /^(?:use|let|have|put|assign)\s+(.+?)\s+(?:for|to do|to handle|handle|do|on|to run|run)\s+(?:the\s+)?(.+)$/.exec(t) ??
-    /^(?:switch|route|move|reroute|reassign|give)\s+(?:the\s+)?(.+?)(?:\s+stage)?\s+to\s+(.+)$/.exec(t);
+    /^(?:use|let|have|put|assign)\s+(.+?)\s+(?:for|to do|to handle|handle|do|on|to run|run)\s+(?:the\s+)?(.+)$/.exec(routed) ??
+    /^(?:switch|route|move|reroute|reassign|give)\s+(?:the\s+)?(.+?)(?:\s+stage)?\s+to\s+(.+)$/.exec(routed);
   if (routing) {
-    const first = /^(?:use|let|have|put|assign)/.test(t);
+    const first = /^(?:use|let|have|put|assign)/.test(routed);
     const agentText = first ? routing[1]! : routing[2]!;
     const stageText = first ? routing[2]! : routing[1]!;
     const agent = agentFrom(agentText, ctx);
     const stage = stageFrom(stageText, ctx);
     if (agent && stage) {
       return result('ROUTING_CHANGE', [
-        { type: 'CHANGE_AGENT', params: { stageKey: stage.key, agentId: agent.id } },
+        { type: 'CHANGE_AGENT', params: { stageKey: stage.key, agentId: agent.id, ...(effort ? { effort } : {}) } },
         { type: 'ADD_DIRECTIVE', params: { text: original, kind: 'routing', scope: 'CURRENT_TASK', rule: { type: 'routing', stageKey: stage.key, agentId: agent.id } } },
       ]);
     }
@@ -205,7 +209,11 @@ export function classifyMessage(raw: string, ctx: IntentContext): ParsedMessage 
   // "Do not …" starts like a question but is an instruction.
   const isQuestion = text.endsWith('?') || (QUESTION_START.test(text) && !/^(do not|don't|dont)\b/.test(text));
   if (isQuestion) {
-    if (STATUS_WORDS.test(text) && !/\bwhy\b/.test(text)) return result('STATUS', [], { topic: /\bblock/.test(text) ? 'blockers' : 'status' });
+    // The canned status answer only when the whole question is about status; "…and would a rollback help?" needs a real answer.
+    const clauses = text.split(/[?,;]|\b(?:and|but|also|then)\b/).map((c) => c.trim()).filter(Boolean);
+    if (STATUS_WORDS.test(text) && !/\bwhy\b/.test(text) && clauses.every((c) => STATUS_WORDS.test(c))) {
+      return result('STATUS', [], { topic: /\bblock/.test(text) ? 'blockers' : 'status' });
+    }
     return result('QUESTION', []);
   }
 

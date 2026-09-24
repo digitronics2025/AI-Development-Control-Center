@@ -131,6 +131,21 @@ describe('recovery policy', () => {
     expect(recoveryCandidates(ctx({ trigger: 'worker_failure', failingStageKey: 'implement', availableAgents: ['claude'] })).map((c) => c.kind)).toEqual(['retry_stage']);
   });
 
+  it('moves every stage of an agent that is out for everything, not one model, in the same decision', () => {
+    // Codex is out of credits during Investigate: Plan, Review and Verify would each stop in turn.
+    const [wide] = recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'investigate', providerWide: true }));
+    expect(wide!.id).toBe('change_agent:investigate:claude');
+    expect(wide!.actions.filter((a) => a.type === 'CHANGE_AGENT').map((a) => (a.params as { stageKey: string }).stageKey)).toEqual(['plan', 'review', 'verify', 'investigate']);
+    expect(wide!.actions.at(-1)).toMatchObject({ type: 'RETURN_TO_STAGE', params: { stageKey: 'investigate' } });
+    // An unavailable provider is not a verdict on the work: no "take a different approach" guidance.
+    expect((wide!.actions.at(-1)!.params as { guidance?: string }).guidance).toBeUndefined();
+    expect(wide!.description).toContain('Plan, Review, Verify use the same agent and move with it.');
+    for (const a of wide!.actions) expect(chairmanActionSchema.safeParse(a).success).toBe(true);
+    // A model the CLI rejects is only this stage's problem.
+    const [narrow] = recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'investigate', providerWide: false }));
+    expect(narrow!.actions.filter((a) => a.type === 'CHANGE_AGENT')).toHaveLength(1);
+  });
+
   it('moves a family that did not work behind the other safe options, never out of the list', () => {
     const facts = (over: Partial<RankingFacts> = {}): RankingFacts => ({ trigger: 'repeated_failure', failedFamilies: [], confidence: 'HIGH', ...over });
     const base = recoveryCandidates(ctx());
@@ -188,6 +203,17 @@ describe('ask vs act', () => {
       expect(r.actions, q).toEqual([]);
     }
     expect(c('What is blocking the task?')).toMatchObject({ intent: 'STATUS', topic: 'blockers' });
+    expect(c('What is happening?').intent).toBe('STATUS');
+    // Seen in a real run: the second half got a canned status snapshot and no answer.
+    expect(c('What is happening right now, and would a rollback help at this point?')).toMatchObject({ intent: 'QUESTION', actions: [] });
+    expect(c('Where are we and what is blocking?').intent).toBe('STATUS');
+  });
+
+  it('keeps the effort asked for in a routing request', () => {
+    // Seen in a real run: "with high effort" was dropped while the reply said the change was made.
+    expect(c('Use Claude for review, with high effort.').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'review', agentId: 'claude', effort: 'high' } });
+    expect(c('switch the fix to codex at max effort').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'fix', agentId: 'codex', effort: 'max' } });
+    expect(c('Use Claude for review').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'review', agentId: 'claude' } });
   });
 
   it('maps clear commands to typed actions', () => {
@@ -429,6 +455,8 @@ describe('chairman evidence service', () => {
       tailLogLines: () => log.map((text) => ({ text })),
       getRepository: () => ({ id: 'r1', path: REPO }),
       getSnapshot: () => null,
+      // A fix report is newer than the implementation report when both exist.
+      latestArtifactOfType: (_taskId: string, type: string) => (over.artifacts?.[type] ? { createdAt: type === 'fix-report' ? '2026-09-24T02:00:00Z' : '2026-09-24T01:00:00Z' } : null),
     } as unknown as Store;
     const deps: EvidenceDeps = {
       store,
@@ -528,6 +556,14 @@ describe('chairman evidence service', () => {
     expect(rendered).toContain('codex: disabled (disabled)');
     expect(rendered).not.toContain('npm install --token');
     expect(rendered).not.toContain('raw evidence body');
+  });
+
+  it('shows the latest work report as the agent’s claim, so a refusal is not read as a lost write', async () => {
+    const { evidence } = service({ artifacts: { 'implementation-report': 'Implemented it.', 'fix-report': 'Blocked. No code was changed: the two tests contradict each other.' } });
+    const packet = await evidence.forRecovery(task, testsFailure);
+    const section = packet.sections.find((s) => s.kind === 'work_report')!;
+    expect(section).toMatchObject({ reliability: 'AGENT_REPORTED', label: 'latest implementation or fix report' });
+    expect(section.text).toContain('the two tests contradict each other');
   });
 
   it('keeps going when a source cannot be read, and says which', async () => {

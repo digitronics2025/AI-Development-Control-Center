@@ -56,6 +56,18 @@ A **recovery cycle** increments `tasks.recovery_cycle`, resets `fix_cycles`
 | worker_failure | change agent → retry once |
 | provider_blocked | change agent (not a recovery cycle) |
 
+A provider block is agent-wide unless it is `MODEL_UNAVAILABLE` (`providerWide`
+in [policy.ts](../../apps/orchestrator/src/chairman/policy.ts)): the same
+decision then also moves every other stage of the task still on that agent, so
+Codex out of credits costs one failed attempt, not one per Codex stage. It
+carries no guidance and does not replace the current strategy's guidance or
+`lastRecoveryReason`: an unavailable provider says nothing about the work, and
+"take a different approach" would reach every later prompt. `CHANGE_AGENT`
+without an effort keeps the stage's effort when every model of the new agent
+lists it ([gateway.ts](../../apps/orchestrator/src/chairman/gateway.ts)
+`carriedEffort`), so a planner or reviewer at "high" is not dropped to the CLI
+default.
+
 "Available" agents for change-agent candidates are enabled, signed in, and
 have no `capacityBlock` ([usage.md](usage.md#capacity)): an agent that just
 reported it is out of credits or out of its window is not an escape route, so
@@ -74,7 +86,9 @@ confidence diagnosis puts root-cause analysis first. With a model the reasoner
 may pick any candidate in that order; without one the first is used.
 
 No candidate left → **hard blocker** (`WAITING_FOR_USER`, blocker
-`hard_blocker`). Limits (`tasks.limits`: recovery cycles, work minutes = sum of
+`hard_blocker`); its message ends with the latest strategy diagnosis, so the
+operator reads what the Chairman understood, not only that it ran out of
+options. Limits (`tasks.limits`: recovery cycles, work minutes = sum of
 execution time, agent runs) → blocker `limit`; *Resume* extends them for that
 task. Neither is ever reported as `FAILED`.
 
@@ -96,6 +110,7 @@ redacted, stripped of the repository/worktree path (`<repo>`), capped per kind
 | failing test output: command, count, failing test ids, last 80 log lines | OBSERVED | tests failure |
 | latest verification / review | AGENT_REPORTED | verify / review failure, chat |
 | current plan | AGENT_REPORTED | review/verify failure categorised REQUIREMENT_OR_PLAN |
+| latest implementation or fix report (the newer one) | AGENT_REPORTED | tests, review, verify, gate — a worker that refused reads as a refusal, not as "the change never reached the repository" |
 | files changed by this task — names, status, +/- only | OBSERVED | tests, review, verify, gate |
 | recent tool calls (capability, status, error code, one-line summary — never inputs) and tool recovery attempts, from the tool layer's `ToolStore` | OBSERVED | worker failure |
 | agent health | OBSERVED | worker failure |
@@ -200,11 +215,14 @@ MARK_HARD_BLOCKER, COMPLETE_TASK (only if the gate passes).
 Messages persist at once (`client_message_id` dedupes) and are processed one
 at a time per task. Deterministic ask-vs-act first: questions (incl. "Would
 rollback help?", "Could Claude review this?") never act and the model is
-offered no actions; `/status /blockers /directives` answer from the snapshot;
+offered no actions; `/status /blockers /directives` answer from the snapshot,
+and so does a question only when every clause of it is about status ("What is
+happening, and would a rollback help?" goes to the model, which answers both);
 commands map to actions; "Do not …" → constraint directive (interrupts a
 running write stage, which re-runs under it; new contract version); "Run E2E
 before finishing" → requirement directive; "Use Claude for review" → deferred
-routing. Unclear sentences become an instruction directive unless the model
+routing, keeping an effort said with it ("… with high effort", "at max effort";
+the reply names it). Unclear sentences become an instruction directive unless the model
 reads them differently — and a model may only add non-destructive actions, with
 directive text pinned to the user's own words. Cancelling a task is never done
 from chat.

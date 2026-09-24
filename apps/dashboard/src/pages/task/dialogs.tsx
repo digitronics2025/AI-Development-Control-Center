@@ -21,6 +21,8 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
   const connection = useConnection();
   const { toast } = useFeedback();
   const running = task.status === 'RUNNING';
+  // The task stopped on a stage's question: the directive is the answer, and it continues the task.
+  const answering = task.status === 'WAITING_FOR_USER' && task.blocker?.kind === 'decision';
   return (
     <form
       className="flex flex-col gap-3"
@@ -34,7 +36,7 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
           { command: 'directives', body: { text: text.trim(), pause } },
           {
             onSuccess: () => {
-              toast(pause ? 'Directive queued; pausing the task' : 'Directive queued for the next stage');
+              toast(answering ? 'Answer recorded; the task continues' : pause ? 'Directive queued; pausing the task' : 'Directive queued for the next stage');
               setText('');
               setPause(false);
               setError(null);
@@ -45,25 +47,38 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
         );
       }}
     >
+      {answering ? (
+        <div className="rounded-md border border-border-subtle bg-muted p-3 text-body">
+          <p className="font-semibold text-fg">The question</p>
+          <p className="mt-1 whitespace-pre-wrap text-fg-secondary">{task.blocker!.message}</p>
+        </div>
+      ) : null}
       <Field
-        label="Directive"
+        label={answering ? 'Your answer' : 'Directive'}
         error={error}
         helper={
           <>
-            Applied at the next safe boundary: the next agent stage receives it with its instructions.
+            {answering ? 'Added as a directive; the stage runs again with it straight away.' : 'Applied at the next safe boundary: the next agent stage receives it with its instructions.'}
             {skillPicker.available ? ' Type / to add a skill.' : null}
             <RequestedSkills names={skillPicker.requested} />
           </>
         }
       >
-        <SlashTextarea autoFocus={autoFocus} value={text} onValueChange={setText} className="min-h-24" placeholder="e.g. Do not modify the D1 schema." {...skillPicker.textareaProps} />
+        <SlashTextarea
+          autoFocus={autoFocus}
+          value={text}
+          onValueChange={setText}
+          className="min-h-24"
+          placeholder={answering ? 'e.g. Round halves up everywhere; the accounts test is wrong.' : 'e.g. Do not modify the D1 schema.'}
+          {...skillPicker.textareaProps}
+        />
       </Field>
       {running ? (
         <Checkbox checked={pause} onCheckedChange={setPause} label="Pause the current stage now" description="Stops the running stage; it runs again with this directive when you resume." />
       ) : null}
       <div className="flex justify-end">
         <Button type="submit" loading={command.isPending} disabled={!connection.online} disabledReason="Reconnect to the orchestrator first">
-          Add directive
+          {answering ? 'Answer and continue' : 'Add directive'}
         </Button>
       </div>
     </form>
@@ -72,7 +87,7 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
 
 export function DirectiveDialog({ task, open, onOpenChange }: { task: TaskDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Add directive" description={`${task.id} · ${task.title}`}>
+    <Dialog open={open} onOpenChange={onOpenChange} title={task.blocker?.kind === 'decision' && task.status === 'WAITING_FOR_USER' ? 'Answer the question' : 'Add directive'} description={`${task.id} · ${task.title}`}>
       <DirectiveForm task={task} autoFocus onDone={() => onOpenChange(false)} />
     </Dialog>
   );

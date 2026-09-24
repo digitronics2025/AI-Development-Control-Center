@@ -1,4 +1,4 @@
-import { FileText, Pause, Play, RotateCcw, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { FileText, MessageSquareReply, Pause, Play, RotateCcw, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { Button, useFeedback } from '@acc/ui';
 import type { TaskSummary } from '@acc/shared';
@@ -6,7 +6,7 @@ import { errorMessage } from '../api/client';
 import { useTaskCommand } from '../api/hooks';
 import { useConnection } from '../app/runtime';
 
-export type PrimaryActionKind = 'pause' | 'resume' | 'review-approval' | 'retry' | 'open-report' | 'start' | 'more-cycle' | 'open';
+export type PrimaryActionKind = 'pause' | 'resume' | 'review-approval' | 'retry' | 'open-report' | 'start' | 'more-cycle' | 'open' | 'answer';
 
 export interface PrimaryAction {
   kind: PrimaryActionKind;
@@ -35,6 +35,8 @@ export function primaryActionFor(task: Pick<TaskSummary, 'status' | 'blocker'>):
       // Chairman blockers: resuming extends a limit, or retries after you dealt with the blocker.
       if (task.blocker?.kind === 'limit') return { kind: 'resume', label: 'Extend limits and resume', icon: Play };
       if (task.blocker?.kind === 'hard_blocker') return { kind: 'resume', label: 'Resume', icon: Play };
+      // A stage asked a question: your answer (a directive) continues the task.
+      if (task.blocker?.kind === 'decision') return { kind: 'answer', label: 'Answer', icon: MessageSquareReply };
       return { kind: 'retry', label: 'Retry Stage', icon: RotateCcw };
     case 'FAILED':
       return { kind: 'retry', label: 'Retry Stage', icon: RotateCcw };
@@ -47,7 +49,18 @@ export function primaryActionFor(task: Pick<TaskSummary, 'status' | 'blocker'>):
   }
 }
 
-export function TaskPrimaryAction({ task, size = 'default', onOpenReport }: { task: TaskSummary; size?: 'compact' | 'default'; onOpenReport?: () => void }) {
+export function TaskPrimaryAction({
+  task,
+  size = 'default',
+  onOpenReport,
+  onAnswer,
+}: {
+  task: TaskSummary;
+  size?: 'compact' | 'default';
+  onOpenReport?: () => void;
+  /** Where the task's page can take the answer in place; elsewhere Answer opens the task. */
+  onAnswer?: () => void;
+}) {
   const action = primaryActionFor(task);
   const command = useTaskCommand(task.id);
   const navigate = useNavigate();
@@ -67,6 +80,10 @@ export function TaskPrimaryAction({ task, size = 'default', onOpenReport }: { ta
       case 'open':
         navigate(`/tasks/${task.id}`);
         return;
+      case 'answer':
+        if (onAnswer) onAnswer();
+        else navigate(`/tasks/${task.id}`);
+        return;
       default: {
         const name = action.kind === 'more-cycle' ? 'resume' : action.kind;
         command.mutate(
@@ -80,7 +97,7 @@ export function TaskPrimaryAction({ task, size = 'default', onOpenReport }: { ta
     }
   };
 
-  const needsConnection = !['review-approval', 'open-report', 'open'].includes(action.kind);
+  const needsConnection = !['review-approval', 'open-report', 'open'].includes(action.kind) && !(action.kind === 'answer' && !onAnswer);
   return (
     <Button
       variant="primary"

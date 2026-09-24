@@ -293,16 +293,23 @@ export class Chairman implements SupervisorHooks {
     if (mode === 'blocked') {
       // Provider blocks: hand the stage to another subscription agent if one is healthy; otherwise wait as before.
       if (!BLOCKING_PROVIDER.has(outcome.errorClass) || def.kind !== 'agent') return 'legacy';
-      const candidates = recoveryCandidates(this.candidateContext(task, 'provider_blocked', def.key, sig));
+      const candidates = recoveryCandidates({
+        ...this.candidateContext(task, 'provider_blocked', def.key, sig),
+        // A model the CLI rejects is one stage's problem; credits, usage windows and sign-in are the whole agent's.
+        providerWide: outcome.errorClass !== 'MODEL_UNAVAILABLE',
+      });
       const choice = candidates[0];
       if (!choice) return 'legacy';
       const input: RecoveryInput = { trigger: 'provider_blocked', failingStageKey: def.key, stageId: stage.id, sig };
       const packet = await this.evidencePacket(task, input);
-      const decision = this.decide(task, 'provider_blocked', `${def.name} is blocked (${outcome.message.slice(0, 160)}). ${choice.label}.`, choice.label, {
+      // Name the blocked agent: without it, later answers could not say which provider ran out.
+      const blocked = stage.agentId ? (this.d.agents.list().find((a) => a.id === stage.agentId)?.name ?? stage.agentId) : 'its agent';
+      const decision = this.decide(task, 'provider_blocked', `${def.name} is blocked on ${blocked} (${outcome.message.slice(0, 160)}). ${choice.label}.`, choice.label, {
         fingerprint: choice.fingerprint,
         strategy: this.strategyStart(choice, input, this.diagnose(input), packet.digest, task.recoveryCycle),
       });
-      this.rememberStrategy(taskId, choice, `${def.name} moved to another agent after: ${outcome.message.slice(0, 200)}`);
+      // A provider reroute runs alongside the current strategy: it must not replace that strategy's guidance.
+      this.rememberStrategy(taskId, choice, null);
       const results = await this.gateway.executeDecision(taskId, choice.actions, { initiator: 'chairman', source: 'supervisor', decisionId: decision.id, control });
       if (results.every((r) => r.status === 'completed')) return 'continue';
       this.strategyNotStarted(decision.id, results);
@@ -389,12 +396,12 @@ export class Chairman implements SupervisorHooks {
     return rec;
   }
 
-  private rememberStrategy(taskId: string, candidate: StrategyCandidate, guidance: string): void {
+  /** `guidance: null` keeps the current strategy's guidance (a provider reroute is not a new strategy for the work). */
+  private rememberStrategy(taskId: string, candidate: StrategyCandidate, guidance: string | null): void {
     const session = this.store.session(taskId);
     this.store.updateSession(taskId, {
       strategyFingerprints: [...session.strategyFingerprints, candidate.fingerprint].slice(-200),
-      strategySummary: redact(guidance).slice(0, 2000),
-      lastRecoveryReason: candidate.label,
+      ...(guidance === null ? {} : { strategySummary: redact(guidance).slice(0, 2000), lastRecoveryReason: candidate.label }),
     });
   }
 
@@ -555,7 +562,12 @@ export class Chairman implements SupervisorHooks {
 
   private async hardBlock(task: TaskRecord, input: RecoveryInput): Promise<'stop'> {
     const tried = this.store.session(task.id).lastRecoveryReason;
-    const message = `No safe new strategy remains for "${input.sig.message.slice(0, 200)}" (${TRIGGER_LABEL[input.trigger]}).${tried ? ` Last strategy tried: ${tried}.` : ''} Add a directive with what to do differently, then resume.`;
+    // What the Chairman understood about the failure is what the operator needs to decide what to do differently.
+    const diagnosis = this.store
+      .listDecisions(task.id, 20)
+      .reverse()
+      .find((d) => d.strategy?.diagnosis.summary)?.strategy!.diagnosis.summary;
+    const message = `No safe new strategy remains for "${input.sig.message.slice(0, 200)}" (${TRIGGER_LABEL[input.trigger]}).${tried ? ` Last strategy tried: ${tried}.` : ''}${diagnosis ? ` Diagnosis: ${diagnosis.slice(0, 400)}` : ''} Add a directive with what to do differently, then resume.`;
     this.decide(task, input.trigger, message, 'Hard blocker', { hardBlocker: true });
     await this.d.engine.block(task.id, 'hard_blocker', message, { inLoop: true, stageKey: input.failingStageKey });
     return 'stop';

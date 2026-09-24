@@ -168,6 +168,11 @@ describe('supervised recovery (plan §7.2)', () => {
     const implement = t.services.store.listStages(id).filter((s) => s.stageKey === 'implement');
     expect(implement.map((s) => `${s.agentId}:${s.status}`)).toEqual(['claude:PAUSED', 'codex:SUCCESS']);
     expect(decisions(id)[0]).toMatchObject({ trigger: 'provider_blocked', decision: 'Hand Implement to codex' });
+    expect(decisions(id)[0]!.summary).toContain('Implement is blocked on Claude Code (simulated)');
+    // Fix was on the same exhausted agent: it moved in the same decision instead of stopping later.
+    expect(t.services.store.getTask(id)!.overrides.stages.fix).toMatchObject({ agentId: 'codex' });
+    // A provider reroute is not a strategy for the work: later prompts get no guidance from it.
+    expect(t.services.chairman.store.session(id).strategySummary).toBeNull();
     expect(decisions(id)[0]!.strategy).toMatchObject({
       strategyKind: 'change_agent',
       targetAgentId: 'codex',

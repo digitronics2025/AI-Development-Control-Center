@@ -23,6 +23,7 @@ export const EVIDENCE_KINDS = [
   'failure',
   'failure_history',
   'test_output',
+  'work_report',
   'verification',
   'review',
   'plan',
@@ -75,6 +76,7 @@ const SECTION_LIMIT: Record<ChairmanEvidenceKind, number> = {
   failure: 1_500,
   failure_history: 1_500,
   test_output: 6_000,
+  work_report: 4_000,
   verification: 8_000,
   review: 8_000,
   plan: 5_000,
@@ -91,6 +93,7 @@ const RELIABILITY: Record<ChairmanEvidenceKind, EvidenceReliability> = {
   failure: 'OBSERVED',
   failure_history: 'OBSERVED',
   test_output: 'OBSERVED',
+  work_report: 'AGENT_REPORTED',
   verification: 'AGENT_REPORTED',
   review: 'AGENT_REPORTED',
   plan: 'AGENT_REPORTED',
@@ -105,6 +108,7 @@ const LABEL: Record<ChairmanEvidenceKind, string> = {
   failure: 'current failure',
   failure_history: 'failure history',
   test_output: 'failing test output',
+  work_report: 'latest implementation or fix report',
   verification: 'latest verification',
   review: 'latest review',
   plan: 'current plan',
@@ -141,10 +145,13 @@ export class ChairmanEvidenceService {
     switch (failure.source) {
       case 'tests':
         builders.test_output = () => (failure.stageId ? this.testOutput(task, failure.stageId) : null);
+        // What the worker says it did (or why it stopped): without it a refusal reads as a write that never lands.
+        builders.work_report = () => this.workReport(task.id);
         builders.changed_files = () => this.changes(task);
         break;
       case 'review':
       case 'verify':
+        builders.work_report = () => this.workReport(task.id);
         builders[failure.source === 'verify' ? 'verification' : 'review'] = () => this.artifact(task.id, failure.source === 'verify' ? 'verification' : 'review');
         if (failure.category === 'REQUIREMENT_OR_PLAN') builders.plan = () => this.artifact(task.id, 'plan');
         builders.changed_files = () => this.changes(task);
@@ -155,6 +162,7 @@ export class ChairmanEvidenceService {
         builders.agent_health = () => this.agentHealth();
         break;
       case 'gate':
+        builders.work_report = () => this.workReport(task.id);
         builders.changed_files = () => this.changes(task);
         break;
     }
@@ -259,6 +267,17 @@ export class ChairmanEvidenceService {
 
   private async artifact(taskId: string, type: 'review' | 'verification' | 'plan') {
     const text = await this.d.artifacts.latestText(taskId, type, 40_000);
+    return text ? { text } : null;
+  }
+
+  /** The newer of the latest implementation and fix reports. */
+  private async workReport(taskId: string) {
+    const newest = (['implementation-report', 'fix-report'] as const)
+      .map((type) => ({ type, rec: this.d.store.latestArtifactOfType(taskId, type) }))
+      .filter((x) => x.rec)
+      .sort((a, b) => b.rec!.createdAt.localeCompare(a.rec!.createdAt))[0];
+    if (!newest) return null;
+    const text = await this.d.artifacts.latestText(taskId, newest.type, 40_000);
     return text ? { text } : null;
   }
 

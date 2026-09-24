@@ -88,6 +88,11 @@ export interface CandidateContext {
   triedFingerprints: ReadonlySet<string>;
   /** Checkpoint taken before the change that made things worse, if one exists. */
   rollbackCheckpointId: string | null;
+  /**
+   * provider_blocked only: the whole agent is out (credits, usage window, sign-in),
+   * not one model, so every stage of the task still on it would stop in turn.
+   */
+  providerWide?: boolean;
 }
 
 const byRole = (wf: WorkflowProfile, role: StageDefinition['role']) => wf.stages.find((s) => s.role === role && s.kind === 'agent') ?? null;
@@ -151,9 +156,27 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         const current = ctx.assignments[stage.key];
         const alternative = ctx.availableAgents.find((a) => a !== current && !(ctx.triedAgents?.[stage.key] ?? []).includes(a));
         if (!alternative) break;
-        add('change_agent', 5, stage.key, alternative, `Hand ${stage.name} to ${alternative}`, `${current ?? 'The current agent'} has not been able to resolve this; a different agent gets the full context and the failure history.`, [
+        // A provider that is out for everything would stop each of its later stages in turn: move them in the same decision.
+        const alsoMoved =
+          ctx.trigger === 'provider_blocked' && ctx.providerWide && current
+            ? wf.stages.filter((s) => s.kind === 'agent' && s.key !== stage.key && ctx.assignments[s.key] === current)
+            : [];
+        const also = alsoMoved.length ? ` ${alsoMoved.map((s) => s.name).join(', ')} ${alsoMoved.length === 1 ? 'uses' : 'use'} the same agent and move with it.` : '';
+        add('change_agent', 5, stage.key, alternative, `Hand ${stage.name} to ${alternative}`, `${current ?? 'The current agent'} has not been able to resolve this; a different agent gets the full context and the failure history.${also}`, [
+          ...alsoMoved.map((s) => ({ type: 'CHANGE_AGENT' as const, params: { stageKey: s.key, agentId: alternative } })),
           { type: 'CHANGE_AGENT', params: { stageKey: stage.key, agentId: alternative } },
-          { type: 'RETURN_TO_STAGE', params: { stageKey: stage.key, guidance: `You are taking over ${stage.name} from another agent that could not resolve: "${failure}". Read the history and take a different approach.` } },
+          {
+            type: 'RETURN_TO_STAGE',
+            params: {
+              stageKey: stage.key,
+              // An unavailable provider says nothing about the work: no guidance, so the current strategy's guidance
+              // (which every later prompt carries) stays, instead of "take a different approach" steering away from a sound plan.
+              guidance:
+                ctx.trigger === 'provider_blocked'
+                  ? undefined
+                  : `You are taking over ${stage.name} from another agent that could not resolve: "${failure}". Read the history and take a different approach.`,
+            },
+          },
         ]);
         break;
       }

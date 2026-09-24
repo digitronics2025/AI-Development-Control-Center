@@ -27,6 +27,7 @@ import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '
 import type { ApprovalGate } from './approvals.js';
 import type { ContextBuilder } from './context.js';
 import { LogSink } from './log-sink.js';
+import { extractOperatorBlockers } from './report.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { testFailureSummary, testPassSummary } from './test-summary.js';
@@ -43,6 +44,8 @@ export type StageOutcome =
   | { kind: 'tests_failed'; stageId: string; message: string }
   | { kind: 'error'; stageId: string; errorClass: ErrorClass; message: string }
   | { kind: 'blocked'; stageId: string }
+  /** A work stage needs the operator's decision before the task can be done right. */
+  | { kind: 'needs_operator'; stageId: string; questions: string[] }
   | { kind: 'stopped'; stageId: string; reason: StopReason };
 
 /** What a `redirect` stop applies once the loop has let go of the task. */
@@ -313,6 +316,15 @@ export class StageRunners {
     }
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
     await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
+
+    if (def.role !== 'reviewer' && def.role !== 'verifier') {
+      // Reviewers and verifiers list operator items without stopping (NEEDS OPERATOR); a work stage that cannot proceed stops the task.
+      const questions = extractOperatorBlockers(output);
+      if (questions.length) {
+        publisher.updateStage(stage.id, { status: 'PAUSED', summary: summarize(output), finishedAt: now() });
+        return { kind: 'needs_operator', stageId: stage.id, questions };
+      }
+    }
 
     let verdict: 'PASS' | 'FAIL' | null = null;
     if (def.verdict) {

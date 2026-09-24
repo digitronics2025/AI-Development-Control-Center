@@ -165,6 +165,7 @@ function lastSegment(p: string): string {
 const LOCAL_FIELDS: Record<string, unknown> = {
   path: undefined,
   worktreePath: null,
+  workspacePath: null,
   executablePath: null,
   dataDir: undefined,
   host: undefined,

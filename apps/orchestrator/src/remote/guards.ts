@@ -93,6 +93,8 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       const ceilingPolicy = repo?.policyMode ?? settings.execution.policyMode;
       if (typeof b.policyMode === 'string' && policyRank(b.policyMode as PolicyMode) > policyRank(ceilingPolicy)) return deny('A remote task cannot use a more permissive policy than this machine allows.');
       if (Array.isArray(b.attachments) && b.attachments.length) return deny('Attach files from this machine; remote tasks carry text only.');
+      // A task across repositories is created on this machine only (docs/plans/MULTI_REPO_TASKS_PLAN.md): the cloud leases one repository.
+      if (Array.isArray(b.linkedRepositoryIds) && b.linkedRepositoryIds.length) return deny('A task across several repositories can only be created on this machine.');
       return allow;
     }
     default:

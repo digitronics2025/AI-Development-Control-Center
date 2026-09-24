@@ -234,7 +234,8 @@ export class SourceControlService {
     const task = this.attributionTask(repo.id, state.branch.head);
     let attributionTaskId: string | null = null;
     if (task && state.entries.length > 0 && small) {
-      const baseline = task.git.baselineSnapshotId ? this.d.store.getSnapshot(task.git.baselineSnapshotId) : null;
+      const git = this.gitIn(task, repo.id);
+      const baseline = git.baselineSnapshotId ? this.d.store.getSnapshot(git.baselineSnapshotId) : null;
       if (baseline) {
         try {
           for (const f of await changesSince(state.root, baseline)) attribution.set(f.path, f.origin);
@@ -254,12 +255,22 @@ export class SourceControlService {
    * tree. Attribution is only shown when a baseline proves it.
    */
   private attributionTask(repositoryId: string, branch: string | null): TaskRecord | null {
-    const tasks = this.d.store.listTasks({ repositoryId, limit: 50 }).filter((t) => t.git.baselineSnapshotId && !isReadOnlyWorkflow(t.workflow));
+    const tasks = this.d.store.listTasks({ repositoryId, limit: 50 }).filter((t) => this.gitIn(t, repositoryId).baselineSnapshotId && !isReadOnlyWorkflow(t.workflow));
     return (
       tasks.find((t) => !TERMINAL_TASK_STATUSES.includes(t.status) && t.status !== 'DRAFT') ??
-      tasks.find((t) => TERMINAL_TASK_STATUSES.includes(t.status) && branch !== null && (t.git.taskBranch ?? t.git.baselineBranch) === branch) ??
+      tasks.find((t) => TERMINAL_TASK_STATUSES.includes(t.status) && branch !== null && (this.gitIn(t, repositoryId).taskBranch ?? this.gitIn(t, repositoryId).baselineBranch) === branch) ??
       null
     );
+  }
+
+  /**
+   * A task's Git record in this repository: its own for its primary
+   * repository, the linked repository's for a task across repositories
+   * (docs/plans/MULTI_REPO_TASKS_PLAN.md).
+   */
+  private gitIn(task: TaskRecord, repositoryId: string): TaskRecord['git'] {
+    if (task.repositoryId === repositoryId) return task.git;
+    return this.d.store.listLinkedRepositories(task.id).find((l) => l.repositoryId === repositoryId)?.git ?? task.git;
   }
 
   private activeTask(repositoryId: string): SourceControlActiveTask | null {
@@ -271,7 +282,7 @@ export class SourceControlService {
     }
     const running = this.d.store
       .listTasks({ repositoryId, statuses: ['RUNNING', 'PAUSED', 'WAITING_FOR_USER', 'WAITING_FOR_USAGE_RESET', 'INTERRUPTED', 'FAILED'], limit: 20 })
-      .filter((t) => !isReadOnlyWorkflow(t.workflow) && (t.status === 'RUNNING' || t.git.baselineSnapshotId));
+      .filter((t) => !isReadOnlyWorkflow(t.workflow) && (t.status === 'RUNNING' || this.gitIn(t, repositoryId).baselineSnapshotId));
     const task = running.find((t) => t.status === 'RUNNING') ?? running[0];
     if (!task) return null;
     const stage = task.currentStageId ? this.d.store.getStage(task.currentStageId) : null;
@@ -406,7 +417,7 @@ export class SourceControlService {
     const map = new Map<string, CommitAttribution>();
     const wanted = new Set(shas);
     for (const task of this.d.store.listTasks({ repositoryId, limit: 1000 })) {
-      for (const sha of task.git.commits) if (wanted.has(sha)) map.set(sha, { kind: 'task', taskId: task.id, taskTitle: task.title });
+      for (const sha of this.gitIn(task, repositoryId).commits) if (wanted.has(sha)) map.set(sha, { kind: 'task', taskId: task.id, taskTitle: task.title });
     }
     for (const [sha, op] of this.d.operations.byCommits(repositoryId, shas)) {
       if (!map.has(sha)) map.set(sha, { kind: 'source-control', operationId: op.id, taskId: op.taskId });
@@ -863,7 +874,7 @@ export class SourceControlService {
   private branchBlocker(repositoryId: string, branch: string): string | null {
     const task = this.d.store
       .listTasks({ repositoryId, statuses: ['QUEUED', 'RUNNING', 'PAUSED', 'WAITING_FOR_USER', 'WAITING_FOR_USAGE_RESET', 'INTERRUPTED', 'FAILED'], limit: 50 })
-      .find((t) => (t.git.taskBranch ?? t.git.baselineBranch) === branch);
+      .find((t) => (this.gitIn(t, repositoryId).taskBranch ?? this.gitIn(t, repositoryId).baselineBranch) === branch);
     return task ? `${task.id} is unfinished on ${branch}; finish or cancel it before its branch moves.` : null;
   }
 

@@ -30,6 +30,7 @@ import {
 } from '@acc/shared';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
+import { taskRepositories, taskRepository, type TaskRepository } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
 import { AgentNotFoundError } from '../services/agents.js';
 import { toArtifactView } from '../services/artifacts.js';
@@ -245,24 +246,22 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return store.listApprovals({ taskId: id }).map((a) => views.approval(a));
   });
 
-  app.get('/api/tasks/:id/changes', async (request): Promise<TaskChanges> => {
-    const task = engine.task(idParam.parse(request.params).id);
-    const repo = s.repositories.record(task.repositoryId);
-    const baseline = task.git.baselineSnapshotId ? store.getSnapshot(task.git.baselineSnapshotId) : null;
+  /** One repository's changes for a task (its Git record: the task's own, or a linked repository's). */
+  const repositoryChanges = async (unit: Pick<TaskRepository, 'repo' | 'git' | 'workdir'>): Promise<TaskChanges> => {
+    const { repo, git: rec } = unit;
+    const baseline = rec.baselineSnapshotId ? store.getSnapshot(rec.baselineSnapshotId) : null;
     const status = await s.repositories.status(repo, true);
     const base = {
-      baselineCommit: task.git.baselineCommit,
-      baselineBranch: task.git.baselineBranch,
-      taskBranch: task.git.taskBranch,
+      baselineCommit: rec.baselineCommit,
+      baselineBranch: rec.baselineBranch,
+      taskBranch: rec.taskBranch,
       currentBranch: status.branch,
-      preexistingWarning: task.git.preexistingChanges.length > 0,
+      preexistingWarning: rec.preexistingChanges.length > 0,
     };
     if (!baseline || !(await isGitRepository(repo.path))) return { ...base, files: [], totals: { files: 0, additions: 0, deletions: 0 } };
     // An isolated task whose worktree is gone: its changes are the commits on its branch.
     const files =
-      task.git.isolated && !task.git.worktreePath && task.git.taskBranch
-        ? await changesInRange(repo.path, task.git.baselineCommit, task.git.taskBranch)
-        : await changesSince(taskWorkdir(task, repo), baseline);
+      rec.isolated && !rec.worktreePath && rec.taskBranch ? await changesInRange(repo.path, rec.baselineCommit, rec.taskBranch) : await changesSince(unit.workdir, baseline);
     return {
       ...base,
       files,
@@ -272,21 +271,38 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
         deletions: files.filter((f) => f.origin !== 'preexisting').reduce((n, f) => n + (f.deletions ?? 0), 0),
       },
     };
+  };
+
+  app.get('/api/tasks/:id/changes', async (request): Promise<TaskChanges> => {
+    const task = engine.task(idParam.parse(request.params).id);
+    const repo = s.repositories.record(task.repositoryId);
+    const units = taskRepositories(store, task);
+    if (units.length <= 1) return repositoryChanges({ repo, git: task.git, workdir: taskWorkdir(task, repo) });
+    // Across repositories: the flat fields are the primary's; `repositories` has each one, paths relative to it.
+    const repositories = await Promise.all(
+      units.map(async (u) => {
+        const changes = await repositoryChanges(u);
+        return { ...changes, repositoryId: u.repo.id, repositoryName: u.repo.name, folder: u.folder, files: changes.files.map((f) => ({ ...f, repositoryId: u.repo.id })) };
+      }),
+    );
+    return { ...repositories[0]!, repositories };
   });
 
   app.get('/api/tasks/:id/diff', async (request) => {
     const task = engine.task(idParam.parse(request.params).id);
-    const { path: file } = z.object({ path: z.string().max(1000).optional() }).parse(request.query);
-    const baseline = task.git.baselineSnapshotId ? store.getSnapshot(task.git.baselineSnapshotId) : null;
+    const { path: file, repositoryId } = z.object({ path: z.string().max(1000).optional(), repositoryId: z.string().max(100).optional() }).parse(request.query);
+    const primary = s.repositories.record(task.repositoryId);
+    const unit = repositoryId && repositoryId !== task.repositoryId ? taskRepository(store, task, repositoryId) : { repo: primary, git: task.git, workdir: taskWorkdir(task, primary) };
+    if (!unit) throw new EngineError(`${task.id} does not work in repository ${repositoryId}`, 'NOT_FOUND');
+    const baseline = unit.git.baselineSnapshotId ? store.getSnapshot(unit.git.baselineSnapshotId) : null;
     if (!baseline) return { diff: '', truncated: false };
-    const repo = s.repositories.record(task.repositoryId);
     if (file !== undefined && (file.includes('..') || /^[/\\]|^[A-Za-z]:/.test(file))) {
       throw new EngineError('Invalid path', 'INVALID_INPUT');
     }
     const { diff, truncated } =
-      task.git.isolated && !task.git.worktreePath && task.git.taskBranch
-        ? await diffInRange(repo.path, task.git.baselineCommit, task.git.taskBranch, { path: file, maxBytes: 1_000_000 })
-        : await diffSince(taskWorkdir(task, repo), baseline, { path: file, maxBytes: 1_000_000 });
+      unit.git.isolated && !unit.git.worktreePath && unit.git.taskBranch
+        ? await diffInRange(unit.repo.path, unit.git.baselineCommit, unit.git.taskBranch, { path: file, maxBytes: 1_000_000 })
+        : await diffSince(unit.workdir, baseline, { path: file, maxBytes: 1_000_000 });
     return { diff: redact(diff), truncated };
   });
 

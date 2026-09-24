@@ -447,3 +447,46 @@ describe('Chairman evidence across repositories', () => {
     expect(scrubRoots('at C:/code/api/x.ts', ['C:/code/api'])).toBe('at <repo>/x.ts');
   });
 });
+
+describe('API, Source Control and remote across repositories', () => {
+  it('serves changes and diffs per repository, lists the task under each, and Source Control sees it in a linked repository', async () => {
+    t = await createTestApp();
+    const api = await addRepo(t, await makeRepo());
+    const web = await addRepo(t, await makeRepo());
+    const id = await createTask(t, api, 'Views [sim:needs-decision]', { linkedRepositoryIds: [web], workflowId: 'quick-change', supervised: false });
+    await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+    const { writeFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const task = t.services.store.getTask(id)!;
+    const linked = t.services.store.listLinkedRepositories(id)[0]!;
+    writeFileSync(path.join(task.git.worktreePath!, 'api.txt'), 'api\n');
+    writeFileSync(path.join(linked.git.worktreePath!, 'web.txt'), 'web\n');
+
+    const changes = (await t.api('GET', `/api/tasks/${id}/changes`)).body;
+    expect(changes.repositories.map((r: { repositoryId: string; folder: string }) => [r.repositoryId, r.folder])).toEqual([[api, task.git.folder], [web, linked.folder]]);
+    expect(changes.repositories[1].files).toEqual([expect.objectContaining({ path: 'web.txt', origin: 'task', repositoryId: web })]);
+    expect(changes.files.map((f: { path: string }) => f.path)).toEqual(['api.txt']);
+    expect(changes.taskBranch).toBe(task.git.taskBranch);
+
+    const webDiff = (await t.api('GET', `/api/tasks/${id}/diff?repositoryId=${web}&path=web.txt`)).body;
+    expect(webDiff.diff).toContain('+web');
+    expect((await t.api('GET', `/api/tasks/${id}/diff?path=api.txt`)).body.diff).toContain('+api');
+    expect((await t.api('GET', `/api/tasks/${id}/diff?repositoryId=nope`)).status).toBe(404);
+
+    expect((await t.api('GET', `/api/tasks?repositoryId=${web}`)).body.items.map((x: { id: string }) => x.id)).toContain(id);
+    const snapshot = (await t.api('GET', `/api/repositories/${web}/source-control`)).body;
+    expect(JSON.stringify(snapshot)).toContain(id);
+  }, 120_000);
+
+  it('refuses a task across repositories from the cloud, and never sends the workspace path', async () => {
+    const { guardRemoteCommand } = await import('../src/remote/guards.js');
+    const { stripLocalFields } = await import('../src/remote/egress.js');
+    t = await createTestApp();
+    const ctx = { settings: t.services.settings.get(), repository: () => null, workflow: () => null };
+    const body = { description: 'x', repositoryId: 'r1', workflowId: 'quick-change', mode: 'autopilot' };
+    expect(guardRemoteCommand('task.create', {}, body, ctx)).toEqual({ ok: true });
+    expect(guardRemoteCommand('task.create', {}, { ...body, linkedRepositoryIds: ['r2'] }, ctx)).toEqual({ ok: false, message: 'A task across several repositories can only be created on this machine.' });
+    const out = stripLocalFields({ task: { git: { workspacePath: 'C:/data/workspaces/TASK-0001', worktreePath: 'C:/data/workspaces/TASK-0001/api', folder: 'api' } } }) as { task: { git: Record<string, unknown> } };
+    expect(out.task.git).toEqual({ workspacePath: null, worktreePath: null, folder: 'api' });
+  });
+});

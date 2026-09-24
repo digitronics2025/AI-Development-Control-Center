@@ -34,6 +34,8 @@ function fail(title: string, text: string): void {
 // Without it the page came from the cloud control plane, which authenticates through
 // Cloudflare Access; the session check below confirms it before the app starts.
 const detected = detectMode(document);
+// Read once, then gone from the DOM: a DOM dump or a content script must not find the token (audit F-25).
+document.querySelector('meta[name="acc-token"]')?.remove();
 if (detected.mode === 'local') {
   render({ baseUrl: '', mode: 'local', token: detected.token, host: 'web' });
 } else {

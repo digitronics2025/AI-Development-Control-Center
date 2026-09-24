@@ -64,8 +64,17 @@ export async function expectNoAxeViolations(page: Page, testInfo: TestInfo): Pro
   expect(summary, 'axe WCAG 2.2 AA violations').toEqual([]);
 }
 
+/**
+ * The local API token, read from the page the orchestrator serves: the running
+ * dashboard removes it from its own DOM once read (audit F-25).
+ */
+export async function localToken(page: Page): Promise<string> {
+  const html = await (await page.request.get('/')).text();
+  return /name="acc-token" content="([^"]+)"/.exec(html)?.[1] ?? '';
+}
+
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
-  const token = await page.evaluate(() => document.querySelector<HTMLMetaElement>('meta[name="acc-token"]')?.content ?? '');
+  const token = await localToken(page);
   const res = await page.request.patch('/api/settings', { data: { theme }, headers: { authorization: `Bearer ${token}` } });
   expect(res.ok()).toBe(true);
   // The page learns the new setting over the WebSocket; checks made before it is painted see the old theme.
@@ -73,7 +82,7 @@ export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<voi
 }
 
 export async function api<T = unknown>(page: Page, method: 'GET' | 'POST' | 'PATCH', path: string, data?: unknown): Promise<T> {
-  const token = await page.evaluate(() => document.querySelector<HTMLMetaElement>('meta[name="acc-token"]')?.content ?? '');
+  const token = await localToken(page);
   const res = await page.request.fetch(path, { method, data, headers: { authorization: `Bearer ${token}` } });
   expect(res.ok(), `${method} ${path}: ${res.status()}`).toBe(true);
   return (res.status() === 204 ? null : await res.json()) as T;

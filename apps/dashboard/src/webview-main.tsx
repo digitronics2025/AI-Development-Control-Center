@@ -26,6 +26,8 @@ declare global {
 }
 
 const boot = window.__ACC_WEBVIEW__;
+// Read once, then gone from the page's globals (audit F-25).
+delete window.__ACC_WEBVIEW__;
 const vscode = window.acquireVsCodeApi?.();
 applyInitialTheme('vscode');
 

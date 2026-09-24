@@ -17,7 +17,10 @@ package, `allowBuilds` only runs its prebuild check).
 
 - Output is redacted per chunk and kept in a bounded buffer (256 KB) with a
   monotonic **cursor**: `read(since)` returns what came after a cursor and
-  says when older output was dropped.
+  says when older output was dropped. The realtime socket skips chunks for a
+  viewer that falls more than 8 MB behind; the dashboard terminal sees the gap
+  between its cursor and the next chunk and reads the missing part with
+  `?since=`.
 - Close on idle (30 min), lifetime cap (8 h), explicit close, task end and
   shutdown. `kill()` lets ConPTY end its console session, then runs
   `taskkill /T /F` on the shell as a fallback, then waits up to 2 s for exit.

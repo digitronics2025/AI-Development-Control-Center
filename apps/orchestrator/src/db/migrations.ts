@@ -1178,4 +1178,18 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX idx_ask_messages_client ON ask_messages(thread_id, client_message_id) WHERE client_message_id IS NOT NULL;
     `,
   },
+  {
+    // Ask reads live data (docs/plans/ASK_READ_ONLY_DATA_PLAN.md): the sources a
+    // conversation may read, whether it shows personal data, and the tool
+    // session behind each answer — its lookups stay in tool_executions, found
+    // by session. Additive only.
+    version: 15,
+    name: 'ask data sources',
+    sql: `
+      ALTER TABLE ask_threads ADD COLUMN sources TEXT NOT NULL DEFAULT '["controlcenter"]';
+      ALTER TABLE ask_threads ADD COLUMN show_personal INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ask_messages ADD COLUMN tool_session_id TEXT;
+      CREATE INDEX idx_tool_executions_session ON tool_executions(session_id) WHERE session_id IS NOT NULL;
+    `,
+  },
 ];

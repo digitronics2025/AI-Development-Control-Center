@@ -36,6 +36,7 @@ export const PAGES = [
   { name: 'learning', path: '/learning', ready: 'Tasks reviewed' },
   { name: 'learning-findings', path: '/learning?tab=findings', ready: 'Proposed:' },
   { name: 'settings-learning', path: '/settings/learning', ready: 'When a change is worth making' },
+  { name: 'settings-ask', path: '/settings/ask', ready: 'Check access' },
 ] as const;
 
 /** Console errors fail the test; collected from page load onwards. */

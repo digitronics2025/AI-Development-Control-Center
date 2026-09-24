@@ -644,6 +644,29 @@ export class CredentialBroker {
     return env;
   }
 
+  /**
+   * Environment for a read-only session's pinned credentials (docs/systems/ask.md):
+   * exactly the named credential of each kind, as that kind's variable, or a
+   * missing kind. Never another credential of the same kind. The operator chose
+   * these by name in Settings → Ask, which is their scope; a value MyVault has
+   * not saved yet is still held back.
+   */
+  async envForPinned(kinds: readonly string[], pins: Partial<Record<string, string>>): Promise<{ env: Record<string, string>; missing: string[] }> {
+    const env: Record<string, string> = {};
+    const missing: string[] = [];
+    for (const kind of kinds) {
+      const name = pins[kind];
+      const r = name ? this.store.credential(name) : null;
+      const variable = CREDENTIAL_KIND_ENV[kind as CredentialKind];
+      if (!r || r.kind !== kind || !variable || this.heldForVault(r)) {
+        missing.push(kind);
+        continue;
+      }
+      env[variable] = await this.open(r);
+    }
+    return { env, missing };
+  }
+
   /** Environment for an MCP server: VAR → credential name. */
   async envForMapping(mapping: Record<string, string>, repositoryId: string | null): Promise<Record<string, string>> {
     const env: Record<string, string> = {};

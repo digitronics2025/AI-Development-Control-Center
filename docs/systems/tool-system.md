@@ -99,6 +99,17 @@ the front of the profile's `include` order (`profileRank`: its speciality such
 as `cloudflare.*` first, general Git/GitHub/editor tools last), then lower
 levels first.
 
+**Read-only sessions** (`ToolScope.readOnly`, used by Ask — [ask.md](ask.md)):
+an allow-list, pinned credentials, plain settings for the packs
+(`CLOUDFLARE_ACCOUNT_ID`, `ACC_GITHUB_OWNERS`, `ACC_READ_ONLY=1`), personal-data
+masking and a call limit. A capability off the list is refused before routing
+and never escalated; the list is all `sessionTools` and `find` show. An
+operation is a read only when it declares `readOnly: true` (and its `classify`
+does not say `writes`); `decide()` then allows it whatever its level and
+denies everything else. Credentials come from `envForPinned` — the named
+credential of each kind or none, never another of the kind and never an
+ambient login. Normal scopes are unaffected.
+
 ## Profiles ([profiles.ts](../../packages/tools/src/profiles.ts))
 
 `analysis` (every Level 1 stage), `general`, `web-development`,

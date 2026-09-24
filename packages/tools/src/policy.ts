@@ -28,6 +28,13 @@ export interface PolicyInput {
   /** The capability is in the stage's profile. */
   inProfile: boolean;
   origin: CallOrigin;
+  /**
+   * A read-only session (docs/systems/ask.md): only capabilities on its
+   * allow-list, and only calls that cannot change anything. Levels are
+   * recorded but not compared: the level scale mixes "remote" with "writes",
+   * and a production read is still a read.
+   */
+  readOnly?: { allowed: boolean };
 }
 
 /** The highest level that runs without asking, for a mode and auto-approve level. */
@@ -41,6 +48,14 @@ export function decide(input: PolicyInput): PolicyDecision {
   const { risk, origin } = input;
   const ceiling = policyCeiling(input.mode, input.autoApproveUpToLevel);
   const why = risk.reasons.length ? risk.reasons.join(', ') : `Level ${risk.level}`;
+
+  // Fails closed: not on the list, not declared a read, or dangerous is refused, never escalated.
+  if (input.readOnly) {
+    if (!input.readOnly.allowed) return { decision: 'deny', reason: 'Not available in a read-only conversation.' };
+    if (risk.writes !== false) return { decision: 'deny', reason: `${why}: this could change something, and this conversation is read-only.` };
+    if (risk.risk === 'dangerous') return { decision: 'deny', reason: `${why}: refused in a read-only conversation.` };
+    return { decision: 'allow', reason: `Read-only: ${why}` };
+  }
 
   // Irreversible or production-facing: a person decides, with a typed confirmation.
   if (risk.risk === 'dangerous' || risk.level >= 5 || risk.production) {

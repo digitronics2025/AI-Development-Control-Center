@@ -18,6 +18,8 @@ export const keys = {
   askRoot: ['ask'] as const,
   askThreads: ['ask', 'threads'] as const,
   askThread: (id: string) => ['ask', 'thread', id] as const,
+  /** Which Ask data sources are set up; follows settings and credentials. */
+  askSources: ['ask', 'sources'] as const,
   /** An answer being written (`ask.delta`): transient, never fetched, dropped when the answer is stored. */
   askDraft: (messageId: string) => ['ask', 'draft', messageId] as const,
   logs: (executionId: string) => ['logs', executionId] as const,

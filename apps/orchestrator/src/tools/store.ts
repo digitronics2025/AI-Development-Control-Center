@@ -280,6 +280,13 @@ export class ToolStore {
     return r ? toExecution(r) : null;
   }
 
+  /** Every call made in these sessions, oldest first (Ask shows them as an answer's sources). */
+  listExecutionsBySession(sessionIds: readonly string[], limit = 500): ToolExecution[] {
+    if (!sessionIds.length) return [];
+    const marks = sessionIds.map(() => '?').join(', ');
+    return (this.db.prepare(`SELECT * FROM tool_executions WHERE session_id IN (${marks}) ORDER BY started_at LIMIT ?`).all(...sessionIds, limit) as Row[]).map(toExecution);
+  }
+
   listExecutions(filter: { taskId?: string; capability?: string; limit?: number; before?: string } = {}): ToolExecution[] {
     const where: string[] = [];
     const params: unknown[] = [];

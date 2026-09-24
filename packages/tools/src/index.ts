@@ -2,11 +2,13 @@ import { androidProviders } from './packs/android.js';
 import { browserProvider } from './packs/browser.js';
 import { browserPageOperations } from './packs/browser-session.js';
 import { cloudflareProvider } from './packs/cloudflare.js';
+import { cloudflareApiProvider } from './packs/cloudflare-api.js';
 import { credentialProvider } from './packs/credential-broker.js';
 import { databaseProviders } from './packs/database.js';
 import { dockerProvider } from './packs/docker.js';
 import { filesystemProvider } from './packs/filesystem.js';
 import { githubProvider } from './packs/github.js';
+import { githubApiProvider } from './packs/github-api.js';
 import { gitProvider } from './packs/git.js';
 import { hostedProviders } from './packs/hosted.js';
 import { httpProviders } from './packs/http.js';
@@ -42,6 +44,7 @@ export { verifyWeb, webVerifyInput, type WebVerifyInput } from './packs/verify.j
 export { tcpConnect } from './packs/network.js';
 export { globToRegExp } from './packs/filesystem.js';
 export { refreshedPath, locateInstalled } from './packs/installer.js';
+export { resetCloudflareCatalog } from './packs/cloudflare-api.js';
 
 /** Every built-in provider (V2 plan §6). MCP servers are added at runtime by the gateway. */
 export function builtinProviders(): ToolProvider[] {
@@ -50,6 +53,7 @@ export function builtinProviders(): ToolProvider[] {
     filesystemProvider(),
     gitProvider(),
     githubProvider(),
+    githubApiProvider(),
     ...runtimeProviders(),
     browserProvider(browserPageOperations()),
     ...httpProviders(),
@@ -57,6 +61,7 @@ export function builtinProviders(): ToolProvider[] {
     ...networkProviders(),
     windowsProvider(),
     cloudflareProvider(),
+    cloudflareApiProvider(),
     credentialProvider(),
     ...databaseProviders(),
     dockerProvider(),

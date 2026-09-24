@@ -92,3 +92,34 @@ for (const theme of ['dark', 'light'] as const) {
     await expectNoAxeViolations(page, testInfo);
   });
 }
+
+test('an answer lists what it looked up, including a refused lookup', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const stamp = Date.now();
+  const drawer = await askFromPalette(page, `Tasks please ${stamp} [sim:lookup:controlcenter.tasks:{"limit":3}] [sim:lookup:fs.write:{"path":"x","content":"y"}]`);
+  await expect(drawer.getByText(`Simulated answer to: Tasks please ${stamp}`)).toBeVisible();
+  const sources = drawer.getByText('Sources · 2 lookups');
+  await expect(sources).toBeVisible();
+  await sources.click();
+  const lookups = drawer.getByRole('list', { name: 'Lookups' });
+  await expect(lookups.getByRole('listitem').filter({ hasText: 'Tasks' })).toBeVisible();
+  await expect(lookups.getByRole('listitem').filter({ hasText: 'fs.write' })).toContainText('Refused');
+});
+
+test('sources that are not set up are offered with the way to set them up', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/ask');
+  await page.getByRole('button', { name: 'New question' }).first().click();
+  const conversation = page.getByRole('region', { name: 'New question' });
+  await expect(conversation.getByText('Looks at: Control Center · personal data hidden')).toBeVisible();
+  await conversation.getByRole('button', { name: /Options/ }).click();
+  await expect(conversation.getByRole('checkbox', { name: 'Control Center' })).toBeDisabled();
+  await expect(conversation.getByRole('checkbox', { name: 'Cloudflare' })).toBeDisabled();
+  await conversation.getByRole('link', { name: 'Set up in Settings' }).first().click();
+  await expect(page).toHaveURL(/\/settings\/ask$/);
+  await page.getByRole('button', { name: 'Check access' }).click();
+  const results = page.getByRole('list', { name: 'Access check' });
+  await expect(results).toContainText('Control Center: Ready');
+  await expect(results).toContainText('Choose a read-only GitHub key');
+});

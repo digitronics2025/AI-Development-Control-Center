@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 import type {
   AgentInfo,
   AskMessage,
+  AskSource,
+  AskSourceCheck,
   AskThread,
   AskThreadDetail,
   Approval,
@@ -129,12 +131,24 @@ export function useAskThread(id: string | null) {
 
 export function useCreateAskThread() {
   const api = useApi();
-  return useMutation({ mutationFn: (input: { repositoryId?: string | null; agentId?: string; model?: string; effort?: string }) => api.post<AskThread>('/api/ask/threads', input) });
+  return useMutation({ mutationFn: (input: { repositoryId?: string | null; agentId?: string; model?: string; effort?: string; sources?: AskSource[]; showPersonal?: boolean }) => api.post<AskThread>('/api/ask/threads', input) });
 }
 
 export function useUpdateAskThread(id: string) {
   const api = useApi();
-  return useMutation({ mutationFn: (patch: Partial<Pick<AskThread, 'title' | 'repositoryId' | 'agentId' | 'model' | 'effort'>>) => api.patch<AskThread>(`/api/ask/threads/${id}`, patch) });
+  return useMutation({ mutationFn: (patch: Partial<Pick<AskThread, 'title' | 'repositoryId' | 'agentId' | 'model' | 'effort' | 'sources' | 'showPersonal'>>) => api.patch<AskThread>(`/api/ask/threads/${id}`, patch) });
+}
+
+/** Which data sources are set up (Settings → Ask), with the reason when one is not. */
+export function useAskSources(enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.askSources, queryFn: ({ signal }) => api.get<Record<AskSource, { ready: boolean; reason: string | null }>>('/api/ask/sources', signal), enabled });
+}
+
+/** Settings → Ask → Check access: one real read per source. */
+export function useAskSourceCheck() {
+  const api = useApi();
+  return useMutation({ mutationFn: () => api.post<AskSourceCheck[]>('/api/ask/sources/check', {}) });
 }
 
 export function useDeleteAskThread() {

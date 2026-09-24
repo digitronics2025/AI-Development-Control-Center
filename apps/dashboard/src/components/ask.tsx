@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ClipboardList, Send, Square } from 'lucide-react';
+import { ArrowDown, ClipboardList, Database, Send, Square } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
-import { ActivityDot, Button, Combobox, Disclosure, Drawer, Field, SlashTextarea, formatTime } from '@acc/ui';
-import type { AskMessage, AskThread, AskThreadDetail } from '@acc/shared';
+import { Link, useNavigate } from 'react-router';
+import { ActivityDot, Badge, Button, Checkbox, Combobox, Disclosure, Drawer, Field, SlashTextarea, Switch, formatTime } from '@acc/ui';
+import { ASK_SOURCE_LABEL, ASK_SOURCES, type AskLookup, type AskMessage, type AskSource, type AskThread, type AskThreadDetail } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { keys } from '../api/keys';
-import { useAskCancel, useAskMessage, useAskThread, useCreateAskThread, useRepositories, useSettings, useUpdateAskThread } from '../api/hooks';
+import { useAskCancel, useAskMessage, useAskSources, useAskThread, useCreateAskThread, useRepositories, useSettings, useUpdateAskThread } from '../api/hooks';
 import { useConnection } from '../app/runtime';
 import { AssignmentPicker } from './assignment-picker';
 import { Markdown } from './markdown';
@@ -120,7 +120,58 @@ function MessageItem({ message }: { message: AskMessage }) {
       ) : null}
       {message.status === 'failed' ? <p className="text-small text-danger wrap-anywhere">Not answered: {message.error ?? 'the agent failed.'}</p> : null}
       {message.status === 'cancelled' ? <p className="text-small text-fg-secondary">Stopped</p> : null}
+      {message.lookups.length ? <Lookups lookups={message.lookups} /> : null}
     </div>
+  );
+}
+
+const CAPABILITY_LABEL: Record<string, string> = {
+  'controlcenter.tasks': 'Tasks',
+  'controlcenter.task': 'Task',
+  'controlcenter.usage': 'Usage & Costs',
+  'controlcenter.approvals': 'Approvals',
+  'controlcenter.learning': 'Learning',
+  'github.repos': 'GitHub · Repositories',
+  'github.file_read': 'GitHub · File',
+  'github.commits': 'GitHub · Commits',
+  'github.code_search': 'GitHub · Code search',
+  'github.pulls': 'GitHub · Pull requests',
+  'github.issues': 'GitHub · Issues',
+  'github.runs': 'GitHub · Actions runs',
+  'cloudflare.catalog': 'Cloudflare · Data stores',
+  'cloudflare.d1_schema': 'D1 · Tables',
+  'cloudflare.d1_read': 'D1 · Read',
+  'cloudflare.kv_keys': 'KV · Keys',
+  'cloudflare.kv_get': 'KV · Value',
+  'cloudflare.r2_list': 'R2 · Objects',
+  'cloudflare.r2_get': 'R2 · Object',
+  'cloudflare.logs_query': 'Worker logs',
+};
+
+const LOOKUP_STATUS: Record<string, string> = { denied: 'Refused', failed: 'Failed', needs_approval: 'Refused', running: 'Running' };
+
+/** What an answer looked at (design.md §7.3.2): collapsed, one row per lookup. */
+function Lookups({ lookups }: { lookups: AskLookup[] }) {
+  return (
+    <details className="group mt-1 rounded-md border border-border-subtle">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-small font-semibold text-fg-secondary hover:text-fg focus-visible:outline-2 focus-visible:outline-focus pointer-coarse:min-h-11">
+        <Database size={14} aria-hidden />
+        Sources · {lookups.length} lookup{lookups.length === 1 ? '' : 's'}
+      </summary>
+      <ul aria-label="Lookups" className="flex flex-col divide-y divide-border-subtle border-t border-border-subtle">
+        {lookups.map((l) => (
+          <li key={l.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-small">
+            <span className="font-semibold text-fg">{CAPABILITY_LABEL[l.capability] ?? l.capability}</span>
+            {l.live ? <Badge>Live data</Badge> : null}
+            {LOOKUP_STATUS[l.status] ? <span className={l.status === 'running' ? 'text-fg-secondary' : 'text-danger'}>{LOOKUP_STATUS[l.status]}</span> : null}
+            <span className="min-w-0 flex-1 text-fg-secondary wrap-anywhere">{l.summary ?? ''}</span>
+            <time dateTime={l.startedAt} className="tabular text-fg-tertiary">
+              {formatTime(l.startedAt)}
+            </time>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -217,6 +268,9 @@ export function AskComposer({ threadId, onThreadCreated, autoFocus }: { threadId
   // Choices for a conversation that does not exist yet.
   const [newRepositoryId, setNewRepositoryId] = useState<string | null>(null);
   const [newAssignment, setNewAssignment] = useState<{ agentId?: string; model?: string; effort?: string }>({});
+  const [newSources, setNewSources] = useState<AskSource[] | null>(null);
+  const [newShowPersonal, setNewShowPersonal] = useState(false);
+  const sourceStates = useAskSources();
 
   const current = thread.data?.thread;
   const repositoryId = threadId ? (current?.repositoryId ?? null) : newRepositoryId;
@@ -224,6 +278,19 @@ export function AskComposer({ threadId, onThreadCreated, autoFocus }: { threadId
   const assignment = threadId
     ? { agentId: current?.agentId, model: current?.model, effort: current?.effort }
     : { agentId: newAssignment.agentId ?? defaults?.agentId, model: newAssignment.model ?? defaults?.model, effort: newAssignment.effort ?? defaults?.effort };
+  const ready = (s: AskSource) => sourceStates.data?.[s]?.ready ?? s === 'controlcenter';
+  const sources: AskSource[] = threadId ? (current?.sources ?? ['controlcenter']) : (newSources ?? ASK_SOURCES.filter(ready));
+  const showPersonal = threadId ? (current?.showPersonal ?? false) : newShowPersonal;
+  const masking = (settings.data?.ask.maskPersonalData ?? true) && !showPersonal;
+  const lookingAt = ASK_SOURCES.filter((s) => sources.includes(s) && ready(s)).map((s) => ASK_SOURCE_LABEL[s]);
+  const setSources = (next: AskSource[]) => {
+    if (!threadId) return setNewSources(next);
+    update.mutate({ sources: next }, { onError: (e) => setError(errorMessage(e)) });
+  };
+  const setShowPersonal = (next: boolean) => {
+    if (!threadId) return setNewShowPersonal(next);
+    update.mutate({ showPersonal: next }, { onError: (e) => setError(errorMessage(e)) });
+  };
   const running = thread.data?.messages.some((m) => m.status === 'running' || (m.role === 'user' && m.status === 'pending')) ?? false;
   const picker = useSkillPicker(repositoryId ?? undefined, text);
   const busy = create.isPending || send.isPending;
@@ -255,7 +322,7 @@ export function AskComposer({ threadId, onThreadCreated, autoFocus }: { threadId
       let id = threadId;
       if (!id) {
         const chosen = newAssignment.agentId ? { agentId: newAssignment.agentId, model: newAssignment.model ?? 'default', effort: newAssignment.effort ?? 'default' } : {};
-        const created = await create.mutateAsync({ repositoryId: newRepositoryId, ...chosen });
+        const created = await create.mutateAsync({ repositoryId: newRepositoryId, ...chosen, ...(newSources ? { sources: newSources } : {}), ...(newShowPersonal ? { showPersonal: true } : {}) });
         id = created.id;
         onThreadCreated(created);
       }
@@ -289,9 +356,51 @@ export function AskComposer({ threadId, onThreadCreated, autoFocus }: { threadId
           disabled={!connection.online}
         />
       </Field>
-      <Disclosure title="Options" description="Agent, model and effort for this conversation">
-        <AssignmentPicker label="Ask" value={assignment} onChange={setAssignment} disabled={!connection.online} />
+      <Disclosure title="Options" description="Where it may look, and the agent, model and effort">
+        <div className="flex flex-col gap-4">
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-body font-semibold text-fg">Can look at</legend>
+            {ASK_SOURCES.map((s) => {
+              const state = sourceStates.data?.[s];
+              const isReady = ready(s);
+              return (
+                <Checkbox
+                  key={s}
+                  label={ASK_SOURCE_LABEL[s]}
+                  checked={s === 'controlcenter' || (isReady && sources.includes(s))}
+                  disabled={s === 'controlcenter' || !isReady || !connection.online}
+                  onCheckedChange={(on) => setSources(on ? [...new Set([...sources, s])] : sources.filter((x) => x !== s))}
+                  description={
+                    s === 'controlcenter' ? (
+                      'Tasks, usage and costs, approvals and learning. Always on.'
+                    ) : isReady ? (
+                      s === 'github' ? 'Files, commits, pull requests, issues and CI runs, read-only.' : 'D1, KV, R2 and Worker logs, read-only and live.'
+                    ) : (
+                      <>
+                        {state?.reason ?? 'Not set up.'}{' '}
+                        <Link to="/settings/ask" className="text-fg underline">
+                          Set up in Settings
+                        </Link>
+                      </>
+                    )
+                  }
+                />
+              );
+            })}
+          </fieldset>
+          <div className="flex items-start justify-between gap-3">
+            <span className="flex flex-col">
+              <span className="text-body font-semibold text-fg">Show personal data</span>
+              <span className="text-small text-fg-secondary">Customer names, emails and phone numbers are hidden unless this is on.</span>
+            </span>
+            <Switch aria-label="Show personal data" checked={showPersonal} onCheckedChange={setShowPersonal} disabled={!connection.online} />
+          </div>
+          <AssignmentPicker label="Ask" value={assignment} onChange={setAssignment} disabled={!connection.online} />
+        </div>
       </Disclosure>
+      <p className="text-small text-fg-secondary">
+        Looks at: {lookingAt.join(', ')} · personal data {masking ? 'hidden' : 'shown'}
+      </p>
       <Field
         label="Ask a question"
         error={error}

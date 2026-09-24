@@ -38,10 +38,17 @@ function envFlags(env: Environment): string[] {
 }
 
 /** `stdin` carries a secret value when one is needed: never argv, never the environment, never a file. */
-async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_000, stdin?: string): Promise<{ code: number | null; stdout: string; stderr: string; spawnError: string | null }> {
+/**
+ * `fullStdout` keeps every stdout line up to that many characters instead of
+ * the last few thousand lines: for JSON output (D1 results) whose start must
+ * not be lost. `truncated` says the cap was reached.
+ */
+async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_000, stdin?: string, opts: { fullStdout?: number } = {}): Promise<{ code: number | null; stdout: string; stderr: string; spawnError: string | null; truncated?: boolean }> {
   const exe = localBin(ctx.cwd, 'wrangler') ?? ctx.detection('wrangler')?.path ?? 'wrangler';
   const lines: string[] = [];
   const errs: string[] = [];
+  let kept = 0;
+  let truncated = false;
   const handle = runProcess({
     command: exe,
     args,
@@ -51,7 +58,13 @@ async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_0
     ...(stdin !== undefined ? { stdin } : {}),
     onLine: (stream, line) => {
       const text = redact(line);
-      pushBounded(stream === 'stdout' ? lines : errs, text);
+      if (stream === 'stdout' && opts.fullStdout) {
+        if (kept + text.length + 1 > opts.fullStdout) truncated = true;
+        else {
+          lines.push(text);
+          kept += text.length + 1;
+        }
+      } else pushBounded(stream === 'stdout' ? lines : errs, text);
       ctx.onLine?.(stream, text);
     },
   });
@@ -59,7 +72,7 @@ async function wrangler(ctx: OperationContext, args: string[], timeoutMs = 180_0
   ctx.signal.addEventListener('abort', abort, { once: true });
   const result = await handle.done;
   ctx.signal.removeEventListener('abort', abort);
-  return { code: result.exitCode, stdout: lines.join('\n'), stderr: errs.join('\n'), spawnError: result.spawnError };
+  return { code: result.exitCode, stdout: lines.join('\n'), stderr: errs.join('\n'), spawnError: result.spawnError, truncated };
 }
 
 function resultOf(r: Awaited<ReturnType<typeof wrangler>>, summary: string, output?: unknown): OperationResult {
@@ -322,6 +335,7 @@ export function cloudflareProvider(): ToolProvider {
           accountId: z.string().regex(/^[0-9a-f]{32}$/).optional(),
         }),
         level: 2,
+        readOnly: true,
         classify: () => ({ reasons: ['Reads Worker logs stored by Cloudflare'], effects: ['network'] }),
         credentials: CREDENTIALS,
         async run(input, ctx) {
@@ -380,8 +394,12 @@ export function cloudflareProvider(): ToolProvider {
         credentials: CREDENTIALS,
         async run(input, ctx) {
           const where = input.environment === 'local' ? ['--local'] : ['--remote', ...envFlags(input.environment)];
-          const r = await wrangler(ctx, ['d1', 'execute', input.database, '--command', input.sql, '--json', ...where], 180_000);
+          const r = await wrangler(ctx, ['d1', 'execute', input.database, '--command', input.sql, '--json', ...where], 180_000, undefined, { fullStdout: 16 * 1024 * 1024 });
           const json = parseJson(r.stdout) as Array<{ results?: unknown[]; meta?: Record<string, unknown> }> | null;
+          // A result that could not be read is a failure, never "0 rows".
+          if (!r.spawnError && r.code === 0 && !Array.isArray(json)) {
+            return failure('FAILED', r.truncated ? 'The D1 result was too large to read: select fewer columns, add LIMIT, or aggregate.' : 'Wrangler returned output that is not the expected JSON.', { stdout: clip(r.stdout), networkTargets: ['api.cloudflare.com'] });
+          }
           const rows = Array.isArray(json) ? json.flatMap((s) => s.results ?? []) : [];
           return resultOf(r, `${rows.length} row(s) from ${input.database} (${input.environment})`, { results: rows.slice(0, 500), meta: Array.isArray(json) ? json.map((s) => s.meta) : null });
         },

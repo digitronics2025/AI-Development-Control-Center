@@ -2,16 +2,21 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { AgentGuardError } from '@acc/agent-sdk';
 import { redact } from '@acc/security';
-import { ACTIVE_TASK_STATUSES, type AskMessage, type AskThread, type AskThreadDetail } from '@acc/shared';
+import { ACTIVE_TASK_STATUSES, ASK_SOURCE_LABEL, ASK_SOURCES, type AskLookup, type AskMessage, type AskSource, type AskSourceCheck, type AskThread, type AskThreadDetail, type ToolExecution } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { Chairman } from '../chairman/chairman.js';
 import { EngineError } from '../engine/engine.js';
+import type { EngineTooling } from '../engine/tooling.js';
 import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { RepositoryService } from '../services/repositories.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, type Store } from '../store/store.js';
-import { askPrompt, HISTORY_TURNS, taskReferences } from './prompt.js';
+import type { CredentialBroker } from '../tools/credentials.js';
+import type { ReadOnlyScope, ToolScope, ToolService } from '../tools/service.js';
+import type { ToolStore } from '../tools/store.js';
+import { askPrompt, HISTORY_TURNS, taskReferences, type AskDataSection } from './prompt.js';
+import { MAX_LOOKUPS_PER_ANSWER, SOURCE_CAPABILITIES, sourceStates } from './sources.js';
 import { AskStore } from './store.js';
 
 export interface AskDeps {
@@ -24,6 +29,11 @@ export interface AskDeps {
   settings: SettingsService;
   chairman: Chairman;
   dataDir: string;
+  /** Read-only data tools (docs/plans/ASK_READ_ONLY_DATA_PLAN.md). */
+  tools: ToolService;
+  toolStore: ToolStore;
+  tooling: EngineTooling;
+  credentials: CredentialBroker;
 }
 
 const NEW_TITLE = 'New question';
@@ -33,6 +43,8 @@ const ANSWER_CHARS = 20_000;
 const DRAFT_INTERVAL_MS = 150;
 const DRAFT_CHARS = 16_000;
 const ASK_TIMEOUT_MS = 10 * 60_000;
+/** A lookup reads live data when it went to Cloudflare. */
+const LIVE_PREFIX = 'cloudflare.';
 
 interface Running {
   executionId: string | null;
@@ -43,8 +55,10 @@ interface Running {
 /**
  * Ask (docs/systems/ask.md): read-only questions outside tasks. Every answer
  * is one level-1 agent run through `AgentRegistry.launch` — metered, under
- * the subscription guard, with no tool bridge — whose working directory is
- * the chosen repository or an empty folder. Questions in one conversation are
+ * the subscription guard — whose working directory is the chosen repository
+ * or an empty folder. Its data tools come through a read-only tool session:
+ * an allow-list of reads for the sources the conversation chose, pinned
+ * read-only keys, personal data masked. Questions in one conversation are
  * answered one at a time.
  */
 export class AskService {
@@ -60,10 +74,41 @@ export class AskService {
   }
 
   detail(threadId: string): AskThreadDetail {
-    return { thread: this.thread(threadId), messages: this.d.askStore.listMessages(threadId) };
+    const thread = this.thread(threadId);
+    return { thread, messages: this.withLookups(thread.id, this.d.askStore.listMessages(threadId)) };
   }
 
-  create(input: { repositoryId?: string | null; agentId?: string; model?: string; effort?: string }): AskThread {
+  /** Whether each source is set up (Settings → Ask). */
+  sources(): Record<AskSource, { ready: boolean; reason: string | null }> {
+    return sourceStates(this.d.settings.get().ask, this.d.credentials);
+  }
+
+  /**
+   * Settings → Ask → Check access: one real read per source, through the same
+   * read-only session an answer gets, so a green result means answers can read.
+   */
+  async checkSources(): Promise<AskSourceCheck[]> {
+    const states = this.sources();
+    const probes: Record<AskSource, { capability: string; input: unknown }> = {
+      controlcenter: { capability: 'controlcenter.tasks', input: { limit: 1 } },
+      github: { capability: 'github.repos', input: { limit: 5 } },
+      cloudflare: { capability: 'cloudflare.catalog', input: {} },
+    };
+    const out: AskSourceCheck[] = [];
+    for (const source of ASK_SOURCES) {
+      const state = states[source];
+      if (!state.ready) {
+        out.push({ source, ok: false, message: state.reason ?? 'Needs setup' });
+        continue;
+      }
+      const cwd = this.emptyFolder();
+      const outcome = await this.d.tools.invoke({ capability: probes[source].capability, input: probes[source].input, origin: 'operator', scope: { ...this.readOnlyScope(cwd, null, [source], true), sessionId: null, escalated: new Set() } });
+      out.push({ source, ok: outcome.result.ok, message: outcome.result.ok ? `Ready: ${outcome.result.summary}` : outcome.result.summary });
+    }
+    return out;
+  }
+
+  create(input: { repositoryId?: string | null; agentId?: string; model?: string; effort?: string; sources?: AskSource[]; showPersonal?: boolean }): AskThread {
     const repositoryId = input.repositoryId ?? null;
     if (repositoryId) this.d.repositories.record(repositoryId);
     if (input.agentId && !this.d.agents.has(input.agentId)) throw new EngineError(`Unknown agent "${input.agentId}"`, 'INVALID_INPUT');
@@ -71,22 +116,25 @@ export class AskService {
     const agentId = input.agentId ?? defaults.agentId;
     // A model or effort belongs to its agent: another agent without them means its own defaults.
     const own = agentId === defaults.agentId;
-    const thread = this.d.askStore.insertThread({
+    const inserted = this.d.askStore.insertThread({
       title: NEW_TITLE,
       repositoryId,
       agentId,
       model: input.model ?? (own ? defaults.model : 'default'),
       effort: input.effort ?? (own ? defaults.effort : 'default'),
+      // By default a conversation may look wherever a key is set up.
+      sources: normalizeSources(input.sources ?? ASK_SOURCES.filter((s) => this.sources()[s].ready)),
     });
+    const thread = input.showPersonal ? this.d.askStore.updateThread(inserted.id, { showPersonal: true }) : inserted;
     this.d.bus.publish({ type: 'ask.thread', thread });
     return thread;
   }
 
-  update(threadId: string, patch: Partial<Pick<AskThread, 'title' | 'repositoryId' | 'agentId' | 'model' | 'effort'>>): AskThread {
+  update(threadId: string, patch: Partial<Pick<AskThread, 'title' | 'repositoryId' | 'agentId' | 'model' | 'effort' | 'sources' | 'showPersonal'>>): AskThread {
     this.thread(threadId);
     if (patch.repositoryId) this.d.repositories.record(patch.repositoryId);
     if (patch.agentId && !this.d.agents.has(patch.agentId)) throw new EngineError(`Unknown agent "${patch.agentId}"`, 'INVALID_INPUT');
-    const thread = this.d.askStore.updateThread(threadId, patch);
+    const thread = this.d.askStore.updateThread(threadId, { ...patch, ...(patch.sources ? { sources: normalizeSources(patch.sources) } : {}) });
     this.d.bus.publish({ type: 'ask.thread', thread });
     return thread;
   }
@@ -188,14 +236,37 @@ export class AskService {
       .listMessages(thread.id, HISTORY_TURNS * 2 + 2)
       .filter((m) => m.seq < question.seq && m.status === 'done' && m.body)
       .map((m) => ({ role: m.role, body: m.body }));
+    // The read-only data tools: a session limited to the sources this conversation chose and that are set up.
+    const states = this.sources();
+    const usable = thread.sources.filter((s) => states[s].ready);
+    const bridge = this.d.tooling.openBridge(this.readOnlyScope(cwd, thread.repositoryId, usable, !thread.showPersonal), ASK_TIMEOUT_MS + 5 * 60_000);
+    if (bridge) this.d.askStore.updateMessage(reply.id, { toolSessionId: bridge.sessionId });
+    const data: AskDataSection = {
+      toolsOff: bridge ? null : this.d.tooling.bridgeUnavailableReason(),
+      sources: ASK_SOURCES.map((s) => ({
+        label: ASK_SOURCE_LABEL[s],
+        state: !thread.sources.includes(s) ? 'off in this conversation' : states[s].ready ? 'available' : `not set up: ${states[s].reason}`,
+      })),
+      personalMasked: this.d.settings.get().ask.maskPersonalData && !thread.showPersonal,
+      dataMap: this.d.settings.get().ask.dataMap,
+      githubOwners: usable.includes('github') ? this.d.settings.get().ask.sources.github.owners : [],
+    };
     const prompt = askPrompt({
       question: question.body,
       repository: repo ? { name: repo.name } : null,
       overview: this.overview(),
       tasks: taskReferences(question.body).map((id) => ({ id, text: this.describeTask(id) })),
       history,
+      data,
     });
+    try {
+      return await this.launch(thread, reply, run, cwd, prompt, bridge);
+    } finally {
+      bridge?.close();
+    }
+  }
 
+  private async launch(thread: AskThread, reply: AskMessage, run: Running, cwd: string, prompt: string, bridge: ReturnType<EngineTooling['openBridge']>): Promise<{ status: AskMessage['status']; body: string; error: string | null }> {
     const draft = new Draft((text, activity) => this.d.bus.publish({ type: 'ask.delta', threadId: thread.id, messageId: reply.id, text, activity }));
     const executionId = newId();
     run.executionId = executionId;
@@ -213,6 +284,7 @@ export class AskService {
           // Read-only, always: no route or setting raises it.
           permissionLevel: 1,
           timeoutMs: ASK_TIMEOUT_MS,
+          ...(bridge ? { toolBridge: { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } } : {}),
           onLine: (stream, text) => {
             if (stream === 'stdout') draft.line(text);
           },
@@ -242,8 +314,51 @@ export class AskService {
     this.publishMessage(this.d.askStore.updateMessage(messageId, outcome));
   }
 
+  /** Answers carry their lookups (read from tool_executions, the one record of them). */
   private publishMessage(message: AskMessage): void {
-    this.d.bus.publish({ type: 'ask.message', message });
+    const [withLookups] = message.role === 'assistant' ? this.withLookups(message.threadId, [message]) : [message];
+    this.d.bus.publish({ type: 'ask.message', message: withLookups! });
+  }
+
+  private withLookups(threadId: string, messages: AskMessage[]): AskMessage[] {
+    const sessions = this.d.askStore.toolSessions(threadId);
+    const wanted = messages.map((m) => sessions.get(m.id)).filter((s): s is string => Boolean(s));
+    if (!wanted.length) return messages;
+    const bySession = new Map<string, AskLookup[]>();
+    for (const e of this.d.toolStore.listExecutionsBySession(wanted, 2000)) {
+      const list = bySession.get(e.sessionId!) ?? [];
+      list.push(lookupOf(e));
+      bySession.set(e.sessionId!, list);
+    }
+    return messages.map((m) => {
+      const session = sessions.get(m.id);
+      return session ? { ...m, lookups: bySession.get(session) ?? [] } : m;
+    });
+  }
+
+  /**
+   * The scope every answer's tools run in (docs/systems/ask.md): Level 1,
+   * the safe policy, no task — and a read-only allow-list of the given sources'
+   * reads, pinned read-only keys, and personal data masked unless the
+   * conversation turned that off.
+   */
+  private readOnlyScope(cwd: string, repositoryId: string | null, sources: readonly AskSource[], mask: boolean): Omit<ToolScope, 'sessionId' | 'escalated'> {
+    const settings = this.d.settings.get().ask;
+    const readOnly: ReadOnlyScope = {
+      allow: new Set(sources.flatMap((s) => SOURCE_CAPABILITIES[s])),
+      credentials: {
+        ...(sources.includes('github') && settings.sources.github.credential ? { github: settings.sources.github.credential } : {}),
+        ...(sources.includes('cloudflare') && settings.sources.cloudflare.credential ? { cloudflare: settings.sources.cloudflare.credential } : {}),
+      },
+      env: {
+        ...(settings.sources.cloudflare.accountId ? { CLOUDFLARE_ACCOUNT_ID: settings.sources.cloudflare.accountId } : {}),
+        ACC_GITHUB_OWNERS: settings.sources.github.owners.join(','),
+      },
+      maskPersonal: settings.maskPersonalData && mask,
+      maxCalls: MAX_LOOKUPS_PER_ANSWER,
+      calls: { count: 0 },
+    };
+    return { taskId: null, stageId: null, repositoryId, cwd, roots: [cwd], stageLevel: 1, autoApproveUpToLevel: 1, mode: 'safe', profile: 'analysis', protectedPaths: [], readOnly };
   }
 
   // ----- context --------------------------------------------------------------------
@@ -302,6 +417,15 @@ export class AskService {
       return null;
     }
   }
+}
+
+function normalizeSources(list: readonly AskSource[]): AskSource[] {
+  // The Control Center's own records are always readable.
+  return ASK_SOURCES.filter((s) => s === 'controlcenter' || list.includes(s));
+}
+
+function lookupOf(e: ToolExecution): AskLookup {
+  return { id: e.id, capability: e.capability, summary: e.summary, status: e.status, live: e.capability.startsWith(LIVE_PREFIX), durationMs: e.durationMs, startedAt: e.startedAt };
 }
 
 function titleFrom(question: string): string {

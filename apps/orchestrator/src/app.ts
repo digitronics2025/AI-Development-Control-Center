@@ -30,6 +30,7 @@ import { GitOperationStore } from './store/git-operations.js';
 import { Store } from './store/store.js';
 import { EngineTooling } from './engine/tooling.js';
 import { CredentialBroker, fileKeyProvider } from './tools/credentials.js';
+import { controlCenterProvider } from './tools/control-center.js';
 import { environmentProvider } from './tools/environment.js';
 import { McpService } from './tools/mcp.js';
 import { PrivilegedHelper } from './tools/privileged.js';
@@ -145,12 +146,13 @@ export function createServices(
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore, coordinator });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
-  const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir });
+  const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir, tools, toolStore, tooling, credentials });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
   context.lessons = (task, def, stage) => learning.promptSection(task, def, stage);
   context.pluginDirs = (task) => learning.pluginDirs(task);
   tools.registerProvider(environmentProvider({ store, repositories, tooling }));
+  tools.registerProvider(controlCenterProvider({ store, views, chairman, usage, learning }));
   tools.attach({
     events: (taskId, type, message, data, stageId) => engine.publisher.event(taskId, type, message, data ?? {}, stageId ?? null),
     privileged,

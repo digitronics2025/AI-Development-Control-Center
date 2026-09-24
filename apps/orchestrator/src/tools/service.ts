@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, redact, referencesSelf, sanitizeEnv } from '@acc/security';
+import { constantTimeEqual, maskPersonalData, maskPersonalText, redact, referencesSelf, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -59,6 +59,26 @@ export interface ToolScope {
    * to the repository its folder names (`narrowToRepository`).
    */
   repositories?: Array<{ id: string; root: string }>;
+  /**
+   * A read-only session (docs/systems/ask.md). Only capabilities on `allow`
+   * run, and only calls that cannot change anything; everything else is
+   * denied, never escalated. Credentials are the pinned ones or none.
+   */
+  readOnly?: ReadOnlyScope;
+}
+
+export interface ReadOnlyScope {
+  allow: ReadonlySet<string>;
+  /** Credential kind → credential name. A kind without a pin has no credential at all. */
+  credentials: Partial<Record<string, string>>;
+  /** Plain settings the read packs need (CLOUDFLARE_ACCOUNT_ID, ACC_GITHUB_OWNERS); never secrets. */
+  env: Record<string, string>;
+  /** Mask personal data in what the model sees and what is stored. */
+  maskPersonal: boolean;
+  /** Calls one session may make; the next is denied. */
+  maxCalls: number;
+  /** Calls made so far (mutable). */
+  calls: { count: number };
 }
 
 /**
@@ -386,6 +406,18 @@ export class ToolService {
     }
     const rawInput = narrowed.input;
 
+    // A read-only session names what it may call; nothing else is routed, detected or escalated.
+    if (scope.readOnly) {
+      if (!scope.readOnly.allow.has(req.capability)) {
+        this.escalate(scope, req.capability, 'denied', 'Not available in a read-only conversation', 1);
+        return refuse('denied', 'DENIED', `${req.capability} is not available in this read-only conversation.`, 'deny');
+      }
+      if (scope.readOnly.calls.count >= scope.readOnly.maxCalls) {
+        return refuse('denied', 'DENIED', `Lookup limit reached (${scope.readOnly.maxCalls} per answer). Answer from what you have.`, 'deny');
+      }
+      scope.readOnly.calls.count += 1;
+    }
+
     // 1. Route the capability to a provider available here.
     const prefer = req.preferProvider ?? (typeof (req.input as { shell?: unknown })?.shell === 'string' ? ((req.input as { shell: string }).shell as string) : null);
     let route = this.router.route({ capability: req.capability, detection: (id) => this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
@@ -419,7 +451,9 @@ export class ToolService {
 
     // 3. Classify this concrete call.
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid) }) };
+    const classified = operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid) });
+    // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
+    const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
     // An agent never reaches the Control Center itself — its token, keys, data folder or API — through
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
@@ -431,7 +465,7 @@ export class ToolService {
 
     // 4. Policy.
     const inProfile = profileIncludes(PROFILES[scope.profile], req.capability) || scope.escalated.has(req.capability);
-    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin });
+    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
     if (req.preApproved && decision.decision === 'approval') decision = { decision: 'allow', reason: `${decision.reason} — approved` };
     if (decision.decision === 'deny') {
       this.escalate(scope, req.capability, 'denied', decision.reason, risk.level);
@@ -463,14 +497,28 @@ export class ToolService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let result: OperationResult;
     try {
-      const credentialEnv = operation.credentials?.length ? await this.d.credentials.envFor(operation.credentials, scope.repositoryId) : {};
+      let credentialEnv: Record<string, string> = {};
+      let missingCredential: string | null = null;
+      if (operation.credentials?.length) {
+        if (scope.readOnly) {
+          // Pinned or nothing: a read-only session never falls back to another credential or a login.
+          const pinned = await this.d.credentials.envForPinned(operation.credentials, scope.readOnly.credentials);
+          credentialEnv = pinned.env;
+          missingCredential = pinned.missing[0] ?? null;
+        } else {
+          credentialEnv = await this.d.credentials.envFor(operation.credentials, scope.repositoryId);
+        }
+      }
       // In a task workspace, a Git process started by any tool stops searching for a repository at the workspaces folder.
       const ceiling = req.scope.repositories?.length ? { GIT_CEILING_DIRECTORIES: path.dirname(req.scope.roots[0]!) } : {};
-      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine });
-      result = await Promise.race([
-        operation.run(input, ctx),
-        new Promise<OperationResult>((resolve) => controller.signal.addEventListener('abort', () => resolve({ ok: false, summary: req.signal?.aborted ? 'Stopped' : `Timed out after ${Math.round(timeoutMs / 1000)}s`, error: { code: req.signal?.aborted ? 'CANCELLED' : 'TIMEOUT', message: 'aborted' } }), { once: true })),
-      ]);
+      const readOnlyEnv = scope.readOnly ? { ...scope.readOnly.env, ACC_READ_ONLY: '1' } : {};
+      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine });
+      result = missingCredential
+        ? { ok: false, summary: `No read-only ${missingCredential} key is set up for this conversation (Settings → Ask).`, error: { code: 'AUTH_REQUIRED', message: `No read-only ${missingCredential} key is set up (Settings → Ask).` } }
+        : await Promise.race([
+            operation.run(input, ctx),
+            new Promise<OperationResult>((resolve) => controller.signal.addEventListener('abort', () => resolve({ ok: false, summary: req.signal?.aborted ? 'Stopped' : `Timed out after ${Math.round(timeoutMs / 1000)}s`, error: { code: req.signal?.aborted ? 'CANCELLED' : 'TIMEOUT', message: 'aborted' } }), { once: true })),
+          ]);
     } catch (error) {
       result = { ok: false, summary: redact((error as Error).message).slice(0, 500), error: { code: 'FAILED', message: redact((error as Error).message).slice(0, 500) } };
     } finally {
@@ -478,6 +526,7 @@ export class ToolService {
       req.signal?.removeEventListener('abort', onAbort);
     }
     result = { ...result, summary: redact(result.summary), stdout: result.stdout ? redact(result.stdout) : undefined, stderr: result.stderr ? redact(result.stderr) : undefined };
+    if (scope.readOnly?.maskPersonal) result = maskResult(result);
 
     // 7. Record, remember provider failures for routing, and surface notable calls.
     const done = this.finish(execution, result, started);
@@ -614,8 +663,13 @@ export class ToolService {
     const profile = PROFILES[scope.profile];
     const ordered = [...this.registry.capabilities()].sort((a, b) => profileRank(profile, a.id) - profileRank(profile, b.id) || a.level - b.level || a.id.localeCompare(b.id));
     for (const cap of ordered) {
-      const listed = profileIncludes(PROFILES[scope.profile], cap.id) || scope.escalated.has(cap.id);
-      if (!listed || cap.level > Math.min(scope.stageLevel, ceiling)) continue;
+      if (scope.readOnly) {
+        // A read-only session lists exactly its allow-list, whatever the levels.
+        if (!scope.readOnly.allow.has(cap.id)) continue;
+      } else {
+        const listed = profileIncludes(PROFILES[scope.profile], cap.id) || scope.escalated.has(cap.id);
+        if (!listed || cap.level > Math.min(scope.stageLevel, ceiling)) continue;
+      }
       if (session.kind === 'agent' && NATIVE_OVERLAP.test(cap.id)) continue;
       const route = this.router.route({ capability: cap.id, detection: (id) => this.health.get(id) });
       // Providers never checked yet count as available: the first call detects them.
@@ -633,12 +687,16 @@ export class ToolService {
   find(session: ToolSession, query: string): string {
     const { scope } = session;
     const ceiling = policyCeiling(scope.mode, scope.autoApproveUpToLevel);
-    const hits = this.registry.search(query, 12);
-    if (!hits.length) return `No capability matches "${query}".`;
+    const hits = this.registry.search(query, scope.readOnly ? 40 : 12).filter((c) => !scope.readOnly || scope.readOnly.allow.has(c.id)).slice(0, 12);
+    if (!hits.length) return `No capability matches "${query}"${scope.readOnly ? ' in this read-only conversation' : ''}.`;
     return hits
       .map((c) => {
         const route = this.router.route({ capability: c.id, detection: (id) => this.health.get(id) });
-        const status = !route.ok ? `unavailable (${route.reason})` : c.level > scope.stageLevel ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}` : c.level > ceiling ? 'needs approval' : 'available — call it with acc_call_capability';
+        const status = scope.readOnly
+          ? route.ok || this.registry.offering(c.id).some((r) => !this.health.get(r.provider.id))
+            ? 'available — call it with acc_call_capability'
+            : `unavailable (${route.ok ? '' : route.reason})`
+          : !route.ok ? `unavailable (${route.reason})` : c.level > scope.stageLevel ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}` : c.level > ceiling ? 'needs approval' : 'available — call it with acc_call_capability';
         return `- ${c.id} (Level ${c.level}): ${c.title}. ${c.description} → ${status}`;
       })
       .join('\n');
@@ -657,5 +715,24 @@ export class ToolService {
     if (r.evidence?.length) parts.push(`evidence:\n${r.evidence.join('\n')}`);
     if (r.artifacts?.length) parts.push(`artifacts: ${r.artifacts.map((a) => a.name).join(', ')}`);
     return parts.join('\n\n');
+  }
+}
+
+/**
+ * Personal data out of a result (docs/systems/ask.md): the model and the
+ * record both see the masked form. A result that cannot be masked is dropped.
+ */
+function maskResult(result: OperationResult): OperationResult {
+  try {
+    return {
+      ...result,
+      summary: maskPersonalText(result.summary),
+      ...(result.output !== undefined ? { output: maskPersonalData(result.output) } : {}),
+      ...(result.stdout ? { stdout: maskPersonalText(result.stdout) } : {}),
+      ...(result.stderr ? { stderr: maskPersonalText(result.stderr) } : {}),
+      ...(result.evidence ? { evidence: result.evidence.map(maskPersonalText) } : {}),
+    };
+  } catch {
+    return { ok: false, summary: 'The result could not be checked for personal data, so it was not shown.', error: { code: 'FAILED', message: 'Personal-data masking failed' } };
   }
 }

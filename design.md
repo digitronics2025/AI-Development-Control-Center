@@ -989,6 +989,29 @@ Page (`/ask`), desktop:
   conversation (first question, last answer) and the repository selected; it
   is enabled once there is an answer.
 - Rename and delete live in the conversation's ⋯ menu; delete confirms (§8.7).
+- **Data sources.** The **Options** disclosure also holds "Can look at": one
+  checkbox for each source (Control Center, always on and disabled; GitHub;
+  Cloudflare). A source that is not set up is disabled, with its reason and a
+  link to Settings → Ask. Below the checkboxes is a **Show personal data** switch
+  (off by default). One secondary line above the question field summarises the
+  choice: "Looks at: Control Center, GitHub · personal data hidden".
+- **Sources under an answer.** An answer that used data tools ends with a
+  collapsed disclosure, "Sources · N lookups". Each row shows the lookup's label
+  (e.g. "D1 · Read"), its one-line summary, a status chip for anything other
+  than success (Refused, Failed), and the time. Live Cloudflare reads carry a
+  "Live data" badge. The rows use `role="list"`, and summaries never show
+  values that were masked.
+
+Settings → **Ask** (local only), one panel:
+- For each of GitHub and Cloudflare: a read-only key picker that lists
+  credentials of that kind by name (never a value), then the owners (GitHub,
+  comma-separated) or the account id (Cloudflare).
+- The steps to create each read-only key, with the exact permissions to tick,
+  in a collapsed "How to create a read-only key" disclosure.
+- **Mask personal data by default** (switch, on).
+- The data map: rows of name, kind, target and note, with add and remove.
+- **Check access** runs one real read per source and shows a result line per
+  source (success tone "Ready: …", or the reason in danger tone).
 
 Drawer: the palette opens the same conversation in the standard right drawer
 (§8.8), 460px, with **Open in Ask** in the footer. It starts a new conversation

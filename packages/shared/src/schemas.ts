@@ -260,11 +260,47 @@ export const chairmanSettingsSchema = z.object({
 });
 export type ChairmanSettings = z.infer<typeof chairmanSettingsSchema>;
 
+const credentialNameSchema = z.string().trim().min(1).max(100);
+
 /** Ask defaults for new conversations (docs/systems/ask.md); each conversation can change them. */
 export const askSettingsSchema = z.object({
   agentId: agentIdSchema.default('claude'),
   model: modelIdSchema.default('default'),
   effort: effortSchema.default('low'),
+  /** Read-only data sources. A source without a credential is not offered. */
+  sources: z
+    .object({
+      github: z
+        .object({
+          /** A credential of kind `github` (a read-only fine-grained token). */
+          credential: credentialNameSchema.nullable().default(null),
+          /** Owners whose repositories may be read. */
+          owners: z.array(z.string().trim().regex(/^[\w.-]+$/).max(100)).max(20).default(['digitronics2025']),
+        })
+        .default({ credential: null, owners: ['digitronics2025'] }),
+      cloudflare: z
+        .object({
+          /** A credential of kind `cloudflare` (a read-only API token). */
+          credential: credentialNameSchema.nullable().default(null),
+          accountId: z.string().regex(/^[0-9a-f]{32}$/i, 'A 32-character account id').nullable().default(null),
+        })
+        .default({ credential: null, accountId: null }),
+    })
+    .default({ github: { credential: null, owners: ['digitronics2025'] }, cloudflare: { credential: null, accountId: null } }),
+  /** Mask customer names, contact details and identity numbers in what Ask reads, unless a conversation turns it off. */
+  maskPersonalData: z.boolean().default(true),
+  /** Friendly names for data stores, given to the agent. */
+  dataMap: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(60),
+        kind: z.enum(['d1', 'kv', 'r2', 'repo']),
+        target: z.string().trim().min(1).max(200),
+        note: z.string().trim().max(300).default(''),
+      }),
+    )
+    .max(50)
+    .default([]),
 });
 export type AskSettings = z.infer<typeof askSettingsSchema>;
 

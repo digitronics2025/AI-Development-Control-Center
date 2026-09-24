@@ -42,6 +42,7 @@ import { errorMessage } from '../api/client';
 import { useHealth, usePromptMutations, usePrompts, useSettings, useUpdateSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
+import { AskSettingsPanel } from '../components/ask-settings';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { RemoteAccessPanel } from '../components/remote-access';
 
@@ -50,6 +51,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'agents', label: 'Agents & Models' },
   { id: 'chairman', label: 'Chairman' },
+  { id: 'ask', label: 'Ask' },
   { id: 'learning', label: 'Learning' },
   { id: 'repositories', label: 'Repositories' },
   { id: 'workflows', label: 'Workflows' },
@@ -199,7 +201,7 @@ export function SettingsPage() {
   const connection = useConnection();
   const { host, mode } = useRuntime();
   // Remote access belongs to the machine itself, and learning stays on it: neither is offered from the cloud dashboard.
-  const localOnly = (id: SectionId) => id === 'remote' || id === 'learning';
+  const localOnly = (id: SectionId) => id === 'remote' || id === 'learning' || id === 'ask';
   const sections = SECTIONS.filter((s) => !localOnly(s.id) || mode === 'local');
   const { toast } = useFeedback();
   const [draft, setDraft] = useState<Settings | null>(null);
@@ -249,6 +251,7 @@ export function SettingsPage() {
   };
 
   const content: Record<SectionId, ReactNode> = {
+    ask: <AskSettingsPanel draft={draft} setDraft={setDraft} />,
     general: (
       <Panel title="General" headingLevel={2}>
         <div className="flex flex-col gap-4">

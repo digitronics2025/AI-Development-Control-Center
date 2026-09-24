@@ -177,6 +177,7 @@ export class CacheSync {
         return;
       case 'settings':
         qc.setQueryData(keys.settings, message.settings);
+        void qc.invalidateQueries({ queryKey: keys.askSources });
         return;
       case 'repository': {
         const repo: Repository = message.repository;
@@ -267,10 +268,12 @@ export class CacheSync {
       case 'credential': {
         const c: CredentialView = message.credential;
         qc.setQueryData<CredentialView[]>(keys.credentials, (old) => upsert(old, c, (x) => x.id));
+        void qc.invalidateQueries({ queryKey: keys.askSources });
         return;
       }
       case 'credential.deleted':
         qc.setQueryData<CredentialView[]>(keys.credentials, (old) => old?.filter((x) => x.id !== message.credentialId));
+        void qc.invalidateQueries({ queryKey: keys.askSources });
         return;
       case 'recovery': {
         const a = message.attempt;

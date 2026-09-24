@@ -55,6 +55,12 @@ export interface ToolRisk {
   reasons: string[];
   effects: CommandEffect[];
   production: boolean;
+  /**
+   * False only when the call cannot change anything anywhere. Read-only
+   * sessions (docs/systems/ask.md) run a call only when this is false; an
+   * operation that does not say so is treated as a write.
+   */
+  writes?: boolean;
 }
 
 export interface DetectContext {
@@ -224,6 +230,8 @@ export interface ToolOperation<I = any, O = any> {
   classify?(input: I, ctx: ClassifyContext): Partial<ToolRisk>;
   /** Credential kinds the broker injects (`cloudflare`, `github`, `postgres`). */
   credentials?: readonly string[];
+  /** Never changes anything, whatever the input: callable from a read-only session. `classify` may still say `writes`. */
+  readOnly?: boolean;
   /** Runs until stopped (dev servers): the call returns once it is up. */
   longRunning?: boolean;
   run(input: I, ctx: OperationContext): Promise<OperationResult<O>>;

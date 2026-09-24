@@ -9,6 +9,12 @@ const idParam = z.object({ id: z.string().min(1).max(100) });
 export function registerAskRoutes(app: FastifyInstance, s: AppServices): void {
   app.get('/api/ask/threads', async () => s.ask.list());
 
+  /** Which data sources are set up (names and reasons only). */
+  app.get('/api/ask/sources', async () => s.ask.sources());
+
+  /** One real read per source through a read-only session (Settings → Ask → Check access). */
+  app.post('/api/ask/sources/check', async () => s.ask.checkSources());
+
   app.post('/api/ask/threads', async (request, reply) => reply.code(201).send(s.ask.create(askThreadCreateSchema.parse(request.body ?? {}))));
 
   app.get('/api/ask/threads/:id', async (request) => s.ask.detail(idParam.parse(request.params).id));

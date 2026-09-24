@@ -7,6 +7,15 @@ import { agentIdSchema, effortSchema, modelIdSchema } from './schemas.js';
  * anything that needs a change becomes a task through New Task.
  */
 
+/**
+ * Where an answer may look (docs/systems/ask.md). The Control Center's own
+ * records are always available; GitHub and Cloudflare need a read-only key
+ * chosen in Settings → Ask.
+ */
+export const ASK_SOURCES = ['controlcenter', 'github', 'cloudflare'] as const;
+export type AskSource = (typeof ASK_SOURCES)[number];
+export const ASK_SOURCE_LABEL: Record<AskSource, string> = { controlcenter: 'Control Center', github: 'GitHub', cloudflare: 'Cloudflare' };
+
 export const ASK_MESSAGE_STATUSES = ['pending', 'running', 'done', 'failed', 'cancelled'] as const;
 export type AskMessageStatus = (typeof ASK_MESSAGE_STATUSES)[number];
 export type AskMessageRole = 'user' | 'assistant';
@@ -19,8 +28,24 @@ export interface AskThread {
   agentId: string;
   model: string;
   effort: string;
+  /** Sources this conversation may read. */
+  sources: AskSource[];
+  /** Personal data is shown unmasked in this conversation. */
+  showPersonal: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One lookup an answer made, from the tool execution record. */
+export interface AskLookup {
+  id: string;
+  capability: string;
+  summary: string | null;
+  status: string;
+  /** Live Cloudflare data was read. */
+  live: boolean;
+  durationMs: number | null;
+  startedAt: string;
 }
 
 export interface AskMessage {
@@ -32,6 +57,8 @@ export interface AskMessage {
   status: AskMessageStatus;
   /** Why an answer failed, in plain words. */
   error: string | null;
+  /** What an answer looked at (answers only; empty when it used no data tools). */
+  lookups: AskLookup[];
   createdAt: string;
 }
 
@@ -46,6 +73,8 @@ export const askThreadCreateSchema = z.object({
   agentId: agentIdSchema.optional(),
   model: modelIdSchema.optional(),
   effort: effortSchema.optional(),
+  sources: z.array(z.enum(ASK_SOURCES)).max(ASK_SOURCES.length).optional(),
+  showPersonal: z.boolean().optional(),
 });
 
 export const askThreadUpdateSchema = z
@@ -55,8 +84,18 @@ export const askThreadUpdateSchema = z
     agentId: agentIdSchema,
     model: modelIdSchema,
     effort: effortSchema,
+    sources: z.array(z.enum(ASK_SOURCES)).max(ASK_SOURCES.length),
+    showPersonal: z.boolean(),
   })
   .partial();
+
+/** Result of Settings → Ask → Check access, per source. */
+export interface AskSourceCheck {
+  source: AskSource;
+  ok: boolean;
+  /** "ready", "needs setup", or what went wrong. */
+  message: string;
+}
 
 export const askMessageBodySchema = z.object({
   text: z.string().trim().min(1, 'Write a question').max(4000),

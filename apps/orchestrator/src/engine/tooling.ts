@@ -203,6 +203,30 @@ export class EngineTooling {
     };
   }
 
+  /** Why an agent run cannot get the Control Center's tools right now, or null when it can. */
+  bridgeUnavailableReason(): string | null {
+    if (!this.d.settings.get().execution.exposeToolsToAgents) return 'Giving agents the Control Center tools is turned off in Settings → Tools policy.';
+    if (!this.listenUrl || !this.d.bridgePath) return 'The tool bridge is not built on this machine.';
+    return null;
+  }
+
+  /**
+   * A tool session and its MCP bridge for a scope the caller built (Ask's
+   * read-only sessions, docs/systems/ask.md). Null when tools cannot be
+   * offered (see `bridgeUnavailableReason`). The caller closes it.
+   */
+  openBridge(scope: Omit<ToolScope, 'sessionId' | 'escalated'>, ttlMs: number): (AgentToolBridge & { sessionId: string }) | null {
+    if (this.bridgeUnavailableReason()) return null;
+    const session = this.d.tools.openSession(scope, 'agent', ttlMs);
+    return {
+      sessionId: session.id,
+      command: process.execPath,
+      args: [this.d.bridgePath!],
+      env: { ACC_TOOL_URL: this.listenUrl!, ACC_TOOL_SESSION: session.token },
+      close: () => this.d.tools.closeSession(session.id),
+    };
+  }
+
   /** "## Control Center tools" section appended to agent prompts. */
   toolsPromptSection(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): string {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return '';

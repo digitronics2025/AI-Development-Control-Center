@@ -37,7 +37,10 @@ Chairman edits `settings.chairman`.
 
 The **Ask** sidebar item (local and VS Code only) opens `/ask`. The palette's
 **Ask a question** and `?question` open the Ask drawer in the Shell. Turn into
-task pre-fills New Task through router state. See [ask.md](ask.md).
+task pre-fills New Task through router state. Settings → Ask (local only)
+chooses the read-only keys, owners, account, masking default and data map and
+runs Check access; each answer lists its lookups under "Sources". See
+[ask.md](ask.md).
 
 ## State
 
@@ -115,6 +118,61 @@ the failure line when it failed.
 - Repository detail edits the repository's policy, Git mode *Isolated
   worktree* and the **App runtime** used by the App check.
 
+## Installable app (PWA)
+
+The web build is installable to a phone's home screen (and as a desktop app).
+It's meant for the cloud dashboard; installing the local one is harmless
+because the token arrives with each page load and is never part of the
+manifest. Plan: [MOBILE_PWA_PLAN.md](../../MOBILE_PWA_PLAN.md).
+
+- **Manifest and icons.** They live in
+  [public/](../../apps/dashboard/public/):
+  - [manifest.webmanifest](../../apps/dashboard/public/manifest.webmanifest)
+    has `id` and `start_url` set to `/`, `standalone`, and colours from the
+    Dark canvas token.
+  - `icons/` holds 192, 512, 512 maskable and a 180 apple-touch icon.
+  - The icons are rendered from `favicon.svg` by
+    [render-app-icons.mjs](../../apps/dashboard/scripts/render-app-icons.mjs)
+    (Playwright's Chromium). Re-run it and commit the PNGs whenever the logo
+    changes.
+- **No service worker, no Cache Storage, on purpose.** The cloud already
+  answers offline reads from D1/R2. A cached `index.html` would hold the local
+  token, and a cached bundle would outlive releases. Current Chrome installs a
+  page without one.
+- **Realtime liveness** ([realtime.ts](../../apps/dashboard/src/api/realtime.ts)).
+  A phone that slept or changed network can keep a socket that never closes.
+  - While the page is visible, it sends `{"type":"ping"}` every 25 s and
+    waits up to 10 s for any answer. It also pings at once on
+    `visibilitychange` (visible), `pageshow` and `online`.
+  - When nothing answers, the socket is replaced, which runs the normal
+    reconnect and full refetch.
+  - The ping is sent **undecorated**: the cloud hub answers that exact string
+    itself, and the orchestrator replies `pong`. A `pong` never reaches
+    `sync.ts`.
+- **Expired sign-in (cloud)** ([session.ts](../../apps/dashboard/src/api/session.ts)).
+  - Each of these asks `SessionWatch` for a check: a request that got no
+    answer, a 401, a non-JSON reply, or a second failed socket reconnect.
+  - The check is at most one probe per 15 s. It sends `GET /api/cloud/session`
+    with `redirect: 'manual'`. An Access redirect, 401, 403 or HTML page means
+    expired. A network error doesn't.
+  - Expired shows one Shell banner, "Your sign-in expired.", with **Sign in
+    again** (a reload through Access). Before, this looked like "The control
+    plane is not reachable."
+- **Release skew** ([reload.ts](../../apps/dashboard/src/app/reload.ts),
+  [PageErrorBoundary.tsx](../../apps/dashboard/src/app/PageErrorBoundary.tsx)).
+  A page open across a release asks for route chunks that no longer exist.
+  - `vite:preloadError` reloads once (guarded for 60 s in `sessionStorage`,
+    and never without storage).
+  - A repeat reaches the per-page error boundary: "A new version is
+    available." with **Reload**. The Shell stays usable.
+  - Any other render error now stays inside the page instead of blanking the
+    app.
+- Tests: [pwa.spec.ts](../../apps/dashboard/e2e/pwa.spec.ts) covers the
+  manifest, taps at 390 px, a silent socket and a missing chunk. Cloud test 16
+  in [cloud.spec.ts](../../apps/dashboard/e2e-cloud/cloud.spec.ts) covers the
+  manifest behind sign-in and the expired banner. Unit tests are
+  `realtime.test.ts`, `session.test.ts` and `reload.test.ts`.
+
 ## Quality gates
 
 `pnpm e2e` ([e2e/](../../apps/dashboard/e2e)) runs the design.md §19 matrix:
@@ -156,5 +214,13 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
 - Controlled Radix dialogs/drawers return focus to the element that opened them
   via `useReturnFocus` in [overlays.tsx](../../packages/ui/src/primitives/overlays.tsx).
 - Scrollable regions without focusable content need `tabIndex={0}`.
+- `crossorigin="use-credentials"` on the manifest link in
+  [index.html](../../apps/dashboard/index.html) is load-bearing. Browsers
+  fetch a manifest without cookies by default, and the Worker (and Access)
+  refuse it with 401, so the install option quietly disappears.
+- With an expired cloud sign-in, a route chunk also fails with 401. The
+  one-time reload then goes through Access, which is the right recovery. In
+  the local cloud e2e harness, which has no Access in front, it lands on the
+  Worker's JSON 401 instead.
 
 Last verified: 2026-09-24

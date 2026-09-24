@@ -336,7 +336,23 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           const question = (input.prompt.split('\nQUESTION:\n').at(-1) ?? '').trim().split('\n')[0]!.slice(0, 120);
           const repo = /repository "([^"]+)"/.exec(input.prompt)?.[1];
           const task = /<untrusted_evidence source="task (TASK-\d+)">/.exec(input.prompt)?.[1];
-          output = [`Simulated answer to: ${question}`, '', `- Repository: ${repo ?? 'none'}`, ...(task ? [`- Looked up ${task}`] : [])].join('\n');
+          // `[sim:lookup:<capability>:<json input>]` in the question: call it through the run's tool session, as a real agent would over MCP.
+          const lookups: string[] = [];
+          const bridge = input.toolBridge?.env;
+          for (const m of (input.prompt.split('\nQUESTION:\n').at(-1) ?? '').matchAll(/\[sim:lookup:([\w.]+)(?::(\{[^\]]*\}))?\]/g)) {
+            if (!bridge?.ACC_TOOL_URL || !bridge.ACC_TOOL_SESSION) {
+              lookups.push(`- No tools for ${m[1]}`);
+              continue;
+            }
+            const res = await fetch(`${bridge.ACC_TOOL_URL}/api/tool-session/call`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${bridge.ACC_TOOL_SESSION}`, 'content-type': 'application/json' },
+              body: JSON.stringify({ capability: m[1], input: m[2] ? JSON.parse(m[2]) : {} }),
+            }).catch(() => null);
+            const r = (await res?.json().catch(() => null)) as { ok?: boolean; summary?: string } | null;
+            lookups.push(`- ${m[1]}: ${r?.ok ? 'OK' : 'REFUSED'} ${r?.summary ?? `HTTP ${res?.status ?? 'error'}`}`);
+          }
+          output = [`Simulated answer to: ${question}`, '', `- Repository: ${repo ?? 'none'}`, ...(task ? [`- Looked up ${task}`] : []), ...lookups].join('\n');
           break;
         }
         default:

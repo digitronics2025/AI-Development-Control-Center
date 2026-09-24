@@ -1,3 +1,4 @@
+import { classifyCommand } from '@acc/security';
 import { z } from 'zod';
 import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
 import { checkPage } from './browser.js';
@@ -95,7 +96,12 @@ export function verifyProvider(): ToolProvider {
         description: 'Start the app (optional), wait until it answers, open each path at desktop and phone widths (or call it over HTTP), report console errors, failed requests and screenshots, then stop it.',
         input: webVerifyInput,
         level: 2,
-        classify: (input) => (input.startCommand ? { reasons: ['Starts the app for verification'], effects: ['process'] } : { level: 1 }),
+        // The start command is a free-form command line run by a shell: it is judged like one (audit F-04).
+    classify: (input) => {
+      if (!input.startCommand) return { level: 1 };
+      const c = classifyCommand(input.startCommand);
+      return { level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: ['Starts the app for verification', ...c.reasons], effects: ['process', ...c.effects], production: c.production };
+    },
         run: (input, ctx) => verifyWeb(input, ctx),
       }),
     ],

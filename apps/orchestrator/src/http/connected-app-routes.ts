@@ -11,7 +11,8 @@ import { CONNECTED_APP_HTTP_STATUS, ConnectedAppError } from '../connected-apps/
  *    pairing codes, the list, default mode, disconnect.
  *  - `/api/connected-app/*` — the paired app, with its own token only
  *    (security.ts lets these through without the local token and refuses any
- *    Origin). Pairing is the one call without a token; the code guards it.
+ *    Origin). Pairing (guarded by its code) and hello (a signed identity
+ *    statement, nothing else) are the only calls without a token.
  *
  * None of these are tools, MCP tools or remote operations, and a request the
  * cloud relayed (`x-acc-remote-request`) is refused on all of them.
@@ -70,7 +71,8 @@ export function registerConnectedAppRoutes(app: FastifyInstance, s: AppServices)
 
   // The paired app (its own token).
   app.post('/api/connected-app/pair', { bodyLimit: 4 * 1024 }, guarded(async (request, reply) => reply.code(201).send(await apps.pair(request.body))));
-  app.post('/api/connected-app/hello', { bodyLimit: 4 * 1024 }, guarded(async (request) => apps.hello(apps.authenticate(bearer(request)), request.body)));
+  // No token: the app proves who answers before it sends its token (service.hello).
+  app.post('/api/connected-app/hello', { bodyLimit: 4 * 1024 }, guarded(async (request) => apps.hello(request.body)));
   app.get('/api/connected-app/repositories', guarded(async (request) => {
     apps.authenticate(bearer(request));
     return apps.repositories();

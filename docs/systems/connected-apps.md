@@ -33,7 +33,7 @@ Browser is not an agent surface.
 - **Token.** 256 random bits (base64url), returned once. Only its SHA-256 is
   stored (`connected_apps.token_hash`). It is registered with the redactor, and
   `last_used_at` is updated at most once a minute.
-- **Identity.** Responses to `pair` and `hello {nonce}` are signed with the
+- **Identity.** Responses to `pair` and `hello {appId, nonce}` are signed with the
   Control Center identity key, the same sealed ECDSA P-256 key MyVault pins
   ([credential-broker.md](credential-broker.md#myvault-bridge)).
   - The statements are `acc-connected-app-v1 pair|hello\n<appId>\n<nonce>`
@@ -43,8 +43,10 @@ Browser is not an agent surface.
   - Test vectors: `apps/orchestrator/test/fixtures/acc-connected-app-v1.vectors.json`,
     copied byte-for-byte into Private Browser. ECDSA is randomised, so the
     vectors are verified, not reproduced.
-  - The app pins the key at pairing and checks a fresh `hello` before it sends
-    anything. First contact is trust on first use: the dialog shows the
+  - `hello` needs **no token** and looks nothing up: it signs for any
+    well-formed app id. The app calls it before every call that carries its
+    token, so a program squatting the port is never handed the token.
+  - The app pins the key at pairing. First contact is trust on first use: the dialog shows the
     fingerprint for the operator to compare.
 - **Reach.** [security.ts](../../apps/orchestrator/src/http/security.ts) lets
   `/api/connected-app/*` through without the local token, and refuses it with
@@ -77,7 +79,7 @@ Browser is not an agent surface.
 | Route | Behaviour |
 |---|---|
 | `POST /api/connected-app/pair` | no token; the code guards it |
-| `POST /api/connected-app/hello {nonce}` | returns a fresh signed statement |
+| `POST /api/connected-app/hello {appId, nonce}` | no token; returns a fresh signed statement and nothing else |
 | `GET /api/connected-app/repositories` | `{id, name, devOrigin}`: the origin of `runtime.devUrl`, so the app can suggest one. No paths. |
 | `POST /api/connected-app/tasks` | see below; 201 when created, 200 when the `requestId` already made one |
 | `GET /api/connected-app/tasks` | the app's last 20 tasks |

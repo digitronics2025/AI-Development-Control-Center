@@ -75,7 +75,7 @@ export const pairSchema = z.object({
   name: z.string().trim().min(1).max(80),
   nonce: z.string().regex(STATEMENT_FIELD, 'Invalid nonce'),
 });
-export const helloSchema = z.object({ nonce: z.string().regex(STATEMENT_FIELD, 'Invalid nonce') });
+export const helloSchema = z.object({ appId: z.string().regex(STATEMENT_FIELD, 'Invalid app id'), nonce: z.string().regex(STATEMENT_FIELD, 'Invalid nonce') });
 export const createFromAppSchema = z
   .object({
     requestId: REQUEST_ID,
@@ -246,10 +246,16 @@ export class ConnectedAppService {
     return app;
   }
 
-  async hello(app: ConnectedAppRecord, raw: unknown): Promise<{ appId: string; identityKey: string; signature: string; name: string }> {
-    const { nonce } = helloSchema.parse(raw);
+  /**
+   * Proves this is the Control Center the app paired with, before the app
+   * sends its token anywhere. Needs no token on purpose: a program squatting
+   * the port must never receive one. It signs for any well-formed app id and
+   * looks nothing up, so it tells a caller nothing but the identity.
+   */
+  async hello(raw: unknown): Promise<{ appId: string; identityKey: string; signature: string }> {
+    const { appId, nonce } = helloSchema.parse(raw);
     const identity = await this.requireIdentity();
-    return { appId: app.id, identityKey: identity.publicKey, signature: await signStatement(identity.signingKey, { purpose: 'hello', appId: app.id, nonce }), name: app.name };
+    return { appId, identityKey: identity.publicKey, signature: await signStatement(identity.signingKey, { purpose: 'hello', appId, nonce }) };
   }
 
   /** Repositories by name, with the origin of the address the app runs at (to suggest one). No paths. */

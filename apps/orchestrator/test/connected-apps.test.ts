@@ -108,11 +108,13 @@ describe('connected apps', () => {
       expect((await t.api('POST', '/api/connected-app/pair', { code: 'abc', name: 'X', nonce: nonce() }, { authorization: '' })).status).toBe(400);
     });
 
-    it('answers hello with a fresh signed statement', async () => {
+    it('answers hello with a fresh signed statement, without asking for the token', async () => {
       const app = await pairApp(t);
       const n = nonce();
-      const hello = await t.api('POST', '/api/connected-app/hello', { nonce: n }, asApp(app.token));
+      // No Authorization header: a program squatting the port must never be handed the token.
+      const hello = await t.api('POST', '/api/connected-app/hello', { appId: app.appId, nonce: n }, { authorization: '' });
       expect(hello.status).toBe(200);
+      expect(Object.keys(hello.body).sort()).toEqual(['appId', 'identityKey', 'signature']);
       expect(await verifyStatement({ purpose: 'hello', appId: app.appId, nonce: n, identityKey: hello.body.identityKey, signature: hello.body.signature })).toBe(true);
       // A pairing signature cannot pass as a hello.
       expect(await verifyStatement({ purpose: 'pair', appId: app.appId, nonce: n, identityKey: hello.body.identityKey, signature: hello.body.signature })).toBe(false);
@@ -139,7 +141,7 @@ describe('connected apps', () => {
       for (const url of ['/api/connected-app/repositories', '/api/connected-app/tasks']) {
         expect((await t.api('GET', url)).status).toBe(401);
       }
-      expect((await t.api('POST', '/api/connected-app/hello', { nonce: nonce() }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await t.api('POST', '/api/connected-app/tasks', { requestId: nonce(), repositoryId: 'x', note: 'x', sourceUrl: 'http://127.0.0.1/', evidence: 'x' }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
       // The app token opens its own.
       const repos = await t.api('GET', '/api/connected-app/repositories', undefined, asApp(app.token));
       expect(repos.status).toBe(200);
@@ -174,7 +176,7 @@ describe('connected apps', () => {
       const revoked = await t.api('POST', `/api/connected-apps/${app.appId}/revoke`);
       expect(revoked.body.revokedAt).toEqual(expect.any(String));
       expect((await t.api('GET', '/api/connected-app/tasks', undefined, asApp(app.token))).status).toBe(401);
-      expect((await t.api('POST', '/api/connected-app/hello', { nonce: nonce() }, asApp(app.token))).status).toBe(401);
+      expect((await t.api('GET', '/api/connected-app/repositories', undefined, asApp(app.token))).status).toBe(401);
     });
   });
 

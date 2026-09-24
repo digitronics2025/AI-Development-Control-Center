@@ -89,7 +89,9 @@ They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
 
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
-task record. A reviewer/verifier stage with `verdict: false` still records an
+task record. The report lists any `browser-recheck-*.md` re-checks under
+Verification coverage as operator-observed evidence, never as a pass
+([connected-apps.md](connected-apps.md)). A reviewer/verifier stage with `verdict: false` still records an
 advisory verdict (it does not route); a FAIL makes the report
 `NEEDS_USER_ACTION` (used by the built-in Staged Review workflow). The final
 status is `READY` only when the last test stage passed (not skipped), the last

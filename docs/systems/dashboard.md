@@ -74,7 +74,11 @@ cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New T
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md)),
 Tools (`/tools/:tab`: Overview, Processes, Terminals, MCP servers,
-Credentials, Policy — see [tool-system.md](tool-system.md); Credentials lives in
+Credentials, Connected apps (local and VS Code only), Policy — see
+[tool-system.md](tool-system.md); Connected apps is
+[pages/tools/ConnectedAppsTab.tsx](../../apps/dashboard/src/pages/tools/ConnectedAppsTab.tsx),
+see [connected-apps.md](connected-apps.md), and tasks a connected app created
+carry a From Private Browser badge in the task row and header; Credentials lives in
 [pages/tools/CredentialsTab.tsx](../../apps/dashboard/src/pages/tools/CredentialsTab.tsx), and the
 bare `/vault-bridge` page is MyVault's popup relay, rendered outside the Shell —
 see [credential-broker.md](credential-broker.md)),

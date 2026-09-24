@@ -155,7 +155,7 @@ gains optional `generate` and `deployGate` for this.
 `POST /api/tools/call {repositoryId, capability, input, confirmation}`
 (operator call; Level 5 runs only when `confirmation` equals the capability
 id), `GET /api/tool-executions`, `GET /api/tasks/:id/execution`,
-`GET /api/tasks/:id/processes`, `POST /api/tasks/:id/processes/:pid/stop`,
+`GET /api/tasks/:id/processes`, `POST /api/tasks/:id/processes/:processId/stop` (the `task_processes` record id, not an OS pid),
 `GET /api/processes`, `POST /api/processes/:id/stop`, plus the terminal, MCP,
 credential, checkpoint and session routes in their own docs. Realtime:
 `tool`, `toolExecution`, `taskProcess`, `recovery`, `escalation`.

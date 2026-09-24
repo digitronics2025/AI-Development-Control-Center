@@ -42,7 +42,9 @@ reconnect invalidates everything. `useRepositoryAutomation` also polls every
 5 s while a run is in progress, so a missed end-of-run message cannot leave
 "Checking now…" on screen. Mutations are never optimistic for
 orchestrator-owned state. Tab choice lives in the URL (`?tab=`); only per-viewer
-conveniences (sidebar collapsed, log mode) use `localStorage`.
+conveniences use `localStorage`: sidebar collapsed, log mode, the resolved theme,
+the selected cloud node, the last Source Control repository and per-repository
+commit-message drafts.
 
 ## Tokens
 
@@ -134,7 +136,8 @@ is `{kind:'local', token}` or `{kind:'cloud', node()}`; cloud requests send
 the Nodes page (`/nodes`), the top-bar node selector (remembered in
 localStorage), offline and update-required banners, New Task "Run on" /
 "Run when the node is back", and a confirmation before a remote terminal; it
-hides Settings → Remote access and disables attachments. Local mode shows
+hides Settings → Remote access, Learning, Tools → Connected apps and the vault
+bridge page, and disables attachments. Local mode shows
 Settings → Remote access instead. Tests: `pnpm e2e:cloud`
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)). See
 [cloud-control.md](cloud-control.md#dashboard-in-cloud-mode).

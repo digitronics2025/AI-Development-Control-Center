@@ -828,7 +828,8 @@ export class TaskEngine {
             this.publisher.event(taskId, 'ENVIRONMENT_DISCOVERED', `Environment discovery failed: ${redact((error as Error).message).slice(0, 200)}`);
           });
         }
-        // The Chairman checks limits and takes its checkpoint while the writer lock is held.
+        // The Chairman checks limits and takes its before-stage checkpoint while this writer lock is held;
+        // its rollbacks, which run outside a stage, take the lock themselves (CheckpointService.restore).
         if (this.supervises(task) && !(await this.supervisor!.beforeStage(this.task(taskId), def, control))) return this.afterHook(taskId, control);
         stage = this.createStageInstance(this.task(taskId), def);
         switch (def.kind) {

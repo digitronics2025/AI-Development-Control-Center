@@ -131,7 +131,8 @@ export function App({ config, queryClient }: { config: RuntimeConfig; queryClien
               <CommandProvider>
                 <ThemeSync />
                 <NotificationBridge />
-                {config.host === 'web' && window.location.pathname === VAULT_BRIDGE_PATH ? (
+                {/* The vault bridge belongs to this machine's orchestrator; the cloud Worker has no such route (audit I-09). */}
+                {config.host === 'web' && config.mode === 'local' && window.location.pathname === VAULT_BRIDGE_PATH ? (
                   <Suspense fallback={null}>
                     <VaultBridgePage />
                   </Suspense>

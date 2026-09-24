@@ -37,7 +37,7 @@ removed when the run ends.
 
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
-- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] -`
+- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).

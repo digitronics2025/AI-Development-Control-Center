@@ -100,7 +100,8 @@ through `AgentRegistry.launch`, which records them — see [usage.md](usage.md).
 
 Structured provider messages are classified before log noise: `USAGE_LIMIT`
 ("out of credits", "hit your limit", 429…), `AUTH_FAILURE`,
-`MODEL_UNAVAILABLE` ("requires a newer version"…), `PERMISSION_DENIED`,
+`MODEL_UNAVAILABLE` ("requires a newer version", a CLI's own "error: unknown
+option '--…'" line when it is older than the adapter's flags…), `PERMISSION_DENIED`,
 `CONTEXT_FAILURE`; otherwise `PROCESS_CRASH`.
 
 Only plain output lines count as evidence from the output tail

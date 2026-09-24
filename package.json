@@ -9,6 +9,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "prepare": "node scripts/install-hooks.mjs",
     "dev": "pnpm --parallel --filter @acc/orchestrator --filter @acc/dashboard dev",
     "build": "pnpm --filter @acc/dashboard build && pnpm --filter @acc/orchestrator build && pnpm --filter acc-vscode build",
     "start": "node apps/orchestrator/dist/main.js",

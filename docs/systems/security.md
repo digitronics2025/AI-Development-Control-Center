@@ -155,7 +155,14 @@ Revocation from the cloud or the admin CLI stops the node for good.
 
 ## Gotchas
 
-- Tests build fake credentials at runtime; the operator's commit guard rejects credential-shaped literals.
+- Tests build fake credentials at runtime. The repository's own pre-commit hook
+  ([.githooks/pre-commit](../../.githooks/pre-commit) →
+  [secret-scan.ts](../../scripts/secret-scan.ts)) stops staged sensitive files and
+  credential-shaped added lines for every commit, however it is made; it fails
+  closed when it cannot run. `pnpm install` sets `core.hooksPath` to `.githooks`
+  ([install-hooks.mjs](../../scripts/install-hooks.mjs)). A line that must keep a
+  credential-shaped example carries `secret-scan: allow`. `git commit --no-verify`
+  skips it; nothing else does.
 - Redaction is conservative: values such as `API_KEY=absent` are masked too.
 
 Last verified: 2026-09-24

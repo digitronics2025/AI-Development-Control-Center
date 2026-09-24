@@ -34,7 +34,8 @@ change behaviour.
 - The orchestrator never runs elevated; administrator work goes through the
   signed, allowlisted `scripts/windows/privileged-helper.ps1`.
 - Test credentials are assembled at runtime; never commit a credential-shaped
-  literal (the commit guard blocks it).
+  literal (`.githooks/pre-commit` runs `scripts/secret-scan.ts` and blocks it;
+  `pnpm install` installs the hook).
 - Frontend: semantic tokens only (the default Tailwind palette is removed),
   shared components from `packages/ui`, and the Playwright matrix must stay
   green in both themes.

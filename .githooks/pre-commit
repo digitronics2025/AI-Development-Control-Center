@@ -22,7 +22,20 @@
 # to the existing hook instead:
 #   node scripts/docs-guard.mjs hook || exit 1
 
-command -v node >/dev/null 2>&1 || exit 0
+# --- Secret scan (audit F-19): blocking, and it fails closed. ---------------
+# Staged sensitive files and credential-shaped added lines stop the commit,
+# however it is made. See scripts/secret-scan.ts.
+if ! command -v node >/dev/null 2>&1; then
+  echo "secret-scan: Node.js is not on PATH, so this commit cannot be checked for secrets." >&2
+  exit 1
+fi
+if [ ! -d node_modules/tsx ]; then
+  echo "secret-scan: run 'pnpm install' first; the secret scan needs it." >&2
+  exit 1
+fi
+node --import tsx scripts/secret-scan.ts || exit 1
+
+# --- Docs guard ----------------------------------------------------------------
 [ -f scripts/docs-guard.mjs ] || exit 0
 
 node scripts/docs-guard.mjs hook || exit 1

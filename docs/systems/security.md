@@ -94,7 +94,9 @@ needs an approval with a typed confirmation (the task ID).
 ## Chairman ([chairman.md](chairman.md))
 
 - Every Chairman action passes one gateway: schema, initiator permissions,
-  task state, stale-version check, per-task lock, idempotency key, audit row.
+  task state, stale-version check (supervisor decisions always; API callers
+  when they send `expectedVersion`; chat acts on current state), per-task lock,
+  idempotency key, audit row.
 - Agent output, logs, tests and repository text reach the reasoning model only
   inside `<untrusted_evidence>` fences it cannot close (the snapshot's
   agent-written fields included), and the model can only pick a pre-validated

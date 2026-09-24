@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import type { UsageEvent, UsageEventPage, UsageOverview, UsageTaskLedger } from '@acc/shared';
+import { budgetState } from '../src/usage/budgets.js';
 import type { UsageDispatch } from '../src/usage/ledger.js';
 import { addRepo, createTask, createTestApp, makeRepo, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
@@ -277,6 +278,9 @@ describe('budgets', () => {
     expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'GLOBAL', period: 'month', amountUsd: 5 })).status).toBe(409);
     expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'GLOBAL', scopeId: 'x', period: 'month', amountUsd: 5 })).status).toBe(400);
     expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'PROVIDER', period: 'month', amountUsd: 5 })).status).toBe(400);
+    // Below one nano-dollar the amount would round to zero (audit F-38).
+    expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'PROVIDER', scopeId: 'simulated', period: 'month', amountUsd: 1e-10 })).status).toBe(400);
+    expect(budgetState({ amountNanos: 0, warningThreshold: 0.8, criticalThreshold: 0.95 }, 0)).toBe('exceeded');
     expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'TASK', scopeId: 'TASK-0001', period: 'month', amountUsd: 5 })).status).toBe(400);
     await runTask('Add a greeting');
     const statuses = (await t.api('GET', '/api/usage/budgets')).body;

@@ -63,6 +63,8 @@ export function periodWindow(period: BudgetPeriod, now = new Date()): { start: D
 }
 
 export function budgetState(budget: Pick<Budget, 'amountNanos' | 'warningThreshold' | 'criticalThreshold'>, spentNanos: number): BudgetState {
+  // A zero amount (a row written before the schema minimum) spends nothing: fail closed (audit F-38).
+  if (budget.amountNanos <= 0) return 'exceeded';
   const ratio = spentNanos / budget.amountNanos;
   if (ratio >= 1) return 'exceeded';
   if (ratio >= budget.criticalThreshold) return 'critical';
@@ -199,7 +201,7 @@ export class BudgetService {
       periodEnd: window?.end.toISOString() ?? null,
       spentNanos: spent,
       remainingNanos: Math.max(0, budget.amountNanos - spent),
-      usedRatio: spent / budget.amountNanos,
+      usedRatio: budget.amountNanos > 0 ? spent / budget.amountNanos : 1,
       state: budgetState(budget, spent),
       unknownCostEvents: unknown,
     };

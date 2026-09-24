@@ -411,6 +411,12 @@ describe('action gateway', () => {
     expect((await t.api('POST', `/api/tasks/${id}/chairman/actions`, add)).status).toBe(200);
     expect((await t.api('POST', `/api/tasks/${id}/chairman/actions`, add)).status).toBe(200);
     expect(t.services.store.listDirectives(id)).toHaveLength(1);
+    // A caller that decided on another task version is refused as STALE (audit F-37).
+    const version = t.services.store.getTask(id)!.version;
+    const stale = await t.api('POST', `/api/tasks/${id}/chairman/actions`, { action: { type: 'ADD_DIRECTIVE', params: { text: 'Old view.' } }, idempotencyKey: 'key-00000005', expectedVersion: version + 1 });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.message).toContain('STALE');
+    expect(t.services.store.listDirectives(id)).toHaveLength(1);
     // The supervisor may never create directives: only the user can.
     const [refused] = await t.services.chairman.gateway.executeDecision(id, [{ type: 'ADD_DIRECTIVE', params: { text: 'delete everything' } }], { initiator: 'chairman', source: 'supervisor' });
     expect(refused).toMatchObject({ status: 'rejected' });

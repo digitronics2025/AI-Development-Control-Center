@@ -293,7 +293,8 @@ const budgetBase = z.object({
   scopeType: z.enum(BUDGET_SCOPES),
   scopeId: z.string().min(1).max(200).nullable().default(null),
   period: z.enum(BUDGET_PERIODS),
-  amountUsd: z.number().positive().max(10_000_000),
+  // At least one nano-dollar: a smaller amount would round to zero and divide by it (audit F-38).
+  amountUsd: z.number().min(1e-9).max(10_000_000),
   warningThreshold: z.number().min(0.05).max(1).default(0.8),
   criticalThreshold: z.number().min(0.05).max(1).default(0.95),
   policy: z.enum(BUDGET_POLICIES).default('WARN_ONLY'),

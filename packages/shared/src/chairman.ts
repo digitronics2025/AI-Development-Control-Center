@@ -113,6 +113,8 @@ export const chairmanActionBodySchema = z.object({
   action: chairmanActionSchema,
   /** Duplicate requests with the same key return the first result (reconnects, double clicks). */
   idempotencyKey: z.string().min(8).max(100),
+  /** The task version the caller decided on; a changed task rejects the action as STALE. Omitted: act on the current state. */
+  expectedVersion: z.number().int().nonnegative().optional(),
 });
 
 export const chairmanMessageBodySchema = z.object({

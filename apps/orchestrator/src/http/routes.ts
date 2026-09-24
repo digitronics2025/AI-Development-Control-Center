@@ -205,7 +205,7 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   app.post('/api/tasks/:id/chairman/actions', async (request, reply) => {
     const { id } = idParam.parse(request.params);
     const body = chairmanActionBodySchema.parse(request.body);
-    const action = await s.chairman.gateway.execute(id, body.action, { initiator: 'user', source: 'api', idempotencyKey: body.idempotencyKey });
+    const action = await s.chairman.gateway.execute(id, body.action, { initiator: 'user', source: 'api', idempotencyKey: body.idempotencyKey, expectedVersion: body.expectedVersion });
     if (action.status === 'completed') return action;
     return sendError(reply, 409, action.status === 'rejected' ? 'REJECTED' : 'FAILED', action.reason ?? 'The action did not complete', action);
   });

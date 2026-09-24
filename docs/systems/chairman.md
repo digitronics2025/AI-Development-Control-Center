@@ -231,7 +231,9 @@ all judgement text on top of unchanged validation:
 
 Every action (supervisor, chat, `POST /api/tasks/:id/chairman/actions`):
 schema → initiator permission → task not terminal → version check (stale
-decisions rejected) → per-task lock (the loop's own in-loop calls skip it; a
+decisions rejected; the supervisor always supplies the version it decided on,
+the HTTP route only when the body carries `expectedVersion`, and chat never:
+a user's words act on the task as it is when the message is handled) → per-task lock (the loop's own in-loop calls skip it; a
 pending stop supersedes them) → idempotency key → `chairman_actions` audit row →
 engine command. Only the **user** may add/remove directives; only chairman or
 system may mark a hard blocker. Running work is stopped with

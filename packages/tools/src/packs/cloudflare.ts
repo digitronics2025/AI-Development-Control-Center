@@ -13,7 +13,11 @@ import { classifySql } from '../sql.js';
  * Cloudflare through Wrangler (V2 plan §23). Every operation names its
  * environment — local, preview, staging or production — and the level
  * follows it: local work is Level 2, staging and previews Level 4,
- * production Level 5 (always a typed approval). Credentials come from the
+ * production Level 5 (always a typed approval). Reads that return no stored
+ * data (deployment history, live logs, KV key names) stay Level 2 whatever the
+ * environment. A remote D1/KV "preview" is the live database and is judged as
+ * production; a Pages branch is production when Cloudflare says so, not the
+ * caller. Credentials come from the
  * broker (`cloudflare` kind → CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID).
  */
 
@@ -87,6 +91,28 @@ function parseJson(text: string): unknown {
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
 /** A value from the repository's Wrangler config (`name`, `account_id`), for defaults only. */
+/** Branch names that are production on nearly every Pages project: classified production without asking Cloudflare. */
+const PRODUCTION_BRANCH = /^(?:main|master|production|prod|release|live)$/i;
+
+/** The Pages project's production branch as Cloudflare has it, or null when it cannot be read. */
+async function pagesProductionBranch(ctx: OperationContext, project: string): Promise<string | null> {
+  const token = ctx.env.CLOUDFLARE_API_TOKEN;
+  const account = ctx.env.CLOUDFLARE_ACCOUNT_ID ?? wranglerConfigValue(ctx.cwd, 'account_id');
+  if (!token || !account) return null;
+  const r = await cfApi(ctx, token, `/accounts/${account}/pages/projects/${project}`).catch(() => null);
+  const branch = (r?.json?.result as { production_branch?: unknown } | undefined)?.production_branch;
+  return r?.ok && typeof branch === 'string' ? branch : null;
+}
+
+/**
+ * A remote D1 or KV store has no preview copy: `--remote` without `--env`
+ * addresses the one database by name, which is the live one. A remote write
+ * labelled preview is judged as production (audit F-14).
+ */
+function remoteData(env: Environment): Environment {
+  return env === 'preview' ? 'production' : env;
+}
+
 export function wranglerConfigValue(cwd: string, key: 'name' | 'account_id'): string | null {
   for (const file of ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml']) {
     let text: string;
@@ -243,9 +269,12 @@ export function cloudflareProvider(): ToolProvider {
         id: 'cloudflare.pages_deploy',
         title: 'Deploy a Pages site',
         description: 'Upload a built folder to a Pages project. A preview branch is Level 4; the production branch needs your typed approval.',
-        input: z.object({ directory: z.string().min(1).max(500), project: z.string().min(1).max(100).regex(/^[\w-]+$/), branch: z.string().min(1).max(100).regex(/^[\w./-]+$/), productionBranch: z.string().max(100).default('main') }),
+        // Which branch is production is the project's setting on Cloudflare, never the caller's word
+        // (audit F-14): common production names are classified production up front, and any other
+        // branch is checked against the project before anything is uploaded.
+        input: z.object({ directory: z.string().min(1).max(500), project: z.string().min(1).max(100).regex(/^[\w-]+$/), branch: z.string().min(1).max(100).regex(/^[\w./-]+$/) }),
         level: 4,
-        classify: (i) => levelFor(i.branch === i.productionBranch ? 'production' : 'preview', true),
+        classify: (i) => levelFor(PRODUCTION_BRANCH.test(i.branch) ? 'production' : 'preview', true),
         credentials: CREDENTIALS,
         async run(input, ctx) {
           let dir: string;
@@ -253,6 +282,11 @@ export function cloudflareProvider(): ToolProvider {
             dir = resolveInside(ctx.roots, ctx.cwd, input.directory);
           } catch (error) {
             return failure('OUTSIDE_ROOT', (error as Error).message);
+          }
+          if (!PRODUCTION_BRANCH.test(input.branch)) {
+            const production = await pagesProductionBranch(ctx, input.project);
+            if (production === null) return failure('DENIED', `Could not confirm ${input.project}'s production branch on Cloudflare, so a deploy to "${input.branch}" cannot be judged a preview. Store a Cloudflare token with Pages read access, or deploy as the production branch (typed approval).`);
+            if (production === input.branch) return failure('DENIED', `"${input.branch}" is ${input.project}'s production branch: this is a production deploy and needs your typed approval. Deploy it under that name as production.`);
           }
           const r = await wrangler(ctx, ['pages', 'deploy', dir, '--project-name', input.project, '--branch', input.branch], 600_000);
           const url = /(https:\/\/\S+\.pages\.dev)/.exec(r.stdout)?.[1] ?? null;
@@ -340,7 +374,7 @@ export function cloudflareProvider(): ToolProvider {
         level: 1,
         classify: (i) => {
           const sql = classifySql(i.sql);
-          const base = levelFor(i.environment, !sql.readOnly);
+          const base = levelFor(remoteData(i.environment), !sql.readOnly);
           return sql.destructive ? { ...base, level: 5 as PermissionLevel, risk: 'dangerous', reasons: sql.reasons, effects: ['database', ...(base.effects ?? [])] } : { ...base, reasons: [...(base.reasons ?? []), ...sql.reasons], effects: ['database', ...(base.effects ?? [])] };
         },
         credentials: CREDENTIALS,
@@ -358,7 +392,7 @@ export function cloudflareProvider(): ToolProvider {
         description: 'List or apply D1 migrations. Applying locally is Level 2, to staging Level 4, to production your typed approval.',
         input: z.object({ database: dbName, action: z.enum(['list', 'apply']), environment }),
         level: 1,
-        classify: (i) => ({ ...levelFor(i.environment, i.action === 'apply'), effects: ['database'] }),
+        classify: (i) => ({ ...levelFor(remoteData(i.environment), i.action === 'apply'), effects: ['database'] }),
         credentials: CREDENTIALS,
         async run(input, ctx) {
           const where = input.environment === 'local' ? ['--local'] : ['--remote', ...envFlags(input.environment)];
@@ -372,7 +406,7 @@ export function cloudflareProvider(): ToolProvider {
         description: 'Export a D1 database to a SQL file kept with the Control Center (not in the repository).',
         input: z.object({ database: dbName, environment }),
         level: 2,
-        classify: (i) => (i.environment === 'production' ? levelFor('production', false) : { level: 2, reasons: ['Backs up a database'], effects: ['database'] }),
+        classify: (i) => (remoteData(i.environment) === 'production' ? levelFor('production', false) : { level: 2, reasons: ['Backs up a database'], effects: ['database'] }),
         credentials: CREDENTIALS,
         async run(input, ctx) {
           const dir = path.join(ctx.stateDir, 'backups', 'd1');

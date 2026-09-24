@@ -159,3 +159,25 @@ describe('F-02: pages the tools drive never load the Control Center', async () =
     }
   }, 60_000);
 });
+
+describe('F-14: production is decided by the resource, not by a label the caller picks', () => {
+  it('classifies a Pages deploy of a production-named branch as production, whatever else is passed', () => {
+    const main = risk('cloudflare.pages_deploy', { directory: 'dist', project: 'site', branch: 'main', productionBranch: 'release' });
+    expect(main).toMatchObject({ level: 5, production: true });
+    expect(risk('cloudflare.pages_deploy', { directory: 'dist', project: 'site', branch: 'feature-x' }).level).toBe(4);
+  });
+
+  it('refuses a non-production-named branch it cannot check against Cloudflare', async () => {
+    const os = await import('node:os');
+    const o = op('cloudflare.pages_deploy');
+    const ctx = { executionId: 't', taskId: null, cwd: os.tmpdir(), roots: [os.tmpdir()], env: {}, signal: new AbortController().signal, timeoutMs: 1000, tempDir: os.tmpdir(), stateDir: os.tmpdir(), shell: async () => null, detection: () => undefined, protectedPaths: [] } as never;
+    const r = await o.run(o.input.parse({ directory: '.', project: 'site', branch: 'staging-preview' }), ctx);
+    expect(r.error?.code).toBe('DENIED');
+  });
+
+  it('judges a remote D1 write or migration labelled preview as production', () => {
+    expect(risk('cloudflare.d1_query', { database: 'app-db', sql: 'UPDATE users SET plan = 1 WHERE id = 2', environment: 'preview' })).toMatchObject({ level: 5, production: true });
+    expect(risk('cloudflare.d1_migrations', { database: 'app-db', action: 'apply', environment: 'preview' })).toMatchObject({ level: 5, production: true });
+    expect(risk('cloudflare.d1_query', { database: 'app-db', sql: 'SELECT 1', environment: 'local' }).level).toBeLessThan(3);
+  });
+});

@@ -32,7 +32,9 @@ therefore every repository hook — and the Playwright browser run with
 the orchestrator logs the **names** of any such variable it withheld.
 `CLAUDE_CODE_OAUTH_TOKEN` (the subscription sign-in) is kept. Adapters verify the CLI's own login before each launch
 (cached 5 minutes) and refuse API-key logins. Explicit API Mode requires typing
-`API BILLING` in Settings → Billing and shows a persistent indicator.
+`API BILLING` in Settings → Billing — checked by the server: `PATCH /api/settings`
+with `billingMode: 'api'` is 422 `CONFIRMATION_REQUIRED` unless the body carries
+`confirmation: 'API BILLING'` — and shows a persistent indicator.
 
 ## Redaction ([redact.ts](../../packages/security/src/redact.ts))
 

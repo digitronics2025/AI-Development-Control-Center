@@ -65,3 +65,19 @@ describe('F-02: an agent cannot reach the Control Center itself through any tool
     expect(outcome.decision).not.toBe('deny');
   });
 });
+
+describe('F-54: switching to API billing needs the typed phrase on the server', () => {
+  it('refuses the bare patch, accepts the phrase, and needs nothing to switch back', async () => {
+    const bare = await t.api('PATCH', '/api/settings', { billingMode: 'api' });
+    expect(bare.status).toBe(422);
+    expect(bare.body.error.code).toBe('CONFIRMATION_REQUIRED');
+    expect((await t.api('GET', '/api/settings')).body.billingMode).toBe('subscription');
+    expect((await t.api('PATCH', '/api/settings', { billingMode: 'api', confirmation: 'api billing' })).status).toBe(422);
+    const typed = await t.api('PATCH', '/api/settings', { billingMode: 'api', confirmation: 'API BILLING' });
+    expect(typed.status).toBe(200);
+    expect(typed.body.billingMode).toBe('api');
+    expect(typed.body).not.toHaveProperty('confirmation');
+    const back = await t.api('PATCH', '/api/settings', { billingMode: 'subscription' });
+    expect(back.body.billingMode).toBe('subscription');
+  });
+});

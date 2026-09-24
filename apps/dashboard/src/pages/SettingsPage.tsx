@@ -1,5 +1,5 @@
 import { Monitor, Moon, RotateCcw, Save, Sun, Undo2 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useParams } from 'react-router';
 import {
   Badge,
@@ -22,6 +22,7 @@ import {
   useFeedback,
 } from '@acc/ui';
 import {
+  API_BILLING_CONFIRMATION,
   MODE_HELP,
   PERMISSION_LEVEL_INFO,
   PROMPT_PLACEHOLDERS,
@@ -203,12 +204,27 @@ export function SettingsPage() {
   const { toast } = useFeedback();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [apiConfirmOpen, setApiConfirmOpen] = useState(false);
+  // What the operator typed in the API-billing dialog; the server checks it (audit F-54).
+  const billingPhrase = useRef<string | null>(null);
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const seenServer = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notificationPermission, setNotificationPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
 
+  // A settings broadcast replaces the draft only when the operator has no unsaved edits;
+  // otherwise it is announced, never silently applied over their work (audit F-26).
+  const draftJson = draft ? JSON.stringify(draft) : null;
   useEffect(() => {
-    if (settings.data) setDraft(structuredClone(settings.data));
-  }, [settings.data]);
+    if (!settings.data) return;
+    const incoming = JSON.stringify(settings.data);
+    if (incoming === seenServer.current) return;
+    const previous = seenServer.current;
+    seenServer.current = incoming;
+    if (draftJson === null || draftJson === previous || draftJson === incoming) {
+      setDraft(structuredClone(settings.data));
+      setChangedElsewhere(false);
+    } else setChangedElsewhere(true);
+  }, [settings.data, draftJson]);
   const dirty = useMemo(() => Boolean(draft && settings.data && JSON.stringify(draft) !== JSON.stringify(settings.data)), [draft, settings.data]);
 
   const active: SectionId = localOnly(activeRequested) && mode !== 'local' ? 'general' : activeRequested;
@@ -219,14 +235,18 @@ export function SettingsPage() {
   const setChairman = <K extends keyof ChairmanSettings>(key: K, value: ChairmanSettings[K]) => setDraft({ ...draft, chairman: { ...draft.chairman, [key]: value } });
   const setLearning = <K extends keyof LearningSettings>(key: K, value: LearningSettings[K]) => setDraft({ ...draft, learning: { ...draft.learning, [key]: value } });
 
-  const save = (patch: Partial<Settings> = draft) =>
-    update.mutate(patch, {
+  const save = (patch: Partial<Settings> = draft) => {
+    const toApi = patch.billingMode === 'api' && settings.data?.billingMode !== 'api';
+    return update.mutate(toApi ? { ...patch, confirmation: billingPhrase.current ?? '' } : patch, {
       onSuccess: () => {
         toast('Settings saved');
         setError(null);
+        setChangedElsewhere(false);
+        billingPhrase.current = null;
       },
       onError: (e) => setError(errorMessage(e)),
     });
+  };
 
   const content: Record<SectionId, ReactNode> = {
     general: (
@@ -479,8 +499,9 @@ export function SettingsPage() {
           description="Agents will be allowed to use API keys present in the orchestrator's environment, which bills your API account per token. Subscription Only stays the recommended mode."
           confirmLabel="Allow API billing"
           cancelLabel="Keep Subscription Only"
-          confirmationPhrase="API BILLING"
-          onConfirm={() => {
+          confirmationPhrase={API_BILLING_CONFIRMATION}
+          onConfirm={(typed) => {
+            billingPhrase.current = typed;
             set('billingMode', 'api');
             setApiConfirmOpen(false);
           }}
@@ -545,6 +566,30 @@ export function SettingsPage() {
     <div className="flex flex-col gap-5 px-4 py-5 sm:px-5 md:px-6 xl:px-8">
       <PageHeader title="Settings" description="Global defaults. Repositories and tasks can override most of them." />
       {error ? <Banner tone="danger" role="alert" title="Settings were not saved">{error}</Banner> : null}
+      {changedElsewhere && dirty ? (
+        <Banner
+          tone="warning"
+          role="status"
+          title="Settings were changed elsewhere"
+          actions={
+            <>
+              <Button variant="ghost" onClick={() => setChangedElsewhere(false)}>
+                Keep my edits
+              </Button>
+              <Button
+                onClick={() => {
+                  setDraft(structuredClone(settings.data!));
+                  setChangedElsewhere(false);
+                }}
+              >
+                Load the new settings
+              </Button>
+            </>
+          }
+        >
+          Another window saved settings while you were editing. Saving now replaces them with your version.
+        </Banner>
+      ) : null}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[200px_minmax(0,900px)]">
         <nav aria-label="Settings sections" className="min-w-0">
           <ul className="flex gap-1 overflow-x-auto md:flex-col">

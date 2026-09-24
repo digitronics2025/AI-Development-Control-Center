@@ -124,6 +124,12 @@ to run, a second review sees the first, the verifier sees the reports, a Quick
 Change implementer sees the failing test output, a second investigator sees
 the first report.
 
+## Not covered here
+
+The Chairman's own prompts (recovery choice, chat, learning review) are built
+in code and validated as JSON, not editable templates:
+[chairman.md](chairman.md#reasoning) and [learning.md](learning.md#flow).
+
 ## Gotchas
 
 - A template is Markdown that contains Markdown: the diff placeholders sit in

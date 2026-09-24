@@ -196,6 +196,30 @@ model, or a failed call → `degraded` ("rules only"). Each call is launched
 through `AgentRegistry.launch`, so its usage and cost are recorded against the
 task with step `chairman` ([usage.md](usage.md)).
 
+What the prompts tell the model ([plan](../plans/CHAIRMAN_PROMPTS_PLAN.md)),
+all judgement text on top of unchanged validation:
+
+- **Shared rules**: what the Chairman is, evidence fences, OBSERVED against
+  AGENT_REPORTED, say when evidence is missing, constraints bind every choice
+  and every piece of guidance, no weakened checks, no secrets or paths, one
+  JSON object.
+- **Recovery**: a "how to read it" legend for the snapshot (`retryState`,
+  failure signatures and counts, `lastStrategy` outcomes: "No improvement" or
+  "Regressed" means that approach is spent), the candidates **in the rules'
+  preferred order** with kind, level and target (the first is the default; a
+  departure must be justified in `reasoningSummary`), and a per-field contract:
+  `guidance` is written for the agent of the chosen stage and reaches every
+  later prompt until the next strategy (what fails, what earlier attempts got
+  wrong, what must be true, what not to change); `expectedResult` is an
+  observable outcome; `diagnosis.confidence` is HIGH only when observed
+  evidence names the cause, MEDIUM for a consistent hypothesis, LOW for a guess.
+- **Chat**: lead with the answer, state first and evidence second, observed
+  against claimed, name the instruction the operator can give, never claim an
+  action happened, short Markdown. A question prompt carries no action help; an
+  uncertain instruction gets the allowed types with their parameters, the stage
+  keys from the snapshot and the installed agent ids.
+- **Learning review**: see [learning.md](learning.md#flow).
+
 ## Action Gateway ([gateway.ts](../../apps/orchestrator/src/chairman/gateway.ts))
 
 Every action (supervisor, chat, `POST /api/tasks/:id/chairman/actions`):

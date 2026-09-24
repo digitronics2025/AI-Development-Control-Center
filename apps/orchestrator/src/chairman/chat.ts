@@ -181,7 +181,7 @@ export class ChairmanChat {
     let modelReply: string | null = null;
     if (!parsed.confident && !chairman.reasoner.unavailableReason()) {
       // Uncertain wording: the model may interpret it, but only into non-destructive actions.
-      const interpreted = await chairman.reasoner.reply(snapshot(), message.body, parsed, history, await this.evidence(task), [...INTERPRETABLE_ACTIONS]);
+      const interpreted = await chairman.reasoner.reply(snapshot(), message.body, parsed, history, await this.evidence(task), [...INTERPRETABLE_ACTIONS], this.intentContext(task).agents);
       if (interpreted.ok) {
         intent = interpreted.value.intent;
         modelReply = interpreted.value.reply;

@@ -52,10 +52,16 @@ the engine.
    HIGH; a refused skill → a report); plus, when Settings → Learning *Use the
    Chairman agent* is on and the reasoner is available, `Reasoner.review`
    (same read-only runner as recovery, usage step `learning`). The prompt
-   (`Role: chairman`, `Mode: learning`) carries the signals, the final report
+   (`Role: chairman`, `Mode: learning`) carries a legend of the signal kinds,
+   the signals, the final report
    fenced as `<untrusted_evidence>`, the catalog, up to 25 skills ranked by
    shared words (installed + marketplace), live lessons and open findings (for
-   `sameAs`); a stuck task has no final report, so its latest review,
+   `sameAs`), and a quality bar: a lesson is one habit written as an
+   instruction with its reason (≤ 400 characters); `ADD_LESSON` for a way of
+   working, `USE_SKILL` when an offered skill covers it, `AUTHOR_SKILL` only
+   for a multi-step playbook, `INSTALL_TOOL` for a catalog program;
+   confidence HIGH only when the signals show problem and fix directly
+   ([plan](../plans/CHAIRMAN_PROMPTS_PLAN.md)); a stuck task has no final report, so its latest review,
    verification or implementation report is sent instead. Each finding must cite an offered signal id or it is dropped;
    at most 5 are kept; a bad proposal becomes `null` without dropping the
    finding; `app_defect` never carries a proposal; `INSTALL_TOOL` is global.

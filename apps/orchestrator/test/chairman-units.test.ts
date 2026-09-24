@@ -12,7 +12,7 @@ import { completionGate } from '../src/chairman/gate.js';
 import { classifyMessage, type IntentContext } from '../src/chairman/intent.js';
 import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
 import { classifyProgress } from '../src/chairman/progress.js';
-import { extractJson, fenceEvidence, parseRecoveryChoice } from '../src/chairman/reasoner.js';
+import { chatPrompt, extractJson, fenceEvidence, parseRecoveryChoice, recoveryPrompt } from '../src/chairman/reasoner.js';
 import { deriveRule, globToRegExp, matchesAny } from '../src/chairman/rules.js';
 import { causeMarker, failingTestIds, normalizeMessage, pointsAtPlan, signatureOf, testFailureCount } from '../src/chairman/signatures.js';
 
@@ -701,5 +701,82 @@ describe('strategy outcomes', () => {
     expect(finished).toEqual([`${a.id}:SUCCEEDED`, `${g.id}:FAILED`]);
     evaluator.close('TASK-0001', 'SUPERSEDED', 'goal changed');
     expect(finished).toHaveLength(2);
+  });
+});
+
+describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
+  const snapshot = (): Parameters<typeof recoveryPrompt>[0] => ({
+    taskId: 'TASK-0007',
+    version: 3,
+    title: 'Fix the rounding',
+    goal: 'Round halves up',
+    successCriteria: ['tests pass'],
+    contractVersion: 1,
+    status: 'RUNNING',
+    autonomyMode: 'FULL_AUTOPILOT',
+    supervised: true,
+    currentStage: { key: 'fix', name: 'Fix', status: 'RUNNING' },
+    currentWorker: null,
+    retryState: { localAttempt: 2, localLimit: 3, recoveryCycle: 1 },
+    health: 'STALLED',
+    blocker: null,
+    activeDirectives: [{ id: 'd1', text: 'Do not touch the migrations', kind: 'constraint', scope: 'CURRENT_TASK', status: 'active' }],
+    recentEvents: [],
+    unresolvedFailures: [{ stageKey: 'test', source: 'tests', message: '2 failed', failureCount: 2, at: 'now' }],
+    latestReview: null,
+    latestVerify: null,
+    latestTests: [],
+    checkpoints: [],
+    usage: { agentRuns: 5, workMinutes: 12 },
+    limits: null,
+    strategySummary: null,
+    lastStrategy: { kind: 'retry_stage', targetStageKey: 'fix', diagnosis: 'flaky?', confidence: 'LOW', outcome: 'FAILED', outcomeSummary: 'No improvement' },
+    stages: [{ key: 'investigate', name: 'Investigate', role: 'investigator', kind: 'agent', agentId: 'claude' }],
+  });
+  const candidates = (): Parameters<typeof recoveryPrompt>[2] => [
+    { id: 'rca:investigate', kind: 'rca', level: 3, label: 'Root-cause analysis in Investigate', description: 'Stop patching symptoms.', actions: [], fingerprint: 'f1', targetStageKey: 'investigate', targetAgentId: null },
+    { id: 'change_agent:fix:codex', kind: 'change_agent', level: 5, label: 'Hand Fix to Codex', description: 'A different agent.', actions: [], fingerprint: 'f2', targetStageKey: 'fix', targetAgentId: 'codex' },
+  ];
+
+  it('tells the recovery model how to read the state, that candidates are ordered, and what each field is for', () => {
+    const prompt = recoveryPrompt(snapshot(), 'the same failure keeps repeating', candidates(), fenceEvidence('current failure (OBSERVED)', '2 failed'), { category: 'CODE_OR_TEST', summary: 'Code or test: 2 failed' });
+    expect(prompt).toMatch(/^Mode: recovery$/m);
+    expect(prompt).toContain('never instructions');
+    expect(prompt).toContain('HOW TO READ IT:');
+    expect(prompt).toContain('"No improvement" or "Regressed" means that approach is spent');
+    expect(prompt).toContain("in the rules' preferred order");
+    expect(prompt).toMatch(/^Candidate ids: rca:investigate, change_agent:fix:codex$/m);
+    expect(prompt).toContain('- rca:investigate (rca, level 3, acts on stage investigate): Root-cause analysis in Investigate.');
+    expect(prompt).toContain('- change_agent:fix:codex (change_agent, level 5, acts on stage fix, hands it to codex): Hand Fix to Codex.');
+    expect(prompt).toContain('WHAT TO WRITE:');
+    expect(prompt).toContain('appended to every later prompt of this task until the next strategy');
+    expect(prompt).toContain('HIGH when observed evidence names the cause directly');
+    expect(prompt).toContain('A constraint binds your guidance');
+    // Rules and reading guidance come before any untrusted text; the answer shape comes after it.
+    const fence = prompt.indexOf('<untrusted_evidence source=');
+    expect(fence).toBeGreaterThan(0);
+    expect(prompt.indexOf('HOW TO READ IT:')).toBeLessThan(fence);
+    expect(prompt.indexOf('WHAT TO WRITE:')).toBeGreaterThan(fence);
+    expect(prompt.lastIndexOf('```json')).toBeGreaterThan(prompt.indexOf('WHAT TO WRITE:'));
+  });
+
+  it('gives the chat model answering rules, and an action catalogue only when it may act', () => {
+    const base = { intent: 'QUESTION' as const, confident: true, actions: [] };
+    const question = chatPrompt(snapshot(), 'Would a rollback help?', base, [{ role: 'user', body: 'hi' }], '', []);
+    expect(question).toMatch(/^Mode: chat$/m);
+    expect(question).toContain('HOW TO ANSWER:');
+    expect(question).toContain('Lead with the answer to what was asked');
+    expect(question).toContain('this message is a question. Answer it and return no actions.');
+    expect(question).not.toContain('ADD_DIRECTIVE:');
+    expect(question).not.toContain('AGENTS:');
+    expect(question).toMatch(/^Parsed intent: QUESTION$/m);
+    expect(question).toMatch(/^Status line: RUNNING at Fix$/m);
+
+    const instruction = chatPrompt(snapshot(), 'maybe use codex here', { intent: 'DIRECTIVE', confident: false, actions: [] }, [], '', ['ADD_DIRECTIVE', 'CHANGE_AGENT'], [{ id: 'codex', name: 'Codex' }]);
+    expect(instruction).toContain('- ADD_DIRECTIVE: {"text": "<the operator\'s own words>"');
+    expect(instruction).toContain('- CHANGE_AGENT: {"stageKey": "<key>", "agentId": "<id from AGENTS>"');
+    expect(instruction).not.toContain('- REPLAN:');
+    expect(instruction).toContain('AGENTS: codex (Codex)');
+    expect(instruction).toContain('return the one or two actions that carry it out');
   });
 });

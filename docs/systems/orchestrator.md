@@ -72,7 +72,7 @@ before any row is written.
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |
 | Artifacts | `GET artifacts/:id/content` (≤2 MB), `GET artifacts/:id/download` (text types sent with `charset=utf-8`) |
 | Approvals | `GET approvals?status=`, `POST approvals/:id/{approve,deny}` |
-| Agents | `GET agents`, `POST agents/refresh`, `POST agents/:id/refresh`, `PATCH agents/:id`, `POST/DELETE agents/:id/models` |
+| Agents | `GET agents` (each with `capacityBlock` — why a signed-in agent cannot run now, [usage.md](usage.md#capacity)), `POST agents/refresh`, `POST agents/:id/refresh`, `PATCH agents/:id`, `POST/DELETE agents/:id/models` |
 | Workflows | `GET workflows[/:id]`, `POST workflows/validate`, `PUT workflows/:id`, `POST workflows/:id/duplicate`, `DELETE workflows/:id` |
 | Repositories | `GET/POST repositories`, `GET/PATCH/DELETE repositories/:id`, `POST repositories/:id/redetect` |
 | Source Control | `repositories/:id/source-control[/…]` — see [source-control.md](source-control.md) |
@@ -147,4 +147,4 @@ listener stays on loopback. Details: [remote-node.md](remote-node.md).
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

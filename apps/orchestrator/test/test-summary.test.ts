@@ -21,4 +21,14 @@ describe('test summaries', () => {
     expect(testFailureSummary(['error: something broke', '  '])).toBe('error: something broke');
     expect(testFailureSummary([])).toBe('Command failed');
   });
+
+  it('reads the totals of Node\'s built-in test runner (TAP and spec reporters)', () => {
+    const tap = ['TAP version 13', 'ok 1 - adds', '1..2', '# tests 2', '# suites 0', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0', '# duration_ms 48.4'];
+    expect(testPassSummary(tap)).toBe('2 passed (2)');
+    const spec = ['✔ adds (0.5ms)', 'ℹ tests 3', 'ℹ suites 0', 'ℹ pass 2', 'ℹ fail 1', 'ℹ cancelled 0', 'ℹ skipped 0', 'ℹ todo 0', 'ℹ duration_ms 52.1'];
+    expect(testFailureSummary(spec)).toBe('1 failed | 2 passed (3)');
+    expect(testPassSummary(['# tests 5', '# pass 4', '# fail 0', '# skipped 1'])).toBe('4 passed | 1 skipped (5)');
+    // A cancelled file (e.g. a module that does not load) is a failure, not "the last line".
+    expect(testFailureSummary(['# Subtest: test', 'not ok 1 - test', '# tests 1', '# pass 0', '# fail 0', '# cancelled 1', '# duration_ms 48.4'])).toBe('1 cancelled | 0 passed (1)');
+  });
 });

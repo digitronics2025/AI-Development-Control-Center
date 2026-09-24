@@ -524,6 +524,31 @@ function fakeWranglerFiles(): Record<string, string> {
   };
 }
 
+describe('project-local tools', () => {
+  it('routes to a wrangler in the repository when none is on PATH', async () => {
+    const state = path.join(mkdtempSync(path.join(os.tmpdir(), 'acc-local-wrangler-')), 'state.json');
+    // PATH holds node and the system shell only: the global check cannot find wrangler.
+    const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PATH'));
+    env.PATH = [path.dirname(process.execPath), ...(process.platform === 'win32' ? [path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')] : ['/bin', '/usr/bin'])].join(path.delimiter);
+    const t = await createTestApp({ baseEnv: { ...env, FAKE_WRANGLER_STATE: state } });
+    try {
+      const repoPath = await makeRepo({ files: { 'wrangler.toml': 'name = "fixture"\n' } });
+      mkdirSync(path.join(repoPath, 'node_modules', '.bin'), { recursive: true });
+      for (const [file, content] of Object.entries(fakeWranglerFiles())) writeFileSync(path.join(repoPath, file), content);
+      if (process.platform !== 'win32') chmodSync(path.join(repoPath, 'node_modules', '.bin', 'wrangler'), 0o755);
+      const repositoryId = await addRepo(t, repoPath);
+      // The global check (no folder) cannot see it.
+      expect((await t.services.tools.health.check('wrangler', { force: true })).installed).toBe(false);
+      const r = await t.api('POST', '/api/tools/call', { repositoryId, capability: 'cloudflare.whoami', input: {} });
+      expect(r.body.result.ok).toBe(true);
+      expect(r.body.execution.providerId).toBe('wrangler');
+      expect(readFileSync(`${state}.log`, 'utf8')).toContain('"whoami"');
+    } finally {
+      await t.close();
+    }
+  }, 60_000);
+});
+
 describe('cloudflare.secret_put', () => {
   let t: TestApp;
   let repoId: string;

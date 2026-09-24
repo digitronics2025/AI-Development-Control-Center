@@ -19,6 +19,7 @@ import {
   type OperationResult,
   type PolicyDecision,
   type ProfileId,
+  type ToolDetection,
   type ToolProvider,
   type ToolRisk,
 } from '@acc/tools';
@@ -139,6 +140,8 @@ export class ToolService {
   private readonly shells = new Map<ShellKind, Promise<ShellInfo | null>>();
   private readonly sessions = new Map<string, ToolSession>();
   private readonly failures = new Map<string, Map<string, number>>();
+  /** Detections made in a repository folder (project-local binaries), by `provider|folder`. */
+  private readonly folderDetections = new Map<string, { at: number; detection: ToolDetection }>();
   private events: (taskId: string, type: EventType, message: string, data?: Record<string, unknown>, stageId?: string | null) => void = () => undefined;
   private checkpointsFor: (taskId: string) => CheckpointHost | undefined = () => undefined;
   private privileged: OperationContext['privileged'];
@@ -346,6 +349,16 @@ export class ToolService {
         route = this.router.route({ capability: req.capability, detection: (id) => this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
       }
     }
+    if (!route.ok && route.code === 'NOT_INSTALLED' && scope.cwd) {
+      // Not on PATH, but the repository may carry it (node_modules/.bin/wrangler as a devDependency).
+      const local = new Map<string, ToolDetection>();
+      for (const r of this.registry.offering(req.capability)) {
+        if (r.provider.builtin) continue;
+        const found = await this.detectIn(r.provider, scope.cwd);
+        if (found?.installed) local.set(r.provider.id, found);
+      }
+      if (local.size) route = this.router.route({ capability: req.capability, detection: (id) => local.get(id) ?? this.health.get(id), prefer, failures: scope.taskId ? this.failures.get(scope.taskId) : undefined });
+    }
     if (!route.ok) return refuse('failed', route.code === 'UNKNOWN_CAPABILITY' ? 'UNKNOWN_CAPABILITY' : 'NOT_INSTALLED', route.reason, 'deny');
     const { provider, operation } = route.route;
     base.providerId = provider.id;
@@ -419,6 +432,25 @@ export class ToolService {
       }
     }
     return { execution: done, result, decision: decision.decision };
+  }
+
+  /**
+   * A provider detected in one folder rather than on PATH alone: the global
+   * health check runs without a folder, so it cannot see project-local
+   * binaries. Cached briefly per provider and folder.
+   */
+  private async detectIn(provider: ToolProvider, cwd: string): Promise<ToolDetection | undefined> {
+    const key = `${provider.id}|${cwd}`;
+    const cached = this.folderDetections.get(key);
+    if (cached && Date.now() - cached.at < 10 * 60_000) return cached.detection;
+    try {
+      const detection = await provider.detect({ env: this.env(), cwd, shell: (k) => this.shell(k), tempDir: this.tempDir() });
+      if (this.folderDetections.size >= 200) this.folderDetections.clear();
+      this.folderDetections.set(key, { at: Date.now(), detection });
+      return detection;
+    } catch {
+      return undefined;
+    }
   }
 
   private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine'] }): OperationContext {

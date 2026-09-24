@@ -90,7 +90,13 @@ the failure line when it failed.
 every page at 1440/1280/1024/768/390 px in Dark and Light, asserting no
 page-level horizontal scroll, no console errors and zero axe WCAG 2.2 AA
 violations; plus keyboard/dialog/realtime/disconnection flows and the VS Code
-WebView harness. A global teardown shuts the demo orchestrator down through
+WebView harness. [journey.spec.ts](../../apps/dashboard/e2e/journey.spec.ts)
+walks the whole product once against a real Git repository it creates: add
+the repository and its App runtime in the UI, a Discuss First task on Full
+Autopilot, plan approval, a failed review and one fix cycle, the repository's
+real `node --test` suite, the app started and checked in Chromium, the Git
+checkpoint commit — then checks the commit, branch and working tree on disk
+against what the task page, Source Control and Usage show. A global teardown shuts the demo orchestrator down through
 `/api/service/shutdown`, because on Windows Playwright stops `demo.mjs` but not
 the orchestrator it spawned, which would hold the port for the next run.
 
@@ -119,4 +125,4 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
   via `useReturnFocus` in [overlays.tsx](../../packages/ui/src/primitives/overlays.tsx).
 - Scrollable regions without focusable content need `tabIndex={0}`.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

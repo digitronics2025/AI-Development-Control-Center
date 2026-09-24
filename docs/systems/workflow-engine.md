@@ -145,7 +145,9 @@ record, so it writes no chat-style recap or to-do block.
 Stage summaries in timelines and reports come from the agent's **Summary**
 section (or Goal/Findings), else its first prose line — never a heading,
 table row or verdict line (`summarize`). Verification commands record their
-runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`
+runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`, or for
+`node --test` (which prints `# pass 2` / `ℹ pass 2`, one total per line)
+a composed `1 failed | 2 passed (3)`
 ([test-summary.ts](../../apps/orchestrator/src/engine/test-summary.ts)).
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

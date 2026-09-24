@@ -25,7 +25,7 @@ line that decided it:
 |---|---|---|
 | `missing_browser` | Playwright "Executable doesn't exist" | `npx --yes playwright install chromium` |
 | `port_conflict` | `EADDRINUSE …:port`, "port N is already in use" | stop **this task's own** process on that port; someone else's is left alone and named |
-| `missing_dependency` | Cannot find module/package, ERR_MODULE_NOT_FOUND, Vite/webpack resolve errors, outdated lockfile, ModuleNotFoundError | locked install with the repo's package manager, then an unlocked one (may update the lockfile); `pip install -r requirements.txt` for Python |
+| `missing_dependency` | Cannot find module/package, ERR_MODULE_NOT_FOUND, Vite/webpack resolve errors, outdated lockfile, ModuleNotFoundError — not a module named by path (`/repo/test`, `./a.js`, `C:\x`, `file:`): that is the project's own missing file, which no install can create | locked install with the repo's package manager, then an unlocked one (may update the lockfile); `pip install -r requirements.txt` for Python |
 | `missing_command` | "not recognized as an internal or external command", "command not found" | install, only when the binary belongs to a declared dependency or `node_modules` is missing |
 | `transient_network` | ECONNRESET, EAI_AGAIN, ETIMEDOUT, socket hang up, registry 5xx | wait 2 s, then 4 s |
 | `file_lock` | EBUSY, EPERM on rename/unlink, "used by another process" | same backoff |
@@ -50,4 +50,4 @@ Integration test: a repository whose test needs a `file:` dependency that is
 not installed fails, `npm ci` fails for lack of a lockfile, `npm install`
 succeeds, the test is re-run and passes, the task completes.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

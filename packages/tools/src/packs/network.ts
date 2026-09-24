@@ -58,6 +58,40 @@ async function netstatOwners(ctx: OperationContext, portFilter: number | null): 
     if (portFilter !== null && p !== portFilter) continue;
     owners.push({ port: p, address: m[1]!, pid: m[4] ? Number(m[4]) : null, process: m[3] ?? null, state: 'Listen' });
   }
+  // macOS and minimal Linux images have no `ss`, and BSD netstat prints no pids: ask lsof.
+  if (!owners.some((o) => o.pid !== null)) {
+    const fromLsof = await lsofOwners(ctx, portFilter);
+    if (fromLsof.length) return fromLsof;
+  }
+  return owners;
+}
+
+/** `lsof -F pcn` prints one field per line: p<pid>, c<command>, n<address:port>. */
+async function lsofOwners(ctx: OperationContext, portFilter: number | null): Promise<PortOwner[]> {
+  const r = await run('lsof', ['-nP', `-iTCP${portFilter !== null ? `:${portFilter}` : ''}`, '-sTCP:LISTEN', '-F', 'pcn'], { env: ctx.env, timeoutMs: 20_000 });
+  if (r.spawnError) return [];
+  const owners: PortOwner[] = [];
+  const seen = new Set<string>();
+  let pid: number | null = null;
+  let command: string | null = null;
+  for (const line of r.stdout.split('\n')) {
+    const field = line[0];
+    const value = line.slice(1).trim();
+    if (field === 'p') {
+      pid = Number(value) || null;
+      command = null;
+    } else if (field === 'c') command = value || null;
+    else if (field === 'n') {
+      const m = /^(.*):(\d+)$/.exec(value);
+      if (!m) continue;
+      const port = Number(m[2]);
+      if (portFilter !== null && port !== portFilter) continue;
+      const key = `${pid}|${m[1]}|${port}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      owners.push({ port, address: m[1]!, pid, process: command, state: 'Listen' });
+    }
+  }
   return owners;
 }
 

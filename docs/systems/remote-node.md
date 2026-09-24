@@ -136,7 +136,8 @@ mirrored event, live message, command result and read:
    `workdir` → `null`, attachment paths and health `dataDir/host/port` dropped;
    keys named `env`, `token`, `apiKey`, `secret`, `password`, `authorization`,
    `cookie`, `ciphertext`, `privateKey`… dropped at any depth.
-3. Deep scrub: repository roots → `<repo:name>`, the data folder →
+3. Deep scrub (roots in either Windows or POSIX form, whatever the host):
+   repository roots → `<repo:name>`, the data folder →
    `<acc-data>`, the home folder → `<home>`, any other absolute path (a drive
    path, also JSON-escaped, or a network share) → its last segment; then the
    shared redactor (credential values, environment secrets, token formats, the
@@ -249,4 +250,4 @@ classification, dropped escapes, expiry) run against the in-process
 Worker: `apps/cloud-control/test/*.test.ts` (see
 [cloud-control.md](cloud-control.md#tests)).
 
-Last verified: 2026-09-23
+Last verified: 2026-09-24

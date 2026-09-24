@@ -71,13 +71,25 @@ const RULES: Rule[] = [
   { category: 'build_failure', test: /error TS\d+:|SyntaxError:|Build failed|Failed to compile|ERROR in |error: could not compile|BUILD FAILED/i },
 ];
 
+/**
+ * A module named by path (`/repo/test`, `./util.js`, `C:\\app\\x`, `file:…`)
+ * is one of the project's own files. Installing dependencies cannot create
+ * it, and running an install anyway only leaves a new lockfile behind.
+ */
+function isLocalPath(module: string): boolean {
+  return /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/]|file:)/.test(module);
+}
+
 export function classifyFailure(output: string | readonly string[], opts: { timedOut?: boolean } = {}): FailureClassification {
   if (opts.timedOut) return { category: 'timeout', evidence: null, detail: {} };
   const lines = (typeof output === 'string' ? output.split(/\r?\n/) : [...output]).map((l) => l.trim()).filter(Boolean);
   for (const rule of RULES) {
     for (const line of lines) {
       const m = rule.test.exec(line);
-      if (m) return { category: rule.category, evidence: line.length > 300 ? `${line.slice(0, 297)}...` : line, detail: rule.detail?.(m) ?? {} };
+      if (!m) continue;
+      const detail = rule.detail?.(m) ?? {};
+      if (rule.category === 'missing_dependency' && detail.module && isLocalPath(detail.module)) continue;
+      return { category: rule.category, evidence: line.length > 300 ? `${line.slice(0, 297)}...` : line, detail };
     }
   }
   return { category: 'unknown', evidence: null, detail: {} };

@@ -315,3 +315,14 @@ test.describe('Tasks across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md)',
     expect(errors).toEqual([]);
   });
 });
+
+test.describe('Local token (audit F-25)', () => {
+  test('is gone from the DOM once the dashboard has read it, and the app still works', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('navigation').first()).toBeVisible();
+    expect(await page.evaluate(() => document.querySelector('meta[name="acc-token"]'))).toBeNull();
+    expect(await page.evaluate(() => document.documentElement.outerHTML.includes('acc-token'))).toBe(false);
+    await page.goto('/tasks');
+    await expect(page.getByRole('heading', { level: 1, name: 'Tasks' })).toBeVisible();
+  });
+});

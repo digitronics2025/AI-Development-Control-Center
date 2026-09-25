@@ -885,6 +885,9 @@ export class TaskEngine {
             this.publisher.event(taskId, 'ENVIRONMENT_DISCOVERED', `Environment discovery failed: ${redact((error as Error).message).slice(0, 200)}`);
           });
         }
+        // A drain requested while the baseline was prepared (a worktree's install takes minutes) stops here,
+        // before the stage starts, not after it (found in the TASK-0008 replay).
+        if (this.draining) return this.stopped(this.task(taskId), 'shutdown', null);
         // The Chairman checks limits and takes its before-stage checkpoint while this writer lock is held;
         // its rollbacks, which run outside a stage, take the lock themselves (CheckpointService.restore).
         if (this.supervises(task) && !(await this.supervisor!.beforeStage(this.task(taskId), def, control))) return this.afterHook(taskId, control);

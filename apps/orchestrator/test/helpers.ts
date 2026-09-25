@@ -25,7 +25,14 @@ export function simAdapters(delayMs = 10): AgentAdapter[] {
 }
 
 export async function createTestApp(
-  options: { adapters?: AgentAdapter[]; dataDir?: string; baseEnv?: NodeJS.ProcessEnv; dashboardDir?: string; remoteTimings?: Parameters<typeof createServices>[1] extends infer O ? (O extends { remoteTimings?: infer R } ? R : never) : never } = {},
+  options: {
+    adapters?: AgentAdapter[];
+    dataDir?: string;
+    baseEnv?: NodeJS.ProcessEnv;
+    dashboardDir?: string;
+    remoteTimings?: Parameters<typeof createServices>[1] extends infer O ? (O extends { remoteTimings?: infer R } ? R : never) : never;
+    release?: Parameters<typeof createServices>[1] extends infer O ? (O extends { release?: infer R } ? R : never) : never;
+  } = {},
 ): Promise<TestApp> {
   const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
   const config: OrchestratorConfig = {
@@ -40,7 +47,7 @@ export async function createTestApp(
     allowedOrigins: [],
     version: 'test',
   };
-  const services = createServices(config, { adapters: options.adapters ?? simAdapters(), baseEnv: options.baseEnv, remoteTimings: options.remoteTimings });
+  const services = createServices(config, { adapters: options.adapters ?? simAdapters(), baseEnv: options.baseEnv, remoteTimings: options.remoteTimings, release: options.release });
   await services.recover();
   const app = await buildServer(services);
   const api = async (method: string, url: string, body?: unknown, headers: Record<string, string> = {}) => {

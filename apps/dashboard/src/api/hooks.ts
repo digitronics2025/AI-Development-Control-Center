@@ -20,6 +20,8 @@ import type {
   OverviewCounts,
   Page,
   PromptTemplate,
+  ReleaseConfigInput,
+  ReleaseSetupCheck,
   Repository,
   RepositoryAutomationStatus,
   ServiceHealth,
@@ -314,6 +316,28 @@ export function useTaskCommand(taskId: string) {
       if (command === 'directives') void qc.invalidateQueries({ queryKey: keys.taskDirectives(taskId) });
     },
   });
+}
+
+/** Releases (docs/plans/RELEASE_STAGE_PLAN.md §3.6): ask for the Release approval, or re-run only the proof. */
+export function useReleaseCommands(taskId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const refresh = (task?: unknown) => {
+    if (task && typeof task === 'object' && 'stages' in task) qc.setQueryData(keys.task(taskId), task);
+    void qc.invalidateQueries({ queryKey: keys.task(taskId) });
+    void qc.invalidateQueries({ queryKey: ['approvals'] });
+  };
+  return {
+    // A refused release answers 409 with the reason; the task record carries it too, so both outcomes refresh the task.
+    request: useMutation({ mutationFn: () => api.post<{ approval: Approval; task: TaskDetail }>(`/api/tasks/${taskId}/release`, {}), onSuccess: (r) => refresh(r.task), onError: () => refresh() }),
+    checkAgain: useMutation({ mutationFn: () => api.post<TaskDetail>(`/api/tasks/${taskId}/release/check`, {}), onSuccess: (task) => refresh(task) }),
+  };
+}
+
+/** Check setup: read-only checks of a release setting (saved, or the unsaved form). Sends nothing. */
+export function useReleaseSetupCheck(repositoryId: string) {
+  const api = useApi();
+  return useMutation({ mutationFn: (release: ReleaseConfigInput | undefined) => api.post<ReleaseSetupCheck>(`/api/repositories/${repositoryId}/release/check`, release ? { release } : {}) });
 }
 
 export function useCreateTask() {

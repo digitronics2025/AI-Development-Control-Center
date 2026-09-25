@@ -1222,4 +1222,15 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE repositories ADD COLUMN preexisting_failures TEXT NOT NULL DEFAULT 'allow';
     `,
   },
+  {
+    // Releases (docs/plans/RELEASE_STAGE_PLAN.md): how a repository's tested
+    // work goes live. Every existing repository reads as {"method":"none"},
+    // which behaves exactly as before. The tree a check ran on is already
+    // recorded (migration 16); a task's release lives in tasks.git. Additive only.
+    version: 17,
+    name: 'release setting',
+    sql: `
+      ALTER TABLE repositories ADD COLUMN release TEXT NOT NULL DEFAULT '{"method":"none"}';
+    `,
+  },
 ];

@@ -778,7 +778,16 @@ Contains:
 - blockers,
 - directives,
 - review state,
+- the Release card when the task was released or can be (state chip, commit,
+  target, each proof with its evidence, **Check again**),
 - final report when complete.
+
+A release is production-impacting: its header action **Release…** is a
+secondary button that only requests the approval; the decision happens on the
+approval card with the typed task id ("Approve production release"). The
+release badge (Live, Sent — checking, Sent — not confirmed, Release failed,
+Not released) sits next to the task status chip in the header and the task
+list. Live is shown only when the host proved it serves the commit.
 
 ### Activity
 
@@ -1153,6 +1162,9 @@ Repository detail:
 - commands,
 - permissions,
 - Git behavior,
+- release (Off / Push to a branch, with the sentence "Releasing sends work to
+  your live site. It always asks you first." and a **Check setup** action that
+  only reads),
 - task history.
 
 A dirty working tree must be clearly visible.

@@ -1,6 +1,8 @@
 # Full implementation/review/verification loop (PLAN §13.5). Commits on the task
-# branch; staging deploy is optional and always approval-gated; production
-# actions are never part of a workflow.
+# branch; staging deploy is optional and always approval-gated. The Release
+# stage sends the tested commit live only after your typed Level 5 approval,
+# and is skipped when the repository has no release set up
+# (docs/plans/RELEASE_STAGE_PLAN.md).
 id: full-autopilot
 name: Full Autopilot
 description: Full implementation, review and verification loop
@@ -94,4 +96,13 @@ stages:
     optional: true
     # Nothing to smoke-test when nothing was deployed.
     requires: [staging]
+    next: release
+  - key: release
+    name: Release
+    role: deployer
+    kind: release
+    description: Push the tested commit to the live branch and prove the host serves it (asks you first, every time)
+    permissionLevel: 5
+    requiresApproval: true
+    optional: true
     next: complete

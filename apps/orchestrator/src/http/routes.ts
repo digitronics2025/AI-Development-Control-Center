@@ -14,6 +14,7 @@ import {
   createRepositorySchema,
   createTaskSchema,
   directiveSchema,
+  releaseConfigSchema,
   modelInputSchema,
   promptTemplateUpdateSchema,
   rerouteSchema,
@@ -31,6 +32,7 @@ import {
 } from '@acc/shared';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
+import { ReleaseError } from '../release/service.js';
 import { taskRepositories, taskRepository, type TaskRepository } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
 import { AgentNotFoundError } from '../services/agents.js';
@@ -58,6 +60,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
     if (error instanceof ZodError) {
       return sendError(reply, 400, 'VALIDATION', error.issues[0]?.message ?? 'Invalid request', error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })));
     }
+    if (error instanceof ReleaseError) return sendError(reply, error.code === 'NOT_FOUND' ? 404 : 409, error.code, error.message);
     if (error instanceof EngineError) {
       const status = { NOT_FOUND: 404, INVALID_STATE: 409, INVALID_INPUT: 400, CONFIRMATION_REQUIRED: 422 }[error.code];
       return sendError(reply, status, error.code, error.message);
@@ -180,6 +183,25 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
   command('reroute', (id, body) => engine.reroute(id, rerouteSchema.parse(body)));
   command('assignments', async (id, body) => engine.changeAssignment(id, assignmentChangeSchema.parse(body)));
   command('directives', (id, body) => engine.addDirective(id, directiveSchema.parse(body)));
+
+  // ----- releases (docs/plans/RELEASE_STAGE_PLAN.md §3.6) ---------------------
+  // Operator only: these routes take the local API token and nothing else. No
+  // Chairman action, chat intent, agent tool or cloud operation reaches them.
+
+  /** Release a completed task: a Level 5 approval with the typed task id, or the reason it would be refused (nothing sent). */
+  app.post('/api/tasks/:id/release', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const { approval, release } = await engine.release.requestRelease(id);
+    if (!approval) return sendError(reply, 409, 'RELEASE_REFUSED', release?.reason ?? 'The release was refused; nothing was sent.', { release });
+    return reply.code(202).send({ approval: views.approval(approval), task: engine.detail(id) });
+  });
+
+  /** Check again: only the proof of a release that was sent runs again; it reads and never writes. */
+  app.post('/api/tasks/:id/release/check', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    engine.release.checkAgain(id);
+    return reply.code(202).send(engine.detail(id));
+  });
 
   // ----- chairman (docs/systems/chairman.md) ---------------------------------
 
@@ -438,6 +460,17 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return s.repositories.update(idParam.parse(request.params).id, patch);
   });
   app.post('/api/repositories/:id/redetect', async (request) => s.repositories.redetect(idParam.parse(request.params).id));
+
+  /**
+   * Check a release setting — the saved one, or `release` from the form before
+   * it is saved — with read-only calls only: the remote and branch, the live
+   * URL, the provider project. It sends nothing (RELEASE_STAGE_PLAN §3.2).
+   */
+  app.post('/api/repositories/:id/release/check', async (request) => {
+    const repo = s.repositories.record(idParam.parse(request.params).id);
+    const body = z.object({ release: releaseConfigSchema.optional() }).parse(request.body ?? {});
+    return engine.release.checkSetup(body.release ? { ...repo, release: body.release } : repo);
+  });
   app.delete('/api/repositories/:id', async (request, reply) => {
     s.repositories.remove(idParam.parse(request.params).id);
     return reply.code(204).send();

@@ -5,13 +5,14 @@ import {
   type StageDefinition,
   type StageInstance,
   type StageStatus,
+  type ReleaseState,
   type TaskStatus,
 } from '@acc/shared';
 import { cn } from '../lib/cn.js';
 import { formatDuration, durationBetween } from '../lib/format.js';
 import { ActivityDot } from '../primitives/misc.js';
 import { Tooltip } from '../primitives/tooltip.js';
-import { STAGE_STATUS_VISUAL, TASK_STATUS_VISUAL, TONE_CLASSES, type StatusVisual } from '../tokens/status.js';
+import { RELEASE_STATE_VISUAL, STAGE_STATUS_VISUAL, TASK_STATUS_VISUAL, TONE_CLASSES, type StatusVisual } from '../tokens/status.js';
 
 /**
  * [icon] Label — color lives in the icon and tint; the label stays in
@@ -37,6 +38,11 @@ export function StatusChip({ visual, className, size = 'default' }: { visual: St
 
 export function TaskStatusChip({ status, className, size }: { status: TaskStatus; className?: string; size?: 'compact' | 'default' }) {
   return <StatusChip visual={TASK_STATUS_VISUAL[status]} className={className} size={size} />;
+}
+
+/** The badge of a task's release: Live, Sent — not confirmed, Release failed, Not released (design.md §7.3). */
+export function ReleaseStateChip({ state, className, size }: { state: ReleaseState; className?: string; size?: 'compact' | 'default' }) {
+  return <StatusChip visual={RELEASE_STATE_VISUAL[state]} className={className} size={size} />;
 }
 
 export function StageStatusChip({ status, className, size }: { status: StageStatus; className?: string; size?: 'compact' | 'default' }) {

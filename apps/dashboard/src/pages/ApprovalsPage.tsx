@@ -34,6 +34,8 @@ function approveLabel(a: Approval): string {
       return 'Continue without tests';
     case 'command':
       return a.environment === 'production' ? 'Approve production command' : 'Approve command once';
+    case 'release':
+      return 'Approve production release';
     case 'stage_permission': {
       const stage = (a.stageName ?? a.action.replace(/^Start /, '')).toLowerCase();
       if (a.environment === 'production') return `Approve production ${stage.replace(/^production /, '')}`;

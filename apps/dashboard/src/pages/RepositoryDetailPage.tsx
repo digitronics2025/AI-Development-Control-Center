@@ -46,6 +46,7 @@ import { useConnection } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
 import { GitState } from './RepositoriesPage';
+import { ReleasePanel, releaseConfig, releaseErrors, releaseForm, type ReleaseForm } from './ReleasePanel';
 
 interface Draft {
   defaultWorkflowId: string | null;
@@ -55,6 +56,7 @@ interface Draft {
   runtime: RepositoryRuntime;
   commands: RepositoryCommand[];
   roleOverrides: RoleAssignments;
+  release: ReleaseForm;
 }
 
 /** design.md §7.7 — repository defaults, commands, permissions, Git behaviour and task history. */
@@ -85,6 +87,7 @@ export function RepositoryDetailPage() {
         runtime: structuredClone(repo.data.runtime),
         commands: structuredClone(repo.data.commands),
         roleOverrides: structuredClone(repo.data.roleOverrides),
+        release: releaseForm(repo.data.release),
       });
       setPathsText(null);
     }
@@ -93,12 +96,13 @@ export function RepositoryDetailPage() {
   const original = useMemo(
     () =>
       repo.data
-        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, policyMode: repo.data.policyMode, runtime: repo.data.runtime, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides })
+        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, policyMode: repo.data.policyMode, runtime: repo.data.runtime, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides, release: releaseForm(repo.data.release) })
         : '',
     [repo.data],
   );
   const dirty = draft !== null && JSON.stringify(draft) !== original;
   const commandErrors = (draft?.commands ?? []).map((c) => (!c.name.trim() ? 'Name is required' : !c.command.trim() ? 'Command is required' : null));
+  const releaseInvalid = draft ? Object.keys(releaseErrors(draft.release)).length > 0 : false;
 
   if (repo.isLoading || !draft) return <div className="p-6"><Skeleton className="h-96" /></div>;
   if (!repo.data) return <div className="p-6"><EmptyState title="Repository not found" /></div>;
@@ -106,7 +110,7 @@ export function RepositoryDetailPage() {
 
   const save = () =>
     mutations.update.mutate(
-      { id, patch: { ...draft, commands: draft.commands.map((c) => ({ ...c, name: c.name.trim(), command: c.command.trim() })) } },
+      { id, patch: { ...draft, commands: draft.commands.map((c) => ({ ...c, name: c.name.trim(), command: c.command.trim() })), release: releaseConfig(draft.release) } },
       { onSuccess: () => toast('Repository settings saved'), onError: (e) => setError(errorMessage(e)) },
     );
 
@@ -129,7 +133,7 @@ export function RepositoryDetailPage() {
             <Button icon={RefreshCw} onClick={() => mutations.redetect.mutate(id, { onSuccess: () => toast('Tooling re-detected') })} loading={mutations.redetect.isPending} disabled={!connection.online}>
               Re-detect tooling
             </Button>
-            <Button variant="primary" icon={Save} onClick={save} loading={mutations.update.isPending} disabled={!dirty || commandErrors.some(Boolean) || !connection.online} disabledReason={!dirty ? 'No unsaved changes' : 'Fix the highlighted fields first'}>
+            <Button variant="primary" icon={Save} onClick={save} loading={mutations.update.isPending} disabled={!dirty || commandErrors.some(Boolean) || releaseInvalid || !connection.online} disabledReason={!dirty ? 'No unsaved changes' : 'Fix the highlighted fields first'}>
               Save Changes
             </Button>
           </>
@@ -308,6 +312,8 @@ export function RepositoryDetailPage() {
           </ul>
         )}
       </Panel>
+
+      <ReleasePanel repositoryId={id} form={draft.release} onChange={(release) => setDraft({ ...draft, release })} />
 
       <Panel title="Role overrides" headingLevel={3} description="Agent, model and effort for this repository. Leave a role on its global default unless this codebase needs something else.">
         <div className="flex flex-col gap-3">

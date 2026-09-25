@@ -16,7 +16,8 @@ import {
   useNow,
 } from '@acc/ui';
 import { MODE_LABEL, ROLE_LABEL, type Artifact, type TaskDetail } from '@acc/shared';
-import { useArtifactContent, useTaskArtifacts, useTaskDirectives } from '../../api/hooks';
+import { useArtifactContent, useRepository, useTaskArtifacts, useTaskDirectives } from '../../api/hooks';
+import { ReleaseCard } from './ReleaseCard';
 import { AssignmentText } from '../../components/agents';
 import { Markdown } from '../../components/markdown';
 
@@ -39,6 +40,7 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
   const artifacts = useTaskArtifacts(task.id);
   const directives = useTaskDirectives(task.id);
   const finalReport = artifacts.data?.filter((a) => a.type === 'final-report').at(-1);
+  const repo = useRepository(task.repositoryId);
   const current = task.stages.find((s) => s.id === task.currentStageId && s.stageKey === task.currentStageKey) ?? null;
 
   const stages = task.stages;
@@ -58,6 +60,7 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
           The completion report lists what could not be verified. The task is not marked ready.
         </Banner>
       ) : null}
+      <ReleaseCard task={task} repo={repo.data} />
       {finalReport ? <FinalReport artifact={finalReport} /> : null}
 
       <div className="grid gap-4 lg:grid-cols-2">

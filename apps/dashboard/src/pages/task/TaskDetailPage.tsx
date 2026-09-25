@@ -15,6 +15,7 @@ import {
   TabList,
   TabPanel,
   Tabs,
+  ReleaseStateChip,
   TaskStatusChip,
   durationBetween,
   formatDuration,
@@ -27,7 +28,8 @@ import {
 } from '@acc/ui';
 import { CONNECTED_APP_LABEL, MODE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
 import { ApiError, errorMessage } from '../../api/client';
-import { useChairman, useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
+import { useChairman, useRepository, useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
+import { ReleaseButton } from './ReleaseCard';
 import { useTaskOrigin } from '../../api/connected-apps';
 import { useBreadcrumb } from '../../app/breadcrumbs';
 import { usePageCommands } from '../../app/commands';
@@ -168,6 +170,7 @@ export function TaskDetailPage() {
   const connection = useConnection();
   const { toast } = useFeedback();
   const data = task.data;
+  const repo = useRepository(data?.repositoryId);
   const now = useNow(1000, data?.status === 'RUNNING');
 
   useBreadcrumb([{ label: 'Tasks', to: '/tasks' }, { label: data ? `${data.id} ${data.title}` : id }]);
@@ -237,6 +240,7 @@ export function TaskDetailPage() {
           <h1 className="text-h1 text-fg wrap-anywhere">{data.title}</h1>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-small text-fg-secondary">
             <TaskStatusChip status={data.status} />
+            {data.git.release ? <ReleaseStateChip state={data.git.release.state} /> : null}
             {data.finalStatus ? <span className="font-semibold text-fg">{data.finalStatus === 'READY' ? 'Ready' : 'Needs user action'}</span> : null}
             <span>{data.workflowName}</span>
             <span>{MODE_LABEL[data.mode]}</span>
@@ -254,6 +258,7 @@ export function TaskDetailPage() {
         <div className="flex items-center gap-2">
           {!isMobile ? <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} onAnswer={() => setDirectiveOpen(true)} /> : null}
           <ChairmanButton overview={chairman.data} onOpen={() => setChairmanOpen(true)} compact={isMobile} />
+          <ReleaseButton task={data} repo={repo.data} compact={isMobile} />
           {!isWide ? (
             <Button icon={SlidersHorizontal} onClick={() => setInspectorOpen(true)}>
               Details

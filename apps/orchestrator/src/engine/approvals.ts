@@ -48,6 +48,32 @@ export class ApprovalGate {
 
   /** Create the approval and park the task on it. */
   request(task: TaskRecord, req: ApprovalRequest): ApprovalRecord {
+    const rec = this.insert(task, req);
+    this.publisher.updateTask(task.id, {
+      status: 'WAITING_FOR_USER',
+      blocker: { kind: 'approval', message: `Approval needed: ${req.action}`, approvalId: rec.id, stageKey: req.stageKey ?? undefined },
+    });
+    this.announce(task, req, rec);
+    return rec;
+  }
+
+  /**
+   * Create an approval for a task that is not waiting on it (the Release
+   * button on a completed task): the task keeps its status, and the decision
+   * is handed to whoever asked, not to the engine loop.
+   */
+  requestDetached(task: TaskRecord, req: ApprovalRequest): ApprovalRecord {
+    const rec = this.insert(task, req);
+    this.announce(task, req, rec);
+    return rec;
+  }
+
+  private announce(task: TaskRecord, req: ApprovalRequest, rec: ApprovalRecord): void {
+    const level = PERMISSION_LEVEL_INFO[req.permissionLevel];
+    this.publisher.event(task.id, 'APPROVAL_REQUESTED', `Approval requested: ${req.action} (Level ${req.permissionLevel} · ${level.name})`, { approvalId: rec.id, kind: req.kind }, req.stageId);
+  }
+
+  private insert(task: TaskRecord, req: ApprovalRequest): ApprovalRecord {
     const strong = req.permissionLevel === 5 || req.risk === 'dangerous';
     const rec: ApprovalRecord = {
       id: newId(),
@@ -71,12 +97,6 @@ export class ApprovalGate {
     };
     this.store.insertApproval(rec);
     this.bus.publish({ type: 'approval', approval: this.views.approval(rec) });
-    this.publisher.updateTask(task.id, {
-      status: 'WAITING_FOR_USER',
-      blocker: { kind: 'approval', message: `Approval needed: ${req.action}`, approvalId: rec.id, stageKey: req.stageKey ?? undefined },
-    });
-    const level = PERMISSION_LEVEL_INFO[req.permissionLevel];
-    this.publisher.event(task.id, 'APPROVAL_REQUESTED', `Approval requested: ${req.action} (Level ${req.permissionLevel} · ${level.name})`, { approvalId: rec.id, kind: req.kind }, req.stageId);
     return rec;
   }
 

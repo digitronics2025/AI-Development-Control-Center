@@ -22,6 +22,7 @@ import type { PolicyMode, RepositoryRuntime } from './tools.js';
 import type {
   AgentSettings,
   GitMode,
+  ReleaseConfig,
   RepositoryCommand,
   RoleAssignments,
   TaskOverrides,
@@ -66,6 +67,61 @@ export interface TaskGitInfo {
   workspacePath?: string | null;
   /** Multi-repository tasks: this repository's folder inside the workspace. */
   folder?: string | null;
+  /** The task's release, once one was asked for (docs/plans/RELEASE_STAGE_PLAN.md). */
+  release?: TaskRelease | null;
+}
+
+/**
+ * publishing/proving: in progress. live: every configured proof passed.
+ * published_unconfirmed: pushed, but not proved live in time (or the provider
+ * could not be read). failed: the push was rejected or the provider reported a
+ * failed build. refused: a check stopped it before anything was sent.
+ */
+export type ReleaseState = 'publishing' | 'proving' | 'live' | 'published_unconfirmed' | 'failed' | 'refused';
+
+/** What each configured proof saw, most recent read. */
+export interface ReleaseEvidence {
+  /** The Pages project's live deployment before the push. */
+  before?: { deploymentId: string | null; commit: string | null } | null;
+  cloudflarePages?: {
+    project: string;
+    ok: boolean;
+    /** The live production deployment Cloudflare reported. */
+    deploymentId: string | null;
+    commit: string | null;
+    stage: string | null;
+    status: string | null;
+    url: string | null;
+    /** The newest production deployment built from the pushed commit, when it is not (yet) the live one. */
+    candidate?: { deploymentId: string; stage: string | null; status: string | null; url: string | null } | null;
+    note: string;
+  } | null;
+  versionUrl?: { url: string; ok: boolean; status: number | null; excerpt: string | null; note: string } | null;
+  up?: { url: string; ok: boolean; status: number | null; note: string } | null;
+  checkedAt?: Iso | null;
+}
+
+/** Check setup (docs/plans/RELEASE_STAGE_PLAN.md §3.2): read-only checks of a release setting; nothing is sent. */
+export interface ReleaseSetupCheck {
+  ok: boolean;
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
+}
+
+export interface TaskRelease {
+  state: ReleaseState;
+  commit: string;
+  /** The commit's tree, which matched a tree the task's checks passed on. */
+  tree: string | null;
+  target: { remote: string; branch: string; liveUrl: string };
+  /** How the release was started: the workflow's Release stage or the Release button. */
+  via: 'stage' | 'button';
+  approvalId: string | null;
+  requestedAt: Iso;
+  publishedAt: Iso | null;
+  liveConfirmedAt: Iso | null;
+  evidence: ReleaseEvidence;
+  /** Why it was refused, failed or is unconfirmed, in plain words. */
+  reason: string | null;
 }
 
 /** One repository a task works in (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
@@ -119,6 +175,8 @@ export interface TaskSummary {
   blocker: TaskBlocker | null;
   lastEvent: TaskLastEvent | null;
   finalStatus: FinalStatus | null;
+  /** The task's release state, for the list badge; null when it was never released. */
+  releaseState?: ReleaseState | null;
   pauseRequested: boolean;
   /** Pause at the next stage boundary (the running stage finishes first). */
   pauseAfterStage: boolean;
@@ -395,6 +453,8 @@ export interface Repository {
   runtime: RepositoryRuntime;
   /** allow: failures already on the baseline commit are reported but do not block; block: every failure blocks. */
   preexistingFailures: 'allow' | 'block';
+  /** How tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md). */
+  release: ReleaseConfig;
   status: RepositoryStatus;
   createdAt: Iso;
   updatedAt: Iso;

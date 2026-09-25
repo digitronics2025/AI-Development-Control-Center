@@ -21,7 +21,7 @@ the same sequence.
 
 Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
-(agent|tests|command|git|verify), agentId/model/effort (optional pin),
+(agent|tests|command|git|verify|release), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
 verdict, commandKinds, optional, requires`. `requires` names stages whose latest
 run must have ended SUCCESS; otherwise the stage is SKIPPED before any approval
@@ -45,6 +45,16 @@ errors, page errors, failed same-origin requests or horizontal scrolling,
 saves screenshots and `browser-verification.md`, stops the app, and on
 failure goes to `onFail` like a test failure. It is skipped when no runtime
 address is configured (`skipsForLackOfCommands`).
+
+A `release` stage (Full Autopilot's **Release**, after Smoke) sends the
+task's tested commit live after a typed Level 5 approval and proves it
+([release.md](release.md)). Validation requires Level 5, `requiresApproval`
+and `optional`, and no `onFail`. It is skipped before any approval when the
+repository has no release set up, the task spans several repositories or
+nothing was committed. The loop takes no writer lock for it; only Live is a
+success, anything else is an optional failure. A test stage records on each
+run the tree a commit of its files would have (`committableTree`), which is
+how a release proves it sends the version the checks passed on.
 
 Test stages repair environment failures before failing
 ([recovery.md](recovery.md)). Every stage runs in the task's working
@@ -80,7 +90,8 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
-| an optional stage fails (`optional_failed`) | stage FAILED, event `STAGE_OPTIONAL_FAILED`, the message becomes a report limitation, go to `next` — never a fix cycle or a recovery |
+| an optional stage fails (`optional_failed`) | stage FAILED, event `STAGE_OPTIONAL_FAILED`, the message (or the outcome's own `limitation`, as a release gives) becomes a report limitation, go to `next` — never a fix cycle or a recovery |
+| a `stage_permission` approval for a `release` stage is denied | stage SKIPPED "Release declined", event `RELEASE_DECLINED`, go to `next` (every other denied approval fails the task) |
 | `REVIEW_INCOMPLETE` (a verdict stage passed twice without naming files the diff did not show) | an error like any other: retried, then (supervised) the Chairman retries or changes agent; never a code fix |
 | a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
 

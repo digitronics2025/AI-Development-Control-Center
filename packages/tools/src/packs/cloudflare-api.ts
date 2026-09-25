@@ -140,6 +140,61 @@ async function database(ctx: OperationContext, a: Account, value: string) {
   return resolve(ctx, a, (c) => c.d1, (d) => d.name === value || d.uuid === value, 'D1 database', (c) => c.d1.map((d) => d.name));
 }
 
+// ----- Pages (docs/plans/RELEASE_STAGE_PLAN.md §3.7) ------------------------------------
+
+/** A Pages deployment as a release proof reads it. */
+export interface PagesDeploymentView {
+  id: string;
+  commit: string | null;
+  branch: string | null;
+  /** The deployment's latest stage (queued, initialize, clone_repo, build, deploy) and its status. */
+  stage: string | null;
+  status: string | null;
+  url: string | null;
+  createdAt: string | null;
+}
+
+export function pagesDeploymentView(raw: unknown): PagesDeploymentView | null {
+  const d = raw as { id?: unknown; url?: unknown; created_on?: unknown; latest_stage?: { name?: unknown; status?: unknown }; deployment_trigger?: { metadata?: { commit_hash?: unknown; branch?: unknown } } } | null;
+  if (!d || typeof d.id !== 'string') return null;
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+  return {
+    id: d.id,
+    commit: str(d.deployment_trigger?.metadata?.commit_hash)?.toLowerCase() ?? null,
+    branch: str(d.deployment_trigger?.metadata?.branch),
+    stage: str(d.latest_stage?.name),
+    status: str(d.latest_stage?.status),
+    url: str(d.url),
+    createdAt: str(d.created_on),
+  };
+}
+
+/** Two commit ids name the same commit: Cloudflare may report a full or a short hash. */
+export function sameCommit(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x.length >= 7 && y.length >= 7 && (x.startsWith(y) || y.startsWith(x));
+}
+
+/**
+ * The token and account for a Pages read. Unlike the data reads, the account
+ * may be left out when the token sees exactly one: a release proof should not
+ * fail on a setting the token already answers.
+ */
+async function pagesAccount(ctx: OperationContext): Promise<Account | OperationResult> {
+  const token = ctx.env.CLOUDFLARE_API_TOKEN;
+  if (!token) return failure('UNAVAILABLE', 'No Cloudflare key for this repository: add a token with Pages read access in Tools → Credentials (kind cloudflare).');
+  const base = apiBase(ctx, REAL_API, 'ACC_CF_API_BASE');
+  const id = ctx.env.CLOUDFLARE_ACCOUNT_ID;
+  if (id && /^[0-9a-f]{32}$/i.test(id)) return { token, account: id, base };
+  const r = await restRequest(ctx, `${base}/accounts?per_page=50`, { headers: { authorization: `Bearer ${token}` } });
+  if (!r.ok) return cfFailure(r, 'the account list');
+  const accounts = ((r.json?.result ?? []) as Array<{ id?: unknown }>).map((x) => String(x.id ?? '')).filter((x) => /^[0-9a-f]{32}$/i.test(x));
+  if (accounts.length !== 1) return failure('UNAVAILABLE', `The Cloudflare key sees ${accounts.length} accounts: set the account id (a CLOUDFLARE_ACCOUNT_ID credential) so the right one is read.`);
+  return { token, account: accounts[0]!, base };
+}
+
 // ----- provider -------------------------------------------------------------------------
 
 export function cloudflareApiProvider(): ToolProvider {
@@ -153,6 +208,45 @@ export function cloudflareApiProvider(): ToolProvider {
       return builtinDetection();
     },
     operations: [
+      operation({
+        id: 'cloudflare.pages_status',
+        title: 'Pages live deployment',
+        description:
+          'Which deployment a Pages project serves in production now (its canonical deployment): the commit it was built from and whether its deploy stage succeeded. With `commit`, also the newest production deployment built from that commit, so a build still running and one that failed can be told apart. Reads only.',
+        input: z.object({
+          project: z.string().min(1).max(100).regex(/^[\w-]+$/, 'A Pages project name'),
+          commit: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
+        }),
+        level: 1,
+        readOnly: true,
+        credentials: CREDENTIALS,
+        classify: () => ({ level: 1, effects: ['network'], reasons: ['Reads which deployment a Pages project serves'], writes: false }),
+        async run(input, ctx) {
+          const a = await pagesAccount(ctx);
+          if (!isAccount(a)) return a;
+          const route = `/pages/projects/${pathSegment(input.project)}`;
+          const project = await cf(ctx, a, route);
+          if (!project.ok) return cfFailure(project, `Pages project ${input.project}`);
+          const productionBranch = typeof project.json?.result?.production_branch === 'string' ? (project.json.result.production_branch as string) : null;
+          const live = pagesDeploymentView(project.json?.result?.canonical_deployment);
+          let candidate: PagesDeploymentView | null = null;
+          if (input.commit) {
+            const list = await cf(ctx, a, `${route}/deployments?env=production&per_page=25`);
+            if (!list.ok) return cfFailure(list, `deployments of ${input.project}`);
+            // Newest first, as Cloudflare lists them.
+            candidate = ((list.json?.result ?? []) as unknown[]).map(pagesDeploymentView).find((d) => d !== null && sameCommit(d.commit, input.commit)) ?? null;
+          }
+          const liveLine = live ? `${input.project} serves ${live.commit?.slice(0, 7) ?? 'an unknown commit'} (deployment ${live.id.slice(0, 8)}, ${live.stage ?? '?'} ${live.status ?? '?'})` : `${input.project} has no live production deployment`;
+          const candidateLine = candidate && candidate.id !== live?.id ? `newest production deployment of ${input.commit!.slice(0, 7)}: ${candidate.id.slice(0, 8)}, ${candidate.stage ?? '?'} ${candidate.status ?? '?'}` : null;
+          return {
+            ok: true,
+            summary: candidateLine ? `${liveLine}; ${candidateLine}` : liveLine,
+            output: { project: input.project, productionBranch, live, candidate },
+            evidence: [liveLine, ...(candidateLine ? [candidateLine] : [])],
+            ...net,
+          };
+        },
+      }),
       operation({
         id: 'cloudflare.catalog',
         title: 'List Cloudflare data stores',

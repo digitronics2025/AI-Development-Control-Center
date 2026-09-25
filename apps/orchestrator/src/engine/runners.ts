@@ -1,6 +1,6 @@
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
-import { changesSince, commitPaths, workingTreeTree } from '@acc/git';
+import { changesSince, commitPaths, committableTree } from '@acc/git';
 import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
@@ -21,6 +21,8 @@ import {
 import type { RepairPlan, RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
+import type { ReleaseService } from '../release/service.js';
+import { summaryLine } from '../release/service.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
@@ -44,8 +46,11 @@ export type StageOutcome =
   | { kind: 'skipped'; stageId: string; testsSkipped?: boolean }
   | { kind: 'verdict_fail'; stageId: string }
   | { kind: 'tests_failed'; stageId: string; message: string }
-  /** An optional stage failed: a report limitation, never a recovery (AUTOPILOT_GATES_PLAN §3.D). */
-  | { kind: 'optional_failed'; stageId: string; message: string }
+  /**
+   * An optional stage failed: a report limitation, never a recovery (AUTOPILOT_GATES_PLAN §3.D).
+   * `limitation` replaces the default "<stage> (optional) failed: <message>" wording.
+   */
+  | { kind: 'optional_failed'; stageId: string; message: string; limitation?: string }
   | { kind: 'error'; stageId: string; errorClass: ErrorClass; message: string }
   | { kind: 'blocked'; stageId: string }
   /** A work stage needs the operator's decision before the task can be done right. */
@@ -201,6 +206,7 @@ export interface RunnerDeps {
   baseEnv: NodeJS.ProcessEnv;
   tooling: EngineTooling;
   baselines: BaselineChecks;
+  release: ReleaseService;
 }
 
 /** One run of a repository command, as the tests stage and its repairs see it. */
@@ -559,7 +565,7 @@ export class StageRunners {
     const trees = new Map<string, string | null>();
     const treeOf = async (workdir: string, fresh = false): Promise<string | null> => {
       if (!fresh && trees.has(workdir)) return trees.get(workdir)!;
-      const tree = await workingTreeTree(workdir).catch(() => null);
+      const tree = await committableTree(workdir).catch(() => null);
       trees.set(workdir, tree);
       return tree;
     };
@@ -941,6 +947,46 @@ export class StageRunners {
     publisher.event(task.id, 'VERIFICATION', `${label} ${r.ok ? 'passed' : 'failed'}: ${r.summary}`, { executionId, ok: r.ok }, stage.id);
     if (!r.ok) return { kind: 'failed', message: `${label} failed: ${problems[0] ?? r.summary}`, report: reportLines };
     return { kind: 'passed', summary: unit.folder ? `${unit.folder}: ${r.summary}` : r.summary, report: reportLines };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Release stages (docs/plans/RELEASE_STAGE_PLAN.md)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Send the task's tested commit live; the typed Level 5 approval was given
+   * before the stage started. Only Live succeeds. Anything else is an optional
+   * failure — a report limitation, never a fix cycle, a retry or a recovery:
+   * trying a release again is the operator's decision (§3.5).
+   */
+  async runRelease(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
+    const { publisher, release, store } = this.d;
+    const skip = release.skipReason(task, repo);
+    if (skip) {
+      publisher.updateStage(stage.id, { status: 'SKIPPED', summary: skip, finishedAt: now() });
+      publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: ${skip}`, {}, stage.id);
+      return { kind: 'skipped', stageId: stage.id };
+    }
+    publisher.updateStage(stage.id, { status: 'RUNNING' });
+    const approval = store.findApproval(task.id, 'stage_permission', { stageKey: def.key });
+    let record;
+    try {
+      record = await release.release(task.id, { via: 'stage', approvalId: approval?.status === 'approved' ? approval.id : null, stageId: stage.id, stopped: () => control.stopReason !== null });
+    } catch (error) {
+      const message = redact((error as Error)?.message ?? String(error)).slice(0, 300);
+      publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'UNKNOWN', errorMessage: message, summary: message, finishedAt: now() });
+      return { kind: 'optional_failed', stageId: stage.id, message, limitation: `The release did not run to the end: ${message}` };
+    }
+    const line = summaryLine(record);
+    if (record.state === 'live') {
+      publisher.updateStage(stage.id, { status: 'SUCCESS', summary: line, finishedAt: now() });
+      publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed: ${line}`, {}, stage.id);
+      return { kind: 'success', stageId: stage.id };
+    }
+    // Stopped before anything was sent: a pause, not a result; the stage runs again (and asks again) on resume.
+    if (record.state === 'refused' && !record.publishedAt && control.stopReason) return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
+    publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'COMMAND_FAILURE', errorMessage: line, summary: line, finishedAt: now() });
+    return { kind: 'optional_failed', stageId: stage.id, message: line, limitation: line };
   }
 
   // ---------------------------------------------------------------------------

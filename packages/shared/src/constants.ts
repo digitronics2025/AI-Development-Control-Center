@@ -57,7 +57,8 @@ export const ROLES = [
 ] as const;
 export type Role = (typeof ROLES)[number];
 
-export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify'] as const;
+/** `release`: send the tested commit live after a typed approval (docs/plans/RELEASE_STAGE_PLAN.md). */
+export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify', 'release'] as const;
 export type StageKind = (typeof STAGE_KINDS)[number];
 
 export const TASK_MODES = ['discuss', 'autopilot'] as const;
@@ -148,10 +149,20 @@ export const EVENT_TYPES = [
   'VERIFICATION',
   'WORKTREE_CREATED',
   'WORKTREE_REMOVED',
+  // Releases (docs/plans/RELEASE_STAGE_PLAN.md): each carries the commit, the target and the evidence.
+  'RELEASE_REQUESTED',
+  'RELEASE_APPROVED',
+  'RELEASE_DECLINED',
+  'RELEASE_REFUSED',
+  'RELEASE_PUBLISHED',
+  'RELEASE_LIVE',
+  'RELEASE_UNCONFIRMED',
+  'RELEASE_FAILED',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
-export const APPROVAL_KINDS = ['stage_permission', 'plan_review', 'command', 'skip_tests'] as const;
+/** `release`: the Release button on a completed task (a stage release uses `stage_permission`). */
+export const APPROVAL_KINDS = ['stage_permission', 'plan_review', 'command', 'skip_tests', 'release'] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
 export const APPROVAL_STATUSES = ['pending', 'approved', 'denied', 'cancelled'] as const;

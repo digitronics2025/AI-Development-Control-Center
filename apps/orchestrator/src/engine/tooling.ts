@@ -137,6 +137,27 @@ export class EngineTooling {
     };
   }
 
+  /**
+   * A scope for a read the operator asked for outside any task (a release's
+   * Check setup): one repository, the operator profile, `level` as the ceiling.
+   */
+  repositoryScope(repo: RepositoryRecord, level: PermissionLevel): ToolScope {
+    return {
+      taskId: null,
+      stageId: null,
+      sessionId: null,
+      repositoryId: repo.id,
+      cwd: repo.path,
+      roots: [repo.path],
+      stageLevel: level,
+      autoApproveUpToLevel: level,
+      mode: repo.policyMode ?? this.d.settings.get().execution.policyMode,
+      profile: 'operator',
+      escalated: new Set(),
+      protectedPaths: [],
+    };
+  }
+
   // ===========================================================================
   // Environment discovery (V2 plan §36)
   // ===========================================================================

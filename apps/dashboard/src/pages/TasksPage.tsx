@@ -13,6 +13,7 @@ import {
   Select,
   Skeleton,
   StageRail,
+  ReleaseStateChip,
   TaskStatusChip,
   type Column,
 } from '@acc/ui';
@@ -50,7 +51,17 @@ const columns: Column<TaskSummary>[] = [
     className: 'max-w-[360px]',
   },
   { key: 'repo', header: 'Repository', sortValue: (t) => t.repositoryName, cell: (t) => <span className="text-fg-secondary" title={repositoryNames(t)}>{repositoryLabel(t)}</span> },
-  { key: 'status', header: 'Status', sortValue: (t) => t.status, cell: (t) => <TaskStatusChip status={t.status} size="compact" /> },
+  {
+    key: 'status',
+    header: 'Status',
+    sortValue: (t) => t.status,
+    cell: (t) => (
+      <span className="flex flex-wrap items-center gap-1">
+        <TaskStatusChip status={t.status} size="compact" />
+        {t.releaseState ? <ReleaseStateChip state={t.releaseState} size="compact" /> : null}
+      </span>
+    ),
+  },
   {
     key: 'stage',
     header: 'Stage',

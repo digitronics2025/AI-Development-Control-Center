@@ -202,7 +202,8 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         break;
       }
       case 'retry_stage': {
-        if (!failing || ctx.retryIsNoop) break;
+        // Trying a release again is the operator's decision, never a recovery strategy (RELEASE_STAGE_PLAN §3.5).
+        if (!failing || ctx.retryIsNoop || failing.kind === 'release') break;
         add('retry_stage', 1, failing.key, ctx.assignments[failing.key] ?? '', `Retry ${failing.name}`, 'The failure looks transient; run the stage once more.', [
           { type: 'RETRY_STAGE', params: { stageKey: failing.key } },
         ]);

@@ -115,6 +115,23 @@ isolated worktree, or plainly "your own folder". A repository not in worktree
 mode shows **Tasks run in your working folder** with **Use isolated
 worktrees** on its page.
 
+**Releases** ([release.md](release.md)). Repository detail has a **Release**
+panel ([ReleasePanel.tsx](../../apps/dashboard/src/pages/ReleasePanel.tsx)):
+Off / Push to a branch, remote, branch, live URL, the proofs (Cloudflare Pages
+project, version URL — at least one), manual paths and the wait, validated
+with the orchestrator's own `releaseConfigSchema`, saved with **Save
+Changes**; **Check setup** checks the form as it is (saved or not) and lists
+each read-only check with an icon and words. The task list and task header
+carry a `ReleaseStateChip` (Live, Sent — checking, Sent — not confirmed,
+Release failed, Not released). On a completed task of a releasing repository
+the header offers **Release…** (secondary; it only requests the typed approval
+and opens Approvals, where the card reads "Approve production release"), and
+Overview opens with a **Release** card
+([ReleaseCard.tsx](../../apps/dashboard/src/pages/task/ReleaseCard.tsx)):
+state, commit, target, times, each proof with its evidence, and **Check
+again** for a release that was sent and is not Live. Repository data from the
+cloud may lack `release`; the UI then offers no Release actions.
+
 ## Tool layer views
 
 - **Execution tab** ([ExecutionTab.tsx](../../apps/dashboard/src/pages/task/ExecutionTab.tsx)):

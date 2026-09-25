@@ -129,6 +129,47 @@ export const createRepositorySchema = z.object({
   name: z.string().min(1).max(80).optional(),
 });
 
+/** A plain Git name for a remote or branch: no spaces, no option-like leading dash, no `..`. */
+const gitNameSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[\w./-]+$/, 'Letters, digits, ".", "_", "/" and "-" only')
+  .refine((v) => !v.startsWith('-') && !v.includes('..') && !v.endsWith('/') && !v.endsWith('.lock'), 'Not a valid Git name');
+const httpsUrlSchema = z
+  .string()
+  .max(500)
+  .url()
+  .refine((v) => /^https:\/\//i.test(v), 'Must be an https:// URL');
+
+/**
+ * How a repository's tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md).
+ * `push` fast-forwards a remote branch to the task's commit; a Git-connected
+ * host (Cloudflare Pages, a deploy workflow on main) builds it. Live is proved
+ * by the provider or a version URL, never by a push alone.
+ */
+export const releaseConfigSchema = z.discriminatedUnion('method', [
+  z.object({ method: z.literal('none') }),
+  z.object({
+    method: z.literal('push'),
+    remote: gitNameSchema.default('origin'),
+    branch: gitNameSchema.default('main'),
+    liveUrl: httpsUrlSchema,
+    proof: z
+      .object({
+        cloudflarePages: z.object({ project: z.string().min(1).max(100).regex(/^[\w-]+$/, 'A Pages project name') }).optional(),
+        versionUrl: httpsUrlSchema.optional(),
+      })
+      .refine((p) => Boolean(p.cloudflarePages || p.versionUrl), 'Choose at least one way to prove the release is live'),
+    /** Globs that must never ship this way (e.g. db/migrations/**): a release touching one is refused. */
+    manualPaths: z.array(z.string().min(1).max(200)).max(50).default([]),
+    timeoutSec: z.number().int().min(60).max(3600).default(900),
+  }),
+]);
+export type ReleaseConfig = z.infer<typeof releaseConfigSchema>;
+export type ReleaseConfigInput = z.input<typeof releaseConfigSchema>;
+export type PushReleaseConfig = Extract<ReleaseConfig, { method: 'push' }>;
+
 export const updateRepositorySchema = z.object({
   name: z.string().min(1).max(80).optional(),
   defaultWorkflowId: slugSchema.nullable().optional(),
@@ -141,6 +182,8 @@ export const updateRepositorySchema = z.object({
   runtime: repositoryRuntimeSchema.optional(),
   /** allow: failures already on the baseline commit do not block a task; block: every failure blocks. */
   preexistingFailures: z.enum(['allow', 'block']).optional(),
+  /** How tested work goes live; `none` (the default) never releases. */
+  release: releaseConfigSchema.optional(),
 });
 export type UpdateRepositoryInput = z.infer<typeof updateRepositorySchema>;
 

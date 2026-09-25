@@ -41,6 +41,23 @@ hook's message under its test results, and the checkpoint runs again after
 test, review and verify. Git's line-ending notices are dropped from failure
 text (`failureText`) so the hook's own words are what the fixer reads.
 
+## Releases
+
+A release ([release.md](release.md)) is the one path that sends a task's
+commit to a remote, and only after a typed approval. The helpers it uses:
+`pushRef(cwd, { sha, remote, remoteRef })` pushes one exact commit (full id
+only; `refs/heads/<plain name>` only; a remote name cannot start with `-`; no
+force option anywhere); `fetchBranch` updates only
+`refs/remotes/<remote>/<branch>`; `remoteBranchHead` reads a branch with
+`ls-remote` unattended; `treeOfCommit`, `changedPaths(from, to)` (renames count
+as both paths), `commitsInRange(from, to)`, and the existing `isAncestor`.
+
+`committableTree(cwd)` is the tree `git add -A && git commit` would record,
+built in a private index with the repository's own line-ending and filter
+settings. Test runs store it as `tree_id`; `workingTreeTree` (byte-exact,
+`core.autocrlf=false`) stays for checkpoints. With `core.autocrlf=true` the two
+differ for a CRLF file — only `committableTree` equals the commit's tree.
+
 ## Checkpoints
 
 `createCheckpoint` builds a commit of the whole working tree (tracked and

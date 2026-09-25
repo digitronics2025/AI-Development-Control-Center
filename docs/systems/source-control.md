@@ -123,6 +123,13 @@ lines matching the high-confidence `blocking` rules of
 `PREFLIGHT_INCOMPLETE` (fails closed). Stage All skips sensitive files and
 reports them; staging one explicitly is allowed but its commit is blocked.
 AI context omits sensitive files entirely and redacts the rest.
+The push check is `scanOutgoing(root, tip, exclude)` in
+[preflight.ts](../../apps/orchestrator/src/source-control/preflight.ts); a
+release runs the same function on the commits it would send
+([release.md](release.md)). A release holds the repository writer lock while
+it checks and pushes, so Source Control mutations refuse meanwhile
+(`BLOCKED_BY_TASK`); its push moves only the remote branch, and the automatic
+fast-forward later brings the local branch up to date.
 
 File names: a push takes its file list from `git log --name-only -z`, so no
 name is quoted or split. Patch headers are read by `patchHeaderPath`
@@ -198,4 +205,4 @@ Hunk/line staging, worktree task isolation, PR/CI, conflict resolution UI,
 stash, commit signing UI, multi-remote UI, revert/cherry-pick, interactive
 rebase, deployment linkage, remote/mobile access.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-25

@@ -396,11 +396,64 @@ export interface PushLine {
   summary: string;
 }
 
-/** Push `refs/heads/<local>` to `<remoteRef>` without any force option. */
-export async function pushRef(cwd: string, options: { remote: string; localBranch: string; remoteRef: string; setUpstream: boolean }): Promise<GitResult & { lines: PushLine[] }> {
-  const args = ['push', '--porcelain', ...(options.setUpstream ? ['--set-upstream'] : []), options.remote, `refs/heads/${options.localBranch}:${options.remoteRef}`];
+/**
+ * Push `refs/heads/<localBranch>` — or one exact commit, `sha` — to
+ * `<remoteRef>`. There is no force option: the remote rejects anything that is
+ * not a fast-forward, so a lost race fails safely. A commit push only reads
+ * objects (a worktree's commits live in the repository's shared object store)
+ * and changes the remote; it never switches a branch or touches the working tree.
+ */
+export async function pushRef(
+  cwd: string,
+  options: ({ localBranch: string; sha?: undefined } | { sha: string; localBranch?: undefined }) & { remote: string; remoteRef: string; setUpstream: boolean },
+): Promise<GitResult & { lines: PushLine[] }> {
+  if (options.sha !== undefined && !/^[0-9a-f]{40,64}$/.test(options.sha)) throw new Error(`Not a full commit id: ${options.sha}`);
+  if (!options.remoteRef.startsWith('refs/heads/')) throw new Error(`Not a branch ref: ${options.remoteRef}`);
+  // A commit push (a release) names its target from a saved setting: only plain branch names.
+  if (options.sha !== undefined && (!/^refs\/heads\/[\w./-]+$/.test(options.remoteRef) || options.remoteRef.includes('..'))) throw new Error(`Not a plain branch ref: ${options.remoteRef}`);
+  if (options.remote.startsWith('-')) throw new Error(`Not a remote name: ${options.remote}`);
+  const source = options.sha ?? `refs/heads/${options.localBranch}`;
+  const args = ['push', '--porcelain', ...(options.setUpstream ? ['--set-upstream'] : []), options.remote, `${source}:${options.remoteRef}`];
   const result = await git(cwd, args, { timeoutMs: REMOTE_TIMEOUT_MS });
   return { ...result, lines: parsePushPorcelain(result.stdout) };
+}
+
+/**
+ * Update only the remote-tracking ref of one branch (`refs/remotes/<remote>/<branch>`).
+ * Nothing local moves; FETCH_HEAD is not written.
+ */
+export async function fetchBranch(cwd: string, remote: string, branch: string): Promise<GitResult> {
+  if (remote.startsWith('-') || branch.startsWith('-')) throw new Error('Invalid remote or branch name');
+  return git(cwd, ['fetch', '--no-write-fetch-head', '--no-tags', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`], { timeoutMs: REMOTE_TIMEOUT_MS });
+}
+
+/** The commit a remote's branch points at, read from the remote itself (`ls-remote`); null when it has no such branch. */
+export async function remoteBranchHead(cwd: string, remote: string, branch: string): Promise<{ ok: true; sha: string | null } | { ok: false; result: GitResult }> {
+  if (remote.startsWith('-') || branch.startsWith('-')) throw new Error('Invalid remote or branch name');
+  const result = await git(cwd, ['ls-remote', '--heads', remote, `refs/heads/${branch}`], { timeoutMs: REMOTE_TIMEOUT_MS, env: UNATTENDED_REMOTE_ENV });
+  if (result.code !== 0) return { ok: false, result };
+  const line = result.stdout.split('\n').find((l) => l.endsWith(`\trefs/heads/${branch}`));
+  return { ok: true, sha: line ? line.split('\t')[0]!.trim() : null };
+}
+
+/** The tree id of a commit, or null when it does not exist. */
+export async function treeOfCommit(cwd: string, rev: string): Promise<string | null> {
+  const result = await git(cwd, ['rev-parse', '--verify', '--quiet', `${rev}^{tree}`]);
+  return result.code === 0 ? result.stdout.trim() || null : null;
+}
+
+/** Every path that differs between two commits; a rename counts as both its old and its new path. */
+export async function changedPaths(cwd: string, from: string, to: string): Promise<string[]> {
+  const result = await git(cwd, ['diff', '--name-only', '-z', '--no-renames', from, to, '--']);
+  if (result.code !== 0) throw gitFailure('diff', result);
+  return [...new Set(result.stdout.split('\0').filter(Boolean))];
+}
+
+/** Commits reachable from `to` and not from `from`, newest first (at most `limit`). */
+export async function commitsInRange(cwd: string, from: string, to: string, limit = 1000): Promise<string[]> {
+  const result = await git(cwd, ['rev-list', `--max-count=${limit}`, to, '--not', from, '--']);
+  if (result.code !== 0) throw gitFailure('rev-list', result);
+  return result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
 export function parsePushPorcelain(stdout: string): PushLine[] {

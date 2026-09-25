@@ -403,6 +403,22 @@ export async function workingTreeTree(cwd: string): Promise<string> {
   });
 }
 
+/**
+ * The tree `git add -A && git commit` would record for the working tree as it
+ * is now: the repository's own line-ending and filter settings apply, unlike
+ * `workingTreeTree`, which keeps bytes exactly for checkpoints. With
+ * core.autocrlf on (Windows), only this one equals the tree of a commit made
+ * from the same files — which is how a release proves it sends the version
+ * the checks passed on (docs/plans/RELEASE_STAGE_PLAN.md §3.3). The real
+ * index is never written.
+ */
+export async function committableTree(cwd: string): Promise<string> {
+  return withPrivateIndex(cwd, async (env) => {
+    await gitOk(cwd, ['add', '-A'], { env });
+    return (await gitOk(cwd, ['write-tree'], { env })).trim();
+  });
+}
+
 export interface CheckpointResult {
   commit: string;
   tree: string;

@@ -1,5 +1,5 @@
 import { inFolder, taskRepositories } from '../engine/task-repositories.js';
-import { changesSince, workingTreeTree } from '@acc/git';
+import { changesSince, committableTree } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   STRATEGY_OUTCOME_LABEL,
@@ -341,7 +341,7 @@ export class Chairman implements SupervisorHooks {
       const unit = units.length > 1 ? units.find((u) => u.repo.id === run.repositoryId) : units[0];
       if (!unit || unit.repo.updatedAt > last.createdAt) return false;
       if (!unit.repo.commands.some((c) => c.enabled && redact(c.command) === run.command)) return false;
-      if ((await workingTreeTree(unit.workdir).catch(() => null)) !== run.treeId) return false;
+      if ((await committableTree(unit.workdir).catch(() => null)) !== run.treeId) return false;
     }
     return true;
   }

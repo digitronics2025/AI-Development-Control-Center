@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import type { ChangedFile, FinalStatus, StageInstance, TestRun } from '@acc/shared';
+import type { ChangedFile, FinalStatus, StageInstance, TaskRelease, TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -9,7 +9,10 @@ export interface ReportInput {
   testRuns: TestRun[];
   files: ChangedFile[] | null;
   testsSkipped: boolean;
-  deployed: 'none' | 'staging';
+  /** production: a release was proved live (docs/plans/RELEASE_STAGE_PLAN.md). */
+  deployed: 'none' | 'staging' | 'production';
+  /** The task's release, when one was asked for. */
+  release?: TaskRelease | null;
   /** Items the last review or verification said only the operator can settle. */
   operatorItems?: string[];
   /** Completion-gate checks that did not pass on a supervised task. */
@@ -35,6 +38,18 @@ function gitLines(task: TaskRecord, git: TaskRecord['git']): string[] {
     `- Task branch: ${git.taskBranch ?? 'none (worked on the current branch)'}${git.isolated ? ' — worked in an isolated worktree; your working tree was not touched. Merge the branch to take the change.' : ''}`,
     `- Commits: ${git.commits.length ? git.commits.map((c) => c.slice(0, 10)).join(', ') : 'none — changes are uncommitted for your review'}`,
   ];
+}
+
+/** The Cloud section: a proved release names the URL, the time and the commit; anything short of Live says so. */
+function cloudLines(input: ReportInput): string[] {
+  const r = input.release;
+  const lines: string[] = [];
+  if (r?.state === 'live') lines.push(`Live on ${r.target.liveUrl} since ${r.liveConfirmedAt ?? '—'} — commit ${r.commit.slice(0, 10)}`);
+  else if (r?.state === 'published_unconfirmed') lines.push(`Sent ${r.commit.slice(0, 10)} to ${r.target.remote}/${r.target.branch} — not confirmed live`);
+  else if (r?.state === 'failed') lines.push(`Release of ${r.commit.slice(0, 10)} failed`);
+  else if (r?.state === 'refused') lines.push('Not released: the release was refused before anything was sent');
+  if (input.deployed === 'staging' || (input.deployed === 'production' && input.stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer'))) lines.push('Staging deploy ran');
+  return lines.length ? lines : ['Not deployed'];
 }
 
 const MAX_OPERATOR_ITEMS = 10;
@@ -198,7 +213,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     ...(input.executionLines?.length ? ['## Execution', '', ...input.executionLines, ''] : []),
     '## Cloud',
     '',
-    input.deployed === 'staging' ? 'Staging deploy ran' : 'Not deployed',
+    ...cloudLines(input),
     '',
     '## Git',
     '',

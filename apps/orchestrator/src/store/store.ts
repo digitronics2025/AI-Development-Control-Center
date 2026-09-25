@@ -42,9 +42,10 @@ import type {
   WorkflowProfile,
   GitMode,
   PolicyMode,
+  ReleaseConfig,
   RepositoryRuntime,
 } from '@acc/shared';
-import { repositoryRuntimeSchema } from '@acc/shared';
+import { releaseConfigSchema, repositoryRuntimeSchema } from '@acc/shared';
 import type { AgentDetectionResult, AgentHealth } from '@acc/agent-sdk';
 import type { Db } from '../db/database.js';
 
@@ -156,6 +157,8 @@ export interface RepositoryRecord {
   runtime: RepositoryRuntime;
   /** allow: failures already on the baseline are reported but do not block; block: every failure blocks (§3.B). */
   preexistingFailures: 'allow' | 'block';
+  /** How tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md); `none` never releases. */
+  release: ReleaseConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -361,6 +364,12 @@ const toTestRun = (r: Row): TestRun => ({
   reusedFrom: r.reused_from ?? null,
 });
 
+/** A stored release setting that no longer validates reads as `none`: it never releases on a guess. */
+function readRelease(raw: string | null | undefined): ReleaseConfig {
+  const parsed = releaseConfigSchema.safeParse(parse(raw ?? null, { method: 'none' }));
+  return parsed.success ? parsed.data : { method: 'none' };
+}
+
 const toRepository = (r: Row): RepositoryRecord => ({
   id: r.id,
   name: r.name,
@@ -375,6 +384,7 @@ const toRepository = (r: Row): RepositoryRecord => ({
   policyMode: r.policy_mode ?? null,
   runtime: repositoryRuntimeSchema.parse(parse(r.runtime, {})),
   preexistingFailures: r.preexisting_failures === 'block' ? 'block' : 'allow',
+  release: readRelease(r.release),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -514,8 +524,8 @@ export class Store {
   insertRepository(rec: RepositoryRecord): void {
     this.db
       .prepare(
-        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime, preexisting_failures)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime, preexisting_failures, release)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         rec.id,
@@ -533,6 +543,7 @@ export class Store {
         rec.policyMode,
         json(rec.runtime),
         rec.preexistingFailures ?? 'allow',
+        json(rec.release ?? { method: 'none' }),
       );
   }
 
@@ -549,6 +560,7 @@ export class Store {
     if (patch.policyMode !== undefined) cols.policy_mode = patch.policyMode;
     if (patch.runtime !== undefined) cols.runtime = json(patch.runtime);
     if (patch.preexistingFailures !== undefined) cols.preexisting_failures = patch.preexistingFailures;
+    if (patch.release !== undefined) cols.release = json(patch.release);
     cols.updated_at = now();
     const keys = Object.keys(cols);
     this.db.prepare(`UPDATE repositories SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);

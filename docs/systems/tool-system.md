@@ -159,6 +159,18 @@ set up it is saved within seconds, even while MyVault is locked
 ([credential-broker.md](credential-broker.md#delivery-box)). `CredentialHost`
 gains optional `generate` and `deployGate` for this.
 
+`cloudflare.pages_status {project, commit?}` (in the read-only REST pack
+[cloudflare-api.ts](../../packages/tools/src/packs/cloudflare-api.ts), no
+Wrangler needed) is Level 1 and `readOnly`: the Pages project's production
+branch, its canonical (live) deployment — id, commit, latest stage and status,
+URL — and, with `commit`, the newest production deployment built from it. It
+needs the repository's `cloudflare` key; the account comes from a
+`CLOUDFLARE_ACCOUNT_ID` credential or, when the key sees exactly one account,
+from the key. No key → `UNAVAILABLE`. A release reads it through
+`ToolService.invoke` (`origin: engine`, operator profile) to prove Live
+([release.md](release.md)); tests point it at a loopback stand-in with
+`ACC_CF_API_BASE`.
+
 ## API
 
 `GET /api/tools`, `GET /api/tools/capabilities`, `GET /api/tools/:id`,
@@ -187,4 +199,4 @@ credential, checkpoint and session routes in their own docs. Realtime:
 - `node-pty`, `playwright-core`, `better-sqlite3` and `axe-core` stay external
   to the orchestrator bundle and must be dependencies of `@acc/orchestrator`.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

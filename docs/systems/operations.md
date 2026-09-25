@@ -20,6 +20,17 @@ verified_at: b9ce60f
 
 All scripts honour `ACC_DATA_DIR` and `ACC_PORT`.
 
+**Setting up a release** ([release.md](release.md)): Repositories → the
+repository → **Release** → *Push to a branch*; fill remote, branch (the branch
+your host deploys) and the live URL; add the Cloudflare Pages project and/or a
+public version URL; list paths that need a manual step (for example
+`db/migrations/**`); **Check setup** must show every check passed; **Save
+Changes**. A Pages proof needs a `cloudflare` credential scoped to the
+repository with Pages read access (plus a `CLOUDFLARE_ACCOUNT_ID` credential
+when the key sees several accounts). Full Autopilot then asks, after Smoke,
+"Approve production release" with the task id to type; any completed task can
+be released later with **Release…**.
+
 **Restarting after a new build**: `stop-control-center.ps1 -Drain`, then
 `start-control-center.ps1`. Another session must never force-stop an
 orchestrator that is running someone's stages; `-Force` is for a drain that

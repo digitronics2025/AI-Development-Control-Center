@@ -223,6 +223,8 @@ export class ActionGateway {
   }
 
   private async goTo(task: TaskRecord, stageKey: string, reason: string, ctx: ActionContext, guidance?: string): Promise<string> {
+    // A release starts only from its own typed approval or the Release button, never from a supervisor or chat decision (RELEASE_STAGE_PLAN §6).
+    if (this.d.views.stageDef(task, stageKey)?.kind === 'release') throw new Rejected('A release starts only from its approval or the Release button, not from the Chairman or chat');
     if (guidance) this.d.setGuidance(task.id, guidance);
     const name = stageKey === COMPLETE ? 'completion' : (this.d.views.stageDef(task, stageKey)?.name ?? stageKey);
     if (ctx.control) {

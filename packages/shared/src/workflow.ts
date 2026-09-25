@@ -64,7 +64,7 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.kind === 'agent' && stage.commandKinds?.length) {
       issues.push({ stageIndex: index, field: 'commandKinds', message: 'Agent stages do not run repository commands' });
     }
-    if ((stage.kind === 'tests' || stage.kind === 'command' || stage.kind === 'git' || stage.kind === 'verify') && stage.agentId) {
+    if (stage.kind !== 'agent' && stage.agentId) {
       issues.push({ stageIndex: index, field: 'agentId', message: 'System stages are not assigned to an agent' });
     }
     if (stage.kind === 'command' && !stage.commandKinds?.length) {
@@ -78,6 +78,13 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     }
     if (stage.kind === 'verify' && stage.commandKinds?.length) {
       issues.push({ stageIndex: index, field: 'commandKinds', message: 'App verification uses the repository runtime, not commands' });
+    }
+    if (stage.kind === 'release') {
+      // A release sends work live: it is always Level 5 with a typed approval, and it never loops back (RELEASE_STAGE_PLAN §3.5).
+      if (stage.permissionLevel !== 5) issues.push({ stageIndex: index, field: 'permissionLevel', message: 'Release stages need permission level 5 (Production)' });
+      if (!stage.requiresApproval) issues.push({ stageIndex: index, field: 'requiresApproval', message: 'Release stages always require approval' });
+      if (!stage.optional) issues.push({ stageIndex: index, field: 'optional', message: 'Release stages must be optional: a repository without a release set up skips them' });
+      if (stage.commandKinds?.length) issues.push({ stageIndex: index, field: 'commandKinds', message: 'A release uses the repository release setting, not commands' });
     }
     if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git' && stage.kind !== 'verify') {
       issues.push({

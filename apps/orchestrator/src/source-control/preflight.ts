@@ -1,4 +1,4 @@
-import { patchHeaderPath } from '@acc/git';
+import { outgoingFiles, outgoingPatch, patchHeaderPath, splitPatch } from '@acc/git';
 import { detectSecrets, sensitiveFileReason } from '@acc/security';
 
 /**
@@ -73,4 +73,21 @@ export function withoutSensitiveFiles(patch: string): { patch: string; omitted: 
     if (!skipping) out.push(line);
   }
   return { patch: out.join('\n'), omitted };
+}
+
+/** The most outgoing patch text a push preflight reads; anything larger is refused, not partly checked. */
+export const MAX_PREFLIGHT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Check what a push would send, `tip` minus `exclude` (every remote branch
+ * when null), for secret material. Source Control runs it before every push
+ * and a release before its push (docs/plans/RELEASE_STAGE_PLAN.md §3.4):
+ * `truncated` means the range was too large to check, which callers refuse.
+ */
+export async function scanOutgoing(root: string, tip: string, exclude: string | null): Promise<{ truncated: boolean; findings: PreflightFinding[] }> {
+  const { patch, truncated } = await outgoingPatch(root, { tip, exclude, maxBytes: MAX_PREFLIGHT_BYTES });
+  if (truncated) return { truncated: true, findings: [] };
+  // File names come from `--name-only -z`: a quoted or binary file is still checked by name (audit F-47).
+  const files = [...new Set([...(await outgoingFiles(root, { tip, exclude })), ...splitPatch(patch).files])];
+  return { truncated: false, findings: preflightFindings(files, patch) };
 }

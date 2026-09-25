@@ -7,6 +7,7 @@ import type {
   TaskMode,
   TaskStatus,
 } from './constants.js';
+import type { ReleaseState } from './types.js';
 
 /** Human-facing copy shared by the dashboard, the WebView and the VS Code status bar. */
 
@@ -106,4 +107,14 @@ export const COMMAND_KIND_LABEL: Record<CommandKind, string> = {
   smoke: 'Smoke test',
   'deploy-staging': 'Staging deploy',
   other: 'Other',
+};
+
+/** A task's release, as badges and cards say it (docs/plans/RELEASE_STAGE_PLAN.md §3.5). */
+export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
+  publishing: 'Sending',
+  proving: 'Sent — checking',
+  live: 'Live',
+  published_unconfirmed: 'Sent — not confirmed',
+  failed: 'Release failed',
+  refused: 'Not released',
 };

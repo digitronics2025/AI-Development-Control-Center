@@ -11,6 +11,7 @@
 | Agent adapters | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |
 | Security | [security.md](security.md) | `packages/security`, `apps/orchestrator/src/http/security.ts` |
 | Git integration | [git.md](git.md) | `packages/git` |
+| Releases (Release stage and button, proof of live) | [release.md](release.md) | `apps/orchestrator/src/release`, `packages/tools/src/packs/cloudflare-api.ts` |
 | Source Control (repository Git state, sync, journal) | [source-control.md](source-control.md) | `packages/git/src/source-control.ts`, `apps/orchestrator/src/source-control` |
 | Repository automation (discovery, background sync) | [repository-automation.md](repository-automation.md) | `apps/orchestrator/src/services/repository-automation.ts` |
 | Usage, cost and capacity (ledger, pricing, budgets, limits) | [usage.md](usage.md) | `apps/orchestrator/src/usage`, `packages/shared/src/usage.ts`, `apps/dashboard/src/pages/usage` |
@@ -32,4 +33,4 @@
 | Execution policy and privileged helper | [autopilot.md](autopilot.md) | `packages/tools/src/policy.ts`, `scripts/windows/privileged-helper.ps1` |
 | Pre-release audit (2026-09-24, findings F-01 to F-54, production snapshot) | [../security/prerelease-audit-2026-09-24.md](../security/prerelease-audit-2026-09-24.md) | whole repository, both Cloudflare hostnames, D1 `acc-control-production` |
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

@@ -14,6 +14,7 @@ import { migrate, openDatabase, type Db } from './db/database.js';
 import { BaselineChecks } from './engine/baseline-checks.js';
 import { ContextBuilder } from './engine/context.js';
 import { TaskEngine } from './engine/engine.js';
+import type { Probe } from './release/service.js';
 import { TaskViews } from './engine/views.js';
 import { LearningService } from './learning/service.js';
 import { SkillCatalog } from './services/skills.js';
@@ -105,7 +106,14 @@ export function defaultAdapters(config: Pick<OrchestratorConfig, 'simulatedAgent
 /** Composition root: wires persistence, services and the engine. No I/O beyond the database. */
 export function createServices(
   config: OrchestratorConfig,
-  options: { adapters?: AgentAdapter[]; baseEnv?: NodeJS.ProcessEnv; databaseFile?: string; remoteTimings?: RemoteNodeDeps['timings'] } = {},
+  options: {
+    adapters?: AgentAdapter[];
+    baseEnv?: NodeJS.ProcessEnv;
+    databaseFile?: string;
+    remoteTimings?: RemoteNodeDeps['timings'];
+    /** Release proof reads (docs/plans/RELEASE_STAGE_PLAN.md): a stand-in live site and a short poll, for tests. */
+    release?: { probe?: Probe; pollSeconds?: number };
+  } = {},
 ): AppServices {
   const db = openDatabase(options.databaseFile ?? path.join(config.dataDir, 'acc.db'));
   migrate(db);
@@ -145,7 +153,7 @@ export function createServices(
   const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
   const baselines = new BaselineChecks({ store, bus, tooling, dataDir: config.dataDir });
-  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, baseEnv: options.baseEnv });
+  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, baseEnv: options.baseEnv, release: options.release });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
@@ -228,6 +236,8 @@ export function createServices(
       // Before the engine marks them interrupted (and the Chairman resumes the task): stop what they left running.
       await processes.stopLeftoverExecutions(store.executionsWithStatus('running')).catch(() => 0);
       const result = engine.recover();
+      // A release a restart cut short is resolved from the remote, never pushed again (RELEASE_STAGE_PLAN §5).
+      void engine.release.recover().catch(() => 0);
       // Baseline checks a restart cut short leave detached worktrees under the data folder (AUTOPILOT_GATES_PLAN §5).
       await baselines.sweep(store.listRepositories()).catch(() => 0);
       await chairman.onStartup();
@@ -246,6 +256,8 @@ export function createServices(
       watchdog.stop();
       await repositoryAutomation.stop();
       await engine.shutdown();
+      // Background releases (the button, Check again) save where they stand before the database closes.
+      await engine.release.close();
       await chat.idle();
       await ask.stopAll();
       await processes.stopAll('orchestrator shutdown').catch(() => undefined);

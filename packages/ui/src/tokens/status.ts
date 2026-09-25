@@ -14,6 +14,8 @@ import {
   Cloud,
   Link2Off,
   ArrowUpCircle,
+  Rocket,
+  Send,
   Eye,
   FlaskConical,
   FilePen,
@@ -35,6 +37,7 @@ import {
 import {
   CHAIRMAN_HEALTH_LABEL,
   CHAIRMAN_STATUS_LABEL,
+  RELEASE_STATE_LABEL,
   STAGE_STATUS_LABEL,
   STRATEGY_OUTCOME_LABEL,
   TASK_STATUS_LABEL,
@@ -56,6 +59,7 @@ import {
   type FindingStatus,
   type ImprovementStatus,
   type ReviewStatus,
+  type ReleaseState,
 } from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
@@ -108,6 +112,16 @@ export const STAGE_STATUS_VISUAL: Record<StageStatus, StatusVisual> = {
 };
 
 export const FAILURE_ICON = AlertOctagon;
+
+/** A task's release (docs/plans/RELEASE_STAGE_PLAN.md): Live only when the host proved it serves the commit. */
+export const RELEASE_STATE_VISUAL: Record<ReleaseState, StatusVisual> = {
+  publishing: { label: RELEASE_STATE_LABEL.publishing, tone: 'accent', icon: Send, active: true },
+  proving: { label: RELEASE_STATE_LABEL.proving, tone: 'accent', icon: Hourglass, active: true },
+  live: { label: RELEASE_STATE_LABEL.live, tone: 'success', icon: Rocket },
+  published_unconfirmed: { label: RELEASE_STATE_LABEL.published_unconfirmed, tone: 'warning', icon: AlertTriangle },
+  failed: { label: RELEASE_STATE_LABEL.failed, tone: 'danger', icon: XCircle },
+  refused: { label: RELEASE_STATE_LABEL.refused, tone: 'neutral', icon: Ban },
+};
 
 /** Chairman supervisor state (design.md §7.3.1). */
 export const CHAIRMAN_STATUS_VISUAL: Record<ChairmanStatus, StatusVisual> = {

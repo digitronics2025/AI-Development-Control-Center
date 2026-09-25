@@ -46,6 +46,7 @@ import type { EngineTooling } from './tooling.js';
 import { inFolder, isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
+import { ReleaseService, type Probe } from '../release/service.js';
 import type { TaskViews } from './views.js';
 
 export class EngineError extends Error {
@@ -74,6 +75,8 @@ export interface EngineDeps {
   /** Failed checks compared with the task's baseline commit (AUTOPILOT_GATES_PLAN §3.B). */
   baselines: BaselineChecks;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Release proof reads: a stand-in for the live site in tests, and the poll interval. */
+  release?: { probe?: Probe; pollSeconds?: number };
 }
 
 /** Statuses from which a user may resume or retry. */
@@ -90,6 +93,8 @@ export class TaskEngine {
   readonly publisher: Publisher;
   readonly approvals: ApprovalGate;
   private readonly stages: StageRunners;
+  /** Sending tested work live (docs/plans/RELEASE_STAGE_PLAN.md). */
+  readonly release: ReleaseService;
   private scheduling = false;
   private rescheduleRequested = false;
   private shuttingDown = false;
@@ -100,6 +105,19 @@ export class TaskEngine {
   constructor(private readonly d: EngineDeps) {
     this.publisher = new Publisher(d.store, d.bus, d.views);
     this.approvals = new ApprovalGate(d.store, d.bus, d.views, this.publisher);
+    this.release = new ReleaseService({
+      store: d.store,
+      bus: d.bus,
+      views: d.views,
+      publisher: this.publisher,
+      approvals: this.approvals,
+      coordinator: d.coordinator,
+      repositories: d.repositories,
+      artifacts: d.artifacts,
+      tooling: d.tooling,
+      probe: d.release?.probe,
+      pollSeconds: d.release?.pollSeconds,
+    });
     this.stages = new StageRunners({
       store: d.store,
       bus: d.bus,
@@ -112,6 +130,7 @@ export class TaskEngine {
       baseEnv: d.baseEnv ?? process.env,
       tooling: d.tooling,
       baselines: d.baselines,
+      release: this.release,
     });
     d.tooling.attachPublisher(this.publisher);
   }
@@ -717,6 +736,12 @@ export class TaskEngine {
       approval.stageId,
     );
 
+    // The Release button's approval belongs to a completed task, not to the loop (RELEASE_STAGE_PLAN §3.6).
+    if (approval.kind === 'release') {
+      this.release.onButtonDecision(resolved, decision);
+      return;
+    }
+
     const task = this.task(approval.taskId);
     if (task.status !== 'WAITING_FOR_USER' || task.blocker?.approvalId !== approvalId) return;
 
@@ -730,6 +755,17 @@ export class TaskEngine {
       if (note) await this.addDirective(task.id, { text: `Plan feedback: ${note}` });
       this.publisher.updateTask(task.id, { status: 'QUEUED', blocker: null, currentStageKey: approval.stageKey });
       this.publisher.event(task.id, 'STAGE_RETRY', 'Plan sent back for revision');
+      this.schedule();
+      return;
+    }
+    const declined = approval.kind === 'stage_permission' && approval.stageKey ? this.d.views.stageDef(task, approval.stageKey) : null;
+    if (declined?.kind === 'release') {
+      // Declining a release is a decision, not a failure: nothing is sent, the task completes, and the Release button stays (§3.5).
+      const stage = this.createStageInstance(task, declined);
+      this.publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'Release declined', finishedAt: now() });
+      this.publisher.event(task.id, 'RELEASE_DECLINED', 'Release declined; nothing was sent. You can release later with the Release button.', { approvalId }, stage.id);
+      this.publisher.event(task.id, 'STAGE_SKIPPED', `${declined.name} skipped: release declined`, {}, stage.id);
+      this.publisher.updateTask(task.id, { status: 'QUEUED', blocker: null, currentStageKey: declined.next });
       this.schedule();
       return;
     }
@@ -868,12 +904,22 @@ export class TaskEngine {
         if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
         continue;
       }
+      // A release with nothing to do (none set up, nothing committed) is skipped before any approval is asked (RELEASE_STAGE_PLAN §3.5).
+      const releaseSkip = def.kind === 'release' ? this.release.skipReason(task, repo) : null;
+      if (releaseSkip) {
+        const skipped = this.createStageInstance(task, def);
+        this.publisher.updateStage(skipped.id, { status: 'SKIPPED', summary: releaseSkip, finishedAt: now() });
+        this.publisher.event(taskId, 'STAGE_SKIPPED', `${def.name} skipped: ${releaseSkip}`, {}, skipped.id);
+        if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
+        continue;
+      }
       if (!skipsForLackOfCommands(def, taskRepositories(this.d.store, task).map((r) => r.repo)) && !this.stageGate(task, def)) return;
 
       // A stage that can edit files waits for any Source Control mutation in
       // flight, and Source Control refuses to mutate while it runs — unless the
       // task is isolated in its own worktree and never touches that working tree.
-      const writes = def.permissionLevel >= 2;
+      // A release edits no files: it takes the writer lock itself, only while it checks and pushes.
+      const writes = def.permissionLevel >= 2 && def.kind !== 'release';
       const releaseWriter = writes && !task.git.isolated ? await this.d.coordinator.acquireWriter(repo.id, taskId, def.name) : null;
       let stage: StageInstance;
       let outcome: StageOutcome;
@@ -905,6 +951,9 @@ export class TaskEngine {
             break;
           case 'verify':
             outcome = await this.stages.runVerify(this.task(taskId), def, stage, repo, control);
+            break;
+          case 'release':
+            outcome = await this.stages.runRelease(this.task(taskId), def, stage, repo, control);
             break;
         }
       } finally {
@@ -959,6 +1008,13 @@ export class TaskEngine {
     }
     const assignment = def.kind === 'agent' ? this.d.views.assignmentFor(task, def) : null;
     const level = PERMISSION_LEVEL_INFO[def.permissionLevel];
+    if (def.kind === 'release') {
+      // The card says what is sent, where, and how Live is proved (§3.5).
+      const card = this.release.describe(task, this.d.repositories.record(task.repositoryId));
+      const approval = this.approvals.request(task, { kind: 'stage_permission', stageId: null, stageKey: def.key, requestedBy: 'system', action: card.action, permissionLevel: 5, risk: 'dangerous', reason: card.reason, riskExplanation: card.riskExplanation, environment: card.environment });
+      this.publisher.event(task.id, 'RELEASE_REQUESTED', `Release requested: ${card.action} — waiting for your typed approval`, { approvalId: approval.id, commit: task.git.commits.at(-1), via: 'stage' });
+      return false;
+    }
     this.approvals.request(task, {
       kind: 'stage_permission',
       stageId: null,
@@ -1254,7 +1310,7 @@ export class TaskEngine {
       case 'optional_failed': {
         // Recorded and reported; the workflow moves on and nothing is recovered (§3.D).
         control.autoRetries.delete(def.key);
-        this.publisher.event(taskId, 'STAGE_OPTIONAL_FAILED', `${def.name} failed and is optional: ${outcome.message}. The task continues; the report lists it.`, { stageKey: def.key, limitation: `${def.name} (optional) failed: ${outcome.message}` }, stage.id);
+        this.publisher.event(taskId, 'STAGE_OPTIONAL_FAILED', `${def.name} failed and is optional: ${outcome.message}. The task continues; the report lists it.`, { stageKey: def.key, limitation: outcome.limitation ?? `${def.name} (optional) failed: ${outcome.message}` }, stage.id);
         this.publisher.updateTask(taskId, { currentStageKey: def.next });
         return true;
       }
@@ -1406,7 +1462,8 @@ export class TaskEngine {
     }
     const stages = this.d.store.listStages(task.id);
     const testsSkipped = stages.some((s) => s.kind === 'tests' && s.status === 'SKIPPED');
-    const deployed = stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer') ? 'staging' : 'none';
+    const release = this.task(task.id).git.release ?? null;
+    const deployed = release?.state === 'live' ? 'production' : stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer') ? 'staging' : 'none';
     const operatorItems = latestOperatorItems(
       await this.d.artifacts.latestText(task.id, 'review'),
       await this.d.artifacts.latestText(task.id, 'verification'),
@@ -1435,6 +1492,7 @@ export class TaskEngine {
       files,
       testsSkipped,
       deployed,
+      release,
       operatorItems,
       gateLimitations,
       verification,
@@ -1503,11 +1561,12 @@ export class TaskEngine {
       // skipped; asking for approval of it is noise.
       const def = approval.kind === 'stage_permission' && approval.stageKey ? this.d.views.stageDef(task, approval.stageKey) : null;
       const repo = def ? store.getRepository(task.repositoryId) : null;
-      if (def && repo && skipsForLackOfCommands(def, taskRepositories(store, task).map((r) => r.repo))) {
-        const cancelled = store.resolveApproval(approval.id, 'cancelled', `${def.name} has no command configured and will be skipped`);
+      const nothing = def && repo ? (def.kind === 'release' ? this.release.skipReason(task, repo) : skipsForLackOfCommands(def, taskRepositories(store, task).map((r) => r.repo)) ? `${def.name} has no command configured` : null) : null;
+      if (def && nothing) {
+        const cancelled = store.resolveApproval(approval.id, 'cancelled', `${nothing}; it will be skipped`);
         this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(cancelled) });
         store.updateTask(task.id, { status: 'QUEUED', blocker: null });
-        this.publisher.event(task.id, 'APPROVAL_RESOLVED', `Approval withdrawn: ${def.name} has nothing to run`, { approvalId: approval.id });
+        this.publisher.event(task.id, 'APPROVAL_RESOLVED', `Approval withdrawn: ${def.name} has nothing to run (${nothing})`, { approvalId: approval.id });
       }
     }
     return { interruptedTasks: interrupted };

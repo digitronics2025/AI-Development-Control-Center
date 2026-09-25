@@ -254,6 +254,9 @@ CHANGE_AGENT/MODEL/EFFORT (deferred — the running stage keeps its agent),
 RUN_TARGETED_TESTS / RUN_FULL_TESTS / RUN_E2E (next tests stage runs the extra
 kinds; immediate if the task is stopped), CREATE/ROLLBACK_CHECKPOINT,
 MARK_HARD_BLOCKER, COMPLETE_TASK (only if the gate passes).
+RETRY_STAGE and RETURN_TO_STAGE to a `release` stage are rejected for every
+initiator, and recovery never offers `retry_stage` for one: a release starts
+only from its own typed approval or the Release button ([release.md](release.md)).
 
 ## Chat ([chat.ts](../../apps/orchestrator/src/chairman/chat.ts), [intent.ts](../../apps/orchestrator/src/chairman/intent.ts))
 

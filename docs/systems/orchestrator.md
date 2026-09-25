@@ -76,7 +76,9 @@ metadata only; [connected-apps.md](connected-apps.md)), and
 answer tool sessions in migration 15, [ask.md](ask.md)), and `baseline_checks`
 with `test_runs.failures`, `classification`, `tree_id`, `reused_from` and
 `repositories.preexisting_failures` (migration 16,
-[workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)). Access goes through
+[workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)), and
+`repositories.release` (migration 17, default `{"method":"none"}`; a task's
+release lives in `tasks.git`, [release.md](release.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -85,7 +87,7 @@ before any row is written.
 | Area | Endpoints |
 |---|---|
 | Service | `GET health`, `GET overview`, `POST service/shutdown` (`{ mode: refuse \| drain \| force }`, default refuse: 409 with the running task ids while stages run; [operations.md](operations.md)) |
-| Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`) |
+| Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`), `POST tasks/:id/release` and `tasks/:id/release/check`, `POST repositories/:id/release/check` ([release.md](release.md)) |
 | Chairman | `GET tasks/:id/chairman`, `GET/POST tasks/:id/chairman/messages`, `POST tasks/:id/chairman/actions` ([chairman.md](chairman.md)) |
 | Ask | `GET/POST ask/threads`, `GET/PATCH/DELETE ask/threads/:id`, `POST ask/threads/:id/{messages,cancel}`, `GET ask/sources`, `POST ask/sources/check` ([ask.md](ask.md)) |
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |

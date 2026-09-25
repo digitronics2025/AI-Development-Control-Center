@@ -157,6 +157,16 @@ the writable `cloudflare.d1_query` both refused, and a classic GitHub token
 with write scopes refused on every call. Only a lookup that succeeded is
 marked `live`.
 
+With the operator's own read-only keys (2026-09-25): Check access was green
+for all three sources. Real Claude Code answered a D1 question on a
+production database with its read-only key, so **a D1 Read token can run
+`/query`** — the row counts, cross-checked through a separate connection,
+matched. It also answered commits and the latest failed Actions run of a
+repository, and listed R2 objects; the GitHub data matched GitHub. A
+people's-names column (`actor`) came back masked. Masking treats a bare digit
+run as a phone number only in local (0…), `00…` or `212…` form, so ids such as
+Actions run numbers stay readable.
+
 ## HTTP ([ask-routes.ts](../../apps/orchestrator/src/http/ask-routes.ts))
 
 | Method | Path | |

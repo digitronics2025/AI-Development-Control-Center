@@ -271,7 +271,7 @@ When `ACC_TOOL_URL`/`ACC_TOOL_SESSION` are set and the prompt has `[sim:lookup:<
 |---|---|
 | Credential missing or invalid | The call fails with `AUTH_REQUIRED` and a plain message naming Settings → Ask. The source shows "Needs setup" in the composer. The answer says which source failed, and does not guess. |
 | Token turns out to be write-capable | A classic GitHub token with a write scope is refused at Check access and at call time (the `X-OAuth-Scopes` header). Fine-grained and Cloudflare tokens cannot be inspected, so locks 2 and 3 still hold, and the Settings text says so. |
-| D1 Read cannot run `/query` (step 1 finds this) | Use a D1 Edit token limited to the chosen databases. Lock 3's strict validator, plus a single-statement REST body, stays the enforcement. `ask.md` records that lock 1 does not cover D1 in that case. Nothing silently widens. |
+| D1 Read cannot run `/query` (step 1 finds this) — *not the case: verified 2026-09-25 that a D1 Read token runs `/query`* | Use a D1 Edit token limited to the chosen databases. Lock 3's strict validator, plus a single-statement REST body, stays the enforcement. `ask.md` records that lock 1 does not cover D1 in that case. Nothing silently widens. |
 | Rate limit (429) or 5xx | One retry after `retry-after`, capped at 5 s. Otherwise `UNAVAILABLE` with the status. |
 | Timeout | 30 s per call and 10 min per answer (existing). A timed-out call is recorded as failed, and the agent is told. |
 | Result too large | Capped at 500 rows, 256 KB per object and 64 KB per KV value, with `truncated: true` and a hint to aggregate. A silent partial result is never returned (the root cause seen in `d1_query`). |

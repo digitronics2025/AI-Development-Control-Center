@@ -26,12 +26,18 @@ export function maskPersonalText(text: string): string {
   return text.replace(EMAIL, MASK).replace(PHONE, (match) => (isLikelyPhone(match) ? MASK : match));
 }
 
-/** Timestamps, amounts and ids are long digit runs too; a phone number has no more than 15 digits and is not a date. */
+/**
+ * Ids, timestamps and amounts are long digit runs too (a GitHub run id is
+ * 11 digits). A number written with a leading + or with separators is a
+ * phone number; a bare run of digits is one only in a local form (a leading 0
+ * and 9–10 digits, as in 0612345678) or with a country code written out
+ * (00…, or 212 followed by 9 digits).
+ */
 function isLikelyPhone(match: string): boolean {
   const digits = match.replace(/\D/g, '');
   if (digits.length < 9 || digits.length > 15) return false;
-  if (/^(?:19|20)\d{6,}$/.test(digits) && !/[\s.+-]/.test(match)) return false; // 20260924…, epoch-like
-  return true;
+  if (/^\+/.test(match) || /[\s.-]/.test(match)) return !/^(?:19|20)\d{2}[\s.-]?\d{2}[\s.-]?\d{2}$/.test(match);
+  return /^0\d{8,9}$/.test(digits) || /^00\d{9,13}$/.test(digits) || /^212\d{9}$/.test(digits);
 }
 
 /**

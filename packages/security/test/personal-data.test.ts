@@ -12,6 +12,12 @@ describe('personal-data masking (docs/systems/ask.md)', () => {
     expect(maskPersonalData({ note: { text: 'reach me at 0612345678' } })).toEqual({ note: { text: `reach me at ${MASK}` } });
   });
 
+  it('leaves long ids alone, and still finds local and international numbers written bare', () => {
+    expect(maskPersonalText('GitHub run 36071754702 failed; order 4815162342')).toBe('GitHub run 36071754702 failed; order 4815162342');
+    expect(maskPersonalText('call 0612345678 or 212612345678 or 00212612345678')).toBe(`call ${MASK} or ${MASK} or ${MASK}`);
+    expect(maskPersonalText('+33612345678')).toBe(MASK);
+  });
+
   it('leaves ids, amounts, dates and timestamps alone', () => {
     expect(maskPersonalText('order 20260924183512 total 1299.50 on 2026-09-24, sku 50U8000FUXMV')).toBe('order 20260924183512 total 1299.50 on 2026-09-24, sku 50U8000FUXMV');
     expect(maskPersonalData({ id: 123456789012, name_of_shop: 'Digitronics' })).toEqual({ id: 123456789012, name_of_shop: 'Digitronics' });

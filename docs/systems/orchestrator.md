@@ -73,7 +73,10 @@ metadata only; [connected-apps.md](connected-apps.md)), and
 `task_linked_repositories` with `test_runs.repository_id` and
 `task_checkpoints.parts` (migration 13, [multi-repository-tasks.md](multi-repository-tasks.md)), and
 `ask_threads`, `ask_messages` (migration 14; data sources, personal-data switch and
-answer tool sessions in migration 15, [ask.md](ask.md)). Access goes through
+answer tool sessions in migration 15, [ask.md](ask.md)), and `baseline_checks`
+with `test_runs.failures`, `classification`, `tree_id`, `reused_from` and
+`repositories.preexisting_failures` (migration 16,
+[workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -81,7 +84,7 @@ before any row is written.
 
 | Area | Endpoints |
 |---|---|
-| Service | `GET health`, `GET overview`, `POST service/shutdown` |
+| Service | `GET health`, `GET overview`, `POST service/shutdown` (`{ mode: refuse \| drain \| force }`, default refuse: 409 with the running task ids while stages run; [operations.md](operations.md)) |
 | Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`) |
 | Chairman | `GET tasks/:id/chairman`, `GET/POST tasks/:id/chairman/messages`, `POST tasks/:id/chairman/actions` ([chairman.md](chairman.md)) |
 | Ask | `GET/POST ask/threads`, `GET/PATCH/DELETE ask/threads/:id`, `POST ask/threads/:id/{messages,cancel}`, `GET ask/sources`, `POST ask/sources/check` ([ask.md](ask.md)) |
@@ -178,4 +181,4 @@ listener stays on loopback. Details: [remote-node.md](remote-node.md).
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

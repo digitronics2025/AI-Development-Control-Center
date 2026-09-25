@@ -167,7 +167,10 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:usage-limit]`, `[sim:fail:<role>]`, `[sim:slow]`,
 `[sim:needs-operator]` (verifier names an operator decision), `[sim:hang]` (every run keeps working until cancelled),
 `[sim:needs-decision]` (implementer stops with `BLOCKED ON OPERATOR:` until a directive says `ANSWER:`),
-`[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`.
+`[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`,
+`[sim:big-diff]` (the implementer also writes three 60 KB files),
+`[sim:review-miss-coverage]` / `[sim:review-miss-coverage-once]` (reviewer and verifier
+leave out the files the diff did not show; by default they name them under `## Files reviewed`).
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 Role `ask` answers "Simulated answer to: <question>" and names the repository
 and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`
@@ -194,4 +197,4 @@ REFUSED with the summary.
   closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
   **Load my CLI customisations** per agent for leaner runs.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

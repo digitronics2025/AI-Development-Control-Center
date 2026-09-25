@@ -86,7 +86,8 @@ confined `cwd`.
 ## Prompts
 
 The workspace layout, each folder's facts, Git status and changed files, and
-all diffs within one 150 KB bound (folder-prefixed) replace the
+all diffs packed together by priority into one 150 KB budget (folder-prefixed; every file
+not shown is named in `{{diff_coverage}}`, [workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)) replace the
 single-repository variables; the prompt tells agents to read each folder's
 `AGENTS.md`/`CLAUDE.md`.
 
@@ -119,4 +120,4 @@ single-repository variables; the prompt tells agents to read each folder's
   cwd is the workspace.
 - Usage and budgets attribute the whole task to the primary repository.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

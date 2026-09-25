@@ -32,3 +32,40 @@ describe('test summaries', () => {
     expect(testFailureSummary(['# Subtest: test', 'not ok 1 - test', '# tests 1', '# pass 0', '# fail 0', '# cancelled 1', '# duration_ms 48.4'])).toBe('1 cancelled | 0 passed (1)');
   });
 });
+
+describe('failing test ids', () => {
+  it('keeps each failing test once: a bare title that another id names in full is dropped (LEAD_TIME_PLAN §3.2)', async () => {
+    const { failureIdsIn } = await import('../src/engine/test-summary.js');
+    // TASK-0008's unit output on tenten-accounting-in, reduced to the lines that name failures.
+    const vitest = [
+      ' × PartnersPage shows a retryable error instead of an empty owner breakdown when the cards fail to load 31ms',
+      ' × passes scripts/docs-guard.mjs 812ms',
+      '   ✗ CLAUDE.md',
+      ' FAIL  scripts/fix-name-polluted-sku.test.ts [ scripts/fix-name-polluted-sku.test.ts ]',
+      ' FAIL  scripts/merge-duplicate-supplier-prices.test.ts [ scripts/merge-duplicate-supplier-prices.test.ts ]',
+      ' FAIL  scripts/pin-guard.test.ts [ scripts/pin-guard.test.ts ]',
+      ' FAIL  scripts/strip-brand-from-sku.test.ts [ scripts/strip-brand-from-sku.test.ts ]',
+      ' FAIL  scripts/docs-guard.test.ts > docs/systems stays cheap to read > passes scripts/docs-guard.mjs',
+      ' FAIL  src/test/frontend-wiring.test.tsx > frontend wiring smoke tests > PartnersPage shows a retryable error instead of an empty owner breakdown when the cards fail to load',
+      '      Tests  2 failed | 9070 passed (9072)',
+    ].join('\n');
+    expect(failureIdsIn(vitest)).toEqual([
+      // A line a test printed: not a title of another id, so it is kept, and it appears on both sides of a comparison.
+      'CLAUDE.md',
+      'scripts/docs-guard.test.ts > docs/systems stays cheap to read > passes scripts/docs-guard.mjs',
+      'scripts/fix-name-polluted-sku.test.ts [ scripts/fix-name-polluted-sku.test.ts ]',
+      'scripts/merge-duplicate-supplier-prices.test.ts [ scripts/merge-duplicate-supplier-prices.test.ts ]',
+      'scripts/pin-guard.test.ts [ scripts/pin-guard.test.ts ]',
+      'scripts/strip-brand-from-sku.test.ts [ scripts/strip-brand-from-sku.test.ts ]',
+      'src/test/frontend-wiring.test.tsx > frontend wiring smoke tests > PartnersPage shows a retryable error instead of an empty owner breakdown when the cards fail to load',
+    ]);
+    // Playwright names every test in full once: nothing changes.
+    const playwright = ['  2 failed', '    [chromium] › tests\\e2e\\auth.spec.ts:30:3 › Authentication flows › logout returns to login page', '    [chromium] › tests\\e2e\\quick-sale.spec.ts:8:3 › Quick Sale flow › sees the Quick Sale page with form sections', '  48 passed (3.1m)'].join('\n');
+    expect(failureIdsIn(playwright)).toEqual([
+      '[chromium] › tests\\e2e\\auth.spec.ts › Authentication flows › logout returns to login page',
+      '[chromium] › tests\\e2e\\quick-sale.spec.ts › Quick Sale flow › sees the Quick Sale page with form sections',
+    ]);
+    // Jest's bare title has no full form to defer to: kept.
+    expect(failureIdsIn('  ✕ adds numbers (5 ms)\nFAIL src/sum.test.js')).toEqual(['adds numbers', 'src/sum.test.js']);
+  });
+});

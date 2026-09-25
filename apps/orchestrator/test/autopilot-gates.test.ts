@@ -81,12 +81,16 @@ describe('A. complete review coverage', () => {
     const id = await createTask(t, api, 'Across repositories [sim:big-diff]', { linkedRepositoryIds: [web] });
     await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000);
     const prompt = await artifactText(t, id, 'review-prompt.md');
-    const folder = t.services.store.getTask(id)!.git.folder!;
     expect(prompt).toMatch(/Diff shows \d+ of 5 changed files in full\./);
     // Which two of the three equal files miss the budget depends on the workspace's folder order; that two do is what matters.
-    const notShown = [...prompt.matchAll(/^- (\S+) \(\+1500 −0, too large for the budget\) → read: the file itself \(new, untracked\)$/gm)].map((m) => m[1]);
+    // The simulated implementer writes them into the workspace's first folder, which is either repository's (random temp names).
+    const notShown = [...prompt.matchAll(/^- (\S+) \(\+1500 −0, too large for the budget\) → read: the file itself \(new, untracked\)$/gm)].map((m) => m[1]!);
     expect(notShown).toHaveLength(2);
-    for (const file of notShown) expect(file).toMatch(new RegExp(`^${folder}/big-[abc]\\.ts$`));
+    const folders = new Set(notShown.map((file) => file.split('/')[0]));
+    expect(folders.size).toBe(1);
+    const taskFolders = [t.services.store.getTask(id)!.git.folder, ...t.services.store.listLinkedRepositories(id).map((r) => r.folder)];
+    expect(taskFolders).toContain([...folders][0]);
+    for (const file of notShown) expect(file).toMatch(/^[^/]+\/big-[abc]\.ts$/);
     expect(prompt).toContain('3 of 5 changed files in full');
   }, 120_000);
 

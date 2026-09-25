@@ -162,13 +162,24 @@ Smoke after a skipped Staging, the unit suite run three times):
 - **Baseline-aware checks** ([baseline-checks.ts](../../apps/orchestrator/src/engine/baseline-checks.ts)).
   Failing test ids are read from the whole output while it streams
   (Vitest/Jest/Mocha/TAP/pytest lines and Playwright's `N failed` block; line
-  numbers and timings dropped, at most 500) into `test_runs.failures`. The
+  numbers and timings dropped, at most 500; a bare `× title` that another id
+  names in full as `file > … > title` is dropped) into `test_runs.failures`. The
   first failure of a command in a tests stage runs the same command once on the
   task's baseline commit, in a detached worktree under
   `<dataDir>/baselines/` (dependencies from the lockfile through the tool
   policy; removed in a `finally`; leftovers swept at start). One result per
   repository, commit and command (`baseline_checks`) is shared by every task,
-  one run per key at a time. `preexisting` (the baseline failed and every
+  one run per key at a time. Unless the full result is already known, only the
+  failing test files run first
+  ([targeted-tests.ts](../../apps/orchestrator/src/engine/targeted-tests.ts)):
+  files read from the ids that exist at the baseline commit (safe relative
+  paths, test-file names, at most 50), appended to an npm script whose body is
+  one `vitest`/`jest`/`playwright test`/`pytest` run, or to such a runner called
+  directly (`npm test -- a.test.ts`). That narrowed run is kept under its own
+  command sha and can only prove `preexisting`; when any failure does not
+  reproduce, or it cannot be built or finish, the full run decides as before
+  (TASK-0008: 17.6 min for the whole unit suite, for 6 failing files).
+  `preexisting` (the baseline failed and every
   failing id is among its failures) is recorded, shown apart ("Already failing
   before this task — do not fix unless asked" in prompts, a report limitation)
   and the stage goes on; `new` and `unknown` (ids unreadable, overflow, no

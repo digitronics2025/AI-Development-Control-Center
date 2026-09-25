@@ -138,8 +138,14 @@ export class FailureIdCollector {
     this.ids.add(id);
   }
 
+  /**
+   * The ids, without a bare title that another id names in full: Vitest prints
+   * a failing test as `× title` while it runs and again as `FAIL file > … > title`
+   * at the end (LEAD_TIME_PLAN §3.2). Anything else is kept.
+   */
   list(): string[] {
-    return [...this.ids].sort();
+    const ids = [...this.ids];
+    return ids.filter((id) => !ids.some((other) => other !== id && other.endsWith(` > ${id}`))).sort();
   }
 }
 

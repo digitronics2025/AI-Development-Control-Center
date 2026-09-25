@@ -9,6 +9,7 @@ import type { RepositoryCommand, StageInstance, TestFailureClass } from '@acc/sh
 import type { Bus } from '../bus.js';
 import { newId, now, type BaselineCheckKey, type BaselineCheckRecord, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import { LogSink } from './log-sink.js';
+import { MAX_TARGETED_FILES, targetedCommand, testFilesOf } from './targeted-tests.js';
 import { FailureIdCollector, testFailureSummary, testPassSummary } from './test-summary.js';
 import type { EngineTooling } from './tooling.js';
 
@@ -28,6 +29,8 @@ export interface Classification {
   baselineCommit: string | null;
   /** Why the comparison could not be made (unknown). */
   reason: string | null;
+  /** Set when only the failing test files were run on the baseline (LEAD_TIME_PLAN §3.1): how many. */
+  checkedFiles?: number;
 }
 
 /**
@@ -77,6 +80,12 @@ export class BaselineChecks {
     // Nothing to compare: the failing tests could not be named, so no baseline run can prove them old.
     if (input.overflow || !input.failures.length) return { classification: 'unknown', baselineCommit, reason: input.overflow ? 'too many failing tests to compare' : 'the failing tests could not be identified in the output' };
     const key: BaselineCheckKey = { repositoryId: input.repo.id, baselineCommit, commandId: input.command.id, commandSha: BaselineChecks.commandSha(input.command.command) };
+    // Only the failing test files first (LEAD_TIME_PLAN §3.1), unless the whole suite's answer is already known.
+    const known = this.d.store.getBaselineCheck(key);
+    if (!known || known.status === 'error') {
+      const targeted = await this.targeted(input, key, signal);
+      if (targeted) return targeted;
+    }
     let result: BaselineCheckRecord;
     try {
       result = await this.result(key, input, signal);
@@ -86,6 +95,39 @@ export class BaselineChecks {
     const classification = classifyFailures(input, result);
     const reason = result.status === 'error' ? (result.summary ?? 'the baseline could not be checked') : null;
     return { classification, baselineCommit, reason };
+  }
+
+  /**
+   * Run only the failing test files on the baseline. It answers only when every
+   * failure reproduces there (pre-existing); otherwise null, and the full run
+   * decides. Its result is kept under the narrowed command's own sha, so it can
+   * never stand in for a full run.
+   */
+  private async targeted(input: Parameters<BaselineChecks['classify']>[0], key: BaselineCheckKey, signal: { stopped: () => boolean }): Promise<Classification | null> {
+    const files = testFilesOf(input.failures);
+    if (!files.length || files.length > MAX_TARGETED_FILES || signal.stopped()) return null;
+    try {
+      const repoPath = input.repo.path;
+      // The command and the files as they are at the baseline commit, not in the task's changed copy.
+      const present = await git(repoPath, ['ls-tree', '-r', '--name-only', key.baselineCommit, '--', ...files]);
+      if (present.code !== 0) return null;
+      const atBaseline = new Set(present.stdout.split('\n').filter(Boolean));
+      if (!files.every((f) => atBaseline.has(f))) return null;
+      const pkg = await git(repoPath, ['show', `${key.baselineCommit}:package.json`]);
+      let scripts: Record<string, string> | null = null;
+      if (pkg.code === 0) {
+        const parsed = JSON.parse(pkg.stdout) as { scripts?: unknown };
+        if (parsed.scripts && typeof parsed.scripts === 'object') scripts = parsed.scripts as Record<string, string>;
+      }
+      const narrowed = targetedCommand(input.command.command, scripts, files);
+      if (!narrowed) return null;
+      const command = { ...input.command, command: narrowed.commandLine };
+      const record = await this.result({ ...key, commandSha: BaselineChecks.commandSha(narrowed.commandLine) }, { ...input, command }, signal);
+      if (classifyFailures(input, record) !== 'preexisting') return null;
+      return { classification: 'preexisting', baselineCommit: key.baselineCommit, reason: null, checkedFiles: files.length };
+    } catch {
+      return null;
+    }
   }
 
   private async result(key: BaselineCheckKey, input: Parameters<BaselineChecks['classify']>[0], signal: { stopped: () => boolean }): Promise<BaselineCheckRecord> {

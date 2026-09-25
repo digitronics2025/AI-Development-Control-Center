@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectNoHorizontalOverflow, trackConsoleErrors } from './helpers';
+import { expectNoHorizontalOverflow, setTheme, trackConsoleErrors } from './helpers';
 
 /**
  * Installable app and long-lived phone sessions (docs/systems/dashboard.md
@@ -25,7 +25,16 @@ test.describe('Installable app', () => {
     await page.goto('/');
     // Load-bearing: the cloud serves the manifest behind Access, which needs the cookie.
     await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('crossorigin', 'use-credentials');
-    await expect(page.locator('meta[name="theme-color"]')).toHaveCount(2);
+    // The status bar follows the app's own theme (dark by default), not the OS setting.
+    const themeColor = page.locator('meta[name="theme-color"]');
+    await expect(themeColor).toHaveCount(1);
+    await expect(themeColor).toHaveAttribute('content', '#090b0f');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(themeColor).toHaveAttribute('content', '#090b0f');
+    await setTheme(page, 'light');
+    await expect(themeColor).toHaveAttribute('content', '#f5f7fa');
+    await setTheme(page, 'dark');
+    await expect(themeColor).toHaveAttribute('content', '#090b0f');
   });
 });
 

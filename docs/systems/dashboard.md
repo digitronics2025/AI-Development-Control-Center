@@ -135,6 +135,11 @@ manifest. Plan: [MOBILE_PWA_PLAN.md](../../MOBILE_PWA_PLAN.md).
     [render-app-icons.mjs](../../apps/dashboard/scripts/render-app-icons.mjs)
     (Playwright's Chromium). Re-run it and commit the PNGs whenever the logo
     changes.
+- **Status-bar colour.** One `theme-color` meta, set by
+  [theme.ts](../../apps/dashboard/src/app/theme.ts) to the canvas colour of the
+  theme the app actually shows. It isn't keyed to the phone's light/dark
+  setting, which put a white status bar over the dark app on a light-mode
+  phone.
 - **No service worker, no Cache Storage, on purpose.** The cloud already
   answers offline reads from D1/R2. A cached `index.html` would hold the local
   token, and a cached bundle would outlive releases. Current Chrome installs a

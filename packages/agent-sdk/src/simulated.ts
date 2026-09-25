@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { appendFile, readdir } from 'node:fs/promises';
+import { appendFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentCapabilities, ModelDescriptor, SkillInfo } from '@acc/shared';
 import { scanSkillDirectory } from './skills.js';
@@ -39,6 +39,9 @@ import type {
  *   [sim:learning-skill]     the learning review proposes a written skill
  *   [sim:learning-unsafe]    the learning review proposes a lesson the safety scan must reject
  *   [sim:learning-uncited]   the learning review cites a signal that does not exist
+ *   [sim:big-diff]           the implementer also writes three 60 KB files, more diff than a prompt shows
+ *   [sim:review-miss-coverage]      reviewer and verifier never name the files the diff did not show
+ *   [sim:review-miss-coverage-once] ...only on their first run
  *
  * Usage: every finished or crashed run reports deterministic token counts
  * derived from the prompt and output sizes. The simulated `claude` also
@@ -275,6 +278,13 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             await appendFile(path.join(input.cwd, rel), `- ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
           }
+          if (has('big-diff') && role === 'implementer') {
+            for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {
+              const name = folders.length ? `${folders[0]}/${file}` : file;
+              await writeFile(path.join(input.cwd, name), Array.from({ length: 1500 }, (_, i) => `export const line${i} = '${'x'.repeat(28)}';`).join('\n') + '\n', 'utf8');
+              files.push(name);
+            }
+          }
           base.filesChanged = files;
           output = `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
           break;
@@ -357,6 +367,11 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         }
         default:
           output = `Simulated ${role} output.`;
+      }
+      if ((role === 'reviewer' || role === 'verifier') && !has('review-miss-coverage') && !(has('review-miss-coverage-once') && this.once(`${taskId}:${role}:coverage`))) {
+        // A diligent reviewer names every file the diff did not show (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A).
+        const notShown = [...input.prompt.matchAll(/^- (.+?) \([^\n]*\) → read: /gm)].map((m) => m[1]!);
+        if (notShown.length) output = output.replace(/\n(VERDICT: \w+)\s*$/, `\n## Files reviewed\n\n${[...new Set(notShown)].map((p) => `- ${p}: read from disk`).join('\n')}\n\n$1`);
       }
       for (const line of output.split('\n')) if (line.trim()) emit(line);
       return { ...base, usage: this.usage(input, output, sessionId), capacity: this.capacity(), status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null };

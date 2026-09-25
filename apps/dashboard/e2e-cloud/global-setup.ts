@@ -53,7 +53,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   return async () => {
     try {
-      await local('POST', '/api/service/shutdown');
+      await local('POST', '/api/service/shutdown', { mode: 'force' });
     } catch {
       /* already stopped */
     }

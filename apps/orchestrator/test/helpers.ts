@@ -131,11 +131,22 @@ export async function repoWithSkill(name = 'file-census', description = 'Count t
   return repo;
 }
 
-export async function addRepo(t: TestApp, repoPath: string): Promise<string> {
+export async function addRepo(t: TestApp, repoPath: string, settings?: Record<string, unknown>): Promise<string> {
   const res = await t.api('POST', '/api/repositories', { path: repoPath });
   if (res.status !== 201) throw new Error(`add repo failed: ${JSON.stringify(res.body)}`);
+  if (settings) {
+    const patched = await t.api('PATCH', `/api/repositories/${res.body.id}`, settings);
+    if (patched.status !== 200) throw new Error(`repo settings failed: ${JSON.stringify(patched.body)}`);
+  }
   return res.body.id;
 }
+
+/**
+ * The settings every repository had before AUTOPILOT_GATES_PLAN: tasks work in
+ * the operator's folder on a task branch. For tests of that mode, which new
+ * repositories no longer get by default.
+ */
+export const IN_PLACE = { gitMode: 'task-branch' } as const;
 
 export async function createTask(t: TestApp, repositoryId: string, description: string, extra: Record<string, unknown> = {}) {
   const res = await t.api('POST', '/api/tasks', { description, repositoryId, workflowId: 'normal-development', mode: 'autopilot', ...extra });

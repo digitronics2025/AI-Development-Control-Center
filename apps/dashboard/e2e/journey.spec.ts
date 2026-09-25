@@ -138,6 +138,9 @@ test('registers a local repository and detects its commands', async ({ page }) =
   // How the App check stage starts the app and where it answers.
   await page.getByLabel('Start command').fill(`node server.mjs ${appPort}`);
   await page.getByLabel('Address').fill(`http://127.0.0.1:${appPort}`);
+  // New repositories isolate tasks in worktrees; this journey follows a task on a branch in the folder itself.
+  await expect(page.getByRole('radio', { name: 'Isolated worktree' })).toBeChecked();
+  await page.getByRole('radio', { name: 'Task branch' }).click();
   await page.getByRole('button', { name: 'Save Changes' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Repository settings saved' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save Changes' })).toBeDisabled();

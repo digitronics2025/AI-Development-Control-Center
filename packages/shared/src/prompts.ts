@@ -26,6 +26,7 @@ export const PROMPT_PLACEHOLDERS = {
   verification_report: 'The latest app check (browser or HTTP) the orchestrator ran',
   changed_files: 'Files changed since the task baseline, each marked task change or pre-existing user work',
   diff: 'The diff against the task baseline (150 KB at most), redacted',
+  diff_coverage: 'How many changed files the diff shows in full, and each one it does not, with how to read it',
   verification_commands: 'The lint, typecheck, test and build commands the orchestrator runs after a change',
   preexisting_changes: 'Files with uncommitted user work when the task started, or none',
   previous_attempt: 'How the previous run of this stage ended, with its last output lines',

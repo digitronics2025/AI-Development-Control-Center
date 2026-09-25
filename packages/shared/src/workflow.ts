@@ -57,6 +57,10 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
         issues.push({ stageIndex: index, field, message: 'A stage cannot transition to itself' });
       }
     }
+    for (const required of stage.requires ?? []) {
+      if (!keys.has(required)) issues.push({ stageIndex: index, field: 'requires', message: `"${required}" is not a stage in this workflow` });
+      else if (required === stage.key) issues.push({ stageIndex: index, field: 'requires', message: 'A stage cannot require itself' });
+    }
     if (stage.kind === 'agent' && stage.commandKinds?.length) {
       issues.push({ stageIndex: index, field: 'commandKinds', message: 'Agent stages do not run repository commands' });
     }

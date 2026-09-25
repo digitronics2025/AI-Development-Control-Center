@@ -92,4 +92,6 @@ stages:
     commandKinds: [smoke]
     permissionLevel: 2
     optional: true
+    # Nothing to smoke-test when nothing was deployed.
+    requires: [staging]
     next: complete

@@ -1192,4 +1192,34 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_tool_executions_session ON tool_executions(session_id) WHERE session_id IS NOT NULL;
     `,
   },
+  {
+    // Gates that tell the truth (docs/plans/AUTOPILOT_GATES_PLAN.md): failing
+    // test ids and their classification against the baseline, the tree a
+    // check ran on (for reuse), and one shared baseline result per
+    // repository, commit and command. Existing rows keep NULL, which reads as
+    // before. Additive only.
+    version: 16,
+    name: 'autopilot gates',
+    sql: `
+      ALTER TABLE test_runs ADD COLUMN failures TEXT;
+      ALTER TABLE test_runs ADD COLUMN classification TEXT;
+      ALTER TABLE test_runs ADD COLUMN tree_id TEXT;
+      ALTER TABLE test_runs ADD COLUMN reused_from TEXT;
+      CREATE INDEX idx_test_runs_tree ON test_runs(task_id, tree_id) WHERE tree_id IS NOT NULL;
+      CREATE TABLE baseline_checks (
+        id TEXT PRIMARY KEY,
+        repository_id TEXT NOT NULL,
+        baseline_commit TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        command_sha TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary TEXT,
+        failures TEXT,
+        duration_ms INTEGER,
+        created_at TEXT NOT NULL,
+        UNIQUE (repository_id, baseline_commit, command_id, command_sha)
+      );
+      ALTER TABLE repositories ADD COLUMN preexisting_failures TEXT NOT NULL DEFAULT 'allow';
+    `,
+  },
 ];

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { changesSince, diffSince, status as gitStatus, type GitSnapshot } from '@acc/git';
+import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
@@ -19,6 +19,7 @@ import { agentWorkdir, taskRepositories, type TaskRepository } from './task-repo
 import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
+const UNKNOWN_COVERAGE = 'Diff coverage unknown — read every changed file listed above before your verdict, and name each under `## Files reviewed`.';
 const MAX_DIFF_CHARS = 150_000;
 const MAX_SECTION_CHARS = 60_000;
 const MAX_TEXT_ATTACHMENT = 50_000;
@@ -42,6 +43,22 @@ function clip(text: string, max = MAX_SECTION_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}\n\n[truncated ${text.length - max} characters]` : text;
 }
 
+/** The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff. */
+function coverageOf(packed: ReturnType<typeof packDiff>, files: PackFile[], hint: (file: PackFile | undefined, omitted: OmittedFile) => string): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const total = new Set([...files.map((f) => f.path), ...packed.shown, ...packed.omitted.map((o) => o.path)]).size;
+  if (!packed.omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
+  const lines = [
+    `Diff shows ${total - packed.omitted.length} of ${total} changed files in full.`,
+    '',
+    'Not shown — read each from disk before your verdict and name it under `## Files reviewed`:',
+    ...packed.omitted.map((o) => `- ${o.path} (${diffLineStats(o)}, ${o.reason}) → read: ${hint(byPath.get(o.path), o)}`),
+  ];
+  // Written after packing, so this note is never clipped away with the diff.
+  const trailer = `\n[${packed.omitted.length} changed file${packed.omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
+  return { diff: packed.text + trailer, coverage: lines.join('\n'), required: packed.omitted.map((o) => o.path) };
+}
+
 /** Fill `{{name}}` placeholders; an unknown or empty one renders as "(none)" so a prompt never fails for want of a value. */
 export function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(new RegExp(PLACEHOLDER_PATTERN), (_m, name: string) => {
@@ -53,6 +70,42 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 export interface BuiltPrompt {
   prompt: string;
   templateVersion: number;
+  /** What a verdict stage must account for (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A). */
+  coverage: PromptCoverage;
+}
+
+/**
+ * Changed files a reviewer did not see in the diff. `required` lists the paths
+ * a PASS must name; when packing failed it is every changed file.
+ */
+export interface PromptCoverage {
+  required: string[];
+  /** Every changed path, to tell whether a basename is unique. */
+  all: string[];
+}
+
+interface CollectedDiff {
+  diff: string;
+  changedFiles: string;
+  coverage: string;
+  required: string[];
+  all: string[];
+}
+
+/** One repository's part of a task's diff, before packing. */
+interface DiffSource {
+  workdir: string;
+  snapshot: GitSnapshot;
+  folder: string | null;
+}
+
+/** How a reviewer reads a file the diff does not show, from the task's working directory. */
+function readHint(file: PackFile | undefined, omitted: OmittedFile, source: { folder: string | null; base: string | null } | undefined, staged: boolean): string {
+  if (staged) return `git diff --cached -- ${omitted.path}`;
+  if (!source || file?.status === 'untracked') return 'the file itself (new, untracked)';
+  const rel = source.folder ? omitted.path.slice(source.folder.length + 1) : omitted.path;
+  const base = source.base ? source.base.slice(0, 12) : 'HEAD';
+  return `${source.folder ? `git -C ${source.folder} ` : 'git '}diff ${base} -- ${rel}`;
 }
 
 /**
@@ -111,7 +164,7 @@ export class ContextBuilder {
    * repository its folder, facts, Git status and diff — the diffs sharing one
    * size bound, paths written from the workspace root.
    */
-  private async workspaceFacts(task: TaskRecord, units: TaskRepository[], needsDiff: boolean): Promise<{ facts: string; gitStatus: string; diff: string; changedFiles: string; commands: string }> {
+  private async workspaceFacts(task: TaskRecord, units: TaskRepository[]): Promise<{ facts: string; gitStatus: string; sources: DiffSource[]; commands: string }> {
     const verifyKinds = new Set(DEFAULT_VERIFY_COMMAND_KINDS);
     const facts: string[] = [
       'This task works in several repositories at once. Your working directory is the task workspace; each repository is a folder in it, checked out on its own task branch:',
@@ -122,10 +175,8 @@ export class ContextBuilder {
       '',
     ];
     const status: string[] = [];
-    const diffs: string[] = [];
-    const changed: string[] = [];
+    const sources: DiffSource[] = [];
     const commands: string[] = [];
-    let budget = MAX_DIFF_CHARS;
     for (const u of units) {
       const cmds = u.repo.commands.filter((c) => c.enabled).map((c) => `- ${c.name} (${c.kind}): \`${c.command}\``);
       facts.push(
@@ -145,21 +196,55 @@ export class ContextBuilder {
         status.push(`${u.folder}/: not available`);
       }
       const baseline = u.git.baselineSnapshotId ? this.store.getSnapshot(u.git.baselineSnapshotId) : null;
-      if (!needsDiff || !baseline) continue;
+      if (baseline) sources.push({ workdir: u.workdir, snapshot: { branch: baseline.branch, head: baseline.head, files: baseline.files }, folder: u.folder });
+    }
+    return { facts: facts.join('\n').trimEnd(), gitStatus: status.join('\n'), sources, commands: commands.join('\n') };
+  }
+
+  /**
+   * The task's diff, packed by priority into one budget shared by every
+   * repository (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A), with the changed-files
+   * list and the coverage block naming every file the diff does not show.
+   * Packing never fails silently: when it cannot run, coverage is unknown and
+   * every changed file must be read.
+   */
+  private async collectDiff(sources: DiffSource[]): Promise<CollectedDiff> {
+    const files: Array<PackFile & { origin: string }> = [];
+    const raws: string[] = [];
+    const bases = new Map<string, { folder: string | null; base: string | null }>();
+    let failed = false;
+    for (const src of sources) {
+      const prefix = (p: string) => (src.folder ? `${src.folder}/${p}` : p);
       try {
-        const snapshot: GitSnapshot = { branch: baseline.branch, head: baseline.head, files: baseline.files };
-        const files = await changesSince(u.workdir, snapshot);
-        changed.push(...files.map((f) => `- ${u.folder}/${f.path} (${f.status}, task change)`));
-        if (budget > 0) {
-          const { diff: raw, truncated } = await diffSince(u.workdir, snapshot, { maxBytes: budget, prefix: u.folder });
-          budget -= raw.length;
-          if (raw) diffs.push(redact(raw) + (truncated ? '\n[diff truncated]' : ''));
+        const changed = await changesSince(src.workdir, src.snapshot);
+        for (const f of changed) {
+          files.push({ path: prefix(f.path), additions: f.additions, deletions: f.deletions, status: f.status, origin: f.origin });
+          bases.set(prefix(f.path), { folder: src.folder, base: src.snapshot.head });
         }
+        const { diff: raw, truncated } = await diffSince(src.workdir, src.snapshot, { maxBytes: MAX_DIFF_CHARS * 4, prefix: src.folder });
+        const complete = withoutPartialTail(redact(raw), truncated);
+        // Each repository's diff ends on a newline, or the next one's first header would not start a line.
+        raws.push(complete && !complete.endsWith('\n') ? `${complete}\n` : complete);
       } catch {
-        diffs.push(`(${u.folder}/: diff unavailable)`);
+        failed = true;
+        raws.push(`(${src.folder ? `${src.folder}/: ` : ''}diff unavailable)\n`);
       }
     }
-    return { facts: facts.join('\n').trimEnd(), gitStatus: status.join('\n'), diff: diffs.join('\n'), changedFiles: changed.join('\n'), commands: commands.join('\n') };
+    const changedFiles = files
+      .map((f) => `- ${f.path} (${f.status}, ${diffLineStats(f)}, ${f.origin === 'task' ? 'task change' : f.origin === 'both' ? 'task change on top of pre-existing user work' : 'pre-existing user work'})`)
+      .join('\n');
+    const all = files.map((f) => f.path);
+    if (failed) return { diff: clip(raws.join(''), MAX_DIFF_CHARS), changedFiles, coverage: UNKNOWN_COVERAGE, required: all, all };
+    try {
+      const packed = packDiff(raws.join(''), files, MAX_DIFF_CHARS);
+      // Pre-existing user work the task never touched is context, not part of the change under review.
+      const untouched = new Set(files.filter((f) => f.origin === 'preexisting').map((f) => f.path));
+      packed.omitted = packed.omitted.filter((o) => !untouched.has(o.path));
+      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false)), changedFiles, all };
+    } catch {
+      // Packing itself failed: fall back to the bounded raw diff and require every file (§5).
+      return { diff: clip(raws.join(''), MAX_DIFF_CHARS), changedFiles, coverage: UNKNOWN_COVERAGE, required: all, all };
+    }
   }
 
   private testResults(task: TaskRecord): string {
@@ -167,8 +252,15 @@ export class ContextBuilder {
     if (!runs.length) return '';
     const lastStage = runs.at(-1)!.stageId;
     const latest = runs.filter((r) => r.stageId === lastStage);
-    const lines = latest.map((r) => `- ${r.name}: ${r.status}${r.exitCode !== null ? ` (exit ${r.exitCode})` : ''}${r.summary ? ` — ${r.summary}` : ''}`);
-    const failed = latest.find((r) => r.status === 'failed' && r.executionId);
+    const line = (r: (typeof runs)[number]) => `- ${r.name}: ${r.status}${r.exitCode !== null ? ` (exit ${r.exitCode})` : ''}${r.summary ? ` — ${r.summary}` : ''}`;
+    const old = latest.filter((r) => r.status === 'failed' && r.classification === 'preexisting');
+    const lines = latest.filter((r) => !old.includes(r)).map(line);
+    if (old.length) {
+      // Failures the baseline commit already had (AUTOPILOT_GATES_PLAN §3.B): context, not work for this task.
+      lines.push('', '### Already failing before this task — do not fix unless asked', '');
+      for (const r of old) lines.push(line(r), ...(r.failures ?? []).slice(0, 20).map((f) => `  - ${f}`), ...((r.failures?.length ?? 0) > 20 ? [`  - … and ${r.failures!.length - 20} more`] : []));
+    }
+    const failed = latest.find((r) => r.status === 'failed' && r.classification !== 'preexisting' && r.executionId);
     if (failed?.executionId) {
       const tail = this.store.tailLogLines(failed.executionId, 80).map((l) => l.text);
       lines.push('', `Output of ${failed.name} (last ${tail.length} lines):`, '```', ...tail, '```');
@@ -242,33 +334,29 @@ export class ContextBuilder {
     const snapshot: GitSnapshot | null = baseline ? { branch: baseline.branch, head: baseline.head, files: baseline.files } : null;
     const workdir = taskWorkdir(task, repo);
     const units = taskRepositories(this.store, task);
-    const workspace = units.length > 1 ? await this.workspaceFacts(task, units, true) : null;
+    const workspace = units.length > 1 ? await this.workspaceFacts(task, units) : null;
 
     // Every role gets the diff: the investigator and planner are read-only,
     // but a root-cause return or a re-plan is judged on the work so far.
-    let diff = '';
-    let changedFiles = '';
+    let collected: CollectedDiff = { diff: '', changedFiles: '', coverage: '', required: [], all: [] };
     if (workspace) {
-      diff = workspace.diff;
-      changedFiles = workspace.changedFiles;
+      collected = await this.collectDiff(workspace.sources);
     } else if (snapshot) {
-      try {
-        const { diff: raw, truncated } = await diffSince(workdir, snapshot, { maxBytes: MAX_DIFF_CHARS });
-        diff = redact(raw) + (truncated ? '\n[diff truncated]' : '');
-        const files = await changesSince(workdir, snapshot);
-        changedFiles = files.map((f) => `- ${f.path} (${f.status}, ${f.origin === 'task' ? 'task change' : f.origin === 'both' ? 'task change on top of pre-existing user work' : 'pre-existing user work'})`).join('\n');
-      } catch {
-        diff = '(diff unavailable)';
-      }
+      collected = await this.collectDiff([{ workdir, snapshot, folder: null }]);
     } else {
       // A Staged Review task has no baseline: it reviews the staged diff
       // Source Control saved (already redacted and bounded) when it started.
-      const staged = await this.artifacts.latestText(task.id, 'staged-diff', MAX_DIFF_CHARS);
+      const staged = await this.artifacts.latestText(task.id, 'staged-diff', MAX_DIFF_CHARS * 4);
       if (staged) {
-        diff = staged;
-        changedFiles = [...new Set([...staged.matchAll(/^diff --git a\/.+? b\/(.+)$/gm)].map((m) => m[1]!))].map((f) => `- ${f} (staged)`).join('\n');
+        const files: PackFile[] = [...new Set([...staged.matchAll(/^diff --git a\/.+? b\/(.+)$/gm)].map((m) => m[1]!))].map((path) => ({ path, additions: null, deletions: null, status: 'staged' }));
+        collected = {
+          ...coverageOf(packDiff(staged, files, MAX_DIFF_CHARS), files, (f, o) => readHint(f, o, undefined, true)),
+          changedFiles: files.map((f) => `- ${f.path} (staged)`).join('\n'),
+          all: files.map((f) => f.path),
+        };
       }
     }
+    const { diff, changedFiles } = collected;
 
     let gitStatusText: string;
     try {
@@ -296,7 +384,9 @@ export class ContextBuilder {
       review: await this.latest(task.id, 'review'),
       test_results: this.testResults(task),
       verification_report: await this.latest(task.id, 'browser-report'),
-      diff: clip(diff, MAX_DIFF_CHARS),
+      // The packer owns the diff's budget; clipping it here would cut away its own note (§3.A).
+      diff,
+      diff_coverage: collected.coverage,
       changed_files: changedFiles,
       directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
@@ -322,6 +412,12 @@ export class ContextBuilder {
       /* advice is optional: a prompt never fails for want of it */
     }
     const tools = await this.toolSections(task, def, repo).catch(() => '');
-    return { prompt: header + renderTemplate(template.body, vars) + supervisor + lessons + tools, templateVersion: template.version };
+    // A user-edited template without {{diff_coverage}} still tells the agent what the diff leaves out.
+    const coverage = collected.required.length && !/\{\{\s*diff_coverage\s*\}\}/.test(template.body) ? `\n\n## Diff coverage\n\n${collected.coverage}\n` : '';
+    return {
+      prompt: header + renderTemplate(template.body, vars) + coverage + supervisor + lessons + tools,
+      templateVersion: template.version,
+      coverage: { required: collected.required, all: collected.all },
+    };
   }
 }

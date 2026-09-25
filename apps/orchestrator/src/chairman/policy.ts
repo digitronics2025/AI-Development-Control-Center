@@ -16,6 +16,8 @@ export type RecoveryTrigger =
   | 'plan_mismatch'
   | 'no_fail_route'
   | 'worker_failure'
+  | 'check_failed'
+  | 'review_incomplete'
   | 'provider_blocked'
   | 'completion_gate';
 
@@ -27,6 +29,8 @@ export const TRIGGER_LABEL: Record<RecoveryTrigger, string> = {
   plan_mismatch: 'the work does not match the request',
   no_fail_route: 'the stage failed and the workflow has no repair route',
   worker_failure: 'the agent kept failing to run',
+  check_failed: 'the check command failed',
+  review_incomplete: 'the review left changed files unread',
   provider_blocked: 'the agent is unavailable',
   completion_gate: 'completion checks are not satisfied',
 };
@@ -89,6 +93,12 @@ export interface CandidateContext {
   /** Checkpoint taken before the change that made things worse, if one exists. */
   rollbackCheckpointId: string | null;
   /**
+   * Retrying the failing stage would change nothing: a command stage whose
+   * files and commands are the same as when it failed (§3.E). No retry_stage
+   * candidate is offered then.
+   */
+  retryIsNoop?: boolean;
+  /**
    * provider_blocked only: the whole agent is out (credits, usage window, sign-in),
    * not one model, so every stage of the task still on it would stop in turn.
    */
@@ -112,6 +122,9 @@ const ORDER: Record<RecoveryTrigger, StrategyKind[]> = {
   verify_repeat: ['rca', 'replan', 'change_agent'],
   plan_mismatch: ['replan', 'rca'],
   worker_failure: ['change_agent', 'retry_stage'],
+  // A required command stage: run it again (unless nothing changed since it failed), else look for the cause.
+  check_failed: ['retry_stage', 'rca', 'replan'],
+  review_incomplete: ['retry_stage', 'change_agent'],
   provider_blocked: ['change_agent'],
   completion_gate: [],
 };
@@ -151,7 +164,7 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         break;
       }
       case 'change_agent': {
-        const stage = ctx.trigger === 'worker_failure' || ctx.trigger === 'provider_blocked' ? failing : repair;
+        const stage = ctx.trigger === 'worker_failure' || ctx.trigger === 'provider_blocked' || ctx.trigger === 'review_incomplete' ? failing : repair;
         if (!stage || stage.kind !== 'agent') break;
         const current = ctx.assignments[stage.key];
         const alternative = ctx.availableAgents.find((a) => a !== current && !(ctx.triedAgents?.[stage.key] ?? []).includes(a));
@@ -189,7 +202,7 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         break;
       }
       case 'retry_stage': {
-        if (!failing) break;
+        if (!failing || ctx.retryIsNoop) break;
         add('retry_stage', 1, failing.key, ctx.assignments[failing.key] ?? '', `Retry ${failing.name}`, 'The failure looks transient; run the stage once more.', [
           { type: 'RETRY_STAGE', params: { stageKey: failing.key } },
         ]);

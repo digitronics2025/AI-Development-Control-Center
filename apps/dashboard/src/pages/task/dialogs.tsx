@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Button, Checkbox, ConfirmDialog, Dialog, Field, Input, Select, SlashTextarea, useFeedback } from '@acc/ui';
-import { ROLE_LABEL, type PartialAssignment, type TaskDetail } from '@acc/shared';
+import { COMMAND_KIND_LABEL, ROLE_LABEL, type CommandKind, type PartialAssignment, type TaskDetail } from '@acc/shared';
 import { errorMessage } from '../../api/client';
-import { useTaskCommand } from '../../api/hooks';
+import { useTaskCommand, useTaskDirectives, useTaskTests } from '../../api/hooks';
 import { useConnection } from '../../app/runtime';
 import { AssignmentPicker } from '../../components/assignment-picker';
 import { RequestedSkills, useSkillPicker } from '../../components/skill-picker';
@@ -12,8 +12,21 @@ import { useAgentNames } from '../../components/agents';
  * Add a directive (PLAN §20): persisted immediately, applied at the next safe
  * execution boundary — never injected into a running prompt.
  */
+/**
+ * Check kinds that failed in this task and are not waived yet: the only ones
+ * the "Don't gate this task on" row offers (AUTOPILOT_GATES_PLAN §3.C).
+ */
+function useWaivableKinds(taskId: string): CommandKind[] {
+  const tests = useTaskTests(taskId);
+  const directives = useTaskDirectives(taskId);
+  const waived = new Set((directives.data ?? []).flatMap((d) => (d.state === 'active' && d.rule?.type === 'waive_check' ? d.rule.kinds : [])));
+  return [...new Set((tests.data ?? []).filter((r) => r.status === 'failed' && r.kind !== 'other').map((r) => r.kind))].filter((k) => !waived.has(k));
+}
+
 export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; onDone?: () => void; autoFocus?: boolean }) {
   const [text, setText] = useState('');
+  const waivable = useWaivableKinds(task.id);
+  const [waive, setWaive] = useState<CommandKind[]>([]);
   const skillPicker = useSkillPicker(task.repositoryId, text);
   const [pause, setPause] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,16 +41,20 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!text.trim()) {
+        const kinds = waive.filter((k) => waivable.includes(k));
+        // The checkboxes carry the rule; the text stays free, and says what was decided when left empty.
+        const body = text.trim() || (kinds.length ? `Don't gate this task on ${kinds.map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ')}.` : '');
+        if (!body) {
           setError('Write the instruction the next stage must follow.');
           return;
         }
         command.mutate(
-          { command: 'directives', body: { text: text.trim(), pause } },
+          { command: 'directives', body: { text: body, pause, ...(kinds.length ? { rule: { type: 'waive_check', kinds } } : {}) } },
           {
             onSuccess: () => {
-              toast(answering ? 'Answer recorded; the task continues' : pause ? 'Directive queued; pausing the task' : 'Directive queued for the next stage');
+              toast(kinds.length ? `No longer gating this task on ${kinds.map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ')}` : answering ? 'Answer recorded; the task continues' : pause ? 'Directive queued; pausing the task' : 'Directive queued for the next stage');
               setText('');
+              setWaive([]);
               setPause(false);
               setError(null);
               onDone?.();
@@ -73,6 +90,22 @@ export function DirectiveForm({ task, onDone, autoFocus }: { task: TaskDetail; o
           {...skillPicker.textareaProps}
         />
       </Field>
+      {waivable.length ? (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-body font-semibold text-fg">Don't gate this task on</legend>
+          <p className="text-small text-fg-secondary">Checks that failed in this task. A ticked check stops blocking this task only; other tasks in this repository still run it. The report says you waived it.</p>
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            {waivable.map((kind) => (
+              <Checkbox
+                key={kind}
+                checked={waive.includes(kind)}
+                onCheckedChange={(on) => setWaive((current) => (on ? [...current, kind] : current.filter((k) => k !== kind)))}
+                label={COMMAND_KIND_LABEL[kind]}
+              />
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
       {running ? (
         <Checkbox checked={pause} onCheckedChange={setPause} label="Pause the current stage now" description="Stops the running stage; it runs again with this directive when you resume." />
       ) : null}

@@ -14,7 +14,9 @@ export default async function globalTeardown(): Promise<void> {
   try {
     await fetch(`http://127.0.0.1:${port}/api/service/shutdown`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${readFileSync(tokenFile, 'utf8').trim()}` },
+      // The suite is over: stop now, even with simulated tasks still running.
+      headers: { authorization: `Bearer ${readFileSync(tokenFile, 'utf8').trim()}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'force' }),
       signal: AbortSignal.timeout(5_000),
     });
   } catch {

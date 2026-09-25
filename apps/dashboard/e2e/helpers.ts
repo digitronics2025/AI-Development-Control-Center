@@ -83,7 +83,7 @@ export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<voi
   await page.waitForFunction((t) => document.documentElement.dataset.theme === t && document.documentElement.dataset.themeSwitching === undefined, theme);
 }
 
-export async function api<T = unknown>(page: Page, method: 'GET' | 'POST' | 'PATCH', path: string, data?: unknown): Promise<T> {
+export async function api<T = unknown>(page: Page, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, data?: unknown): Promise<T> {
   const token = await localToken(page);
   const res = await page.request.fetch(path, { method, data, headers: { authorization: `Bearer ${token}` } });
   expect(res.ok(), `${method} ${path}: ${res.status()}`).toBe(true);

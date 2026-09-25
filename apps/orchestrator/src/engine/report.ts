@@ -18,6 +18,8 @@ export interface ReportInput {
   verification?: { type: string; satisfied: string[]; missing: string[] } | null;
   /** Tool calls, repairs, escalations and processes. */
   executionLines?: string[];
+  /** Checks the operator waived for this task, each with the directive that said so (AUTOPILOT_GATES_PLAN §3.C). */
+  waivers?: Array<{ kinds: string[]; text: string }>;
   /** Re-checks the operator attached from Private Browser (docs/systems/connected-apps.md): informational, never a pass. */
   browserRechecks?: string[];
   /** A task across repositories: each one with its folder and Git record, primary first. */
@@ -94,7 +96,9 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const lastWrite = [...stages].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
   const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id) : [];
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
-  const failed = latestRuns.filter((r) => r.status === 'failed').length;
+  // Failures that already existed on the baseline commit are reported, not counted against the task (§3.B).
+  const preexistingRuns = latestRuns.filter((r) => r.status === 'failed' && r.classification === 'preexisting');
+  const failed = latestRuns.filter((r) => r.status === 'failed' && r.classification !== 'preexisting').length;
   const notRun = latestRuns.filter((r) => r.status === 'not_run' || r.status === 'blocked').length;
   const build = latestRuns.find((r) => r.kind === 'build');
   const hasTestsStage = task.workflow.stages.some((s) => s.kind === 'tests');
@@ -104,6 +108,11 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (failed > 0) limitations.push(`${failed} verification command(s) failed in the last run.`);
   else if (lastTestStage?.status === 'FAILED') limitations.push('The last test stage failed.');
   if (lastTestStage?.status === 'SUCCESS' && latestRuns.length && passed === 0) limitations.push('No verification command passed in the last test run.');
+  for (const r of preexistingRuns) {
+    const n = r.failures?.length ?? 0;
+    limitations.push(`${n} pre-existing failure${n === 1 ? '' : 's'} in \`${r.command}\` ${n === 1 ? 'was' : 'were'} left as ${n === 1 ? 'it was' : 'they were'} (already failing on the baseline commit).`);
+  }
+  for (const w of input.waivers ?? []) limitations.push(`Not gated on ${w.kinds.join(', ')} for this task, by your directive: "${w.text.length > 160 ? `${w.text.slice(0, 159)}…` : w.text}".`);
   if (lastTestStage && lastWrite && lastWrite.createdAt > lastTestStage.createdAt) limitations.push('Tests have not run since the last change.');
   const lastVerifyStage = [...stages].reverse().find((s) => s.kind === 'verify' && s.status !== 'SKIPPED' && s.status !== 'CANCELLED');
   if (lastVerifyStage?.status === 'FAILED') limitations.push(`The last browser/HTTP verification failed: ${lastVerifyStage.errorMessage ?? 'see browser-verification.md'}`);

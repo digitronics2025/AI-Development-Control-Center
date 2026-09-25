@@ -8,7 +8,10 @@ import type { SourceControlSnapshot } from '@acc/shared';
 import { migrate, openDatabase, schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
 import { reconcileGitOperations } from '../src/source-control/reconcile.js';
-import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, IN_PLACE);
 
 let t: TestApp;
 let counter = 0;

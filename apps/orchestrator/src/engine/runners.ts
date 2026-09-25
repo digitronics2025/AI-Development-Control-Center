@@ -1,6 +1,6 @@
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
-import { changesSince, commitPaths } from '@acc/git';
+import { changesSince, commitPaths, workingTreeTree } from '@acc/git';
 import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
@@ -25,12 +25,13 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import type { ApprovalGate } from './approvals.js';
-import type { ContextBuilder } from './context.js';
+import type { BaselineChecks, Classification } from './baseline-checks.js';
+import type { ContextBuilder, PromptCoverage } from './context.js';
 import { LogSink } from './log-sink.js';
 import { extractOperatorBlockers } from './report.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
-import { testFailureSummary, testPassSummary } from './test-summary.js';
+import { FailureIdCollector, testFailureSummary, testPassSummary } from './test-summary.js';
 import type { EngineTooling } from './tooling.js';
 import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
@@ -43,6 +44,8 @@ export type StageOutcome =
   | { kind: 'skipped'; stageId: string; testsSkipped?: boolean }
   | { kind: 'verdict_fail'; stageId: string }
   | { kind: 'tests_failed'; stageId: string; message: string }
+  /** An optional stage failed: a report limitation, never a recovery (AUTOPILOT_GATES_PLAN §3.D). */
+  | { kind: 'optional_failed'; stageId: string; message: string }
   | { kind: 'error'; stageId: string; errorClass: ErrorClass; message: string }
   | { kind: 'blocked'; stageId: string }
   /** A work stage needs the operator's decision before the task can be done right. */
@@ -79,6 +82,19 @@ const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string; pr
   reviewer: { type: 'review', name: 'review.md', prompt: 'review-prompt.md' },
   verifier: { type: 'verification', name: 'verification.md', prompt: 'verification-prompt.md' },
 };
+
+/**
+ * Changed files a report fails to account for (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A):
+ * each required path must appear in full, or by its basename when no other
+ * changed file shares it.
+ */
+export function unreviewedFiles(output: string, coverage: PromptCoverage): string[] {
+  const text = output.replace(/\\/g, '/');
+  const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+  const counts = new Map<string, number>();
+  for (const p of new Set([...coverage.all, ...coverage.required])) counts.set(base(p), (counts.get(base(p)) ?? 0) + 1);
+  return coverage.required.filter((p) => !text.includes(p) && !(counts.get(base(p)) === 1 && text.includes(base(p))));
+}
 
 /** Last `VERDICT: PASS|FAIL` line in an agent's output. */
 export function parseVerdict(output: string): 'PASS' | 'FAIL' | null {
@@ -130,6 +146,16 @@ export function stageCommands(def: StageDefinition, repo: RepositoryRecord, extr
   return repo.commands.filter((c) => c.enabled && kinds.has(c.kind));
 }
 
+/**
+ * Check kinds the operator waived for this task (AUTOPILOT_GATES_PLAN §3.C):
+ * set only through the operator's own directive route, never by an agent or the Chairman.
+ */
+export function waivedKinds(store: Store, taskId: string): Set<CommandKind> {
+  const kinds = new Set<CommandKind>();
+  for (const d of store.listDirectives(taskId)) if (d.state === 'active' && d.rule?.type === 'waive_check') for (const k of d.rule.kinds) kinds.add(k);
+  return kinds;
+}
+
 /** Check kinds active directives require (e.g. "run E2E before finishing"). */
 export function requiredKinds(store: Store, taskId: string): CommandKind[] {
   const kinds = new Set<CommandKind>();
@@ -174,6 +200,7 @@ export interface RunnerDeps {
   approvals: ApprovalGate;
   baseEnv: NodeJS.ProcessEnv;
   tooling: EngineTooling;
+  baselines: BaselineChecks;
 }
 
 /** One run of a repository command, as the tests stage and its repairs see it. */
@@ -183,6 +210,10 @@ interface CommandRun {
   passed: boolean;
   summary: string | null;
   tail: string[];
+  /** Failing test ids read from the whole output (§3.B). */
+  failures: string[];
+  /** More tests failed than the collector keeps: the list is incomplete. */
+  overflow: boolean;
 }
 
 export class StageRunners {
@@ -231,9 +262,11 @@ export class StageRunners {
     if (applied.length) publisher.event(task.id, 'DIRECTIVE_APPLIED', `${applied.length} directive${applied.length > 1 ? 's' : ''} applied to ${def.name}`, { count: applied.length }, stage.id);
 
     let prompt: string;
+    let coverage: PromptCoverage;
     try {
       const built = await this.d.context.build(task, def, stage);
       prompt = built.prompt;
+      coverage = built.coverage;
       store.updateTask(task.id, { promptVersions: { ...task.promptVersions, [def.role]: built.templateVersion } });
     } catch (error) {
       return this.failStage(stage, 'CONTEXT_FAILURE', `Context could not be built: ${(error as Error).message}`);
@@ -241,6 +274,82 @@ export class StageRunners {
     // What the agent actually read, kept per stage so any run can be debugged from its prompt.
     await this.d.artifacts.write(task.id, { name: ROLE_ARTIFACT[def.role]?.prompt ?? `${def.key}-prompt.md`, type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key });
 
+    const first = await this.executeAgent(task, def, stage, repo, control, prompt, agentName);
+    if ('kind' in first) return first;
+    let { output } = first;
+    const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
+    await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
+
+    if (def.role !== 'reviewer' && def.role !== 'verifier') {
+      // Reviewers and verifiers list operator items without stopping (NEEDS OPERATOR); a work stage that cannot proceed stops the task.
+      const questions = extractOperatorBlockers(output);
+      if (questions.length) {
+        publisher.updateStage(stage.id, { status: 'PAUSED', summary: summarize(output), finishedAt: now() });
+        return { kind: 'needs_operator', stageId: stage.id, questions };
+      }
+    }
+
+    let verdict: 'PASS' | 'FAIL' | null = null;
+    if (def.verdict) {
+      verdict = parseVerdict(output);
+      if (!verdict) {
+        return this.failStage(stage, 'UNKNOWN', `${agentName} did not end its ${def.name.toLowerCase()} with "VERDICT: PASS" or "VERDICT: FAIL"`);
+      }
+      // A PASS counts only when it accounts for every changed file the diff did not show (§3.A).
+      // A FAIL is never second-guessed: it goes to the fix route as it is.
+      const missing = verdict === 'PASS' ? unreviewedFiles(output, coverage) : [];
+      if (missing.length) {
+        const names = missing.slice(0, 20).join(', ') + (missing.length > 20 ? `, and ${missing.length - 20} more` : '');
+        publisher.event(task.id, 'STAGE_RETRY', `${def.name} passed without accounting for ${missing.length} changed file${missing.length === 1 ? '' : 's'} the diff did not show (${names}); asking ${agentName} once more`, { missing }, stage.id);
+        const followUp = [
+          prompt,
+          '',
+          '## Coverage follow-up (from the orchestrator)',
+          '',
+          `Your previous report ended with VERDICT: PASS but did not account for these changed files, which the diff above does not show in full:`,
+          '',
+          ...missing.map((p) => `- ${p}`),
+          '',
+          'Read each of them from disk now (the Diff coverage section shows how). Then write your complete report again, with a `## Files reviewed` section naming every one of them and what you found, and end with the VERDICT line. If one of them changes your verdict, say so.',
+          '',
+          'Your previous report, for reference:',
+          '',
+          output.length > 20_000 ? `${output.slice(0, 20_000)}\n[previous report truncated]` : output,
+        ].join('\n');
+        const second = await this.executeAgent(task, def, stage, repo, control, followUp, agentName);
+        if ('kind' in second) return second;
+        output = second.output;
+        await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
+        verdict = parseVerdict(output);
+        if (!verdict) return this.failStage(stage, 'UNKNOWN', `${agentName} did not end its ${def.name.toLowerCase()} with "VERDICT: PASS" or "VERDICT: FAIL"`);
+        const still = verdict === 'PASS' ? unreviewedFiles(output, coverage) : [];
+        if (still.length) {
+          return this.failStage(stage, 'REVIEW_INCOMPLETE', `${def.name} gave PASS twice without reviewing ${still.length} changed file${still.length === 1 ? '' : 's'} the diff did not show: ${still.slice(0, 20).join(', ')}${still.length > 20 ? ', …' : ''}`);
+        }
+      }
+    } else if (def.role === 'reviewer' || def.role === 'verifier') {
+      // Advisory verdict: recorded for the report, but it does not route the
+      // workflow (a review-only workflow completes and says changes were requested).
+      verdict = parseVerdict(output);
+    }
+    publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary: summarize(output), finishedAt: now() });
+    if (verdict === 'FAIL') {
+      publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes`, { verdict }, stage.id);
+      if (def.verdict) return { kind: 'verdict_fail', stageId: stage.id };
+    }
+    if (verdict === 'PASS') publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed`, { verdict }, stage.id);
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs: first.durationMs }, stage.id);
+    return { kind: 'success', stageId: stage.id };
+  }
+
+  /**
+   * One run of the stage's agent with `prompt`, as its own execution with its
+   * own log. Returns the redacted output, or the outcome that ends the stage
+   * (stopped, failed, empty output).
+   */
+  private async executeAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, prompt: string, agentName: string): Promise<{ output: string; durationMs: number } | StageOutcome> {
+    const { store, publisher, agents } = this.d;
+    const agentId = stage.agentId!;
     const executionId = newId();
     const startedAt = now();
     const workdir = agentWorkdir(task, repo);
@@ -336,37 +445,7 @@ export class StageRunners {
     if (!output.trim()) {
       return this.failStage(stage, 'UNKNOWN', `${agentName} finished without producing any output`);
     }
-    const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
-    await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
-
-    if (def.role !== 'reviewer' && def.role !== 'verifier') {
-      // Reviewers and verifiers list operator items without stopping (NEEDS OPERATOR); a work stage that cannot proceed stops the task.
-      const questions = extractOperatorBlockers(output);
-      if (questions.length) {
-        publisher.updateStage(stage.id, { status: 'PAUSED', summary: summarize(output), finishedAt: now() });
-        return { kind: 'needs_operator', stageId: stage.id, questions };
-      }
-    }
-
-    let verdict: 'PASS' | 'FAIL' | null = null;
-    if (def.verdict) {
-      verdict = parseVerdict(output);
-      if (!verdict) {
-        return this.failStage(stage, 'UNKNOWN', `${agentName} did not end its ${def.name.toLowerCase()} with "VERDICT: PASS" or "VERDICT: FAIL"`);
-      }
-    } else if (def.role === 'reviewer' || def.role === 'verifier') {
-      // Advisory verdict: recorded for the report, but it does not route the
-      // workflow (a review-only workflow completes and says changes were requested).
-      verdict = parseVerdict(output);
-    }
-    publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary: summarize(output), finishedAt: now() });
-    if (verdict === 'FAIL') {
-      publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes`, { verdict }, stage.id);
-      if (def.verdict) return { kind: 'verdict_fail', stageId: stage.id };
-    }
-    if (verdict === 'PASS') publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed`, { verdict }, stage.id);
-    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs: result.durationMs }, stage.id);
-    return { kind: 'success', stageId: stage.id };
+    return { output, durationMs: result.durationMs };
   }
 
   // ---------------------------------------------------------------------------
@@ -376,15 +455,36 @@ export class StageRunners {
   async runCommands(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome> {
     const { store, publisher, approvals } = this.d;
     const extra = [...task.extraCheckKinds, ...requiredKinds(store, task.id)];
-    const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extra : [])]);
+    // The operator's per-task waivers (AUTOPILOT_GATES_PLAN §3.C) apply to the tests stage only; a waiver
+    // is the later operator decision, so it wins over a directive that requires the same kind.
+    const waived = def.kind === 'tests' ? waivedKinds(store, task.id) : new Set<CommandKind>();
+    const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extra : [])].filter((k) => !waived.has(k)));
     // Every repository runs its own commands in its own folder.
     const units = this.units(task, repo);
     const repoNames = units.map((u) => u.repo.name).join(', ');
-    const jobs = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
+    const configured = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
+    const jobs = configured.filter((j) => !waived.has(j.command.kind));
     const commands = jobs.map((j) => j.command);
     // One-shot requests are consumed by the stage that runs them.
     if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
+    const skippedByWaiver = [...new Set(configured.filter((j) => waived.has(j.command.kind)).map((j) => j.command.kind))];
+    if (skippedByWaiver.length) {
+      const conflict = skippedByWaiver.filter((k) => extra.includes(k));
+      publisher.event(
+        task.id,
+        'TEST_STARTED',
+        `${def.name}: not gating this task on ${skippedByWaiver.map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ')} (your directive)${conflict.length ? `; ${conflict.join(', ')} ${conflict.length === 1 ? 'was' : 'were'} also required, and your later waiver wins` : ''}`,
+        { waived: skippedByWaiver, conflict },
+        stage.id,
+      );
+    }
 
+    if (commands.length === 0 && configured.length > 0) {
+      // Everything configured was waived: the operator decided, so nothing asks again.
+      publisher.updateStage(stage.id, { status: 'SKIPPED', summary: 'Every configured check is waived for this task by your directive', finishedAt: now() });
+      publisher.event(task.id, 'STAGE_SKIPPED', `${def.name} skipped: every configured check is waived for this task`, {}, stage.id);
+      return { kind: 'skipped', stageId: stage.id, testsSkipped: true };
+    }
     if (commands.length === 0) {
       const wanted = [...kinds].map((k) => COMMAND_KIND_LABEL[k].toLowerCase()).join(', ');
       if (def.kind === 'command' && def.optional) {
@@ -452,13 +552,39 @@ export class StageRunners {
     const { env } = sanitizeEnv(this.d.baseEnv, this.d.settings.get().billingMode);
     const report: string[] = [];
     let failure: string | null = null;
+    let finished = 0;
+    const preexisting: string[] = [];
+    let reused = 0;
+    // The files each repository's commands run on (§3.E), read once and again only after a command changed them.
+    const trees = new Map<string, string | null>();
+    const treeOf = async (workdir: string, fresh = false): Promise<string | null> => {
+      if (!fresh && trees.has(workdir)) return trees.get(workdir)!;
+      const tree = await workingTreeTree(workdir).catch(() => null);
+      trees.set(workdir, tree);
+      return tree;
+    };
 
     for (let i = 0; i < jobs.length; i++) {
       const { command, unit, name } = jobs[i]!;
       const { workdir } = unit;
       const run = runs[i]!;
       if (control.stopReason) break;
-      this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now() }));
+      const treeId = await treeOf(workdir);
+
+      // The same command already passed on exactly these files in this task: that result stands (§3.E).
+      const earlier = treeId ? this.reusablePass(task.id, treeId, run) : null;
+      if (earlier) {
+        const at = earlier.finishedAt ? earlier.finishedAt.slice(11, 19) : 'earlier';
+        const earlierStage = earlier.stageId ? (store.getStage(earlier.stageId)?.name ?? 'an earlier stage') : 'an earlier stage';
+        const summary = `Reused: same files as ${earlierStage} at ${at}`;
+        this.publishTestRun(store.updateTestRun(run.id, { status: 'passed', exitCode: 0, durationMs: 0, summary, startedAt: now(), finishedAt: now(), treeId, reusedFrom: earlier.id }));
+        report.push(`✓ ${name.padEnd(16)} 0.0s   ${summary}`);
+        publisher.event(task.id, 'TEST_PASSED', `${name} passed (reused: nothing changed since ${earlierStage} at ${at})`, { reusedFrom: earlier.id }, stage.id);
+        finished++;
+        reused++;
+        continue;
+      }
+      this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now(), treeId }));
 
       // Run it; when it fails for a reason that is the environment's fault
       // (missing dependency, port held by this task, network hiccup, file
@@ -488,8 +614,22 @@ export class StageRunners {
         this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now(), durationMs: exec?.result.durationMs ?? null }));
         return { kind: 'stopped', stageId: stage.id, reason: control.stopReason ?? 'cancel' };
       }
+      // A command that changed the files (a formatter, a code generator) ran on a tree that no longer exists: not reusable.
+      const after = await treeOf(workdir, true);
       const repairedNote = repairs.length ? ` (after repair: ${repairs.join('; ')})` : '';
-      const summary = exec.passed && repairs.length ? `${exec.summary ?? 'Passed'}${repairedNote}` : exec.summary;
+      let summary = exec.passed && repairs.length ? `${exec.summary ?? 'Passed'}${repairedNote}` : exec.summary;
+      const failures = exec.passed ? null : exec.failures.map((f) => redact(f));
+
+      // A failure is compared with the baseline commit before it may block (§3.B).
+      let verdict: Classification | null = null;
+      if (!exec.passed && def.kind === 'tests' && unit.repo.preexistingFailures !== 'block' && !control.stopReason) {
+        this.publishTestRun(store.updateTestRun(run.id, { summary: `${summary ?? 'Failed'} — checking the baseline commit` }));
+        verdict = await this.d.baselines.classify(
+          { task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env, failures: failures ?? [], overflow: exec.overflow },
+          { stopped: () => control.stopReason !== null },
+        );
+        if (verdict.classification === 'preexisting') summary = `${summary ?? 'Failed'} — all ${failures!.length} failing as before on ${verdict.baselineCommit!.slice(0, 7)}`;
+      }
       this.publishTestRun(
         store.updateTestRun(run.id, {
           status: exec.passed ? 'passed' : 'failed',
@@ -497,19 +637,28 @@ export class StageRunners {
           durationMs: exec.result.durationMs,
           summary: summary ? redact(summary) : null,
           finishedAt: now(),
+          failures,
+          classification: verdict?.classification ?? null,
+          treeId: exec.passed && after === treeId ? treeId : exec.passed ? null : treeId,
         }),
       );
+      finished++;
       report.push(`${exec.passed ? '✓' : '✕'} ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
       if (exec.passed) {
         publisher.event(task.id, 'TEST_PASSED', `${name} passed${repairedNote}`, { executionId: exec.executionId, durationMs: exec.result.durationMs }, stage.id);
+      } else if (verdict?.classification === 'preexisting') {
+        // Recorded and reported, never a fix cycle: the stage goes on with the next command.
+        publisher.event(task.id, 'TEST_FAILED', `${name} failed as it already did before this task (${failures!.length} pre-existing failure${failures!.length === 1 ? '' : 's'} on ${verdict.baselineCommit!.slice(0, 7)}); not blocking`, { executionId: exec.executionId, classification: 'preexisting' }, stage.id);
+        preexisting.push(name);
       } else {
-        publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}`, { executionId: exec.executionId }, stage.id);
+        const why = verdict ? (verdict.classification === 'new' ? ' · new since the baseline' : ` · compared with the baseline: unknown (${verdict.reason ?? 'no result'}), treated as new`) : '';
+        publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}${why}`, { executionId: exec.executionId, classification: verdict?.classification ?? null }, stage.id);
         report.push('', `Output of ${name} (last lines):`, ...exec.tail, '');
         failure = `${name} failed${summary ? `: ${summary}` : ''}`;
         break;
       }
     }
-    for (const run of runs.slice(report.filter((l) => /^[✓✕]/.test(l)).length)) report.push(`○ ${run.name.padEnd(16)} not run`);
+    for (const run of runs.slice(finished)) report.push(`○ ${run.name.padEnd(16)} not run`);
     // A stop between two commands is a stop, not a pass with commands missing.
     if (!failure && control.stopReason) return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
 
@@ -524,14 +673,29 @@ export class StageRunners {
         summary: failure,
         finishedAt: now(),
       });
+      // An optional stage (a staging deploy, a smoke test) that fails is reported, not repaired.
+      if (def.optional) return { kind: 'optional_failed', stageId: stage.id, message: redact(failure) };
       publisher.event(task.id, 'STAGE_FAILED', `${def.name} failed: ${failure}`, {}, stage.id);
       return def.kind === 'tests'
         ? { kind: 'tests_failed', stageId: stage.id, message: failure }
         : { kind: 'error', stageId: stage.id, errorClass: 'COMMAND_FAILURE', message: failure };
     }
-    publisher.updateStage(stage.id, { status: 'SUCCESS', summary: `${commands.length} command${commands.length > 1 ? 's' : ''} passed`, finishedAt: now() });
-    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed`, {}, stage.id);
+    const passed = commands.length - preexisting.length;
+    const parts = [`${passed} command${passed === 1 ? '' : 's'} passed${reused ? ` (${reused} reused)` : ''}`];
+    if (preexisting.length) parts.push(`${preexisting.join(', ')} failing as before this task`);
+    publisher.updateStage(stage.id, { status: 'SUCCESS', summary: parts.join('; '), finishedAt: now() });
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed${preexisting.length ? ` apart from failures that already existed before this task (${preexisting.join(', ')})` : ''}`, {}, stage.id);
     return { kind: 'success', stageId: stage.id };
+  }
+
+  /** A passing run of the same command, in the same repository, on the same files, earlier in this task (§3.E). */
+  private reusablePass(taskId: string, treeId: string, run: TestRun): TestRun | null {
+    try {
+      return this.d.store.findReusableRun(taskId, treeId, run.command, run.repositoryId ?? null);
+    } catch {
+      // Reuse is only an optimisation: when the lookup fails, the command runs.
+      return null;
+    }
   }
 
   /**
@@ -606,7 +770,18 @@ export class StageRunners {
 
     const sink = new LogSink(store, this.d.bus, task.id, executionId);
     sink.push('system', `$ ${command.command}`);
-    const handle = runShell({ commandLine: command.command, cwd: workdir, env, timeoutMs: command.timeoutSec * 1000, onLine: sink.push });
+    // Failing test ids come from the whole output as it streams, not only from the tail kept for the prompt.
+    const collector = new FailureIdCollector();
+    const handle = runShell({
+      commandLine: command.command,
+      cwd: workdir,
+      env,
+      timeoutMs: command.timeoutSec * 1000,
+      onLine: (stream, line) => {
+        sink.push(stream, line);
+        collector.push(line);
+      },
+    });
     store.updateExecution(executionId, { pid: handle.pid });
     control.cancelCurrent = () => handle.cancel();
     if (control.stopReason) void handle.cancel();
@@ -616,7 +791,7 @@ export class StageRunners {
 
     if (result.cancelled) {
       this.finishExecution(executionId, 'cancelled', { exitCode: result.exitCode, startedAt });
-      return { executionId, result, passed: false, summary: 'Stopped', tail: sink.recent(80) };
+      return { executionId, result, passed: false, summary: 'Stopped', tail: sink.recent(80), failures: [], overflow: false };
     }
     const passed = result.exitCode === 0 && !result.timedOut && !result.spawnError;
     const tail = sink.recent(80);
@@ -633,7 +808,7 @@ export class StageRunners {
       errorMessage: passed ? null : summary,
       startedAt,
     });
-    return { executionId, result, passed, summary, tail };
+    return { executionId, result, passed, summary, tail, failures: passed ? [] : collector.list(), overflow: collector.overflow };
   }
 
   /** Carry out one repair; returns whether the command is worth running again. */

@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/engine/supervision.ts
   - packages/shared/src/chairman.ts
   - apps/dashboard/src/pages/task/ChairmanDrawer.tsx
-verified_at: 8ce8b50
+verified_at: b9ce60f
 ---
 
 # Chairman supervisor
@@ -44,8 +44,10 @@ hooks). Chat works for all tasks.
 the work misses the request → `plan_mismatch`; local budget used →
 `strategy_exhausted`; otherwise keep the local fix loop.
 
-A **recovery cycle** increments `tasks.recovery_cycle`, resets `fix_cycles`
-(fresh local budget), takes a checkpoint and executes one candidate strategy:
+A **recovery cycle** takes a checkpoint and executes one candidate strategy;
+only once the gateway has started it are `tasks.recovery_cycle` incremented,
+`fix_cycles` reset (fresh local budget) and `RECOVERY_CYCLE` recorded, so a
+candidate refused before it started costs no cycle:
 
 | Trigger | Candidate order |
 |---|---|
@@ -54,6 +56,8 @@ A **recovery cycle** increments `tasks.recovery_cycle`, resets `fix_cycles`
 | verify_repeat | root-cause → re-plan → change agent |
 | plan_mismatch | re-plan → root-cause |
 | worker_failure | change agent → retry once |
+| check_failed (a required command stage failed: "the check command failed") | retry the stage → root-cause → re-plan; the retry is left out when the files, commands and repository settings are the same as when it failed, and the hard blocker then says running it again would change nothing |
+| review_incomplete (`REVIEW_INCOMPLETE`) | retry the stage → hand it to another agent; never a code fix |
 | provider_blocked | change agent (not a recovery cycle) |
 
 A provider block is agent-wide unless it is `MODEL_UNAVAILABLE` (`providerWide`
@@ -88,7 +92,11 @@ may pick any candidate in that order; without one the first is used.
 No candidate left → **hard blocker** (`WAITING_FOR_USER`, blocker
 `hard_blocker`); its message ends with the latest strategy diagnosis, so the
 operator reads what the Chairman understood, not only that it ran out of
-options. Limits (`tasks.limits`: recovery cycles, work minutes = sum of
+options. Resuming it clears the strategies already tried only when a directive
+was added (or a repository setting changed) after the block; a bare resume
+keeps them, so the same strategies are never repeated against the same facts.
+An optional stage that fails never reaches the Chairman: it is a report
+limitation ([workflow-engine.md](workflow-engine.md#outcome-handling)). Limits (`tasks.limits`: recovery cycles, work minutes = sum of
 execution time, agent runs) → blocker `limit`; *Resume* extends them for that
 task. Neither is ever reported as `FAILED`.
 
@@ -271,13 +279,22 @@ Cancelling a task is never done from chat.
 Directives ([rules.ts](../../apps/orchestrator/src/chairman/rules.ts)): scope
 `CURRENT_TASK` or `NEXT_RELEVANT_STAGE`; state `active/removed/superseded`;
 checkable rules `protect_paths` (from paths or known nouns: migrations, schema,
-tests, lockfiles) and `require_check` (e2e, full suite).
+tests, lockfiles) and `require_check` (e2e, full suite). A third rule,
+`waive_check` ("don't gate this task on e2e"), is never derived from words:
+only `POST /api/tasks/:id/directives` accepts it (the dialogs' checkboxes), and
+the gateway's `directiveRuleSchema` — used by the Chairman, chat and
+`/chairman/actions` — has no such member, so an agent or the Chairman cannot
+create it.
 
 ## Completion gate ([gate.ts](../../apps/orchestrator/src/chairman/gate.ts))
 
 Objective only: last tests after the last change passed, last review and
 verification PASS after it, required check kinds passed in the last tests
 stage, no task-owned file matching a protected pattern. `READY` needs the gate.
+A waived kind is never required. A test stage whose only failures already
+failed on the baseline commit passed; a required kind whose run is such a
+pre-existing failure is not a pass either, and the gate says so with no remedy
+(re-running cannot change it).
 
 ## Checkpoints ([checkpoints.ts](../../apps/orchestrator/src/chairman/checkpoints.ts))
 
@@ -358,4 +375,4 @@ never the evidence itself.
 - Checkpoint refs live under `refs/acc/checkpoints/<task>/` and are deleted when
   the task finishes; `.gitattributes` EOL rules may make a restore byte-different.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

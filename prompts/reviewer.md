@@ -32,6 +32,10 @@ When this is not "(none)", a fix stage has run since it. First check each earlie
 {{diff}}
 ```
 
+{{diff_coverage}}
+
+A diff that does not show every changed file is not the whole change. Before your verdict, read each file listed under "Not shown" from disk (the command next to it shows its change), and add a `## Files reviewed` section to your report that names each of them with one line on what you found. A PASS that leaves one of them out does not count: you will be asked again.
+
 ## Test and build results (observed by the orchestrator)
 
 {{test_results}}
@@ -65,6 +69,7 @@ Your final message is the only thing kept. Use exactly these headings, in this o
 - `## Previous findings`: each earlier finding and whether it is resolved; omit when there was no previous review.
 - `## Issues`: each with its severity, `path:line`, the problem and the required fix, precise enough for the Fixer to act without asking.
 - `## Advisory`: non-blocking suggestions, or "none".
+- `## Files reviewed`: each file listed under "Not shown" above and what you found in it; omit when the diff shows every changed file.
 - `## Skills used`: the skills you ran, or "none".
 
 Things only the operator can settle - a decision, credentials, access, a setting outside the repository, an action a user directive forbids - are not a reason to fail: put each on its own line starting `NEEDS OPERATOR:` and judge the rest. These lines appear in the completion report.

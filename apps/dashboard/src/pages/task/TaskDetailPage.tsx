@@ -128,6 +128,25 @@ function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: Tas
 }
 
 /** design.md §7.3 — the primary product screen. */
+/**
+ * Where the task's agents work (AUTOPILOT_GATES_PLAN §3.F): its isolated
+ * worktree or workspace, or — said plainly — the operator's own folder.
+ */
+function WorkingFolder({ task }: { task: TaskDetail }) {
+  const isolatedFolder = task.git.workspacePath ?? task.git.worktreePath ?? null;
+  const own = task.repositories?.[0]?.path ?? null;
+  const folder = isolatedFolder ?? (task.git.isolated ? null : own);
+  if (!folder) return null;
+  return (
+    <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-small text-fg-secondary">
+      <span>{isolatedFolder ? 'Works in an isolated worktree:' : 'Works in your own folder:'}</span>
+      <code className="min-w-0 font-mono text-code text-fg wrap-anywhere" data-testid="task-working-folder">
+        {folder}
+      </code>
+    </p>
+  );
+}
+
 export function TaskDetailPage() {
   const { id = '' } = useParams();
   const origin = useTaskOrigin(id);
@@ -230,6 +249,7 @@ export function TaskDetailPage() {
             ) : null}
             {data.recoveryCycle > 0 ? <span className="tabular">Recovery cycle {data.recoveryCycle}</span> : null}
           </div>
+          <WorkingFolder task={data} />
         </div>
         <div className="flex items-center gap-2">
           {!isMobile ? <TaskPrimaryAction task={data} onOpenReport={() => setTab('overview')} onAnswer={() => setDirectiveOpen(true)} /> : null}

@@ -5,7 +5,7 @@ sources:
   - packages/shared/src/workflow.ts
   - workflows/**
   - prompts/**
-verified_at: 8ce8b50
+verified_at: b9ce60f
 ---
 
 # Workflow engine
@@ -23,9 +23,12 @@ Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
 (agent|tests|command|git|verify), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
-verdict, commandKinds, optional`. Validation
+verdict, commandKinds, optional, requires`. `requires` names stages whose latest
+run must have ended SUCCESS; otherwise the stage is SKIPPED before any approval
+is asked (`Skipped: Staging deploy did not run` — Full Autopilot's Smoke
+requires Staging). Validation
 ([workflow.ts](../../packages/shared/src/workflow.ts)): unique keys,
-resolvable transitions, every stage reachable, reaches `complete`, and the
+resolvable transitions and `requires` keys, every stage reachable, reaches `complete`, and the
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
 `maxFixCycles`. Each task stores a snapshot of its profile.
 
@@ -77,6 +80,8 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
+| an optional stage fails (`optional_failed`) | stage FAILED, event `STAGE_OPTIONAL_FAILED`, the message becomes a report limitation, go to `next` — never a fix cycle or a recovery |
+| `REVIEW_INCOMPLETE` (a verdict stage passed twice without naming files the diff did not show) | an error like any other: retried, then (supervised) the Chairman retries or changes agent; never a code fix |
 | a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
 
 **Supervised tasks** (Autopilot with the Chairman on) differ: a test or
@@ -123,6 +128,54 @@ question and options.
 An optional `command` stage with no matching command configured is skipped
 without asking for approval (`skipsForLackOfCommands`).
 
+## Gates that tell the truth
+
+What [AUTOPILOT_GATES_PLAN.md](../plans/AUTOPILOT_GATES_PLAN.md) added, found
+in TASK-0007 (a PASS on 12 of 19 files, failures that were already on `main`,
+Smoke after a skipped Staging, the unit suite run three times):
+
+- **Review coverage.** `packDiff` ([diff-pack.ts](../../packages/git/src/diff-pack.ts))
+  splits the diff per file and packs whole files into 150 000 characters in the
+  order source, tests, config, docs, then generated files, lockfiles and
+  binaries (a first file too big for the budget is shown in part, cut at a hunk
+  boundary). Every changed file not shown in full is listed in
+  `{{diff_coverage}}` with its `+a −d`, the reason and how to read it; a task
+  across repositories packs every repository into one budget, and a staged
+  review packs its staged diff. The changed-files list carries `+a −d`. A PASS
+  from a `verdict` stage must name every listed file (full path, or a
+  basename no other changed file shares, `unreviewedFiles`): otherwise the
+  runner asks the same agent once more inside the same stage (a second
+  execution, same attempt); a second miss fails the stage `REVIEW_INCOMPLETE`.
+  A FAIL is never second-guessed. When packing cannot run, every changed file
+  must be named.
+- **Baseline-aware checks** ([baseline-checks.ts](../../apps/orchestrator/src/engine/baseline-checks.ts)).
+  Failing test ids are read from the whole output while it streams
+  (Vitest/Jest/Mocha/TAP/pytest lines and Playwright's `N failed` block; line
+  numbers and timings dropped, at most 500) into `test_runs.failures`. The
+  first failure of a command in a tests stage runs the same command once on the
+  task's baseline commit, in a detached worktree under
+  `<dataDir>/baselines/` (dependencies from the lockfile through the tool
+  policy; removed in a `finally`; leftovers swept at start). One result per
+  repository, commit and command (`baseline_checks`) is shared by every task,
+  one run per key at a time. `preexisting` (the baseline failed and every
+  failing id is among its failures) is recorded, shown apart ("Already failing
+  before this task — do not fix unless asked" in prompts, a report limitation)
+  and the stage goes on; `new` and `unknown` (ids unreadable, overflow, no
+  baseline result) block as before. A repository set to
+  `preexistingFailures: 'block'` skips the comparison.
+- **Waivers.** An operator directive with rule `waive_check` (the Answer and
+  Add directive dialogs' **Don't gate this task on** checkboxes) removes those
+  kinds from this task's tests stages and its completion gate; it wins over a
+  `require_check` of the same kind and the report lists it. Only the operator
+  route accepts it ([chairman.md](chairman.md#directives)).
+- **Reuse.** Before each command the tree of the files it runs on
+  (`workingTreeTree`) is recorded as `test_runs.tree_id`. A command that
+  already passed in this task, in the same repository, on the same tree is not
+  run again: the new row is `passed`, `Reused: same files as <stage> at <time>`,
+  `reused_from` set. Failures are never reused; a command that changed files
+  records no tree. Implementer and fixer prompts say to run only the tests for
+  the files they changed.
+
 ## Live control
 
 - **Pause** cancels the running execution; the stage is PAUSED and re-runs on resume.
@@ -168,7 +221,14 @@ On start, executions/stages left `running` are marked interrupted and
 `RUNNING` tasks become `INTERRUPTED` with an explanation; queued tasks keep
 waiting. Supervised tasks interrupted this way are then resumed by the
 Chairman ([chairman.md](chairman.md#restart)). A task parked on a stage approval for a stage that would now be
-skipped (its command was removed) has the approval withdrawn and continues. Graceful shutdown does the same for work in progress.
+skipped (its command was removed) has the approval withdrawn and continues.
+
+`POST /api/service/shutdown` takes `{ mode }`: `refuse` (default) answers 409
+with the running task ids and stage names while any loop runs; `drain` stops
+starting work and lets each task stop at its next stage boundary
+(`INTERRUPTED`, "Stopped between stages for a restart", nothing cut off), then
+shuts down; `force` interrupts running stages now, as before
+([operations.md](operations.md)).
 
 ## Prompts
 
@@ -189,4 +249,4 @@ runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`, or for
 a composed `1 failed | 2 passed (3)`
 ([test-summary.ts](../../apps/orchestrator/src/engine/test-summary.ts)).
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

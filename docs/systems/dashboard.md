@@ -4,7 +4,7 @@ sources:
   - apps/dashboard/**
   - packages/ui/**
   - design.md
-verified_at: 2d516aa
+verified_at: b9ce60f
 ---
 
 # Dashboard and design system
@@ -102,7 +102,18 @@ when there are no unsaved edits, otherwise a "changed elsewhere" banner offers L
 or Keep; the API-billing dialog's typed phrase is sent to and checked by the server). Routes are
 lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
-the failure line when it failed.
+the failure line when it failed — plus the first failing test ids; a failure
+the baseline commit already had gets a warning icon and a **pre-existing**
+badge (and is counted apart in the run header), a pass taken from identical
+files a **reused** badge, and checks the operator waived an info banner
+quoting the directive ([workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)).
+The Answer and Add directive dialogs show **Don't gate this task on**: one
+checkbox per check kind that failed in this task and is not waived yet; a
+ticked box sends rule `waive_check` with the directive (an empty text becomes
+"Don't gate this task on …"). The task header says where the task works: its
+isolated worktree, or plainly "your own folder". A repository not in worktree
+mode shows **Tasks run in your working folder** with **Use isolated
+worktrees** on its page.
 
 ## Tool layer views
 
@@ -231,4 +242,4 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
   the local cloud e2e harness, which has no Access in front, it lands on the
   Worker's JSON 401 instead.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

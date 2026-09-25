@@ -1,5 +1,5 @@
 import { inFolder, taskRepositories } from '../engine/task-repositories.js';
-import { changesSince } from '@acc/git';
+import { changesSince, workingTreeTree } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   STRATEGY_OUTCOME_LABEL,
@@ -19,7 +19,7 @@ import {
 import type { Bus } from '../bus.js';
 import type { ContextBuilder } from '../engine/context.js';
 import type { TaskEngine } from '../engine/engine.js';
-import type { RunControl, StageOutcome } from '../engine/runners.js';
+import { waivedKinds, type RunControl, type StageOutcome } from '../engine/runners.js';
 import type { SupervisorHooks } from '../engine/supervision.js';
 import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
@@ -318,10 +318,35 @@ export class Chairman implements SupervisorHooks {
       this.strategyNotStarted(decision.id, results);
       return 'legacy';
     }
-    return this.recover(task, { trigger: 'worker_failure', failingStageKey: def.key, stageId: stage.id, sig }, control);
+    // A check command that failed, and a review that left files unread, are not an agent failing to run (§3.D).
+    const trigger: RecoveryTrigger =
+      outcome.errorClass === 'REVIEW_INCOMPLETE' ? 'review_incomplete' : outcome.errorClass === 'COMMAND_FAILURE' && def.kind !== 'agent' ? 'check_failed' : 'worker_failure';
+    return this.recover(task, { trigger, failingStageKey: def.key, stageId: stage.id, sig }, control);
   }
 
-  private candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature) {
+  /**
+   * Running a failed command stage again would change nothing (AUTOPILOT_GATES_PLAN §3.E):
+   * every failed command would run with the same command line, on the same
+   * repository settings, on exactly the files it failed on.
+   */
+  private async commandRetryIsNoop(task: TaskRecord, stageKey: string): Promise<boolean> {
+    const def = this.d.views.stageDef(task, stageKey);
+    if (!def || (def.kind !== 'command' && def.kind !== 'tests')) return false;
+    const last = this.d.store.listStages(task.id).filter((s) => s.stageKey === stageKey).at(-1);
+    if (last?.status !== 'FAILED') return false;
+    const failed = this.d.store.listTestRuns(task.id, last.id).filter((r) => r.status === 'failed');
+    if (!failed.length || failed.some((r) => !r.treeId)) return false;
+    const units = taskRepositories(this.d.store, task);
+    for (const run of failed) {
+      const unit = units.length > 1 ? units.find((u) => u.repo.id === run.repositoryId) : units[0];
+      if (!unit || unit.repo.updatedAt > last.createdAt) return false;
+      if (!unit.repo.commands.some((c) => c.enabled && redact(c.command) === run.command)) return false;
+      if ((await workingTreeTree(unit.workdir).catch(() => null)) !== run.treeId) return false;
+    }
+    return true;
+  }
+
+  private candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature, retryIsNoop = false) {
     const assignments: Record<string, string> = {};
     for (const s of task.workflow.stages) if (s.kind === 'agent') assignments[s.key] = this.d.views.assignmentFor(task, s).agentId;
     // An agent whose last run reported it out of credits or out of its window is no escape route.
@@ -347,6 +372,7 @@ export class Chairman implements SupervisorHooks {
       triedAgents,
       triedFingerprints: new Set(this.store.session(task.id).strategyFingerprints),
       rollbackCheckpointId: regression?.id ?? null,
+      retryIsNoop,
     };
   }
 
@@ -427,8 +453,10 @@ export class Chairman implements SupervisorHooks {
       return 'stop';
     }
     const rules = this.diagnose(input);
+    const noop = input.trigger === 'check_failed' && (await this.commandRetryIsNoop(task, input.failingStageKey));
+    if (noop) input = { ...input, noopRetry: true };
     // Safe candidates first, then ordered by what earlier strategies achieved under this contract.
-    const candidates = rankCandidates(recoveryCandidates(this.candidateContext(task, input.trigger, input.failingStageKey, input.sig)), {
+    const candidates = rankCandidates(recoveryCandidates(this.candidateContext(task, input.trigger, input.failingStageKey, input.sig, noop)), {
       trigger: input.trigger,
       failedFamilies: this.store.failedStrategyFamilies(task.id, this.contract(task).version, input.sig.category),
       confidence: rules.confidence,
@@ -479,6 +507,7 @@ export class Chairman implements SupervisorHooks {
 
     for (const candidate of ordered) {
       const current = this.task(task.id);
+      // The cycle a strategy would open; it is counted only once the strategy has really started (§3.D).
       const cycle = current.recoveryCycle + 1;
       const decision = this.decide(current, input.trigger, candidate === ordered[0] ? choice.summary : `${TRIGGER_LABEL[input.trigger]}. Previous option failed; next: ${candidate.label}.`, candidate.label, {
         reasoningSummary: choice.reasoningSummary,
@@ -487,12 +516,10 @@ export class Chairman implements SupervisorHooks {
         fingerprint: candidate.fingerprint,
         strategy: this.strategyStart(candidate, input, diagnosis, packet.digest, cycle),
       });
-      const started = this.d.engine.applyInLoop(task.id, { recoveryCycle: cycle, fixCycles: 0 });
-      this.d.engine.publisher.event(task.id, 'RECOVERY_CYCLE', `Recovery cycle ${cycle}: ${candidate.label}`, { cycle, decisionId: decision.id });
       const guidance = candidate === ordered[0] && choice.guidance ? choice.guidance : guidanceOf(candidate);
       this.rememberStrategy(task.id, candidate, guidance);
       if (candidate.kind !== 'rollback') {
-        await this.checkpoints.create(started, { label: `Recovery cycle ${cycle}`, reason: 'recovery-pivot', stageKey: current.currentStageKey }).catch(() => null);
+        await this.checkpoints.create(current, { label: `Recovery cycle ${cycle}`, reason: 'recovery-pivot', stageKey: current.currentStageKey }).catch(() => null);
       }
       const actions = candidate.actions.map((a) => withGuidance(a, guidance));
       const results = await this.gateway.executeDecision(task.id, actions, {
@@ -502,12 +529,22 @@ export class Chairman implements SupervisorHooks {
         expectedVersion: this.task(task.id).version,
         control,
       });
+      if (results.every((r) => r.status === 'completed')) {
+        this.startCycle(task.id, cycle, candidate.label, decision.id);
+        return 'continue';
+      }
       this.publishState(task.id);
-      if (results.every((r) => r.status === 'completed')) return 'continue';
       this.strategyNotStarted(decision.id, results);
       if (control.stopReason) return 'stop';
     }
     return this.hardBlock(this.task(task.id), input);
+  }
+
+  /** Count a recovery cycle whose strategy started: a fresh local fix budget, and the timeline says so. */
+  private startCycle(taskId: string, cycle: number, label: string, decisionId: string): void {
+    this.d.engine.applyInLoop(taskId, { recoveryCycle: cycle, fixCycles: 0 });
+    this.d.engine.publisher.event(taskId, 'RECOVERY_CYCLE', `Recovery cycle ${cycle}: ${label}`, { cycle, decisionId });
+    this.publishState(taskId);
   }
 
   private diagnose(input: RecoveryInput): ChairmanDiagnosis {
@@ -570,7 +607,8 @@ export class Chairman implements SupervisorHooks {
       .listDecisions(task.id, 20)
       .reverse()
       .find((d) => d.strategy?.diagnosis.summary)?.strategy!.diagnosis.summary;
-    const message = `No safe new strategy remains for "${input.sig.message.slice(0, 200)}" (${TRIGGER_LABEL[input.trigger]}).${tried ? ` Last strategy tried: ${tried}.` : ''}${diagnosis ? ` Diagnosis: ${diagnosis.slice(0, 400)}` : ''} Add a directive with what to do differently, then resume.`;
+    const same = input.noopRetry ? ' Running it again would change nothing: the files, the command and the repository settings are the same as when it failed.' : '';
+    const message = `No safe new strategy remains for "${input.sig.message.slice(0, 200)}" (${TRIGGER_LABEL[input.trigger]}).${same}${tried ? ` Last strategy tried: ${tried}.` : ''}${diagnosis ? ` Diagnosis: ${diagnosis.slice(0, 400)}` : ''} Add a directive with what to do differently, then resume.`;
     this.decide(task, input.trigger, message, 'Hard blocker', { hardBlocker: true });
     await this.d.engine.block(task.id, 'hard_blocker', message, { inLoop: true, stageKey: input.failingStageKey });
     return 'stop';
@@ -619,6 +657,7 @@ export class Chairman implements SupervisorHooks {
       taskFiles,
       // Across repositories a check kind is available when any of them configures it.
       configuredKinds: new Set(units.flatMap((u) => u.repo.commands).filter((c) => c.enabled).map((c) => c.kind)),
+      waivedKinds: waivedKinds(this.d.store, task.id),
     });
   }
 
@@ -653,11 +692,12 @@ export class Chairman implements SupervisorHooks {
         fingerprint: candidate.fingerprint,
         strategy: this.strategyStart(candidate, input, this.diagnose(input), digest, cycle),
       });
-      this.d.engine.applyInLoop(taskId, { recoveryCycle: cycle, fixCycles: 0 });
-      this.d.engine.publisher.event(taskId, 'RECOVERY_CYCLE', `Recovery cycle ${cycle}: ${candidate.label}`, { cycle, decisionId: decision.id });
       this.rememberStrategy(taskId, candidate, guidanceOf(candidate) || failure.message);
       const results = await this.gateway.executeDecision(taskId, candidate.actions, { initiator: 'chairman', source: 'supervisor', decisionId: decision.id, control });
-      if (results.every((r) => r.status === 'completed')) return { kind: 'continue' };
+      if (results.every((r) => r.status === 'completed')) {
+        this.startCycle(taskId, cycle, candidate.label, decision.id);
+        return { kind: 'continue' };
+      }
       this.strategyNotStarted(decision.id, results);
       if (control.stopReason) return { kind: 'stop' };
     }
@@ -668,13 +708,22 @@ export class Chairman implements SupervisorHooks {
   }
 
   /**
-   * A person resolving a hard blocker is new evidence (§5.3): strategies tried
-   * before may be tried again, now with whatever directives they added.
+   * A person resolving a hard blocker with a new directive (or a changed
+   * repository setting) is new evidence (§5.3): strategies tried before may be
+   * tried again under it. A bare resume is not: the tried strategies are kept,
+   * so the same ones are never repeated against the same facts (§3.D).
    */
   onResume(task: TaskRecord): void {
     if (task.blocker?.kind !== 'hard_blocker') return;
-    this.store.updateSession(task.id, { strategyFingerprints: [] });
-    this.note(task.id, 'Resumed by you after a hard blocker. Earlier strategies may be tried again, now with your directives.');
+    const blockedAt = this.store.listDecisions(task.id, 50).reverse().find((d) => d.hardBlocker)?.createdAt ?? '';
+    const newDirective = this.d.store.listDirectives(task.id).some((d) => d.state === 'active' && d.createdAt > blockedAt);
+    const repositoryChanged = taskRepositories(this.d.store, task).some((u) => u.repo.updatedAt > blockedAt);
+    if (newDirective || repositoryChanged) {
+      this.store.updateSession(task.id, { strategyFingerprints: [] });
+      this.note(task.id, `Resumed by you after a hard blocker, with ${newDirective ? 'a new directive' : 'a changed repository setting'}. Earlier strategies may be tried again under it.`);
+      return;
+    }
+    this.note(task.id, 'Resumed by you after a hard blocker with no new directive: the strategies already tried are not repeated. Add a directive saying what to do differently if this stops again.');
   }
 
   extendedLimits(task: TaskRecord): TaskLimits {
@@ -745,6 +794,8 @@ interface RecoveryInput {
   /** The stage instance whose failure is being recovered from. */
   stageId: string | null;
   sig: FailureSignature;
+  /** A retry of the failing command stage was ruled out as a no-op (§3.E). */
+  noopRetry?: boolean;
 }
 
 /** Trigger labels are lower-case phrases; a decision summary starts a sentence. */

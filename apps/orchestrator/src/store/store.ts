@@ -122,6 +122,25 @@ export interface LinkedRepositoryRecord {
   git: TaskGitRecord;
 }
 
+/** Identifies one baseline result: a command, as configured, on one commit of one repository. */
+export interface BaselineCheckKey {
+  repositoryId: string;
+  baselineCommit: string;
+  commandId: string;
+  /** Hash of the command line, so an edited command is never judged by an old result. */
+  commandSha: string;
+}
+
+export interface BaselineCheckRecord extends BaselineCheckKey {
+  id: string;
+  /** error: the baseline could not be checked (no worktree, install failed, timed out). */
+  status: 'passed' | 'failed' | 'error';
+  summary: string | null;
+  failures: string[];
+  durationMs: number | null;
+  createdAt: string;
+}
+
 export interface RepositoryRecord {
   id: string;
   name: string;
@@ -135,6 +154,8 @@ export interface RepositoryRecord {
   lastTaskId: string | null;
   policyMode: PolicyMode | null;
   runtime: RepositoryRuntime;
+  /** allow: failures already on the baseline are reported but do not block; block: every failure blocks (§3.B). */
+  preexistingFailures: 'allow' | 'block';
   createdAt: string;
   updatedAt: string;
 }
@@ -334,6 +355,10 @@ const toTestRun = (r: Row): TestRun => ({
   summary: r.summary,
   startedAt: r.started_at,
   finishedAt: r.finished_at,
+  failures: parse(r.failures, null),
+  classification: r.classification ?? null,
+  treeId: r.tree_id ?? null,
+  reusedFrom: r.reused_from ?? null,
 });
 
 const toRepository = (r: Row): RepositoryRecord => ({
@@ -349,6 +374,7 @@ const toRepository = (r: Row): RepositoryRecord => ({
   lastTaskId: r.last_task_id,
   policyMode: r.policy_mode ?? null,
   runtime: repositoryRuntimeSchema.parse(parse(r.runtime, {})),
+  preexistingFailures: r.preexisting_failures === 'block' ? 'block' : 'allow',
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -488,8 +514,8 @@ export class Store {
   insertRepository(rec: RepositoryRecord): void {
     this.db
       .prepare(
-        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime, preexisting_failures)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         rec.id,
@@ -506,6 +532,7 @@ export class Store {
         rec.updatedAt,
         rec.policyMode,
         json(rec.runtime),
+        rec.preexistingFailures ?? 'allow',
       );
   }
 
@@ -521,6 +548,7 @@ export class Store {
     if (patch.lastTaskId !== undefined) cols.last_task_id = patch.lastTaskId;
     if (patch.policyMode !== undefined) cols.policy_mode = patch.policyMode;
     if (patch.runtime !== undefined) cols.runtime = json(patch.runtime);
+    if (patch.preexistingFailures !== undefined) cols.preexisting_failures = patch.preexistingFailures;
     cols.updated_at = now();
     const keys = Object.keys(cols);
     this.db.prepare(`UPDATE repositories SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
@@ -1127,13 +1155,16 @@ export class Store {
   insertTestRun(t: TestRun): void {
     this.db
       .prepare(
-        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at, repository_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at, repository_id, failures, classification, tree_id, reused_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(t.id, t.taskId, t.stageId, t.executionId, t.name, t.kind, t.command, t.status, t.exitCode, t.durationMs, t.summary, t.startedAt, t.finishedAt, t.repositoryId ?? null);
+      .run(
+        t.id, t.taskId, t.stageId, t.executionId, t.name, t.kind, t.command, t.status, t.exitCode, t.durationMs, t.summary, t.startedAt, t.finishedAt, t.repositoryId ?? null,
+        t.failures ? json(t.failures) : null, t.classification ?? null, t.treeId ?? null, t.reusedFrom ?? null,
+      );
   }
 
-  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt'>>): TestRun {
+  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt' | 'failures' | 'classification' | 'treeId' | 'reusedFrom'>>): TestRun {
     const map: Record<string, string> = {
       status: 'status',
       exitCode: 'exit_code',
@@ -1142,8 +1173,14 @@ export class Store {
       finishedAt: 'finished_at',
       executionId: 'execution_id',
       startedAt: 'started_at',
+      failures: 'failures',
+      classification: 'classification',
+      treeId: 'tree_id',
+      reusedFrom: 'reused_from',
     };
-    const entries = Object.entries(patch).filter(([k]) => map[k]);
+    const entries = Object.entries(patch)
+      .filter(([k]) => map[k])
+      .map(([k, v]): [string, unknown] => [k, k === 'failures' && v ? json(v) : v]);
     if (entries.length) this.db.prepare(`UPDATE test_runs SET ${entries.map(([k]) => `${map[k]} = ?`).join(', ')} WHERE id = ?`).run(...entries.map(([, v]) => v), id);
     return toTestRun(this.db.prepare('SELECT * FROM test_runs WHERE id = ?').get(id) as Row);
   }
@@ -1157,6 +1194,39 @@ export class Store {
 
   testRunsWithStatus(status: TestRunStatus): TestRun[] {
     return (this.db.prepare('SELECT * FROM test_runs WHERE status = ?').all(status) as Row[]).map(toTestRun);
+  }
+
+  /** A passing run of the same command on the same files earlier in this task (§3.E), or null. */
+  findReusableRun(taskId: string, treeId: string, command: string, repositoryId: string | null): TestRun | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM test_runs WHERE task_id = ? AND tree_id = ? AND command = ? AND status = 'passed' AND IFNULL(repository_id, '') = ?
+         ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(taskId, treeId, command, repositoryId ?? '') as Row | undefined;
+    return row ? toTestRun(row) : null;
+  }
+
+  // ----- baseline checks (AUTOPILOT_GATES_PLAN §3.B) ---------------------------
+
+  getBaselineCheck(key: BaselineCheckKey): BaselineCheckRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM baseline_checks WHERE repository_id = ? AND baseline_commit = ? AND command_id = ? AND command_sha = ?')
+      .get(key.repositoryId, key.baselineCommit, key.commandId, key.commandSha) as Row | undefined;
+    return row
+      ? { ...key, id: row.id, status: row.status, summary: row.summary, failures: parse(row.failures, []), durationMs: row.duration_ms, createdAt: row.created_at }
+      : null;
+  }
+
+  saveBaselineCheck(rec: BaselineCheckRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO baseline_checks (id, repository_id, baseline_commit, command_id, command_sha, status, summary, failures, duration_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (repository_id, baseline_commit, command_id, command_sha) DO UPDATE SET
+           status = excluded.status, summary = excluded.summary, failures = excluded.failures, duration_ms = excluded.duration_ms, created_at = excluded.created_at`,
+      )
+      .run(rec.id, rec.repositoryId, rec.baselineCommit, rec.commandId, rec.commandSha, rec.status, rec.summary, json(rec.failures), rec.durationMs, rec.createdAt);
   }
 }
 

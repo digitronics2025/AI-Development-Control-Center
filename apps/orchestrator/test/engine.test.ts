@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { currentBranch, git } from '@acc/git';
 import { SKILLS_PROMPT_SECTION } from '../src/engine/tooling.js';
-import { addRepo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, IN_PLACE);
 
 let t: TestApp;
 

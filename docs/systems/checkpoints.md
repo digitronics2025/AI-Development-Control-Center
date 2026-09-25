@@ -4,7 +4,7 @@ sources:
   - apps/orchestrator/src/chairman/checkpoints.ts
   - packages/git/src/worktrees.ts
   - apps/orchestrator/src/engine/tooling.ts
-verified_at: 351db1e
+verified_at: b9ce60f
 ---
 
 # Checkpoints and worktrees
@@ -37,7 +37,11 @@ isolated.
 
 ## Worktrees ([worktrees.ts](../../packages/git/src/worktrees.ts))
 
-Repository Git mode **Isolated worktree** (or `worktree: true` on a task):
+Repository Git mode **Isolated worktree** (or `worktree: true` on a task). It
+is the default for every repository added since 2026-09-25; one added before
+keeps its mode, and its page shows **Tasks run in your working folder** with a
+**Use isolated worktrees** button. The task header shows the folder a task
+works in:
 
 1. Before the first stage the engine runs `git worktree add -b ai/TASK-… <data>/worktrees/<repo>-<id>/<task> HEAD`.
    The baseline is that commit with no pre-existing changes — your
@@ -57,8 +61,16 @@ Repository Git mode **Isolated worktree** (or `worktree: true` on a task):
 5. After removal the task's Changes and diff views read
    `baselineCommit..taskBranch`.
 
-A repository with no commits cannot have a worktree; the task falls back to a
-task branch and says so.
+When the worktree cannot be created (a repository with no commits, a locked
+or occupied folder) the task stops before anything is touched, with the hard
+blocker *Couldn't create an isolated worktree: <reason>. Your working folder
+was not touched.* — it never falls back to your checkout. **Resume** tries
+again; a folder a previous attempt left behind is cleared first. A folder that
+is not a Git repository has no branch to switch and still runs in place.
+
+Baseline checks ([workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth))
+use a third kind: a detached worktree of the task's baseline commit under
+`<data>/baselines/`, removed after the one command, swept at start.
 
 A task across repositories has one worktree per repository inside
 `<data>/workspaces/<task>/<folder>`, all created before its first stage; a
@@ -71,4 +83,4 @@ A rollback holds the writer lock of every repository it rewrites (like a
 stage), unless the task already holds it or works in its own worktree, so a
 Source Control commit can never land on a half-restored tree.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

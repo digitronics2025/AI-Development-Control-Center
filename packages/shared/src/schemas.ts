@@ -86,8 +86,13 @@ export const stageDefinitionSchema = z.object({
   verdict: z.boolean().default(false),
   /** Command kinds a `tests`/`command` stage runs. */
   commandKinds: z.array(z.enum(COMMAND_KINDS)).optional(),
-  /** A `command` stage with nothing configured is skipped instead of blocking. */
+  /** A `command` stage with nothing configured is skipped instead of blocking; one that fails becomes a report limitation. */
   optional: z.boolean().default(false),
+  /**
+   * Stage keys whose latest run must have ended SUCCESS before this stage runs;
+   * otherwise it is skipped (Smoke after a Staging deploy that did not run).
+   */
+  requires: z.array(slugSchema).max(10).optional(),
   description: z.string().max(300).optional(),
 });
 export type StageDefinition = z.infer<typeof stageDefinitionSchema>;
@@ -134,6 +139,8 @@ export const updateRepositorySchema = z.object({
   /** Overrides Settings → Execution policy for tasks in this repository. */
   policyMode: z.enum(POLICY_MODES).nullable().optional(),
   runtime: repositoryRuntimeSchema.optional(),
+  /** allow: failures already on the baseline commit do not block a task; block: every failure blocks. */
+  preexistingFailures: z.enum(['allow', 'block']).optional(),
 });
 export type UpdateRepositoryInput = z.infer<typeof updateRepositorySchema>;
 
@@ -193,9 +200,14 @@ export const updateTaskSchema = z.object({
   overrides: taskOverridesSchema.optional(),
 });
 
+/** The operator-only waiver (AUTOPILOT_GATES_PLAN §3.C), accepted on the operator's directive route and nowhere else. */
+export const waiveCheckRuleSchema = z.object({ type: z.literal('waive_check'), kinds: z.array(z.enum(COMMAND_KINDS)).min(1).max(8) });
+
 export const directiveSchema = z.object({
   text: z.string().trim().min(1, 'Directive text is required').max(4000),
   pause: z.boolean().default(false),
+  /** The Answer dialog's "Don't gate this task on" checkboxes: operator-only (AUTOPILOT_GATES_PLAN §3.C, §6). */
+  rule: waiveCheckRuleSchema.optional(),
 });
 
 export const rerouteSchema = z.object({

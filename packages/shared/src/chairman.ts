@@ -60,9 +60,16 @@ export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
 export type DirectiveRule =
   | { type: 'protect_paths'; patterns: string[] }
   | { type: 'require_check'; kinds: CommandKind[] }
-  | { type: 'routing'; stageKey: string; agentId: string };
+  | { type: 'routing'; stageKey: string; agentId: string }
+  /**
+   * "Don't gate this task on these checks" (AUTOPILOT_GATES_PLAN §3.C). Set only
+   * by the operator through the directive route's checkboxes: never derived
+   * from text, never accepted from the Chairman, chat or an agent tool.
+   */
+  | { type: 'waive_check'; kinds: CommandKind[] };
 
-export const directiveRuleSchema: z.ZodType<DirectiveRule> = z.discriminatedUnion('type', [
+/** Rules the Chairman gateway and chat may carry; `waive_check` is deliberately absent. */
+export const directiveRuleSchema: z.ZodType<Exclude<DirectiveRule, { type: 'waive_check' }>> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('protect_paths'), patterns: z.array(z.string().min(1).max(300)).min(1).max(20) }),
   z.object({ type: z.literal('require_check'), kinds: z.array(z.enum(COMMAND_KINDS)).min(1).max(8) }),
   z.object({ type: z.literal('routing'), stageKey: slugSchema, agentId: agentIdSchema }),

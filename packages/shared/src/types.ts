@@ -75,6 +75,8 @@ export interface TaskRepositoryRef {
   /** Its folder in the task workspace; null for a single-repository task. */
   folder: string | null;
   primary: boolean;
+  /** The repository's own folder on this machine (the task header says when a task works there). */
+  path?: string;
 }
 
 export interface TaskAttachment {
@@ -275,7 +277,18 @@ export interface TestRun {
   finishedAt: Iso | null;
   /** The repository the command ran in; null for a single-repository task (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
   repositoryId?: string | null;
+  /** Ids of the failing tests, parsed from the whole output (redacted, at most 500). */
+  failures?: string[] | null;
+  /** A failed run compared with the baseline commit (docs/plans/AUTOPILOT_GATES_PLAN.md §3.B). */
+  classification?: TestFailureClass | null;
+  /** The working tree the command ran on, for reusing a pass on identical files (§3.E). */
+  treeId?: string | null;
+  /** The earlier passing run this one reuses instead of running again (§3.E). */
+  reusedFrom?: string | null;
 }
+
+/** new: not failing on the baseline; preexisting: every failure already failed there; unknown: could not tell (treated as new). */
+export type TestFailureClass = 'new' | 'preexisting' | 'unknown';
 
 export interface ChangedFile {
   path: string;
@@ -380,6 +393,8 @@ export interface Repository {
   /** Null = use Settings → Execution. */
   policyMode: PolicyMode | null;
   runtime: RepositoryRuntime;
+  /** allow: failures already on the baseline commit are reported but do not block; block: every failure blocks. */
+  preexistingFailures: 'allow' | 'block';
   status: RepositoryStatus;
   createdAt: Iso;
   updatedAt: Iso;

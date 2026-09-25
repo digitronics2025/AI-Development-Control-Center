@@ -2,7 +2,7 @@
 system: git
 sources:
   - packages/git/**
-verified_at: 2d516aa
+verified_at: b9ce60f
 ---
 
 # Git integration
@@ -53,9 +53,21 @@ at the baseline); files added since are deleted. `deleteRefs` only accepts
 `refs/acc/`. The Chairman refuses a rollback when HEAD moved since the
 checkpoint. Used by [chairman.md](chairman.md#checkpoints).
 
+## Diff packing ([diff-pack.ts](../../packages/git/src/diff-pack.ts))
+
+`packDiff(raw, changedFiles, budget)` splits a unified diff per file (the new
+path from `+++`, else `---`, `rename to` or the header), orders files source →
+tests → config → docs → generated/lockfiles/binaries (`classifyDiffPath`) and
+packs whole files up to the budget; the first file alone over budget is cut at
+a hunk boundary and marked `partial`. `omitted` names every changed file not
+shown in full, including ones that never reached the collected diff
+(`withoutPartialTail` drops a chunk cut short when the raw diff hit its bound).
+`diffSince` now bounds git's output while it is read (`maxOutputBytes`).
+
 ## Worktrees
 
 [worktrees.ts](../../packages/git/src/worktrees.ts): `addWorktree`,
+`addDetachedWorktree` (no branch: a bisect step, a baseline check),
 `removeWorktree` (prunes; clears a locked folder on force), `changesInRange` /
 `diffInRange` (task changes after its worktree is gone) and
 `checkpointMetadata`. How tasks use them: [checkpoints.md](checkpoints.md#worktrees).
@@ -84,4 +96,4 @@ and are documented in [source-control.md](source-control.md). `git()` takes
 `UNATTENDED_REMOTE_ENV` (`GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`)
 so background fetches fail instead of opening a credential window.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

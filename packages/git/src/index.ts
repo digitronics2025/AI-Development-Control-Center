@@ -335,8 +335,9 @@ export async function diffSince(
   const pathArgs = options.path ? ['--', options.path] : [];
   // A folder prefix (a/web/src/x.ts) makes one patch of several repositories apply from their common parent.
   const prefixArgs = options.prefix ? [`--src-prefix=a/${options.prefix}/`, `--dst-prefix=b/${options.prefix}/`] : [];
-  const tracked = await git(cwd, ['diff', '--no-color', '-M', ...prefixArgs, base, ...pathArgs]);
-  let diff = tracked.code === 0 ? tracked.stdout : '';
+  // Bounded while it is read: a huge change never has to fit in memory first.
+  const tracked = await git(cwd, ['diff', '--no-color', '-M', ...prefixArgs, base, ...pathArgs], { maxOutputBytes: maxBytes + 1 });
+  let diff = tracked.code === 0 || tracked.truncated ? tracked.stdout : '';
   const untracked = (await status(cwd)).filter(
     (e) => e.code === '??' && (!options.path || e.path === options.path),
   );
@@ -477,3 +478,4 @@ export async function deleteRefs(cwd: string, prefix: string): Promise<number> {
 
 export * from './source-control.js';
 export * from './worktrees.js';
+export * from './diff-pack.js';

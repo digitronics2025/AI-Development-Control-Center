@@ -68,8 +68,11 @@ export class TaskViews {
       repositoryId: task.repositoryId,
       repositoryName: repo?.name ?? 'Unknown repository',
       repositories: [
-        { id: task.repositoryId, name: repo?.name ?? 'Unknown repository', folder: task.git.folder ?? null, primary: true },
-        ...this.store.listLinkedRepositories(task.id).map((l) => ({ id: l.repositoryId, name: this.store.getRepository(l.repositoryId)?.name ?? 'Unknown repository', folder: l.folder, primary: false })),
+        { id: task.repositoryId, name: repo?.name ?? 'Unknown repository', folder: task.git.folder ?? null, primary: true, ...(repo ? { path: repo.path } : {}) },
+        ...this.store.listLinkedRepositories(task.id).map((l) => {
+          const linked = this.store.getRepository(l.repositoryId);
+          return { id: l.repositoryId, name: linked?.name ?? 'Unknown repository', folder: l.folder, primary: false, ...(linked ? { path: linked.path } : {}) };
+        }),
       ],
       workflowId: task.workflowId,
       workflowName: task.workflow.name,

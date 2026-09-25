@@ -93,6 +93,7 @@ export const ERROR_CLASS_LABEL: Record<ErrorClass, string> = {
   TEST_FAILURE: 'Tests failed',
   CONTEXT_FAILURE: 'Context could not be built',
   PERMISSION_DENIED: 'Permission denied',
+  REVIEW_INCOMPLETE: 'Review left changed files unread',
   UNKNOWN: 'Unknown error',
 };
 

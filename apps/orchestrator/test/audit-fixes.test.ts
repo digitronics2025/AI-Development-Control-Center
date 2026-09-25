@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setSelfReferences } from '@acc/security';
 import { preflightFindings, withoutSensitiveFiles } from '../src/source-control/preflight.js';
 import type { ToolScope } from '../src/tools/service.js';
-import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, IN_PLACE);
 
 /**
  * Regression tests for the 2026-09-24 pre-release audit
@@ -128,7 +131,17 @@ describe('F-09: an approval for a stage the workflow always asks about covers on
         { id: 'smoke', name: 'smoke', command: 'node -e "process.exit(1)"', kind: 'smoke', enabled: true, timeoutSec: 60 },
       ],
     });
-    const id = await createTask(t, repoId, 'Ship it twice', { workflowId: 'full-autopilot' });
+    // A required smoke test after the deploy: its failure stops the task (an optional one would only be reported).
+    t.services.workflows.save('ship-twice', {
+      name: 'Ship twice',
+      maxFixCycles: 1,
+      stages: [
+        { key: 'implement', name: 'Implement', role: 'implementer', permissionLevel: 2, next: 'staging' },
+        { key: 'staging', name: 'Staging deploy', role: 'deployer', kind: 'command', commandKinds: ['deploy-staging'], permissionLevel: 4, requiresApproval: true, next: 'smoke' },
+        { key: 'smoke', name: 'Smoke test', role: 'tester', kind: 'command', commandKinds: ['smoke'], permissionLevel: 2, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, repoId, 'Ship it twice', { workflowId: 'ship-twice' });
     await waitForStatus(t, id, ['WAITING_FOR_USER']);
     const pendingFor = async () => (await t.api('GET', '/api/approvals?status=pending')).body.filter((a: { taskId: string }) => a.taskId === id);
     const [first] = await pendingFor();

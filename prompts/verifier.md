@@ -30,6 +30,10 @@ When the plan has no usable criteria, derive them from the request: each observa
 {{diff}}
 ```
 
+{{diff_coverage}}
+
+A diff that does not show every changed file is not the whole change. Before your verdict, read each file listed under "Not shown" from disk (the command next to it shows its change), and add a `## Files reviewed` section to your report that names each of them with one line on what you found. A PASS that leaves one of them out does not count: you will be asked again.
+
 ## Latest test and build results (observed by the orchestrator)
 
 {{test_results}}
@@ -59,6 +63,7 @@ Your final message is the only thing kept. Use exactly these headings, in this o
 - `## Summary`: one sentence, the outcome and the main reason.
 - `## Criteria`: one line per criterion: met, not met or unverified, then the evidence (which check, which test, which `path:line`, or "claimed only").
 - `## Review follow-up`: each blocking review issue, resolved or not, with evidence.
+- `## Files reviewed`: each file listed under "Not shown" above and what you found in it; omit when the diff shows every changed file.
 - `## Remaining limitations`: what is unverified or not covered, and the risk of each.
 - `## Skills used`: the skills you ran, or "none".
 

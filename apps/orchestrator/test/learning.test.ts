@@ -6,7 +6,10 @@ import { git } from '@acc/git';
 import type { ToolExecution } from '@acc/shared';
 import { z } from 'zod';
 import { newId } from '../src/store/store.js';
-import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, IN_PLACE);
 
 /** A simulated agent that remembers what each run was given. */
 class RecordingAdapter extends SimulatedAgentAdapter {

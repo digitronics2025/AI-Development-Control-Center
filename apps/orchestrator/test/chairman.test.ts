@@ -3,7 +3,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter, type AgentAdapter, type AgentExecutionInput, type AgentExecutionResult } from '@acc/agent-sdk';
 import type { AgentCapabilities, ChairmanDecision, ChairmanMessage, Execution, ModelDescriptor } from '@acc/shared';
-import { addRepo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, simAdapters, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, and recovery from failures the task must fix
+// (its fixtures fail before any change too, which the baseline check would otherwise report as pre-existing).
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, { ...IN_PLACE, preexistingFailures: 'block' });
 
 let t: TestApp;
 
@@ -212,11 +216,20 @@ describe('supervised recovery (plan §7.2)', () => {
     expect(decisions(id).map((x) => x.decision)).toEqual(['Hand Investigate to claude', 'Retry Investigate', 'Hard blocker']);
     expect(decisions(id).slice(0, 2).map((x) => x.strategy?.status)).toEqual(['FAILED', 'FAILED']);
     expect(eventTypes(id)).not.toContain('TASK_FAILED');
-    // Your intervention is new evidence: after resuming, earlier strategies may run again.
+    // A bare resume is no new evidence: the strategies already tried are kept, so it stops again at once.
+    const tried = t.services.chairman.store.session(id).strategyFingerprints;
+    expect(tried.length).toBeGreaterThan(0);
+    expect((await t.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
+    expect(t.services.chairman.store.session(id).strategyFingerprints).toEqual(tried);
+    await waitFor(() => decisions(id).length, (n) => n >= 4, 30_000, 'the second hard blocker');
+    await waitForStatus(t, id, ['WAITING_FOR_USER'], 30_000);
+    expect(decisions(id).map((x) => x.decision)).toEqual(['Hand Investigate to claude', 'Retry Investigate', 'Hard blocker', 'Hard blocker']);
+    // A directive is new evidence: after resuming with one, earlier strategies may run again.
+    expect((await t.api('POST', `/api/tasks/${id}/directives`, { text: 'Try the investigation again; the crash was a flaky machine.' })).status).toBeLessThan(300);
     expect((await t.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
     expect(t.services.chairman.store.session(id).strategyFingerprints).toEqual([]);
-    await waitFor(() => decisions(id).length, (n) => n >= 5, 30_000, 'second round of decisions');
-    expect(decisions(id).slice(3).map((x) => x.decision)[0]).toBe('Retry Investigate');
+    await waitFor(() => decisions(id).length, (n) => n >= 6, 30_000, 'second round of decisions');
+    expect(decisions(id).slice(4).map((x) => x.decision)[0]).toBe('Retry Investigate');
   });
 
   it('falls back to the rules when the reasoning model is down, and repairs bad JSON once', async () => {

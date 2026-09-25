@@ -16,6 +16,8 @@ export interface GateInput {
   taskFiles: string[] | null;
   /** Command kinds the repository has enabled commands for. */
   configuredKinds: ReadonlySet<CommandKind>;
+  /** Kinds the operator waived for this task (AUTOPILOT_GATES_PLAN §3.C): never required, whatever a directive says. */
+  waivedKinds?: ReadonlySet<CommandKind>;
 }
 
 export interface GateFailure {
@@ -67,13 +69,18 @@ export function completionGate(input: GateInput): GateResult {
   }
 
   const required = new Set<CommandKind>();
-  for (const d of input.activeDirectives) if (d.rule?.type === 'require_check') for (const k of d.rule.kinds) required.add(k);
+  for (const d of input.activeDirectives) if (d.rule?.type === 'require_check') for (const k of d.rule.kinds) if (!input.waivedKinds?.has(k)) required.add(k);
   if (required.size) {
-    const passedKinds = new Set(input.testRuns.filter((r) => r.status === 'passed' && lastTests && r.stageId === lastTests.id).map((r) => r.kind));
+    const latest = input.testRuns.filter((r) => lastTests && r.stageId === lastTests.id);
+    const passedKinds = new Set(latest.filter((r) => r.status === 'passed').map((r) => r.kind));
     const missing = [...required].filter((k) => !passedKinds.has(k));
     const unavailable = missing.filter((k) => !input.configuredKinds.has(k));
+    // A pre-existing failure is not a regression and not a pass: running it again cannot satisfy the requirement.
+    const alreadyFailing = missing.filter((k) => latest.some((r) => r.kind === k && r.status === 'failed' && r.classification === 'preexisting'));
     if (unavailable.length) {
       failures.push({ code: 'required_check', message: `Required by your directive but not configured for this repository: ${unavailable.join(', ')}.`, remedy: null });
+    } else if (alreadyFailing.length) {
+      failures.push({ code: 'required_check', message: `Required by your directive, but already failing before this task (not a regression): ${alreadyFailing.join(', ')}.`, remedy: null });
     } else if (missing.length) {
       failures.push({
         code: 'required_check',

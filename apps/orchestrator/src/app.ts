@@ -11,6 +11,7 @@ import { ChairmanChat } from './chairman/chat.js';
 import { Watchdog } from './chairman/watchdog.js';
 import type { OrchestratorConfig } from './config.js';
 import { migrate, openDatabase, type Db } from './db/database.js';
+import { BaselineChecks } from './engine/baseline-checks.js';
 import { ContextBuilder } from './engine/context.js';
 import { TaskEngine } from './engine/engine.js';
 import { TaskViews } from './engine/views.js';
@@ -55,6 +56,7 @@ export interface AppServices {
   workflows: WorkflowService;
   prompts: PromptService;
   artifacts: ArtifactService;
+  context: ContextBuilder;
   views: TaskViews;
   engine: TaskEngine;
   coordinator: RepositoryCoordinator;
@@ -142,7 +144,8 @@ export function createServices(
   const skills = new SkillCatalog(agents);
   const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
-  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baseEnv: options.baseEnv });
+  const baselines = new BaselineChecks({ store, bus, tooling, dataDir: config.dataDir });
+  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, baseEnv: options.baseEnv });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
@@ -190,6 +193,7 @@ export function createServices(
     workflows,
     prompts,
     artifacts,
+    context,
     views,
     engine,
     coordinator,
@@ -224,6 +228,8 @@ export function createServices(
       // Before the engine marks them interrupted (and the Chairman resumes the task): stop what they left running.
       await processes.stopLeftoverExecutions(store.executionsWithStatus('running')).catch(() => 0);
       const result = engine.recover();
+      // Baseline checks a restart cut short leave detached worktrees under the data folder (AUTOPILOT_GATES_PLAN §5).
+      await baselines.sweep(store.listRepositories()).catch(() => 0);
       await chairman.onStartup();
       chat.recoverPending();
       ask.recoverPending();

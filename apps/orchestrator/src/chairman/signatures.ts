@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { failureIdsIn } from '../engine/test-summary.js';
 import type { ErrorClass, FailureCategory } from '@acc/shared';
 
 /**
@@ -59,11 +60,10 @@ export function testFailureCount(text: string): number | null {
 
 /** Identifiers of failing tests named in runner output (vitest, jest, mocha, node:test, pytest, TAP). */
 export function failingTestIds(detail: string, limit = 5): string[] {
+  // The same parser the test stage uses (engine/test-summary.ts), reduced to a signature's normal form.
   const ids = new Set<string>();
-  for (const raw of detail.replace(ANSI, '').split('\n')) {
-    const line = raw.trim();
-    const match = /^(?:FAIL|✕|×|✗|not ok\s+\d+\s*-?|FAILED)\s+(.+)$/.exec(line);
-    if (match) ids.add(normalizeMessage(match[1]!, 120));
+  for (const id of failureIdsIn(detail)) {
+    ids.add(normalizeMessage(id, 120));
     if (ids.size >= limit) break;
   }
   return [...ids].sort();
@@ -128,6 +128,7 @@ function categoryOf(input: FailureInput): FailureCategory {
           return 'WORKFLOW_STATE';
         case 'PROCESS_CRASH':
         case 'TIMEOUT':
+        case 'REVIEW_INCOMPLETE':
           return 'WORKER_OR_TOOL';
         default:
           return 'UNKNOWN';

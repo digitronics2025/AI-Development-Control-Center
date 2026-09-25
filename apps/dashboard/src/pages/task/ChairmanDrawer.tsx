@@ -43,6 +43,8 @@ const TRIGGER_TITLE: Record<string, string> = {
   plan_mismatch: 'Work misses the request',
   no_fail_route: 'No repair route',
   worker_failure: 'Agent kept failing',
+  check_failed: 'Check command failed',
+  review_incomplete: 'Review left files unread',
   provider_blocked: 'Agent unavailable',
   completion_gate: 'Completion check',
   limit: 'Limit reached',

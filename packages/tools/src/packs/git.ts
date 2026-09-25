@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runShell } from '@acc/executor';
-import { git, type GitResult } from '@acc/git';
+import { addDetachedWorktree, git, type GitError, type GitResult } from '@acc/git';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable } from '../detect.js';
@@ -350,8 +350,11 @@ export function gitProvider(): ToolProvider {
         },
         async run(input, ctx) {
           const dir = path.join(os.tmpdir(), `acc-bisect-${randomBytes(6).toString('hex')}`);
-          const add = await git(ctx.cwd, ['worktree', 'add', '--detach', dir, input.bad]);
-          if (add.code !== 0) return out(add, '');
+          try {
+            await addDetachedWorktree(ctx.cwd, dir, input.bad);
+          } catch (error) {
+            return out((error as GitError).result ?? { code: 1, stdout: '', stderr: String(error) }, '');
+          }
           try {
             let step = await git(dir, ['bisect', 'start', input.bad, input.good]);
             const deadline = Date.now() + input.timeoutSec * 1000;

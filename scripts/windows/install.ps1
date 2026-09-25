@@ -32,7 +32,8 @@ function New-Shortcut([string]$path, [string]$script, [string]$extraArgs, [strin
 }
 
 New-Shortcut (Join-Path $programs 'AI Control Center.lnk') $start '' 'Start the AI Development Control Center and open the dashboard'
-New-Shortcut (Join-Path $programs 'Stop AI Control Center.lnk') $stop '' 'Stop the AI Development Control Center orchestrator'
+# The shortcut runs hidden, so it drains rather than refusing where nobody would see why.
+New-Shortcut (Join-Path $programs 'Stop AI Control Center.lnk') $stop '-Drain' 'Stop the AI Development Control Center after each running task reaches the end of its current stage'
 if ($AutoStart) {
   New-Shortcut (Join-Path $startup 'AI Control Center (background).lnk') $start '-NoBrowser' 'Start the AI Development Control Center orchestrator at sign-in'
 }

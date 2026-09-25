@@ -6,7 +6,10 @@ import { git } from '@acc/git';
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
-import { addRepo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, IN_PLACE);
 
 /**
  * The tool layer through the real orchestrator (docs/plans/tool-layer-v2):

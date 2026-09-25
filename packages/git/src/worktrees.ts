@@ -57,7 +57,7 @@ export async function diffInRange(repo: string, base: string | null, tip: string
   return { diff: r.code === 0 || r.truncated ? r.stdout : '', truncated: Boolean(r.truncated) };
 }
 
-const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'requirements.txt', 'Cargo.lock', 'go.sum', 'gradle.lockfile'];
+export const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'requirements.txt', 'Cargo.lock', 'go.sum', 'gradle.lockfile'];
 
 /** What a checkpoint records besides the tree: enough to explain and compare, no file contents. */
 export async function checkpointMetadata(cwd: string): Promise<Record<string, unknown>> {
@@ -81,4 +81,13 @@ export async function checkpointMetadata(cwd: string): Promise<Record<string, un
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
   };
+}
+
+/**
+ * A throwaway checkout of `commit` with no branch (a bisect step, a baseline
+ * check): nothing in the repository's branches or the user's working tree changes.
+ */
+export async function addDetachedWorktree(repo: string, dir: string, commit: string): Promise<void> {
+  const r = await git(repo, ['worktree', 'add', '--detach', dir, commit], { timeoutMs: 300_000 });
+  if (r.code !== 0) throw new GitError(`git worktree add failed: ${r.stderr.trim()}`, r);
 }

@@ -8,7 +8,7 @@ sources:
   - apps/orchestrator/src/engine/report.ts
   - apps/orchestrator/src/chairman/signatures.ts
   - apps/dashboard/src/pages/SettingsPage.tsx
-verified_at: 8ce8b50
+verified_at: b9ce60f
 ---
 
 # Role prompts
@@ -59,8 +59,9 @@ Templates saved before the check keep rendering `(none)` for unknown names.
 | `attachments` | text attachments inline (≤ 50 KB each, redacted), others by path |
 | `directives` | active, non-routing directives for this stage, marked `(constraint)` or `(completion requirement)` |
 | `investigation`, `plan`, `implementation_report`, `review`, `verification_report` | artifacts: every investigation, the latest plan, every implementation and fix report (20 KB each), the latest review, the latest `browser-verification.md` |
-| `test_results` | the last test stage: each command's status and summary, the failing command's last 80 log lines, a commit the repository's hook rejected |
-| `diff`, `changed_files` | against the task baseline for every agent role (150 KB, redacted); a Staged Review task gets the staged diff instead |
+| `test_results` | the last test stage: each command's status and summary, the failing command's last 80 log lines, a commit the repository's hook rejected; failures the baseline commit already had are listed apart under "Already failing before this task — do not fix unless asked" |
+| `diff`, `changed_files` | against the task baseline for every agent role, packed by priority into 150 KB (redacted; `changed_files` carries `+a −d`); a Staged Review task gets the staged diff instead |
+| `diff_coverage` | "Diff shows N of M changed files in full" and one line per file not shown with its reason and how to read it. Reviewer and verifier must name each under `## Files reviewed`, or a PASS is asked again once and then fails `REVIEW_INCOMPLETE`; a user-edited template without the placeholder gets the block appended |
 | `verification_commands` | enabled lint, typecheck, test and build commands |
 | `preexisting_changes` | files with uncommitted user work at task start, or `none` |
 | `previous_attempt` | the last FAILED, CANCELLED, INTERRUPTED or PAUSED run of this stage with its last 40 log lines |
@@ -102,9 +103,9 @@ the headings it lists.
 | Investigator | attachments, Git status, earlier investigations (a second opinion checks the first), and on a root-cause return the plan, diff, review and test results | Summary, Findings, Relevant files, Repository rules that apply, Risks, Open questions (with defaults), Recommended approach, Found for Later, Skills used |
 | Planner | attachments, investigation, verification commands, and on a re-plan the previous plan with what came of it | Summary the operator can approve on, Goal, Scope, Success Criteria (each with its proof), Assumptions and Decisions, Implementation Plan, Verification, Security and Data Check, Irreversible steps and approvals, Completion Report, Found for Later, Next Recommended Task, Skills used |
 | Implementer | attachments, plan, investigation, verification commands, and the work so far (diff, test results, review, fix cycles) when a check or review sent the task back | Summary, Changes (with deviations from the plan), Verification performed (each check: ran and passed, failed, or not run), Known limitations, Found for Later, Skills used |
-| Reviewer | reports as claims, the previous review, diff, test results, app check | Summary, Previous findings, Issues graded blocking or advisory, Advisory, Skills used, `NEEDS OPERATOR:` lines, `CAUSE:` with a FAIL, `VERDICT:`. Only blocking issues fail |
+| Reviewer | reports as claims, the previous review, diff and its coverage, test results, app check | Summary, Previous findings, Issues graded blocking or advisory, Advisory, Files reviewed (each file the diff did not show), Skills used, `NEEDS OPERATOR:` lines, `CAUSE:` with a FAIL, `VERDICT:`. Only blocking issues fail |
 | Fixer | plan, reports, review, failing checks (incl. a rejected commit hook), app check, diff, verification commands, fix cycle N of M | Summary, Root causes, Fixes, Disputed findings, Verification performed, Remaining concerns, Skills used. Never weakens a check to pass it |
-| Verifier | plan, reports as claims, review, diff, test results, app check | Summary, Criteria (met / not met / unverified with named evidence), Review follow-up, Remaining limitations, Skills used, `NEEDS OPERATOR:` (repeating the review's open ones; one for a central criterion nothing can verify), `CAUSE:`, `VERDICT:` |
+| Verifier | plan, reports as claims, review, diff and its coverage, test results, app check | Summary, Criteria (met / not met / unverified with named evidence), Review follow-up, Files reviewed, Remaining limitations, Skills used, `NEEDS OPERATOR:` (repeating the review's open ones; one for a central criterion nothing can verify), `CAUSE:`, `VERDICT:` |
 
 Level 1 roles (investigator, planner, reviewer, verifier) are told what they
 can run: the read tools, read-only Git, and Level 1 Control Center checks
@@ -143,4 +144,4 @@ in code and validated as JSON, not editable templates:
 - The multi-repository plan will give each repository its own facts and diff
   block under the same placeholder names.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-25

@@ -141,6 +141,35 @@ export function RepositoryDetailPage() {
         </Banner>
       ) : null}
       {error ? <Banner tone="danger" role="alert" title="Not saved">{error}</Banner> : null}
+      {r.gitMode !== 'worktree' ? (
+        <Banner
+          tone="info"
+          title="Tasks run in your working folder"
+          actions={
+            <Button
+              onClick={() =>
+                mutations.update.mutate(
+                  { id, patch: { gitMode: 'worktree' } },
+                  {
+                    onSuccess: () => {
+                      setDraft((current) => (current ? { ...current, gitMode: 'worktree' } : current));
+                      toast('Tasks in this repository now run in isolated worktrees');
+                    },
+                    onError: (e) => setError(errorMessage(e)),
+                  },
+                )
+              }
+              loading={mutations.update.isPending}
+              disabled={!connection.online}
+              disabledReason="Reconnect to the orchestrator first"
+            >
+              Use isolated worktrees
+            </Button>
+          }
+        >
+          A task switches this folder to its own branch while it runs. With isolated worktrees each task gets its own copy, and your folder, branch and uncommitted work are never touched.
+        </Banner>
+      ) : null}
 
       <Panel title="Status" headingLevel={3}>
         <KeyValueList

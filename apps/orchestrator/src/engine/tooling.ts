@@ -361,7 +361,6 @@ export class EngineTooling {
     return path.join(this.d.dataDir, 'worktrees', slug);
   }
 
-  /** Create the task's worktree and branch; returns the new git record fields, or null to fall back to a task branch. */
   /** The folder of a multi-repository task: one worktree per repository, side by side (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
   workspaceRoot(task: Pick<TaskRecord, 'id'>): string {
     return path.join(this.d.dataDir, 'workspaces', task.id);
@@ -387,17 +386,27 @@ export class EngineTooling {
     return { taskBranch: branch, head };
   }
 
-  async createWorktree(task: TaskRecord, repo: RepositoryRecord): Promise<{ worktreePath: string; taskBranch: string; head: string } | null> {
-    if (!(await isGitRepository(repo.path))) return null;
+  /**
+   * Create the task's worktree and branch. There is no fallback to the
+   * operator's own checkout (AUTOPILOT_GATES_PLAN §3.F): a failure comes back
+   * with its reason, and the task stops before any file is touched.
+   */
+  async createWorktree(task: TaskRecord, repo: RepositoryRecord): Promise<{ ok: true; worktreePath: string; taskBranch: string; head: string } | { ok: false; reason: string }> {
+    if (!(await isGitRepository(repo.path))) return { ok: false, reason: `${repo.path} is not a Git repository` };
     const dir = path.join(this.worktreeRoot(repo), task.id);
-    mkdirSync(path.dirname(dir), { recursive: true });
     try {
+      // A folder an interrupted attempt left behind (no record, so no agent ever ran in it) is cleared first.
+      if (existsSync(dir)) {
+        await removeWorktree(repo.path, dir, { force: true });
+        const head = await headCommit(repo.path);
+        if (head) await deleteBranchIfAt(repo.path, taskBranchName(task.id, task.title), head);
+      }
+      mkdirSync(path.dirname(dir), { recursive: true });
       const { branch, head } = await addWorktree(repo.path, dir, taskBranchName(task.id, task.title));
       this.event(task.id, 'WORKTREE_CREATED', `Working in an isolated worktree on ${branch}; your working tree is not touched`, { path: dir, branch });
-      return { worktreePath: dir, taskBranch: branch, head };
+      return { ok: true, worktreePath: dir, taskBranch: branch, head };
     } catch (error) {
-      this.event(task.id, 'WORKTREE_CREATED', `Could not create a worktree (${redact((error as Error).message).slice(0, 200)}); using a task branch instead`, {});
-      return null;
+      return { ok: false, reason: redact((error as Error).message).slice(0, 300) };
     }
   }
 
@@ -414,6 +423,21 @@ export class EngineTooling {
     }
     const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null, cwd }), preApproved: true, timeoutMs: 20 * 60_000 });
     this.event(task.id, 'TOOL_CALL', `Installed dependencies in the worktree: ${outcome.result.summary}`, { executionId: outcome.execution.id, ok: outcome.result.ok });
+  }
+
+  /**
+   * Install dependencies in a throwaway checkout outside the task's own folder
+   * (a baseline check, AUTOPILOT_GATES_PLAN §3.B), from its lockfile only,
+   * through the tool policy with a scope confined to that folder.
+   */
+  async prepareDetached(task: TaskRecord, repo: RepositoryRecord, dir: string): Promise<{ ok: boolean; summary: string }> {
+    if (!packageManager(dir) || existsSync(path.join(dir, 'node_modules'))) return { ok: true, summary: 'nothing to install' };
+    if (!LOCKFILES.some((f) => existsSync(path.join(dir, f)))) return { ok: true, summary: 'no lockfile: nothing installed' };
+    // One folder, one repository: never the task's workspace list, whose narrowing would refuse a folder outside it.
+    const { repositories: _r, ...base } = this.scope(task, repo, { level: 2, stageId: null, cwd: dir });
+    const scope = { ...base, roots: [dir], protectedPaths: [] };
+    const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope, preApproved: true, timeoutMs: 20 * 60_000 });
+    return { ok: outcome.result.ok, summary: outcome.result.summary };
   }
 
   /**

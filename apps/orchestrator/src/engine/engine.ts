@@ -37,6 +37,7 @@ import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
+import type { BaselineChecks } from './baseline-checks.js';
 import { buildFinalReport, latestOperatorItems } from './report.js';
 import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
@@ -70,6 +71,8 @@ export interface EngineDeps {
   coordinator: RepositoryCoordinator;
   /** The tool layer: sessions, repairs, verification, worktrees, cleanup (docs/plans/tool-layer-v2). */
   tooling: EngineTooling;
+  /** Failed checks compared with the task's baseline commit (AUTOPILOT_GATES_PLAN §3.B). */
+  baselines: BaselineChecks;
   baseEnv?: NodeJS.ProcessEnv;
 }
 
@@ -90,6 +93,8 @@ export class TaskEngine {
   private scheduling = false;
   private rescheduleRequested = false;
   private shuttingDown = false;
+  /** Drain mode (AUTOPILOT_GATES_PLAN §3.G): every task stops at its next stage boundary, then `onDrained` runs. */
+  private draining: { onDrained: () => void } | null = null;
   private supervisor: SupervisorHooks | null = null;
 
   constructor(private readonly d: EngineDeps) {
@@ -106,6 +111,7 @@ export class TaskEngine {
       approvals: this.approvals,
       baseEnv: d.baseEnv ?? process.env,
       tooling: d.tooling,
+      baselines: d.baselines,
     });
     d.tooling.attachPublisher(this.publisher);
   }
@@ -135,6 +141,45 @@ export class TaskEngine {
 
   isRunning(id: string): boolean {
     return this.runners.has(id);
+  }
+
+  /** Tasks whose loop is working now, with the stage each is in: ids and names only, never content. */
+  runningStages(): Array<{ taskId: string; stage: string | null }> {
+    return [...this.runners.keys()].map((taskId) => {
+      const task = this.d.store.getTask(taskId);
+      const stage = task?.currentStageId ? this.d.store.getStage(task.currentStageId) : null;
+      return { taskId, stage: stage?.name ?? null };
+    });
+  }
+
+  get isDraining(): boolean {
+    return this.draining !== null;
+  }
+
+  /**
+   * Stop starting work and let each running task stop at its next stage
+   * boundary, marked INTERRUPTED so it resumes after the restart; then call
+   * `onDrained` (once). A stage that never ends can still be forced.
+   */
+  drain(onDrained: () => void): void {
+    if (this.draining) {
+      const previous = this.draining.onDrained;
+      this.draining.onDrained = () => {
+        previous();
+        onDrained();
+      };
+    } else {
+      this.draining = { onDrained };
+    }
+    for (const id of this.runners.keys()) this.publisher.event(id, 'TASK_PAUSED', 'The orchestrator is restarting: this task stops after the current stage and resumes when it is back');
+    this.checkDrained();
+  }
+
+  private checkDrained(): void {
+    if (!this.draining || this.runners.size) return;
+    const { onDrained } = this.draining;
+    this.draining.onDrained = () => undefined;
+    onDrained();
   }
 
   // ===========================================================================
@@ -701,7 +746,7 @@ export class TaskEngine {
 
   /** Start queued tasks whose repository is free. Safe to call at any time. */
   schedule(): void {
-    if (this.shuttingDown) return;
+    if (this.shuttingDown || this.draining) return;
     if (this.scheduling) {
       this.rescheduleRequested = true;
       return;
@@ -770,6 +815,7 @@ export class TaskEngine {
         const after = this.d.store.getTask(task.id);
         if (after && !['RUNNING', 'QUEUED'].includes(after.status)) void this.d.tooling.stopProcesses(task.id, `task ${after.status.toLowerCase().replace(/_/g, ' ')}`);
         setImmediate(() => this.schedule());
+        this.checkDrained();
       });
     this.runners.set(task.id, { control, done });
   }
@@ -798,6 +844,8 @@ export class TaskEngine {
       if (task.status !== 'RUNNING') return;
       if (control.stopReason === 'cancel' || control.stopReason === 'shutdown' || control.stopReason === 'redirect') return this.stopped(task, control.stopReason, null);
       if (task.pauseRequested || task.pauseAfterStage || control.stopReason === 'pause') return this.stopped(task, 'pause', null);
+      // Draining for a restart: stop here, between stages, so nothing is cut off mid-stage (§3.G).
+      if (this.draining) return this.stopped(task, 'shutdown', null);
 
       const key = task.currentStageKey ?? task.workflow.stages[0]!.key;
       if (key === COMPLETE) {
@@ -811,6 +859,15 @@ export class TaskEngine {
       if (!def) throw new Error(`Workflow snapshot has no stage "${key}"`);
 
       const repo = this.d.repositories.record(task.repositoryId);
+      // A stage whose prerequisite did not succeed has nothing to act on: skipped before any approval is asked.
+      const unmet = this.unmetRequirement(task, def);
+      if (unmet) {
+        const skipped = this.createStageInstance(task, def);
+        this.publisher.updateStage(skipped.id, { status: 'SKIPPED', summary: `Skipped: ${unmet}`, finishedAt: now() });
+        this.publisher.event(taskId, 'STAGE_SKIPPED', `${def.name} skipped: ${unmet}`, { requires: def.requires }, skipped.id);
+        if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
+        continue;
+      }
       if (!skipsForLackOfCommands(def, taskRepositories(this.d.store, task).map((r) => r.repo)) && !this.stageGate(task, def)) return;
 
       // A stage that can edit files waits for any Source Control mutation in
@@ -853,6 +910,22 @@ export class TaskEngine {
       }
       if (!(await this.handleOutcome(taskId, def, stage, outcome, control))) return;
     }
+  }
+
+  /**
+   * The first of a stage's `requires` whose latest run did not end SUCCESS,
+   * worded for the timeline ("Staging deploy did not run"), or null.
+   */
+  private unmetRequirement(task: TaskRecord, def: StageDefinition): string | null {
+    if (!def.requires?.length) return null;
+    const stages = this.d.store.listStages(task.id);
+    for (const key of def.requires) {
+      const last = stages.filter((s) => s.stageKey === key).at(-1);
+      if (last?.status === 'SUCCESS') continue;
+      const name = this.d.views.stageDef(task, key)?.name ?? key;
+      return last && last.status !== 'SKIPPED' ? `${name} did not succeed` : `${name} did not run`;
+    }
+    return null;
   }
 
   /** A hook returned "stop": honour a pending stop request, else the hook parked the task itself. */
@@ -958,7 +1031,7 @@ export class TaskEngine {
       // Worktree mode: the task gets its own checkout of HEAD on its own branch.
       // Nothing in your working tree — including uncommitted work — is involved.
       const created = await this.d.tooling.createWorktree(task, repo);
-      if (created) {
+      if (created.ok) {
         const snapshotId = newId();
         this.d.store.insertSnapshot({ id: snapshotId, taskId: task.id, stageId: null, kind: 'baseline', branch: created.taskBranch, head: created.head, files: [], createdAt: now() });
         this.publisher.updateTask(task.id, {
@@ -968,8 +1041,11 @@ export class TaskEngine {
         await this.d.tooling.prepareWorktree(this.task(task.id), repo);
         return true;
       }
-      this.publisher.updateTask(task.id, { git: { ...task.git, isolated: false } });
-      task = this.task(task.id);
+      // Never fall back to the operator's own checkout (§3.F): stop before anything is touched; Resume tries again.
+      const message = `Couldn't create an isolated worktree: ${created.reason}. Your working folder was not touched. Fix the cause, then resume to try again.`;
+      this.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'hard_blocker', message, stageKey: task.currentStageKey ?? undefined } });
+      this.publisher.event(task.id, 'TASK_WAITING', `Hard blocker: ${message}`);
+      return false;
     }
     const snap: GitSnapshot = await snapshot(repoPath);
     const snapshotId = newId();
@@ -1172,6 +1248,13 @@ export class TaskEngine {
         this.publisher.event(task.id, 'FIX_CYCLE', `Fix cycle ${cycle} of ${task.maxFixCycles} started`, { cycle });
         return true;
       }
+      case 'optional_failed': {
+        // Recorded and reported; the workflow moves on and nothing is recovered (§3.D).
+        control.autoRetries.delete(def.key);
+        this.publisher.event(taskId, 'STAGE_OPTIONAL_FAILED', `${def.name} failed and is optional: ${outcome.message}. The task continues; the report lists it.`, { stageKey: def.key, limitation: `${def.name} (optional) failed: ${outcome.message}` }, stage.id);
+        this.publisher.updateTask(taskId, { currentStageKey: def.next });
+        return true;
+      }
       case 'error':
         return this.handleError(task, def, stage, outcome, control);
       case 'blocked':
@@ -1269,6 +1352,16 @@ export class TaskEngine {
       return;
     }
     if (active) this.publisher.updateStage(current.id, { status: 'INTERRUPTED', finishedAt: now() });
+    if (!active && this.draining) {
+      // A drain stops between stages: nothing was cut off, and the next stage runs after the restart.
+      const next = this.d.views.stageDef(task, task.currentStageKey);
+      this.publisher.updateTask(task.id, {
+        status: 'INTERRUPTED',
+        blocker: { kind: 'interrupted', message: `Stopped between stages for a restart; ${next?.name ?? 'the next stage'} runs when the orchestrator is back. Resume if it does not start by itself.`, stageKey: task.currentStageKey ?? undefined },
+      });
+      this.publisher.event(task.id, 'TASK_INTERRUPTED', `Stopped at a stage boundary for a restart, before ${next?.name ?? 'the next stage'}`);
+      return;
+    }
     this.publisher.updateTask(task.id, {
       status: 'INTERRUPTED',
       blocker: { kind: 'interrupted', message: `The orchestrator stopped${current ? ` during ${current.name}` : ''}. Resume to run it again.`, stageKey: current?.stageKey },
@@ -1328,6 +1421,7 @@ export class TaskEngine {
       task = this.task(task.id);
     }
     const testRuns = this.d.store.listTestRuns(task.id);
+    gateLimitations = [...gateLimitations, ...optionalFailures(this.d.store.listEvents(task.id, { limit: 5000 }), stages)];
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
     const repositories = multi ? taskRepositories(this.d.store, task).map((u) => ({ name: u.repo.name, path: u.repo.path, folder: u.folder, git: u.git })) : undefined;
     const report = buildFinalReport({
@@ -1344,6 +1438,10 @@ export class TaskEngine {
       repositories,
       browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'operator-evidence').map((a) => a.name),
       executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)],
+      waivers: this.d.store
+        .listDirectives(task.id)
+        .filter((d) => d.state === 'active' && d.rule?.type === 'waive_check')
+        .map((d) => ({ kinds: (d.rule as { kinds: string[] }).kinds, text: d.text })),
     });
     await this.d.artifacts.write(task.id, { name: 'final-report.md', type: 'final-report', content: report.markdown });
     const finishedAt = now();
@@ -1417,6 +1515,19 @@ export class TaskEngine {
     this.shuttingDown = true;
     await Promise.all([...this.runners.keys()].map((id) => this.stop(id, 'shutdown')));
   }
+}
+
+/** Optional stages whose latest run failed, as report limitations (a later success clears one). */
+export function optionalFailures(events: Array<{ type: string; data?: Record<string, unknown> | null; stageId?: string | null }>, stages: StageInstance[]): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    if (e.type !== 'STAGE_OPTIONAL_FAILED') continue;
+    const key = e.data?.stageKey as string | undefined;
+    const limitation = e.data?.limitation as string | undefined;
+    const latest = stages.filter((s) => s.stageKey === key).at(-1);
+    if (limitation && latest?.id === e.stageId && !out.includes(limitation)) out.push(limitation);
+  }
+  return out;
 }
 
 export function deriveTitle(description: string): string {

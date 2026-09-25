@@ -3,6 +3,7 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import type { AppServices } from '../app.js';
 import { registerErrorHandler, registerRoutes } from './routes.js';
 import { registerSecurity } from './security.js';
@@ -72,12 +73,25 @@ export async function buildServer(
   app.get('/healthz', async () => ({ ok: true }));
 
   // Graceful stop for launchers: a background process on Windows cannot
-  // receive Ctrl+C. Authenticated like every /api route; running work is
-  // marked INTERRUPTED so it can be resumed after the next start.
-  app.post('/api/service/shutdown', async (_request, reply) => {
-    if (!options.onShutdownRequest) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Shutdown is not available here' } });
-    setImmediate(options.onShutdownRequest);
-    return reply.code(202).send({ ok: true });
+  // receive Ctrl+C. Authenticated like every /api route. While stages run it
+  // refuses unless asked to drain (stop each task at its next stage boundary,
+  // resumed after the restart) or to force (interrupt them now, as before)
+  // (docs/plans/AUTOPILOT_GATES_PLAN.md §3.G).
+  app.post('/api/service/shutdown', async (request, reply) => {
+    const onShutdown = options.onShutdownRequest;
+    if (!onShutdown) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Shutdown is not available here' } });
+    const { mode } = z.object({ mode: z.enum(['refuse', 'drain', 'force']).default('refuse') }).parse(request.body ?? {});
+    const running = s.engine.runningStages();
+    if (mode === 'force' || running.length === 0) {
+      setImmediate(onShutdown);
+      return reply.code(202).send({ ok: true, waitingFor: [] });
+    }
+    if (mode === 'refuse') {
+      const list = running.map((r) => `${r.taskId}${r.stage ? ` (${r.stage})` : ''}`).join(', ');
+      return reply.code(409).send({ error: { code: 'TASKS_RUNNING', message: `Not stopping: ${running.length} task${running.length === 1 ? ' is' : 's are'} running: ${list}. Drain to stop each at its next stage boundary, or force to interrupt them now.` }, running });
+    }
+    s.engine.drain(() => setImmediate(onShutdown));
+    return reply.code(202).send({ ok: true, draining: true, waitingFor: running });
   });
 
   const dashboardDir = s.config.dashboardDir;

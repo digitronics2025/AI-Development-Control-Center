@@ -69,3 +69,83 @@ export function testFailureSummary(lines: string[]): string {
   if (node && (node.fail || node.cancelled)) return describeNodeTotals(node);
   return lastMatching(lines, /\S/) ?? 'Command failed';
 }
+
+// ---------------------------------------------------------------------------
+// Failing test ids (docs/plans/AUTOPILOT_GATES_PLAN.md §3.B): which tests
+// failed, read from the whole output while it streams, so a failure can be
+// compared with the same command's result on the baseline commit.
+// ---------------------------------------------------------------------------
+
+/** How many ids one run keeps; beyond it the run's failures cannot be compared. */
+export const MAX_FAILURE_IDS = 500;
+
+/** Vitest, Jest, Mocha, node:test, TAP and pytest per-test failure lines. */
+const FAILURE_LINE = /^(?:FAIL|✕|×|✗|not ok\s+\d+\s*-?|FAILED)\s+(.+)$/;
+/** Playwright's summary block: `  10 failed` followed by `[project] › file:line:col › title` lines. */
+const PLAYWRIGHT_BLOCK = /^\d+ failed$/;
+const PLAYWRIGHT_ENTRY = /^\[[^\]]+\] › .+/;
+
+/**
+ * One failing test's id, stable across two runs of the same suite: no colour,
+ * no timing, no line and column numbers (a task may move a test within its file),
+ * no pytest failure reason. Digits in names are kept: "case 1" is not "case 2".
+ */
+export function normalizeTestId(raw: string): string {
+  return raw
+    .replace(ANSI, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    // Playwright pads a title with a box-drawing rule: decoration, not part of the name.
+    .replace(/\s*[─━]+$/, '')
+    .replace(/\s*\(?\d+(?:\.\d+)?\s?m?s\)?$/, '')
+    .replace(/(\.[a-z]{1,5}):\d+(?::\d+)?\b/gi, '$1')
+    .slice(0, 300);
+}
+
+/**
+ * Collects failing test ids from a command's output, a line at a time, up
+ * to `MAX_FAILURE_IDS`. `overflow` says more failed than were kept, so the
+ * list is not complete and cannot prove anything pre-existing.
+ */
+export class FailureIdCollector {
+  private readonly ids = new Set<string>();
+  private inPlaywrightBlock = false;
+  overflow = false;
+
+  constructor(private readonly limit = MAX_FAILURE_IDS) {}
+
+  push(rawLine: string): void {
+    const line = rawLine.replace(ANSI, '').trim();
+    if (PLAYWRIGHT_BLOCK.test(line)) {
+      this.inPlaywrightBlock = true;
+      return;
+    }
+    if (this.inPlaywrightBlock) {
+      if (PLAYWRIGHT_ENTRY.test(line)) return this.add(line);
+      this.inPlaywrightBlock = false;
+    }
+    const match = FAILURE_LINE.exec(line);
+    if (match) this.add(line.startsWith('FAILED') ? match[1]!.replace(/ - .*$/, '') : match[1]!);
+  }
+
+  private add(raw: string): void {
+    const id = normalizeTestId(raw);
+    if (!id || this.ids.has(id)) return;
+    if (this.ids.size >= this.limit) {
+      this.overflow = true;
+      return;
+    }
+    this.ids.add(id);
+  }
+
+  list(): string[] {
+    return [...this.ids].sort();
+  }
+}
+
+/** Failing test ids named in runner output (the Chairman's failure signatures use the first `limit`). */
+export function failureIdsIn(output: string, limit = MAX_FAILURE_IDS): string[] {
+  const collector = new FailureIdCollector(limit);
+  for (const line of output.split('\n')) collector.push(line);
+  return collector.list();
+}

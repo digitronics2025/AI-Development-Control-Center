@@ -203,12 +203,14 @@ export class RepositoryService {
       defaultWorkflowId: null,
       roleOverrides: {},
       commands: detected.commands,
-      gitMode: 'task-branch',
+      // Isolated by default: a task never switches or edits your own checkout (AUTOPILOT_GATES_PLAN §3.F).
+      gitMode: 'worktree',
       autoApproveUpToLevel: null,
       tooling: detected.tooling,
       lastTaskId: null,
       policyMode: null,
       runtime: detected.runtime,
+      preexistingFailures: 'allow',
       createdAt: ts,
       updatedAt: ts,
     };

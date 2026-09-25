@@ -82,6 +82,8 @@ export const ERROR_CLASSES = [
   'TEST_FAILURE',
   'CONTEXT_FAILURE',
   'PERMISSION_DENIED',
+  /** A verdict stage passed without accounting for every changed file it was not shown. */
+  'REVIEW_INCOMPLETE',
   'UNKNOWN',
 ] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
@@ -98,6 +100,8 @@ export const EVENT_TYPES = [
   'STAGE_STARTED',
   'STAGE_COMPLETED',
   'STAGE_FAILED',
+  /** An optional stage failed: recorded as a report limitation, never a recovery (AUTOPILOT_GATES_PLAN §3.D). */
+  'STAGE_OPTIONAL_FAILED',
   'STAGE_SKIPPED',
   'STAGE_RETRY',
   'AGENT_STARTED',

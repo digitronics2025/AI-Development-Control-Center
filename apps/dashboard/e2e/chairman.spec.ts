@@ -34,6 +34,8 @@ function repoWithCheck(check: string): string {
 async function newTask(page: Page, check: string, description: string): Promise<string> {
   // Named to sort after the seeded repositories: other specs select the first one.
   const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: repoWithCheck(check), name: `zz-chairman-${Date.now()}` });
+  // Its checks fail before any change too; strict mode keeps them failures the task must fix.
+  await api(page, 'PATCH', `/api/repositories/${repo.id}`, { preexistingFailures: 'block' });
   const task = await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'normal-development', mode: 'autopilot', description });
   return task.id;
 }

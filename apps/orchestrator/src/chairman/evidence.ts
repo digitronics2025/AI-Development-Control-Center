@@ -194,7 +194,7 @@ export class ChairmanEvidenceService {
 
   /** Last lines of the failed command in a tests stage (also what the failure signature reads). */
   testFailure(taskId: string, stageId: string): { detail: string; commandName: string | null } {
-    const failed = this.d.store.listTestRuns(taskId, stageId).find((r) => r.status === 'failed');
+    const failed = this.d.store.listTestRuns(taskId, stageId).find((r) => r.status === 'failed' && r.classification !== 'preexisting');
     if (!failed?.executionId) return { detail: '', commandName: failed?.name ?? null };
     return { detail: this.d.store.tailLogLines(failed.executionId, TEST_LOG_LINES).map((l) => l.text).join('\n'), commandName: failed.name };
   }
@@ -260,7 +260,7 @@ export class ChairmanEvidenceService {
   }
 
   private testOutput(task: TaskRecord, stageId: string) {
-    const failed = this.d.store.listTestRuns(task.id, stageId).find((r) => r.status === 'failed');
+    const failed = this.d.store.listTestRuns(task.id, stageId).find((r) => r.status === 'failed' && r.classification !== 'preexisting');
     if (!failed) return null;
     const { detail } = this.testFailure(task.id, stageId);
     const ids = failingTestIds(detail, 10);

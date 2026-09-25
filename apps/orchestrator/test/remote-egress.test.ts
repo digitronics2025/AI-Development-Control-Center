@@ -5,7 +5,11 @@ import type { AgentAdapter, AgentExecutionInput, AgentExecutionResult } from '@a
 import { resetSharedRedactor } from '@acc/security';
 import { EgressSanitizer, stripLocalFields } from '../src/remote/egress.js';
 import { FakeRelay } from './fake-relay.js';
-import { addRepo, createTask, createTestApp, makeRepo, simAdapters, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, simAdapters, TOKEN, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+
+// These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
+// Its Chairman fixture fails before any change too: strict mode keeps that a failure the task must fix.
+const addRepo = (app: TestApp, repoPath: string) => addRepoTo(app, repoPath, { ...IN_PLACE, preexistingFailures: 'block' });
 
 // Assembled at runtime: no credential-shaped literal in the repository.
 const ENV_SECRET = ['envsecret', randomBytes(8).toString('hex')].join('-');

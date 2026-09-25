@@ -27,6 +27,14 @@ const NPM_SCRIPT = /^npm\s+(?:test|t|run(?:-script)?\s+([\w:.@/-]+))$/;
 const COMPOUND = /&&|\|\||[;|<>`]|\$\(|^\s*\w+=/;
 /** A relative path that needs no quoting in any shell; no segment starts with a dot (so none is "..") or a dash (never read as an option). */
 const SAFE_PATH = /^[\w@+][\w.@+-]*(?:\/[\w@+][\w.@+-]*)*$/;
+/**
+ * The same, also allowing route-style brackets (`functions/api/accounts/[id]/x.test.ts`,
+ * Cloudflare Pages and Next.js route files). Brackets are glob characters in POSIX
+ * shells, so such a path is passed in double quotes; nothing else in it needs them.
+ */
+const BRACKET_PATH = /^[\w@+[][\w.@+\-[\]]*(?:\/[\w@+[][\w.@+\-[\]]*)*$/;
+const safePath = (f: string) => SAFE_PATH.test(f) || BRACKET_PATH.test(f);
+const shellArg = (f: string) => (SAFE_PATH.test(f) ? f : `"${f}"`);
 const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|(?:^|\/)test_[^/]+\.py|_test\.py)$/;
 
 function isRunner(line: string): boolean {
@@ -42,7 +50,7 @@ export function testFileOf(id: string): string | null {
   const playwright = /^\[[^\]]+\] › (.+?) › /.exec(id);
   const raw = playwright ? playwright[1]! : id.split(' > ')[0]!.split('::')[0]!.split(' [ ')[0]!;
   const file = raw.trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!SAFE_PATH.test(file) || file.split('/').includes('..') || !TEST_FILE.test(file)) return null;
+  if (!safePath(file) || file.split('/').includes('..') || !TEST_FILE.test(file)) return null;
   return file;
 }
 
@@ -62,14 +70,14 @@ export interface TargetedCommand {
  * it has none); `files` must already be known to exist at that commit.
  */
 export function targetedCommand(commandLine: string, scripts: Record<string, string> | null, files: string[]): TargetedCommand | null {
-  if (!files.length || files.length > MAX_TARGETED_FILES || files.some((f) => !SAFE_PATH.test(f))) return null;
+  if (!files.length || files.length > MAX_TARGETED_FILES || files.some((f) => !safePath(f))) return null;
   const line = commandLine.trim().replace(/\s+/g, ' ');
   const script = NPM_SCRIPT.exec(line);
   if (script) {
     const body = scripts?.[script[1] ?? 'test'];
     if (typeof body !== 'string' || !isRunner(body.trim())) return null;
-    return { commandLine: `${line} -- ${files.join(' ')}`, files };
+    return { commandLine: `${line} -- ${files.map(shellArg).join(' ')}`, files };
   }
   if (!isRunner(line)) return null;
-  return { commandLine: `${line} ${files.join(' ')}`, files };
+  return { commandLine: `${line} ${files.map(shellArg).join(' ')}`, files };
 }

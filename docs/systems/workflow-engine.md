@@ -186,7 +186,8 @@ Smoke after a skipped Staging, the unit suite run three times):
   failing test files run first
   ([targeted-tests.ts](../../apps/orchestrator/src/engine/targeted-tests.ts)):
   files read from the ids that exist at the baseline commit (safe relative
-  paths, test-file names, at most 50), appended to an npm script whose body is
+  paths — route folders like `[id]` allowed and passed in double quotes; looked
+  up with literal pathspecs — test-file names, at most 50), appended to an npm script whose body is
   one `vitest`/`jest`/`playwright test` run, or to such a runner called
   directly (`npm test -- a.test.ts`); never pytest, whose files can fail alone
   and pass in the suite. File paths never start with `.` or `-`, and

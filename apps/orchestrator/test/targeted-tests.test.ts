@@ -46,6 +46,14 @@ describe('the targeted command', () => {
     expect(targetedCommand('npm run test:e2e', scripts, ['tests/e2e/auth.spec.ts'])?.commandLine).toBe('npm run test:e2e -- tests/e2e/auth.spec.ts');
   });
 
+  it('narrows route files with brackets, passing them in double quotes (found in TASK-0009)', () => {
+    const id = 'functions/api/banking/accounts/[id]/unaccounted-now.test.ts > GET /api/banking/accounts/:id/unaccounted-now > defaults asOf to today UTC when omitted';
+    expect(testFileOf(id)).toBe('functions/api/banking/accounts/[id]/unaccounted-now.test.ts');
+    expect(targetedCommand('npm test', scripts, ['src/a.test.ts', 'functions/api/[id]/b.test.ts'])?.commandLine).toBe('npm test -- src/a.test.ts "functions/api/[id]/b.test.ts"');
+    // Only brackets are added: quotes, spaces, `$` and the rest stay refused.
+    for (const bad of ['functions/api/[id]"/x.test.ts > t', 'functions/[$(id)]/x.test.ts > t', 'functions/[id] x/x.test.ts > t', '../[id]/x.test.ts > t']) expect(testFileOf(bad), bad).toBeNull();
+  });
+
   it('narrows a runner called directly', () => {
     expect(targetedCommand('npx vitest run', null, ['a.test.ts'])?.commandLine).toBe('npx vitest run a.test.ts');
     expect(targetedCommand('npx playwright test --project=chromium', null, ['e2e/a.spec.ts'])?.commandLine).toBe('npx playwright test --project=chromium e2e/a.spec.ts');

@@ -111,7 +111,7 @@ export class BaselineChecks {
     try {
       const repoPath = input.repo.path;
       // The command and the files as they are at the baseline commit, not in the task's changed copy.
-      const present = await git(repoPath, ['ls-tree', '-r', '--name-only', key.baselineCommit, '--', ...files]);
+      const present = await git(repoPath, ['--literal-pathspecs', 'ls-tree', '-r', '--name-only', key.baselineCommit, '--', ...files]);
       if (present.code !== 0) return null;
       const atBaseline = new Set(present.stdout.split('\n').filter(Boolean));
       if (!files.every((f) => atBaseline.has(f))) return null;

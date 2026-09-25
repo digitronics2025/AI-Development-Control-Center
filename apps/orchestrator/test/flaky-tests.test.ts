@@ -71,6 +71,38 @@ describe('flaky tests', () => {
     expect(t.services.store.listEvents(id, { limit: 500 }).some((e) => e.type === 'FIX_CYCLE')).toBe(false);
   }, 120_000);
 
+  it('runs a route file with brackets again too, through npm and the shell', async () => {
+    t = await createTestApp();
+    const fake = [
+      "const fs = require('fs');",
+      "const files = process.argv.slice(2).filter((a) => a !== 'run');",
+      "const changed = fs.existsSync('sim-output.md');",
+      // Run alone, the bracketed path must arrive exactly as written.
+      "const fails = changed && files.length === 0;",
+      "if (files.length && !files.includes('routes/[id]/a.test.ts')) { console.log('unexpected args ' + JSON.stringify(files)); process.exit(2); }",
+      "if (fails) console.log(' FAIL  routes/[id]/a.test.ts > A > renders the total');",
+      "console.log(fails ? ' Tests  1 failed | 41 passed' : ' Tests  42 passed');",
+      'process.exit(fails ? 1 : 0);',
+    ].join('\n');
+    const repoPath = await makeRepo({ scripts: { test: 'vitest run' }, files: { 'fake-vitest.js': fake } });
+    mkdirSync(path.join(repoPath, 'routes', '[id]'), { recursive: true });
+    writeFileSync(path.join(repoPath, 'routes', '[id]', 'a.test.ts'), '');
+    const bin = path.join(repoPath, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'vitest.cmd'), '@node "%~dp0\\..\\..\\fake-vitest.js" %*\r\n');
+    writeFileSync(path.join(bin, 'vitest'), '#!/bin/sh\nexec node "$(dirname "$0")/../../fake-vitest.js" "$@"\n');
+    await git(repoPath, ['add', '-f', '-A']);
+    await git(repoPath, ['update-index', '--chmod=+x', 'node_modules/.bin/vitest']);
+    await git(repoPath, ['commit', '-m', 'fake runner']);
+    const repo = await addRepo(t, repoPath);
+    const id = await createTask(t, repo, 'Add a feature', { supervised: false, maxFixCycles: 0 });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000);
+    const runs = t.services.store.listTestRuns(id);
+    expect(runs.find((r) => r.command === 'npm test -- "routes/[id]/a.test.ts"')).toMatchObject({ status: 'passed' });
+    expect(runs.find((r) => r.command === 'npm test')).toMatchObject({ classification: 'flaky' });
+    expect(task.status).toBe('COMPLETED');
+  }, 120_000);
+
   it('a failure that fails again on its own is not flaky: it blocks as before', async () => {
     t = await createTestApp();
     const repo = await repoWith(t, 'real');

@@ -105,7 +105,20 @@ They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
 
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
-task record. The report lists any `browser-recheck-*.md` re-checks under
+task record. Both carry **Where the time went**
+([time-breakdown.ts](../../apps/orchestrator/src/engine/time-breakdown.ts),
+also `GET /api/tasks/:id/time`, measured up to now for a running task): every
+millisecond from creation to the end in exactly one bucket, by precedence
+stage → parked → queued → overhead, so the buckets add up to the total. Agent
+stages count as rework once a tests stage failed with anything not
+pre-existing, or a review failed; `tests`/`command`/`verify`/`git` stages are
+checks (`baseline …` executions shown as the part spent comparing with the
+baseline), `release` stages are release; parked runs from `TASK_WAITING`,
+`APPROVAL_REQUESTED`, `TASK_FAILED` or `TASK_INTERRUPTED` to the next
+`TASK_RESUMED`, `APPROVAL_RESOLVED`, `STAGE_RETRY`, `TASK_COMPLETED` or
+`TASK_CANCELLED`. It also counts agents' Bash calls that ran a configured
+test or e2e command in full (evidence only). Computed on demand, no table;
+an error gives "Not enough data" and never stops the report. The report lists any `browser-recheck-*.md` re-checks under
 Verification coverage as operator-observed evidence, never as a pass
 ([connected-apps.md](connected-apps.md)). A reviewer/verifier stage with `verdict: false` still records an
 advisory verdict (it does not route); a FAIL makes the report

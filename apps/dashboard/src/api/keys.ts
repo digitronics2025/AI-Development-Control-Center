@@ -10,6 +10,7 @@ export const keys = {
   taskTests: (id: string) => ['task', id, 'tests'] as const,
   taskArtifacts: (id: string) => ['task', id, 'artifacts'] as const,
   taskChanges: (id: string) => ['task', id, 'changes'] as const,
+  taskTime: (id: string) => ['task', id, 'time'] as const,
   taskDiff: (id: string, path: string | null, repositoryId: string | null = null) => ['task', id, 'diff', path ?? '*', repositoryId ?? ''] as const,
   taskDirectives: (id: string) => ['task', id, 'directives'] as const,
   taskApprovals: (id: string) => ['task', id, 'approvals'] as const,

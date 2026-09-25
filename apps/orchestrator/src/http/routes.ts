@@ -29,11 +29,13 @@ import {
   type ServiceHealth,
   type TaskChanges,
   type TaskStatus,
+  type TimeBreakdown,
 } from '@acc/shared';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
 import { ReleaseError } from '../release/service.js';
 import { taskRepositories, taskRepository, type TaskRepository } from '../engine/task-repositories.js';
+import { taskTimeBreakdown } from '../engine/time-breakdown.js';
 import { taskWorkdir } from '../engine/workdir.js';
 import { AgentNotFoundError } from '../services/agents.js';
 import { toArtifactView } from '../services/artifacts.js';
@@ -257,6 +259,12 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     const { id } = idParam.parse(request.params);
     engine.task(id);
     return store.listTestRuns(id);
+  });
+
+  // Where the task's time went, up to now for a running task (docs/plans/LEAD_TIME_PLAN.md §3.3).
+  app.get('/api/tasks/:id/time', async (request): Promise<TimeBreakdown> => {
+    const { id } = idParam.parse(request.params);
+    return taskTimeBreakdown(store, engine.task(id));
   });
 
   app.get('/api/tasks/:id/artifacts', async (request) => {

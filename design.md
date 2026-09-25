@@ -780,6 +780,9 @@ Contains:
 - review state,
 - the Release card when the task was released or can be (state chip, commit,
   target, each proof with its evidence, **Check again**),
+- the **Where the time went** card once the task has started (a key-value
+  list, one duration per bucket; the baseline comparison inside Checks; "so
+  far" while it runs),
 - final report when complete.
 
 A release is production-impacting: its header action **Release…** is a

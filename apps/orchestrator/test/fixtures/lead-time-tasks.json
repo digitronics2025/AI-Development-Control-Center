@@ -1,0 +1,1176 @@
+{
+ "TASK-0007": {
+  "createdAt": "2026-09-25T10:34:00.892Z",
+  "endAt": "2026-09-25T14:04:17.809Z",
+  "finished": true,
+  "stages": [
+   {
+    "id": "s0",
+    "kind": "agent",
+    "startedAt": "2026-09-25T10:34:02.323Z",
+    "finishedAt": "2026-09-25T10:37:51.214Z"
+   },
+   {
+    "id": "s1",
+    "kind": "agent",
+    "startedAt": "2026-09-25T10:37:51.224Z",
+    "finishedAt": "2026-09-25T10:41:27.025Z"
+   },
+   {
+    "id": "s2",
+    "kind": "agent",
+    "startedAt": "2026-09-25T10:41:27.784Z",
+    "finishedAt": "2026-09-25T11:18:57.711Z"
+   },
+   {
+    "id": "s3",
+    "kind": "tests",
+    "startedAt": "2026-09-25T11:18:57.725Z",
+    "finishedAt": "2026-09-25T11:33:31.707Z"
+   },
+   {
+    "id": "s4",
+    "kind": "agent",
+    "startedAt": "2026-09-25T11:33:32.436Z",
+    "finishedAt": "2026-09-25T11:51:59.802Z"
+   },
+   {
+    "id": "s5",
+    "kind": "tests",
+    "startedAt": "2026-09-25T11:51:59.808Z",
+    "finishedAt": "2026-09-25T12:10:17.902Z"
+   },
+   {
+    "id": "s6",
+    "kind": "agent",
+    "startedAt": "2026-09-25T12:10:51.687Z",
+    "finishedAt": "2026-09-25T12:12:17.857Z"
+   },
+   {
+    "id": "s7",
+    "kind": "agent",
+    "startedAt": "2026-09-25T12:12:18.674Z",
+    "finishedAt": "2026-09-25T12:14:43.742Z"
+   },
+   {
+    "id": "s8",
+    "kind": "agent",
+    "startedAt": "2026-09-25T12:16:12.025Z",
+    "finishedAt": "2026-09-25T12:17:18.746Z"
+   },
+   {
+    "id": "s9",
+    "kind": "agent",
+    "startedAt": "2026-09-25T12:17:18.751Z",
+    "finishedAt": "2026-09-25T12:18:38.881Z"
+   },
+   {
+    "id": "s10",
+    "kind": "agent",
+    "startedAt": "2026-09-25T12:18:39.458Z",
+    "finishedAt": "2026-09-25T12:49:24.825Z"
+   },
+   {
+    "id": "s11",
+    "kind": "tests",
+    "startedAt": "2026-09-25T12:49:24.830Z",
+    "finishedAt": "2026-09-25T13:03:37.709Z"
+   },
+   {
+    "id": "s12",
+    "kind": "verify",
+    "startedAt": "2026-09-25T13:03:37.719Z",
+    "finishedAt": "2026-09-25T13:03:37.723Z"
+   },
+   {
+    "id": "s13",
+    "kind": "agent",
+    "startedAt": "2026-09-25T13:03:37.727Z",
+    "finishedAt": "2026-09-25T13:04:18.794Z"
+   },
+   {
+    "id": "s14",
+    "kind": "agent",
+    "startedAt": "2026-09-25T13:04:18.799Z",
+    "finishedAt": "2026-09-25T13:04:54.178Z"
+   },
+   {
+    "id": "s15",
+    "kind": "git",
+    "startedAt": "2026-09-25T13:04:54.183Z",
+    "finishedAt": "2026-09-25T13:04:55.068Z"
+   },
+   {
+    "id": "s16",
+    "kind": "command",
+    "startedAt": "2026-09-25T13:04:55.070Z",
+    "finishedAt": "2026-09-25T13:04:55.073Z"
+   },
+   {
+    "id": "s17",
+    "kind": "command",
+    "startedAt": "2026-09-25T13:04:55.077Z",
+    "finishedAt": "2026-09-25T13:04:55.486Z"
+   },
+   {
+    "id": "s18",
+    "kind": "command",
+    "startedAt": "2026-09-25T13:05:18.519Z",
+    "finishedAt": "2026-09-25T13:05:18.916Z"
+   },
+   {
+    "id": "s19",
+    "kind": "command",
+    "startedAt": "2026-09-25T13:20:59.225Z",
+    "finishedAt": "2026-09-25T13:20:59.629Z"
+   },
+   {
+    "id": "s20",
+    "kind": "command",
+    "startedAt": "2026-09-25T13:21:35.678Z",
+    "finishedAt": "2026-09-25T13:21:36.285Z"
+   },
+   {
+    "id": "s21",
+    "kind": "command",
+    "startedAt": "2026-09-25T14:04:17.273Z",
+    "finishedAt": "2026-09-25T14:04:17.276Z"
+   }
+  ],
+  "events": [
+   {
+    "type": "TASK_CREATED",
+    "at": "2026-09-25T10:34:00.908Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_QUEUED",
+    "at": "2026-09-25T10:34:00.915Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_STARTED",
+    "at": "2026-09-25T10:34:00.921Z",
+    "stageId": null
+   },
+   {
+    "type": "ENVIRONMENT_DISCOVERED",
+    "at": "2026-09-25T10:34:02.317Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T10:34:02.325Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T10:34:02.741Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T10:37:51.215Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T10:37:51.226Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T10:37:51.359Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T10:41:27.026Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "GIT_BASELINE",
+    "at": "2026-09-25T10:41:27.325Z",
+    "stageId": null
+   },
+   {
+    "type": "GIT_BRANCH",
+    "at": "2026-09-25T10:41:27.327Z",
+    "stageId": null
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T10:41:27.781Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T10:41:27.786Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T10:41:28.364Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T11:18:57.712Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T11:18:57.727Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T11:18:57.756Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T11:18:57.764Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T11:19:54.145Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T11:19:54.148Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T11:33:31.703Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T11:33:31.707Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "FIX_CYCLE",
+    "at": "2026-09-25T11:33:31.717Z",
+    "stageId": null
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T11:33:32.430Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T11:33:32.439Z",
+    "stageId": "s4"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T11:33:33.248Z",
+    "stageId": "s4"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T11:51:59.802Z",
+    "stageId": "s4"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T11:51:59.810Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T11:51:59.821Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T11:51:59.826Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T11:53:14.606Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T11:53:14.610Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T12:07:20.978Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T12:07:20.983Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T12:07:39.797Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T12:07:39.800Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T12:10:17.898Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T12:10:17.903Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T12:10:51.160Z",
+    "stageId": null
+   },
+   {
+    "type": "RECOVERY_CYCLE",
+    "at": "2026-09-25T12:10:51.168Z",
+    "stageId": null
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T12:10:51.674Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_REDIRECTED",
+    "at": "2026-09-25T12:10:51.681Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_ACTION",
+    "at": "2026-09-25T12:10:51.684Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:10:51.688Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T12:10:52.141Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "TASK_INTERRUPTED",
+    "at": "2026-09-25T12:12:17.858Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T12:12:18.567Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T12:12:18.571Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_ACTION",
+    "at": "2026-09-25T12:12:18.575Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:12:18.677Z",
+    "stageId": "s7"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T12:12:20.851Z",
+    "stageId": "s7"
+   },
+   {
+    "type": "TASK_WAITING",
+    "at": "2026-09-25T12:14:43.745Z",
+    "stageId": "s7"
+   },
+   {
+    "type": "USER_DIRECTIVE",
+    "at": "2026-09-25T12:16:12.014Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T12:16:12.016Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T12:16:12.019Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:16:12.027Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "DIRECTIVE_APPLIED",
+    "at": "2026-09-25T12:16:12.030Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T12:16:15.198Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T12:17:18.746Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:17:18.753Z",
+    "stageId": "s9"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T12:17:22.312Z",
+    "stageId": "s9"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T12:18:38.881Z",
+    "stageId": "s9"
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T12:18:39.454Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:18:39.461Z",
+    "stageId": "s10"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T12:18:42.863Z",
+    "stageId": "s10"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T12:49:24.825Z",
+    "stageId": "s10"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T12:49:24.831Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T12:49:24.848Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T12:49:24.852Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T12:50:09.044Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T12:50:09.046Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T13:03:18.771Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T13:03:18.773Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T13:03:37.706Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T13:03:37.710Z",
+    "stageId": "s11"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:03:37.716Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:03:37.720Z",
+    "stageId": "s12"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T13:03:37.723Z",
+    "stageId": "s12"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:03:37.728Z",
+    "stageId": "s13"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T13:03:41.146Z",
+    "stageId": "s13"
+   },
+   {
+    "type": "REVIEW_PASSED",
+    "at": "2026-09-25T13:04:18.794Z",
+    "stageId": "s13"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T13:04:18.795Z",
+    "stageId": "s13"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:04:18.800Z",
+    "stageId": "s14"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T13:04:19.236Z",
+    "stageId": "s14"
+   },
+   {
+    "type": "REVIEW_PASSED",
+    "at": "2026-09-25T13:04:54.179Z",
+    "stageId": "s14"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T13:04:54.180Z",
+    "stageId": "s14"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:04:54.184Z",
+    "stageId": "s15"
+   },
+   {
+    "type": "GIT_COMMIT",
+    "at": "2026-09-25T13:04:55.066Z",
+    "stageId": "s15"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:04:55.071Z",
+    "stageId": "s16"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T13:04:55.073Z",
+    "stageId": "s16"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:04:55.078Z",
+    "stageId": "s17"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T13:04:55.083Z",
+    "stageId": "s17"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T13:04:55.086Z",
+    "stageId": "s17"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T13:04:55.484Z",
+    "stageId": "s17"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T13:04:55.486Z",
+    "stageId": "s17"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:05:18.057Z",
+    "stageId": null
+   },
+   {
+    "type": "RECOVERY_CYCLE",
+    "at": "2026-09-25T13:05:18.060Z",
+    "stageId": null
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T13:05:18.509Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_REDIRECTED",
+    "at": "2026-09-25T13:05:18.514Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_ACTION",
+    "at": "2026-09-25T13:05:18.516Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:05:18.520Z",
+    "stageId": "s18"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T13:05:18.523Z",
+    "stageId": "s18"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T13:05:18.525Z",
+    "stageId": "s18"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T13:05:18.915Z",
+    "stageId": "s18"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T13:05:18.917Z",
+    "stageId": "s18"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:05:18.922Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:05:18.926Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_WAITING",
+    "at": "2026-09-25T13:05:18.929Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T13:20:59.213Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:20:59.226Z",
+    "stageId": "s19"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T13:20:59.238Z",
+    "stageId": "s19"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T13:20:59.242Z",
+    "stageId": "s19"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T13:20:59.627Z",
+    "stageId": "s19"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T13:20:59.629Z",
+    "stageId": "s19"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:21:35.065Z",
+    "stageId": null
+   },
+   {
+    "type": "RECOVERY_CYCLE",
+    "at": "2026-09-25T13:21:35.069Z",
+    "stageId": null
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T13:21:35.652Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_REDIRECTED",
+    "at": "2026-09-25T13:21:35.666Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_ACTION",
+    "at": "2026-09-25T13:21:35.670Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T13:21:35.682Z",
+    "stageId": "s20"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T13:21:35.694Z",
+    "stageId": "s20"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T13:21:35.699Z",
+    "stageId": "s20"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T13:21:36.283Z",
+    "stageId": "s20"
+   },
+   {
+    "type": "STAGE_FAILED",
+    "at": "2026-09-25T13:21:36.286Z",
+    "stageId": "s20"
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:21:36.298Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T13:21:36.311Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_WAITING",
+    "at": "2026-09-25T13:21:36.319Z",
+    "stageId": null
+   },
+   {
+    "type": "USER_DIRECTIVE",
+    "at": "2026-09-25T14:04:03.360Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T14:04:17.263Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T14:04:17.266Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T14:04:17.275Z",
+    "stageId": "s21"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T14:04:17.277Z",
+    "stageId": "s21"
+   },
+   {
+    "type": "TASK_COMPLETED",
+    "at": "2026-09-25T14:04:17.816Z",
+    "stageId": null
+   }
+  ],
+  "baselineRuns": [],
+  "agentBashLines": [
+   "[tool] Bash npx vitest run a.test.ts b.test.tsx 2>&1 | tail -25",
+   "[tool] Bash npm test > \"$TMP/out.log\" 2>&1; echo \"exit $?\" >> \"$TMP/out.log\"; tail -15 \"$TMP/out.log\"",
+   "[tool] Bash npx vitest run src/test/wiring.test.tsx -t \"retryable\" 2>&1 | tail -8",
+   "[tool] Bash npm test > \"$TMP/out.log\" 2>&1; echo exit=$?",
+   "[tool] Bash cd $REPO; git status --short | head -30",
+   "[tool] Bash npm test > \"$TMP/out.log\" 2>&1; echo \"test exit $?\"; grep -E \"Test Files|Tests \" \"$TMP/out.log\" | tail -3",
+   "[tool] Bash npm test > \"$TMP/out.log\" 2>&1; echo \"test exit $?\" >> \"$TMP/out.log\""
+  ],
+  "suiteCommands": [
+   "npm test",
+   "npm run test:e2e"
+  ]
+ },
+ "TASK-0008": {
+  "createdAt": "2026-09-25T16:08:40.098Z",
+  "endAt": "2026-09-25T17:27:14.814Z",
+  "finished": true,
+  "stages": [
+   {
+    "id": "s0",
+    "kind": "agent",
+    "startedAt": "2026-09-25T16:09:28.745Z",
+    "finishedAt": "2026-09-25T16:12:42.932Z"
+   },
+   {
+    "id": "s1",
+    "kind": "agent",
+    "startedAt": "2026-09-25T16:12:44.059Z",
+    "finishedAt": "2026-09-25T16:16:35.100Z"
+   },
+   {
+    "id": "s2",
+    "kind": "agent",
+    "startedAt": "2026-09-25T16:16:38.315Z",
+    "finishedAt": "2026-09-25T16:46:06.449Z"
+   },
+   {
+    "id": "s3",
+    "kind": "tests",
+    "startedAt": "2026-09-25T16:46:06.454Z",
+    "finishedAt": "2026-09-25T17:25:21.553Z"
+   },
+   {
+    "id": "s4",
+    "kind": "verify",
+    "startedAt": "2026-09-25T17:25:21.560Z",
+    "finishedAt": "2026-09-25T17:25:21.564Z"
+   },
+   {
+    "id": "s5",
+    "kind": "agent",
+    "startedAt": "2026-09-25T17:25:21.570Z",
+    "finishedAt": "2026-09-25T17:26:16.390Z"
+   },
+   {
+    "id": "s6",
+    "kind": "agent",
+    "startedAt": "2026-09-25T17:26:16.394Z",
+    "finishedAt": "2026-09-25T17:27:04.072Z"
+   },
+   {
+    "id": "s7",
+    "kind": "git",
+    "startedAt": "2026-09-25T17:27:04.076Z",
+    "finishedAt": "2026-09-25T17:27:04.633Z"
+   },
+   {
+    "id": "s8",
+    "kind": "command",
+    "startedAt": "2026-09-25T17:27:04.635Z",
+    "finishedAt": "2026-09-25T17:27:04.637Z"
+   },
+   {
+    "id": "s9",
+    "kind": "command",
+    "startedAt": "2026-09-25T17:27:04.640Z",
+    "finishedAt": "2026-09-25T17:27:04.642Z"
+   }
+  ],
+  "events": [
+   {
+    "type": "TASK_CREATED",
+    "at": "2026-09-25T16:08:40.113Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_QUEUED",
+    "at": "2026-09-25T16:08:40.128Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_STARTED",
+    "at": "2026-09-25T16:08:40.139Z",
+    "stageId": null
+   },
+   {
+    "type": "WORKTREE_CREATED",
+    "at": "2026-09-25T16:08:42.353Z",
+    "stageId": null
+   },
+   {
+    "type": "GIT_BASELINE",
+    "at": "2026-09-25T16:08:42.386Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_PAUSED",
+    "at": "2026-09-25T16:09:21.947Z",
+    "stageId": null
+   },
+   {
+    "type": "TOOL_CALL",
+    "at": "2026-09-25T16:09:27.272Z",
+    "stageId": null
+   },
+   {
+    "type": "ENVIRONMENT_DISCOVERED",
+    "at": "2026-09-25T16:09:28.742Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T16:09:28.746Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T16:09:29.382Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T16:12:42.932Z",
+    "stageId": "s0"
+   },
+   {
+    "type": "TASK_INTERRUPTED",
+    "at": "2026-09-25T16:12:42.943Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_DECISION",
+    "at": "2026-09-25T16:12:43.957Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_RESUMED",
+    "at": "2026-09-25T16:12:43.962Z",
+    "stageId": null
+   },
+   {
+    "type": "CHAIRMAN_ACTION",
+    "at": "2026-09-25T16:12:43.967Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T16:12:44.061Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T16:12:45.441Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T16:16:35.101Z",
+    "stageId": "s1"
+   },
+   {
+    "type": "CHECKPOINT_CREATED",
+    "at": "2026-09-25T16:16:38.313Z",
+    "stageId": null
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T16:16:38.317Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T16:16:38.943Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T16:46:06.449Z",
+    "stageId": "s2"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T16:46:06.454Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_STARTED",
+    "at": "2026-09-25T16:46:06.475Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T16:46:06.843Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T16:47:06.932Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T16:47:06.938Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T17:21:31.990Z",
+    "stageId": "s3",
+    "data": {
+     "classification": "preexisting"
+    }
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T17:21:31.994Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_PASSED",
+    "at": "2026-09-25T17:22:01.717Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "COMMAND_STARTED",
+    "at": "2026-09-25T17:22:01.724Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "TEST_FAILED",
+    "at": "2026-09-25T17:25:21.547Z",
+    "stageId": "s3",
+    "data": {
+     "classification": "preexisting"
+    }
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T17:25:21.553Z",
+    "stageId": "s3"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:25:21.562Z",
+    "stageId": "s4"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T17:25:21.565Z",
+    "stageId": "s4"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:25:21.572Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T17:25:22.423Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "REVIEW_PASSED",
+    "at": "2026-09-25T17:26:16.390Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T17:26:16.391Z",
+    "stageId": "s5"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:26:16.395Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "AGENT_STARTED",
+    "at": "2026-09-25T17:26:16.850Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "REVIEW_PASSED",
+    "at": "2026-09-25T17:27:04.073Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "STAGE_COMPLETED",
+    "at": "2026-09-25T17:27:04.074Z",
+    "stageId": "s6"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:27:04.077Z",
+    "stageId": "s7"
+   },
+   {
+    "type": "GIT_COMMIT",
+    "at": "2026-09-25T17:27:04.631Z",
+    "stageId": "s7"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:27:04.636Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T17:27:04.637Z",
+    "stageId": "s8"
+   },
+   {
+    "type": "STAGE_STARTED",
+    "at": "2026-09-25T17:27:04.641Z",
+    "stageId": "s9"
+   },
+   {
+    "type": "STAGE_SKIPPED",
+    "at": "2026-09-25T17:27:04.642Z",
+    "stageId": "s9"
+   },
+   {
+    "type": "WORKTREE_REMOVED",
+    "at": "2026-09-25T17:27:14.801Z",
+    "stageId": null
+   },
+   {
+    "type": "TASK_COMPLETED",
+    "at": "2026-09-25T17:27:14.825Z",
+    "stageId": null
+   }
+  ],
+  "baselineRuns": [
+   {
+    "startedAt": "2026-09-25T17:03:48.361Z",
+    "finishedAt": "2026-09-25T17:21:24.779Z"
+   },
+   {
+    "startedAt": "2026-09-25T17:23:14.985Z",
+    "finishedAt": "2026-09-25T17:25:13.759Z"
+   }
+  ],
+  "agentBashLines": [
+   "[tool] Bash cd \"$WORKTREE\" && npx vitest run src/lib/a.test.ts 2>&1 | tail -30",
+   "[tool] Bash cd \"$WORKTREE\" && npx vitest run src/lib functions/api/admin 2>&1 | grep -E \"FAIL|Tests\"",
+   "[tool] Bash cd \"$WORKTREE\" && npm test -- scripts/pin-guard.test.ts 2>&1 | tail -8"
+  ],
+  "suiteCommands": [
+   "npm test",
+   "npm run test:e2e"
+  ]
+ }
+}

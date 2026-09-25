@@ -132,6 +132,12 @@ state, commit, target, times, each proof with its evidence, and **Check
 again** for a release that was sent and is not Live. Repository data from the
 cloud may lack `release`; the UI then offers no Release actions.
 
+Once a task has started, Overview shows **Where the time went**
+(`TimeCard` in [OverviewTab.tsx](../../apps/dashboard/src/pages/task/OverviewTab.tsx),
+`useTaskTime` → `GET /api/tasks/:id/time`, refetched every 30 s while the task
+runs): one duration per bucket, the baseline comparison inside Checks, and how
+often agents ran a full suite themselves ([workflow-engine.md](workflow-engine.md)).
+
 ## Tool layer views
 
 - **Execution tab** ([ExecutionTab.tsx](../../apps/dashboard/src/pages/task/ExecutionTab.tsx)):

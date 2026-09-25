@@ -238,7 +238,7 @@ describe('B. baseline-aware checks', () => {
     expect(t.services.store.latestStage(id, 'test')).toMatchObject({ status: 'SUCCESS' });
     expect(done.finalStatus).toBe('NEEDS_USER_ACTION');
     expect(await artifactText(t, id, 'final-report.md')).toMatch(/1 pre-existing failure in `[^`]+` was left as it was/);
-    expect(await artifactText(t, id, 'tests.log')).toMatch(/all 1 failing as before on [0-9a-f]{7}/);
+    expect(await artifactText(t, id, 'tests.log')).toMatch(/Tests 1 failed \| 3 passed — every failure also fails on [0-9a-f]{7}$/m);
     // The review saw them apart from the task's own results.
     expect(await artifactText(t, id, 'review-prompt.md')).toContain('### Already failing before this task — do not fix unless asked');
     // The baseline ran once, in a detached worktree that is gone again.

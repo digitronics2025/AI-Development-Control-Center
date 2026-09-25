@@ -32,6 +32,7 @@ import type {
   TaskEvent,
   TaskSummary,
   TestRun,
+  TimeBreakdown,
   UpdateRepositoryInput,
   WorkflowIssue,
   WorkflowProfile,
@@ -180,6 +181,12 @@ export function useChairmanAction(taskId: string) {
     mutationFn: ({ action, idempotencyKey }: { action: ChairmanActionInput; idempotencyKey: string }) => api.post<ChairmanAction>(`/api/tasks/${taskId}/chairman/actions`, { action, idempotencyKey }),
     onSettled: () => void qc.invalidateQueries({ queryKey: keys.taskDirectives(taskId) }),
   });
+}
+
+/** Where the task's time went (docs/plans/LEAD_TIME_PLAN.md §3.3); refreshed every 30 s while it runs. */
+export function useTaskTime(id: string, running: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.taskTime(id), queryFn: ({ signal }) => api.get<TimeBreakdown>(`/api/tasks/${id}/time`, signal), refetchInterval: running ? 30_000 : false });
 }
 
 export function useTaskChanges(id: string, enabled = true) {

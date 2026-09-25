@@ -16,10 +16,46 @@ import {
   useNow,
 } from '@acc/ui';
 import { MODE_LABEL, ROLE_LABEL, type Artifact, type TaskDetail } from '@acc/shared';
-import { useArtifactContent, useRepository, useTaskArtifacts, useTaskDirectives } from '../../api/hooks';
+import { useArtifactContent, useRepository, useTaskArtifacts, useTaskDirectives, useTaskTime } from '../../api/hooks';
 import { ReleaseCard } from './ReleaseCard';
 import { AssignmentText } from '../../components/agents';
 import { Markdown } from '../../components/markdown';
+
+/** Where the task's time went (docs/plans/LEAD_TIME_PLAN.md §3.3): one line per bucket, adding up to the total. */
+function TimeCard({ taskId, running }: { taskId: string; running: boolean }) {
+  const time = useTaskTime(taskId, running);
+  const b = time.data;
+  return (
+    <Panel title="Where the time went" headingLevel={3} description={b ? `${formatDuration(b.totalMs)}${b.finished ? '' : ' so far'}` : undefined}>
+      {time.isLoading ? (
+        <Skeleton className="h-24" />
+      ) : !b?.buckets ? (
+        <p className="text-body text-fg-secondary">Not enough data to divide this task's time{b?.reason ? `: ${b.reason}` : ''}.</p>
+      ) : (
+        <KeyValueList
+          items={[
+            { label: 'Waiting to start', value: <span className="tabular">{formatDuration(b.buckets.queued)}</span>, hidden: b.buckets.queued < 1000 },
+            { label: 'Agents, first pass', value: <span className="tabular">{formatDuration(b.buckets.agentFirstPass)}</span> },
+            { label: 'Agents, rework', value: <span className="tabular">{formatDuration(b.buckets.agentRework)}</span> },
+            {
+              label: 'Checks',
+              value: (
+                <span className="tabular">
+                  {formatDuration(b.buckets.checks)}
+                  {b.baselineMs ? ` · ${formatDuration(b.baselineMs)} comparing with the baseline` : ''}
+                </span>
+              ),
+            },
+            { label: 'Release', value: <span className="tabular">{formatDuration(b.buckets.release)}</span>, hidden: !b.buckets.release },
+            { label: 'Waiting for you', value: <span className="tabular">{formatDuration(b.buckets.parked)}</span> },
+            { label: 'Between stages', value: <span className="tabular">{formatDuration(b.buckets.overhead)}</span> },
+            { label: 'Agents ran a full suite', value: <span className="tabular">{b.agentSuiteRuns} time{b.agentSuiteRuns === 1 ? '' : 's'}</span>, hidden: !b.agentSuiteRuns },
+          ]}
+        />
+      )}
+    </Panel>
+  );
+}
 
 function FinalReport({ artifact }: { artifact: Artifact }) {
   const content = useArtifactContent(artifact.id);
@@ -123,6 +159,8 @@ export function OverviewTab({ task, onOpenTab }: { task: TaskDetail; onOpenTab: 
           </div>
         </Panel>
       </div>
+
+      {task.startedAt ? <TimeCard taskId={task.id} running={running} /> : null}
 
       <Panel title="Request" headingLevel={3}>
         <p className="whitespace-pre-wrap text-body text-fg wrap-anywhere">{task.description}</p>

@@ -319,6 +319,32 @@ export interface Approval {
   resolvedAt: Iso | null;
 }
 
+/**
+ * Where a task's time went (docs/plans/LEAD_TIME_PLAN.md §3.3): every
+ * millisecond from creation to the end (or now) in exactly one bucket, so the
+ * buckets add up to the total. `buckets` is null when the records are too
+ * incomplete to divide, with the reason.
+ */
+export interface TimeBreakdown {
+  totalMs: number;
+  /** Measured up to the task's end, or up to now for a task that has not finished. */
+  finished: boolean;
+  buckets: {
+    queued: number;
+    agentFirstPass: number;
+    agentRework: number;
+    checks: number;
+    release: number;
+    parked: number;
+    overhead: number;
+  } | null;
+  /** Part of `checks`: comparing failures with the baseline commit. */
+  baselineMs: number;
+  /** Times an agent ran a configured test or e2e command in full itself (read from its Bash calls; evidence only). */
+  agentSuiteRuns: number;
+  reason?: string;
+}
+
 export interface TestRun {
   id: string;
   taskId: string;

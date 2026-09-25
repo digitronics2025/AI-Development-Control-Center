@@ -634,7 +634,11 @@ export class StageRunners {
           { task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env, failures: failures ?? [], overflow: exec.overflow },
           { stopped: () => control.stopReason !== null },
         );
-        if (verdict.classification === 'preexisting') summary = `${summary ?? 'Failed'} — all ${failures!.length} failing as before on ${verdict.baselineCommit!.slice(0, 7)}`;
+        // The runner's own totals line says how many failed; the ids are not a test count (LEAD_TIME_PLAN §3.2).
+        if (verdict.classification === 'preexisting') {
+          const narrowed = verdict.checkedFiles ? ` (only the ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} run there)` : '';
+          summary = `${summary ?? 'Failed'} — every failure also fails on ${verdict.baselineCommit!.slice(0, 7)}${narrowed}`;
+        }
       }
       this.publishTestRun(
         store.updateTestRun(run.id, {

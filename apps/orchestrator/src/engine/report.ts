@@ -25,6 +25,8 @@ export interface ReportInput {
   waivers?: Array<{ kinds: string[]; text: string }>;
   /** Re-checks the operator attached from Private Browser (docs/systems/connected-apps.md): informational, never a pass. */
   browserRechecks?: string[];
+  /** Where the task's time went (docs/plans/LEAD_TIME_PLAN.md §3.3), already formatted. */
+  timeLines?: string[];
   /** A task across repositories: each one with its folder and Git record, primary first. */
   repositories?: Array<{ name: string; path: string; folder: string | null; git: TaskRecord['git'] }>;
 }
@@ -211,6 +213,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
         ? ['## Verification coverage', '', `- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`, '']
         : []),
     ...(input.executionLines?.length ? ['## Execution', '', ...input.executionLines, ''] : []),
+    ...(input.timeLines?.length ? ['## Where the time went', '', ...input.timeLines, ''] : []),
     '## Cloud',
     '',
     ...cloudLines(input),

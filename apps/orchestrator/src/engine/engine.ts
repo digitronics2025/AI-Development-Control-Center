@@ -39,6 +39,7 @@ import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
 import type { BaselineChecks } from './baseline-checks.js';
 import { buildFinalReport, latestOperatorItems } from './report.js';
+import { taskTimeBreakdown, timeBreakdownLines } from './time-breakdown.js';
 import { Publisher } from './publisher.js';
 import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunControl, type StageOutcome, type StopReason } from './runners.js';
 import type { SupervisorHooks } from './supervision.js';
@@ -1484,6 +1485,8 @@ export class TaskEngine {
     gateLimitations = [...gateLimitations, ...optionalFailures(this.d.store.listEvents(task.id, { limit: 5000 }), stages)];
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
     const repositories = multi ? taskRepositories(this.d.store, task).map((u) => ({ name: u.repo.name, path: u.repo.path, folder: u.folder, git: u.git })) : undefined;
+    // Measured up to now, the moment the task completes (LEAD_TIME_PLAN §3.3); it never throws.
+    const time = taskTimeBreakdown(this.d.store, this.task(task.id));
     const report = buildFinalReport({
       task,
       repo,
@@ -1499,6 +1502,7 @@ export class TaskEngine {
       repositories,
       browserRechecks: this.d.store.listArtifacts(task.id).filter((a) => a.type === 'operator-evidence').map((a) => a.name),
       executionLines: [...this.d.tooling.reportSection(task), ...cleanup.map((l) => `- ${l}`)],
+      timeLines: timeBreakdownLines({ ...time, finished: true }),
       waivers: this.d.store
         .listDirectives(task.id)
         .filter((d) => d.state === 'active' && d.rule?.type === 'waive_check')
@@ -1512,7 +1516,7 @@ export class TaskEngine {
     await this.d.artifacts.write(task.id, {
       name: 'task.json',
       type: 'task-json',
-      content: JSON.stringify({ ...this.d.views.detail({ ...this.task(task.id), ...completion, updatedAt: finishedAt }), events: this.d.store.listEvents(task.id, { limit: 2000 }) }, null, 2),
+      content: JSON.stringify({ ...this.d.views.detail({ ...this.task(task.id), ...completion, updatedAt: finishedAt }), timeBreakdown: { ...time, finished: true }, events: this.d.store.listEvents(task.id, { limit: 2000 }) }, null, 2),
     });
     this.publisher.updateTask(task.id, completion);
     this.publisher.event(task.id, 'TASK_COMPLETED', report.finalStatus === 'READY' ? 'Task completed · ready' : `Task completed · needs your attention: ${report.limitations[0]}`, {

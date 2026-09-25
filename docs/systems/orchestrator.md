@@ -153,7 +153,10 @@ on a newer database) are left alone.
 stopped, leftover terminals exited, leftover task processes — and agent or
 command processes of executions still marked running — killed only if still
 the same process (creation time within 15 s); then engine reconciliation, then the Chairman resumes
-interrupted supervised tasks and answers pending chat), gives the tool layer
+interrupted supervised tasks and answers pending chat, the learning loop and
+phone alerts start — alerts send what a restart left unsent in the last hour,
+[operations.md](operations.md#phone-alerts) — and `close()` stops alerts
+before the learning loop), gives the tool layer
 its listen URL (agent tool sessions need it), refreshes stale tool detection
 and loads stored credentials into the redactor in the background,
 schedules queued tasks, starts Source Control reconciliation (then
@@ -183,4 +186,4 @@ listener stays on loopback. Details: [remote-node.md](remote-node.md).
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

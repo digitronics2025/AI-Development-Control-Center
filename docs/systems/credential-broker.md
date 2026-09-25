@@ -311,4 +311,4 @@ recorded in both plans' Ledgers.
 - MyVault must send `Cross-Origin-Opener-Policy: same-origin-allow-popups`
   (not `same-origin`), or its popup has no opener to answer.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-26

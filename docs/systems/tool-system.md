@@ -70,7 +70,9 @@ the level: a recursive delete is Level 5, a read-only shell script Level 1) →
 stage's profile but within its level — recorded in `capability_escalations`
 and as a `CAPABILITY_ESCALATED` event), needs approval, or deny →
 5. checkpoint before high-impact work in a task (level ≥ 3, or database
-writes) → 6. inject brokered credentials ([credential-broker.md](credential-broker.md))
+writes) → 6. inject brokered credentials ([credential-broker.md](credential-broker.md);
+a credential kept for the orchestrator — the phone-alert token — is read only
+by a Level 5 `cloudflare.secret_put` / `github.secret_put`, never another tool)
 → 7. run with timeout and cancellation → 8. redact → 9. record a
 `tool_executions` row, publish `toolExecution`, and add a `TOOL_CALL` event
 for notable calls (level ≥ 3, long-running, failures, verification evidence).
@@ -199,4 +201,4 @@ credential, checkpoint and session routes in their own docs. Realtime:
 - `node-pty`, `playwright-core`, `better-sqlite3` and `axe-core` stay external
   to the orchestrator bundle and must be dependencies of `@acc/orchestrator`.
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

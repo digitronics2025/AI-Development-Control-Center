@@ -90,4 +90,4 @@ Stored credentials are encrypted with a key that only this Windows account can
 unwrap (`credential-key.dpapi`), so a copy restored under another account or
 machine cannot read them — re-enter them there ([credential-broker.md](credential-broker.md)).
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

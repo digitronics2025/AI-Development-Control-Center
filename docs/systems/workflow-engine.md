@@ -296,4 +296,4 @@ runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`, or for
 a composed `1 failed | 2 passed (3)`
 ([test-summary.ts](../../apps/orchestrator/src/engine/test-summary.ts)).
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

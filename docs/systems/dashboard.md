@@ -276,4 +276,4 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
   the local cloud e2e harness, which has no Access in front, it lands on the
   Worker's JSON 401 instead.
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

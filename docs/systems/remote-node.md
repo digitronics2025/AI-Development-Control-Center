@@ -117,7 +117,7 @@ stage's permission level, creating a new workflow (duplicate one instead),
 adding a repository-discovery folder or un-ignoring a removed repository,
 turning on terminals, agent tool access, automatic repairs, the Chairman
 adopting improvements on its own, or an agent loading the operator's own CLI
-customisations, attachments, and a task across several repositories (`linkedRepositoryIds`). Lowering is allowed. Settings are judged as they would be saved
+customisations, attachments, a task across several repositories (`linkedRepositoryIds`), and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
 and a repository override set to `null` is judged by the Settings value it falls
 back to.
@@ -260,4 +260,4 @@ classification, dropped escapes, expiry) run against the in-process
 Worker: `apps/cloud-control/test/*.test.ts` (see
 [cloud-control.md](cloud-control.md#tests)).
 
-Last verified: 2026-09-24
+Last verified: 2026-09-26

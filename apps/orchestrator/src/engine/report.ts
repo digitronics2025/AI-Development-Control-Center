@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import type { ChangedFile, FinalStatus, StageInstance, TaskRelease, TestRun } from '@acc/shared';
+import { nonBlockingFailure, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -115,7 +115,9 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
   // Failures that already existed on the baseline commit are reported, not counted against the task (§3.B).
   const preexistingRuns = latestRuns.filter((r) => r.status === 'failed' && r.classification === 'preexisting');
-  const failed = latestRuns.filter((r) => r.status === 'failed' && r.classification !== 'preexisting').length;
+  // A failure whose failing files passed when run again on the same files: flaky, reported, not counted against the task.
+  const flakyRuns = latestRuns.filter((r) => r.status === 'failed' && r.classification === 'flaky');
+  const failed = latestRuns.filter((r) => r.status === 'failed' && !nonBlockingFailure(r)).length;
   const notRun = latestRuns.filter((r) => r.status === 'not_run' || r.status === 'blocked').length;
   const build = latestRuns.find((r) => r.kind === 'build');
   const hasTestsStage = task.workflow.stages.some((s) => s.kind === 'tests');
@@ -125,6 +127,10 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (failed > 0) limitations.push(`${failed} verification command(s) failed in the last run.`);
   else if (lastTestStage?.status === 'FAILED') limitations.push('The last test stage failed.');
   if (lastTestStage?.status === 'SUCCESS' && latestRuns.length && passed === 0) limitations.push('No verification command passed in the last test run.');
+  for (const r of flakyRuns) {
+    const n = r.failures?.length ?? 0;
+    limitations.push(`\`${r.command}\` failed once (${n} test${n === 1 ? '' : 's'}: ${(r.failures ?? []).slice(0, 3).join('; ')}${n > 3 ? '; …' : ''}), and the failing test files passed when run again on the same files: a flaky test, worth fixing separately.`);
+  }
   for (const r of preexistingRuns) {
     const n = r.failures?.length ?? 0;
     limitations.push(`${n} pre-existing failure${n === 1 ? '' : 's'} in \`${r.command}\` ${n === 1 ? 'was' : 'were'} left as ${n === 1 ? 'it was' : 'they were'} (already failing on the baseline commit).`);

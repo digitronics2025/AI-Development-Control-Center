@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { changesSince } from '@acc/git';
 import { redact } from '@acc/security';
-import { FAILURE_CATEGORY_LABEL, STRATEGY_OUTCOME_LABEL, type ChangedFile, type FailureCategory, type RecoveryAttempt, type ToolExecution } from '@acc/shared';
+import { FAILURE_CATEGORY_LABEL, STRATEGY_OUTCOME_LABEL, nonBlockingFailure, type ChangedFile, type FailureCategory, type RecoveryAttempt, type ToolExecution } from '@acc/shared';
 import { inFolder, taskRepositories } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
 import type { AgentRegistry } from '../services/agents.js';
@@ -194,7 +194,7 @@ export class ChairmanEvidenceService {
 
   /** Last lines of the failed command in a tests stage (also what the failure signature reads). */
   testFailure(taskId: string, stageId: string): { detail: string; commandName: string | null } {
-    const failed = this.d.store.listTestRuns(taskId, stageId).find((r) => r.status === 'failed' && r.classification !== 'preexisting');
+    const failed = this.d.store.listTestRuns(taskId, stageId).find((r) => r.status === 'failed' && !nonBlockingFailure(r));
     if (!failed?.executionId) return { detail: '', commandName: failed?.name ?? null };
     return { detail: this.d.store.tailLogLines(failed.executionId, TEST_LOG_LINES).map((l) => l.text).join('\n'), commandName: failed.name };
   }
@@ -260,7 +260,7 @@ export class ChairmanEvidenceService {
   }
 
   private testOutput(task: TaskRecord, stageId: string) {
-    const failed = this.d.store.listTestRuns(task.id, stageId).find((r) => r.status === 'failed' && r.classification !== 'preexisting');
+    const failed = this.d.store.listTestRuns(task.id, stageId).find((r) => r.status === 'failed' && !nonBlockingFailure(r));
     if (!failed) return null;
     const { detail } = this.testFailure(task.id, stageId);
     const ids = failingTestIds(detail, 10);

@@ -10,7 +10,7 @@ const preexisting = (run: TestRun) => run.status === 'failed' && run.classificat
 function RunIcon({ run }: { run: TestRun }) {
   const { status } = run;
   if (status === 'passed') return <CheckCircle2 size={16} className="text-success" aria-hidden />;
-  if (preexisting(run)) return <CircleMinus size={16} className="text-warning" aria-hidden />;
+  if (preexisting(run) || run.classification === 'flaky') return <CircleMinus size={16} className="text-warning" aria-hidden />;
   if (status === 'failed') return <XCircle size={16} className="text-danger" aria-hidden />;
   if (status === 'running') return <Loader2 size={16} className="animate-spin text-accent" aria-hidden />;
   return <Circle size={16} className="text-fg-tertiary" aria-hidden />;
@@ -28,6 +28,7 @@ function RunOutput({ executionId }: { executionId: string }) {
 /** What a run's status means once the baseline and reuse are known. */
 function statusText(run: TestRun): string {
   if (preexisting(run)) return 'failed · already failing before this task';
+  if (run.status === 'failed' && run.classification === 'flaky') return 'failed once · passed when run again: flaky';
   if (run.status === 'failed' && run.classification === 'new') return 'failed · new since the baseline';
   return STATUS_TEXT[run.status];
 }

@@ -43,8 +43,9 @@ At least one proof is required. Repository detection never turns release on.
    holds uncommitted changes beyond the operator's pre-existing ones.
 2. **Tested** — `git rev-parse <sha>^{tree}` must be one of `testedTrees()`:
    for each SUCCESS `tests` stage, the `tree_id` of its last-finished check,
-   when every check passed or failed only as on the baseline (repair rows
-   excluded). No tree recorded → "No record of which version passed the checks".
+   when every check passed, failed only as on the baseline, or was flaky
+   (its failing files passed when run again on the same files); repair and
+   re-run rows excluded. No tree recorded → "No record of which version passed the checks".
 3. **Safe to publish** (under the repository writer lock) — the remote exists;
    `fetchBranch` updates only `refs/remotes/<remote>/<branch>`; that ref must be
    an ancestor of the commit ("`<branch>` has moved…"); every outgoing commit

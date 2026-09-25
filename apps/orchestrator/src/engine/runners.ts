@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
 import { changesSince, commitPaths, committableTree } from '@acc/git';
@@ -34,6 +36,7 @@ import { extractOperatorBlockers } from './report.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { FailureIdCollector, testFailureSummary, testPassSummary } from './test-summary.js';
+import { targetedCommand, testFilesOf } from './targeted-tests.js';
 import type { EngineTooling } from './tooling.js';
 import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
@@ -560,6 +563,7 @@ export class StageRunners {
     let failure: string | null = null;
     let finished = 0;
     const preexisting: string[] = [];
+    const flaky: string[] = [];
     let reused = 0;
     // The files each repository's commands run on (§3.E), read once and again only after a command changed them.
     const trees = new Map<string, string | null>();
@@ -638,6 +642,14 @@ export class StageRunners {
         if (verdict.classification === 'preexisting') {
           const narrowed = verdict.checkedFiles ? ` (only the ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} run there)` : '';
           summary = `${summary ?? 'Failed'} — every failure also fails on ${verdict.baselineCommit!.slice(0, 7)}${narrowed}`;
+        } else if (failures?.length && !exec.overflow && !control.stopReason) {
+          // Not explained by the baseline: run only the failing test files again, on exactly these files.
+          // All passing means the failure does not reproduce — a flaky test, reported and not blocking.
+          const again = await this.rerunFailingFiles(task, stage, unit, command, env, control, run, failures, name);
+          if (again?.passed) {
+            verdict = { classification: 'flaky', baselineCommit: verdict.baselineCommit, reason: null, checkedFiles: again.files };
+            summary = `${summary ?? 'Failed'} — the ${again.files} failing test file${again.files === 1 ? '' : 's'} passed when run again on the same files: flaky, not blocking`;
+          }
         }
       }
       this.publishTestRun(
@@ -660,6 +672,9 @@ export class StageRunners {
         // Recorded and reported, never a fix cycle: the stage goes on with the next command.
         publisher.event(task.id, 'TEST_FAILED', `${name} failed as it already did before this task (${failures!.length} pre-existing failure${failures!.length === 1 ? '' : 's'} on ${verdict.baselineCommit!.slice(0, 7)}); not blocking`, { executionId: exec.executionId, classification: 'preexisting' }, stage.id);
         preexisting.push(name);
+      } else if (verdict?.classification === 'flaky') {
+        publisher.event(task.id, 'TEST_FAILED', `${name} failed once, and its ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} passed when run again on the same files: flaky, not blocking (${failures!.slice(0, 3).join('; ')}${failures!.length > 3 ? '; …' : ''})`, { executionId: exec.executionId, classification: 'flaky' }, stage.id);
+        flaky.push(name);
       } else {
         const why = verdict ? (verdict.classification === 'new' ? ' · new since the baseline' : ` · compared with the baseline: unknown (${verdict.reason ?? 'no result'}), treated as new`) : '';
         publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}${why}`, { executionId: exec.executionId, classification: verdict?.classification ?? null }, stage.id);
@@ -690,12 +705,61 @@ export class StageRunners {
         ? { kind: 'tests_failed', stageId: stage.id, message: failure }
         : { kind: 'error', stageId: stage.id, errorClass: 'COMMAND_FAILURE', message: failure };
     }
-    const passed = commands.length - preexisting.length;
+    const passed = commands.length - preexisting.length - flaky.length;
     const parts = [`${passed} command${passed === 1 ? '' : 's'} passed${reused ? ` (${reused} reused)` : ''}`];
     if (preexisting.length) parts.push(`${preexisting.join(', ')} failing as before this task`);
+    if (flaky.length) parts.push(`${flaky.join(', ')} flaky (passed when its failing files ran again)`);
     publisher.updateStage(stage.id, { status: 'SUCCESS', summary: parts.join('; '), finishedAt: now() });
-    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed${preexisting.length ? ` apart from failures that already existed before this task (${preexisting.join(', ')})` : ''}`, {}, stage.id);
+    const apart = [...(preexisting.length ? [`failures that already existed before this task (${preexisting.join(', ')})`] : []), ...(flaky.length ? [`flaky tests that passed when run again (${flaky.join(', ')})`] : [])];
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} passed${apart.length ? ` apart from ${apart.join(' and ')}` : ''}`, {}, stage.id);
     return { kind: 'success', stageId: stage.id };
+  }
+
+  /**
+   * Run only the failing test files of a failed check again, on exactly the
+   * task's files, as their own test run. Null when the command cannot be
+   * narrowed safely (not one test runner, a file that does not exist here, over
+   * the file limit): the failure then stands as it is.
+   */
+  private async rerunFailingFiles(
+    task: TaskRecord,
+    stage: StageInstance,
+    unit: RepoUnit,
+    command: RepositoryCommand,
+    env: NodeJS.ProcessEnv,
+    control: RunControl,
+    failedRun: TestRun,
+    failures: string[],
+    name: string,
+  ): Promise<{ passed: boolean; files: number } | null> {
+    const files = testFilesOf(failures);
+    if (!files.length || !files.every((f) => existsSync(path.join(unit.workdir, f)))) return null;
+    let scripts: Record<string, string> | null = null;
+    try {
+      const parsed = JSON.parse(readFileSync(path.join(unit.workdir, 'package.json'), 'utf8')) as { scripts?: unknown };
+      if (parsed.scripts && typeof parsed.scripts === 'object') scripts = parsed.scripts as Record<string, string>;
+    } catch {
+      scripts = null;
+    }
+    const narrowed = targetedCommand(command.command, scripts, files);
+    if (!narrowed) return null;
+    const again: RepositoryCommand = { ...command, id: `${command.id}-again`, name: `${name} · failing files again`, command: narrowed.commandLine };
+    const row: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: again.name, ...(failedRun.repositoryId ? { repositoryId: failedRun.repositoryId } : {}), kind: command.kind, command: redact(again.command), status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
+    this.d.store.insertTestRun(row);
+    this.publishTestRun(row);
+    this.publishTestRun(this.d.store.updateTestRun(failedRun.id, { summary: `${failedRun.summary ?? 'Failed'} — running the ${files.length} failing test file${files.length === 1 ? '' : 's'} again` }));
+    const exec = await this.executeCommand(task, stage, unit.workdir, again, env, control, row);
+    const passed = Boolean(exec?.passed);
+    this.publishTestRun(
+      this.d.store.updateTestRun(row.id, {
+        status: exec ? (passed ? 'passed' : 'failed') : 'not_run',
+        exitCode: exec?.result.exitCode ?? null,
+        durationMs: exec?.result.durationMs ?? null,
+        summary: `Re-run: ${passed ? 'passed' : 'failed again'} — ${files.length} failing test file${files.length === 1 ? '' : 's'} of ${name}${exec?.summary ? ` (${exec.summary})` : ''}`,
+        finishedAt: now(),
+      }),
+    );
+    return exec ? { passed, files: files.length } : null;
   }
 
   /** A passing run of the same command, in the same repository, on the same files, earlier in this task (§3.E). */

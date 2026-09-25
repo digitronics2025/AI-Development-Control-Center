@@ -13,7 +13,7 @@ import {
   treeOfCommit,
 } from '@acc/git';
 import { redact } from '@acc/security';
-import { RELEASE_STATE_LABEL, type EventType, type PushReleaseConfig, type ReleaseEvidence, type ReleaseSetupCheck, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { RELEASE_STATE_LABEL, nonBlockingFailure, type EventType, type PushReleaseConfig, type ReleaseEvidence, type ReleaseSetupCheck, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import { matchesAny } from '../chairman/rules.js';
 import type { ApprovalGate } from '../engine/approvals.js';
@@ -95,9 +95,9 @@ export function testedTrees(store: Store, task: TaskRecord, repositoryId: string
   const all = store.listTestRuns(task.id);
   for (const stage of store.listStages(task.id)) {
     if (stage.kind !== 'tests' || stage.status !== 'SUCCESS') continue;
-    const rows = all.filter((r) => r.stageId === stage.id && (r.repositoryId ?? task.repositoryId) === repositoryId && !r.summary?.startsWith('Repair: '));
+    const rows = all.filter((r) => r.stageId === stage.id && (r.repositoryId ?? task.repositoryId) === repositoryId && !r.summary?.startsWith('Repair: ') && !r.summary?.startsWith('Re-run: '));
     if (!rows.length) continue;
-    const counts = (r: TestRun) => r.status === 'passed' || (r.status === 'failed' && r.classification === 'preexisting');
+    const counts = (r: TestRun) => r.status === 'passed' || nonBlockingFailure(r);
     if (!rows.every(counts)) continue;
     const last = [...rows].sort((a, b) => (a.finishedAt ?? '').localeCompare(b.finishedAt ?? '')).at(-1)!;
     if (last.treeId) trees.add(last.treeId);

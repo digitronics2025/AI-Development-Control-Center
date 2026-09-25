@@ -86,7 +86,7 @@ export function timeBreakdown(input: TimeInput): TimeBreakdown {
   // entirely pre-existing, or a failed review.
   const testStages = new Set(input.stages.filter((s) => s.kind === 'tests').map((s) => s.id));
   const firstFailure = input.events.find(
-    (e) => (e.type === 'TEST_FAILED' && e.stageId !== null && testStages.has(e.stageId) && e.data?.classification !== 'preexisting') || e.type === 'REVIEW_FAILED',
+    (e) => (e.type === 'TEST_FAILED' && e.stageId !== null && testStages.has(e.stageId) && e.data?.classification !== 'preexisting' && e.data?.classification !== 'flaky') || e.type === 'REVIEW_FAILED',
   );
   const reworkFrom = ms(firstFailure?.at);
 

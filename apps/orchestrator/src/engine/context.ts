@@ -3,6 +3,7 @@ import path from 'node:path';
 import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
 import { redact } from '@acc/security';
 import {
+  nonBlockingFailure,
   COMMAND_KIND_LABEL,
   DEFAULT_VERIFY_COMMAND_KINDS,
   PLACEHOLDER_PATTERN,
@@ -260,7 +261,7 @@ export class ContextBuilder {
       lines.push('', '### Already failing before this task — do not fix unless asked', '');
       for (const r of old) lines.push(line(r), ...(r.failures ?? []).slice(0, 20).map((f) => `  - ${f}`), ...((r.failures?.length ?? 0) > 20 ? [`  - … and ${r.failures!.length - 20} more`] : []));
     }
-    const failed = latest.find((r) => r.status === 'failed' && r.classification !== 'preexisting' && r.executionId);
+    const failed = latest.find((r) => r.status === 'failed' && !nonBlockingFailure(r) && r.executionId);
     if (failed?.executionId) {
       const tail = this.store.tailLogLines(failed.executionId, 80).map((l) => l.text);
       lines.push('', `Output of ${failed.name} (last ${tail.length} lines):`, '```', ...tail, '```');

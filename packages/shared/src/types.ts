@@ -371,8 +371,21 @@ export interface TestRun {
   reusedFrom?: string | null;
 }
 
-/** new: not failing on the baseline; preexisting: every failure already failed there; unknown: could not tell (treated as new). */
-export type TestFailureClass = 'new' | 'preexisting' | 'unknown';
+/**
+ * new: not failing on the baseline; preexisting: every failure already failed there;
+ * flaky: not explained by the baseline, but every failing test file passed when run
+ * again on the same files; unknown: could not tell (treated as new).
+ */
+export type TestFailureClass = 'new' | 'preexisting' | 'flaky' | 'unknown';
+
+/**
+ * A failed run that does not hold the task back: it failed the same way before
+ * the task (preexisting), or its failing files passed when run again on the
+ * same files (flaky). Both are reported, never hidden.
+ */
+export function nonBlockingFailure(run: Pick<TestRun, 'status' | 'classification'>): boolean {
+  return run.status === 'failed' && (run.classification === 'preexisting' || run.classification === 'flaky');
+}
 
 export interface ChangedFile {
   path: string;

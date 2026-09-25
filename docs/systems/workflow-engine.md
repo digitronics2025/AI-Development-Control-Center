@@ -198,16 +198,25 @@ Smoke after a skipped Staging, the unit suite run three times):
   `preexisting` (the baseline failed and every
   failing id is among its failures) is recorded, shown apart ("Already failing
   before this task — do not fix unless asked" in prompts, a report limitation)
-  and the stage goes on; `new` and `unknown` (ids unreadable, overflow, no
-  baseline result) block as before. A repository set to
-  `preexistingFailures: 'block'` skips the comparison.
+  and the stage goes on. A failure the baseline does not explain, with its ids
+  read, gets its failing test files run once more on exactly the task's files
+  (the same narrowing, `rerunFailingFiles` in
+  [runners.ts](../../apps/orchestrator/src/engine/runners.ts), its own test run
+  "<name> · failing files again", summary `Re-run: …`). All passing → `flaky`:
+  not blocking, like `preexisting`, and a report limitation naming the tests
+  ("a flaky test, worth fixing separately"); failing again, or a command that
+  cannot be narrowed, keeps it `new`/`unknown`, which block as before. Found in
+  TASK-0009: a docs-only change failed a different one of 9,269 tests on each
+  19-minute run. `nonBlockingFailure()` (shared) is the one test for both. A
+  repository set to `preexistingFailures: 'block'` skips the comparison and the
+  re-run.
 - **Waivers.** An operator directive with rule `waive_check` (the Answer and
   Add directive dialogs' **Don't gate this task on** checkboxes) removes those
   kinds from this task's tests stages and its completion gate; it wins over a
   `require_check` of the same kind and the report lists it. Only the operator
   route accepts it ([chairman.md](chairman.md#directives)).
 - **Reuse.** Before each command the tree of the files it runs on
-  (`workingTreeTree`) is recorded as `test_runs.tree_id`. A command that
+  (`committableTree`) is recorded as `test_runs.tree_id`. A command that
   already passed in this task, in the same repository, on the same tree is not
   run again: the new row is `passed`, `Reused: same files as <stage> at <time>`,
   `reused_from` set. Failures are never reused; a command that changed files

@@ -115,7 +115,7 @@ lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed — plus the first failing test ids; a failure
 the baseline commit already had gets a warning icon and a **pre-existing**
-badge (and is counted apart in the run header), a pass taken from identical
+badge (and is counted apart in the run header); a failure whose failing files passed when run again on the same files reads "failed once · passed when run again: flaky" with the same warning icon, a pass taken from identical
 files a **reused** badge, and checks the operator waived an info banner
 quoting the directive ([workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)).
 The Answer and Add directive dialogs show **Don't gate this task on**: one

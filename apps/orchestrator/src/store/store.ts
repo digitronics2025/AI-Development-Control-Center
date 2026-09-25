@@ -1000,6 +1000,15 @@ export class Store {
     ).map(toEvent);
   }
 
+  /** A task's events of some types, oldest first (at most `limit`). */
+  eventsOfType(taskId: string, types: EventType[], limit = 500): TaskEvent[] {
+    return (
+      this.db
+        .prepare(`SELECT * FROM task_events WHERE task_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY id LIMIT ?`)
+        .all(taskId, ...types, limit) as Row[]
+    ).map(toEvent);
+  }
+
   lastEventOfType(taskId: string, types: EventType[]): TaskEvent | null {
     const row = this.db
       .prepare(`SELECT * FROM task_events WHERE task_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`)

@@ -140,6 +140,8 @@ export interface ToolSession {
 /** Capabilities agents already have natively (their own Read/Edit/Bash and git): callable, but not listed, to keep prompts small. */
 const NATIVE_OVERLAP = /^(?:fs\.|shell\.|process\.exec$|git\.(?:status|diff|log|show|branch_list|stage)$)/;
 const MAX_LISTED = 60;
+/** Capabilities that put a stored secret where it is used; both need an approval at Level 4 or above. */
+const SECRET_DEPLOYS: ReadonlySet<string> = new Set(['cloudflare.secret_put', 'github.secret_put']);
 
 function clipInput(input: unknown): string {
   const shrink = (v: unknown): unknown => {
@@ -512,7 +514,7 @@ export class ToolService {
       // In a task workspace, a Git process started by any tool stops searching for a repository at the workspaces folder.
       const ceiling = req.scope.repositories?.length ? { GIT_CEILING_DIRECTORIES: path.dirname(req.scope.roots[0]!) } : {};
       const readOnlyEnv = scope.readOnly ? { ...scope.readOnly.env, ACC_READ_ONLY: '1' } : {};
-      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine });
+      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine, capability: req.capability });
       result = missingCredential
         ? { ok: false, summary: `No read-only ${missingCredential} key is set up for this conversation (Settings → Ask).`, error: { code: 'AUTH_REQUIRED', message: `No read-only ${missingCredential} key is set up (Settings → Ask).` } }
         : await Promise.race([
@@ -560,7 +562,7 @@ export class ToolService {
     }
   }
 
-  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine'] }): OperationContext {
+  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine']; capability: string }): OperationContext {
     const artifacts: ArtifactSink | undefined = scope.taskId
       ? {
           write: async (a) => {
@@ -587,7 +589,8 @@ export class ToolService {
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
       credentials: {
-        value: (name) => this.d.credentials.value(name, scope.repositoryId),
+        // Only an approval-gated secret deploy may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
+        value: (name) => this.d.credentials.value(name, scope.repositoryId, SECRET_DEPLOYS.has(run.capability) ? { reserved: 'deploy' } : {}),
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {

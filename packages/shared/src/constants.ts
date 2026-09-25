@@ -158,6 +158,9 @@ export const EVENT_TYPES = [
   'RELEASE_LIVE',
   'RELEASE_UNCONFIRMED',
   'RELEASE_FAILED',
+  // Phone alerts (docs/plans/LEAD_TIME_PLAN.md §3.4): one per attempt, naming the event or approval it is about.
+  'ALERT_SENT',
+  'ALERT_NOT_SENT',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

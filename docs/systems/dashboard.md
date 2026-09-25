@@ -42,6 +42,17 @@ chooses the read-only keys, owners, account, masking default and data map and
 runs Check access; each answer lists its lookups under "Sources". See
 [ask.md](ask.md).
 
+## Notifications
+
+Settings → Notifications holds the approvals / failures / completions
+switches every channel shares: the browser's `NotificationBridge` (only while
+a dashboard tab is open in the background), VS Code toasts, and **Phone
+alerts** (local only, [phone-alerts.tsx](../../apps/dashboard/src/components/phone-alerts.tsx)):
+messenger address, token (an HTTP credential chosen by name), recipient and
+an optional link to open; **Send a test** (`POST /api/alerts/test`, enabled
+once saved) shows the result or the named reason. The orchestrator sends
+them ([operations.md](operations.md#phone-alerts)).
+
 ## State
 
 The orchestrator is the only source of truth. Queries load snapshots;

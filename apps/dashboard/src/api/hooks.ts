@@ -373,6 +373,12 @@ export function useResolveApproval() {
   });
 }
 
+/** Settings → Notifications → Send a test (docs/plans/LEAD_TIME_PLAN.md §3.4): one alert through the saved phone settings. */
+export function useTestPhoneAlert() {
+  const api = useApi();
+  return useMutation({ mutationFn: () => api.post<{ ok: boolean; status?: number; reason?: string }>('/api/alerts/test', {}) });
+}
+
 export function useUpdateSettings() {
   const api = useApi();
   const qc = useQueryClient();

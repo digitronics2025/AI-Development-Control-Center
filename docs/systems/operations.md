@@ -46,6 +46,37 @@ never runs elevated.
 - `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); sets `ACC_REPOSITORY_AUTOMATION=0` so it never scans or fetches your real repositories; writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
 - `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; run it after every Claude Code update ([agents.md](agents.md#skills)).
 
+## Phone alerts
+
+[AlertService](../../apps/orchestrator/src/services/alerts.ts) posts to the
+operator's messenger (`whatsapp-inbox-saas-1`, route
+`/api/v1/internal/notifications/ingest`) as its scoped `control_center` bot,
+so a task that needs the operator reaches the phone with no dashboard open.
+
+- **When:** on the bus, a `TASK_WAITING` (decision → "needs your decision";
+  any other blocker except approval and queued → "is stopped"; usage →
+  "waits for usage to reset"), `TASK_FAILED`, `TASK_COMPLETED`, and every new
+  pending approval. Each follows its Settings switch (approvals, failures,
+  completions).
+- **Once:** every attempt writes `ALERT_SENT` or `ALERT_NOT_SENT` with the
+  source (`event:<id>` or `approval:<id>`); nothing is sent again for a source
+  with `ALERT_SENT`, and the `dedupeKey` `acc:<task>:<source>` makes the
+  messenger drop a repeat too. At start, states entered within the last hour
+  without an `ALERT_SENT` are sent late.
+- **Content:** title (≤ 120, the only text the phone's tray shows)
+  `TASK-n <what> · <title>`, body `<repository> — <blocker or approval>`
+  redacted and capped at 600, a link to `<open URL>/tasks/<id>` when set.
+- **Sending:** `https` only, 10 s timeout, no redirects; one retry after 30 s
+  on a network error, 5xx or 429, none on another 4xx. Reasons name a status
+  or a field, never the address, token or recipient. Never part of task
+  state; never blocks.
+- **Setup:** the bearer is created with `credential.generate` (kind `http`),
+  saved to MyVault, and deployed to the messenger Worker as
+  `NOTIFICATIONS_BEARER_CONTROL_CENTER` with `cloudflare.secret_put`; the
+  operator's address goes to `NOTIFICATIONS_CONTROL_CENTER_RECIPIENTS` the
+  same way. Then Settings → Notifications → Phone alerts, **Send a test**.
+  The token is the orchestrator's own ([credential-broker.md](credential-broker.md)).
+
 ## MCP for your own clients
 
 `node apps/orchestrator/dist/acc-mcp.js --repository <path> [--profile …]`

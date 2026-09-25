@@ -383,6 +383,23 @@ export const repositoryAutomationSettingsSchema = z.object({
 });
 export type RepositoryAutomationSettings = z.infer<typeof repositoryAutomationSettingsSchema>;
 
+/**
+ * Phone alerts through the operator's messenger (docs/plans/LEAD_TIME_PLAN.md
+ * §3.4). Off until the messenger address, the credential and the recipient are
+ * all set. The credential is named, never stored here; the per-kind switches
+ * are the notification switches above, shared by every channel.
+ */
+export const phoneAlertsSchema = z.object({
+  /** The messenger's base address, e.g. https://messenger.example.com. */
+  url: z.union([z.literal(''), httpsUrlSchema]).default(''),
+  /** The credential (kind http) holding the messenger's scoped bearer token. */
+  credentialName: z.string().trim().max(100).default(''),
+  recipientEmail: z.union([z.literal(''), z.string().trim().email().max(200)]).default(''),
+  /** The dashboard address an alert links to (https), e.g. the cloud dashboard. Empty: no link. */
+  openUrl: z.union([z.literal(''), httpsUrlSchema]).default(''),
+});
+export type PhoneAlertSettings = z.infer<typeof phoneAlertsSchema>;
+
 export const settingsSchema = z.object({
   billingMode: z.enum(BILLING_MODES).default('subscription'),
   theme: z.enum(THEMES).default('dark'),
@@ -395,8 +412,9 @@ export const settingsSchema = z.object({
       approvals: z.boolean().default(true),
       failures: z.boolean().default(true),
       completions: z.boolean().default(true),
+      phone: phoneAlertsSchema.default(phoneAlertsSchema.parse({})),
     })
-    .default({ approvals: true, failures: true, completions: true }),
+    .default({ approvals: true, failures: true, completions: true, phone: phoneAlertsSchema.parse({}) }),
   developerMode: z.boolean().default(false),
   chairman: chairmanSettingsSchema.default(chairmanSettingsSchema.parse({})),
   ask: askSettingsSchema.default(askSettingsSchema.parse({})),

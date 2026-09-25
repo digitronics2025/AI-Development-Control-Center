@@ -511,6 +511,9 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return next;
   });
 
+  // Settings → Notifications → Phone alerts: send one test alert and say what happened (docs/plans/LEAD_TIME_PLAN.md §3.4).
+  app.post('/api/alerts/test', async () => s.alerts.test());
+
   app.get('/api/prompts', async () => s.prompts.list());
   const roleParam = z.object({ role: z.enum(ROLES) });
   app.put('/api/prompts/:role', async (request) => {

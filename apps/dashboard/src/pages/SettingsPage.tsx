@@ -44,6 +44,7 @@ import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
 import { AskSettingsPanel } from '../components/ask-settings';
 import { AssignmentPicker } from '../components/assignment-picker';
+import { PhoneAlertsSection } from '../components/phone-alerts';
 import { RemoteAccessPanel } from '../components/remote-access';
 
 const SECTIONS = [
@@ -535,6 +536,7 @@ export function SettingsPage() {
             </Row>
           ) : null}
         </div>
+        {mode === 'local' ? <PhoneAlertsSection draft={draft} setDraft={setDraft} dirty={dirty} /> : null}
       </Panel>
     ),
     remote: <RemoteAccessPanel />,

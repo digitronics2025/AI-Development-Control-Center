@@ -216,6 +216,14 @@ export class CredentialBroker {
      * the key a deploy needs.
      */
     private readonly reservedForAsk: () => ReadonlySet<string> = () => new Set(),
+    /**
+     * Names of credentials only the orchestrator itself reads (lower case): the
+     * messenger token phone alerts post with (docs/plans/LEAD_TIME_PLAN.md §3.4).
+     * No tool path, MCP server or task environment gets them; only a secret
+     * deploy (`cloudflare.secret_put`, `github.secret_put`, both approval-gated)
+     * may read one, to put it where it is used.
+     */
+    private readonly reservedForOrchestrator: () => ReadonlySet<string> = () => new Set(),
   ) {
     this.syncManagedEnv();
   }
@@ -624,9 +632,11 @@ export class CredentialBroker {
    * it. `includeUnsynced` is for the orchestrator's own checks only; no tool
    * path passes it.
    */
-  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean } = {}): Promise<string | null> {
+  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy' } = {}): Promise<string | null> {
     const r = this.store.credential(name);
     if (!r || !this.inScope(r, repositoryId)) return null;
+    // A credential kept for the orchestrator's own use is read only by it, or deployed by a secret put.
+    if (!opts.reserved && this.reservedForOrchestrator().has(r.name.toLowerCase())) return null;
     if (!opts.includeUnsynced && this.heldForVault(r)) return null;
     return this.open(r);
   }
@@ -635,7 +645,7 @@ export class CredentialBroker {
   async envFor(kinds: readonly string[], repositoryId: string | null): Promise<Record<string, string>> {
     if (!kinds.length) return {};
     const env: Record<string, string> = {};
-    const reserved = this.reservedForAsk();
+    const reserved = new Set([...this.reservedForAsk(), ...this.reservedForOrchestrator()]);
     const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r) && !reserved.has(r.name.toLowerCase()));
     for (const kind of kinds) {
       for (const r of all.filter((c) => c.kind === kind)) {

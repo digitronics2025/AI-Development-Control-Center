@@ -17,6 +17,7 @@ import { TaskEngine } from './engine/engine.js';
 import type { Probe } from './release/service.js';
 import { TaskViews } from './engine/views.js';
 import { LearningService } from './learning/service.js';
+import { AlertService, type AlertServiceDeps } from './services/alerts.js';
 import { SkillCatalog } from './services/skills.js';
 import { AgentRegistry } from './services/agents.js';
 import { ArtifactService } from './services/artifacts.js';
@@ -88,6 +89,8 @@ export interface AppServices {
   remote: RemoteNodeService;
   /** The learning loop: reviews finished tasks and adopts improvements (docs/systems/learning.md). */
   learning: LearningService;
+  /** Phone alerts through the operator's messenger (docs/plans/LEAD_TIME_PLAN.md §3.4). */
+  alerts: AlertService;
   /** Paired local apps such as Private Browser (docs/systems/connected-apps.md). */
   connectedApps: ConnectedAppService;
   startedAt: string;
@@ -113,6 +116,8 @@ export function createServices(
     remoteTimings?: RemoteNodeDeps['timings'];
     /** Release proof reads (docs/plans/RELEASE_STAGE_PLAN.md): a stand-in live site and a short poll, for tests. */
     release?: { probe?: Probe; pollSeconds?: number };
+    /** Phone alerts (docs/plans/LEAD_TIME_PLAN.md §3.4): a stand-in messenger and a short retry wait, for tests. */
+    alerts?: Pick<AlertServiceDeps, 'fetch' | 'retryDelayMs' | 'timeoutMs'>;
   } = {},
 ): AppServices {
   const db = openDatabase(options.databaseFile ?? path.join(config.dataDir, 'acc.db'));
@@ -141,6 +146,10 @@ export function createServices(
   const credentials = new CredentialBroker(toolStore, bus, fileKeyProvider(config.dataDir), () => {
     const { github, cloudflare } = settings.get().ask.sources;
     return new Set([github.credential, cloudflare.credential].filter((n): n is string => Boolean(n)).map((n) => n.toLowerCase()));
+  }, () => {
+    // The messenger token phone alerts post with is the orchestrator's own (docs/plans/LEAD_TIME_PLAN.md §6).
+    const name = settings.get().notifications.phone.credentialName;
+    return new Set(name ? [name.toLowerCase()] : []);
   });
   const vaultBridge = new VaultBridgeService(toolStore, credentials, { deposits: { bus } });
   const processes = new ProcessManager(toolStore, bus, executionEnv);
@@ -187,6 +196,7 @@ export function createServices(
   });
   mcp.restore();
   const connectedApps = new ConnectedAppService({ apps: new ConnectedAppStore(db), store, bus, engine, views, artifacts, settings, workflows, identity: () => vaultBridge.identity() });
+  const alerts = new AlertService({ store, bus, settings, credentials, event: (taskId, type, message, data) => void engine.publisher.event(taskId, type, message, data), ...options.alerts });
   const remote = new RemoteNodeService({ db, bus, config, store, views, settings, agents, repositories, tools, credentials, usage, terminals, artifacts, timings: options.remoteTimings });
 
   return {
@@ -225,6 +235,7 @@ export function createServices(
     usage,
     remote,
     learning,
+    alerts,
     connectedApps,
     startedAt: new Date().toISOString(),
     async recover() {
@@ -245,12 +256,15 @@ export function createServices(
       ask.recoverPending();
       // Reviews a restart interrupted resume, and completed tasks are reviewed from now on.
       learning.start();
+      // Phone alerts from now on, plus any a restart left unsent in the last hour (docs/plans/LEAD_TIME_PLAN.md §3.4).
+      alerts.start();
       // Only once local state is settled: the cloud then receives the corrected picture.
       remote.start();
       return result;
     },
     async close() {
       await remote.stop();
+      alerts.stop();
       await learning.stop();
       vaultBridge.closeAll();
       watchdog.stop();

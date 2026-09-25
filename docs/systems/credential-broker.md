@@ -67,6 +67,14 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
    only**: `envFor` skips it, so a read-only key never reaches a task or shadows
    the deploy key of the same kind. The reservation follows Settings; the
    Credentials list labels such keys `Ask only`.
+   The credential named in Settings → Notifications → Phone alerts
+   (`notifications.phone.credentialName`) is the **orchestrator's own**
+   (`reservedForOrchestrator`, [alerts.ts](../../apps/orchestrator/src/services/alerts.ts)):
+   `value()` returns null for it on every tool path (`http.request`, MCP env
+   mapping) and `envFor` skips it; only `AlertService` (`reserved:
+   'orchestrator'`) and the approval-gated `cloudflare.secret_put` /
+   `github.secret_put` (`reserved: 'deploy'`, chosen by capability in
+   `ToolService`) read it. `heldForVault` still applies to both.
    `http.request {auth: {credential}}` uses one by name as a header.
    A read-only session (Ask, [ask.md](ask.md)) uses `envForPinned` instead:
    exactly the credential named in Settings → Ask for each kind, whatever its

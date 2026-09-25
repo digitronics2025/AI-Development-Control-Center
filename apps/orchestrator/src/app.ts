@@ -128,7 +128,10 @@ export function createServices(
   const baseEnv = options.baseEnv ?? process.env;
   const executionEnv = () => ({ base: baseEnv, billing: settings.get().billingMode });
   const toolStore = new ToolStore(db);
-  const credentials = new CredentialBroker(toolStore, bus, fileKeyProvider(config.dataDir));
+  const credentials = new CredentialBroker(toolStore, bus, fileKeyProvider(config.dataDir), () => {
+    const { github, cloudflare } = settings.get().ask.sources;
+    return new Set([github.credential, cloudflare.credential].filter((n): n is string => Boolean(n)).map((n) => n.toLowerCase()));
+  });
   const vaultBridge = new VaultBridgeService(toolStore, credentials, { deposits: { bus } });
   const processes = new ProcessManager(toolStore, bus, executionEnv);
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });

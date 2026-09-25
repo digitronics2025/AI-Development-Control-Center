@@ -209,6 +209,13 @@ export class CredentialBroker {
     private readonly store: ToolStore,
     private readonly bus: Bus,
     private readonly keys: KeyProvider,
+    /**
+     * Names of the credentials Settings → Ask reads with (lower case). They serve
+     * only Ask's pinned read-only sessions: a task tool choosing a credential by
+     * kind never picks one, so a read-only key can never stand in for (or shadow)
+     * the key a deploy needs.
+     */
+    private readonly reservedForAsk: () => ReadonlySet<string> = () => new Set(),
   ) {
     this.syncManagedEnv();
   }
@@ -624,11 +631,12 @@ export class CredentialBroker {
     return this.open(r);
   }
 
-  /** Environment variables for credential kinds (the first in-scope credential of each kind). */
+  /** Environment variables for credential kinds (the first in-scope credential of each kind, never one reserved for Ask). */
   async envFor(kinds: readonly string[], repositoryId: string | null): Promise<Record<string, string>> {
     if (!kinds.length) return {};
     const env: Record<string, string> = {};
-    const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r));
+    const reserved = this.reservedForAsk();
+    const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r) && !reserved.has(r.name.toLowerCase()));
     for (const kind of kinds) {
       for (const r of all.filter((c) => c.kind === kind)) {
         const name = envVarOf(r);

@@ -51,7 +51,7 @@ export function AskSettingsPanel({ draft, setDraft }: { draft: Settings; setDraf
         <section aria-labelledby="ask-github" className="flex flex-col gap-3">
           <h3 id="ask-github" className="text-h3 text-fg">GitHub</h3>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Read-only key" helper={<>A credential of kind GitHub from <Link to="/tools/credentials" className="text-fg underline">Tools → Credentials</Link>.</>}>
+            <Field label="Read-only key" helper={<>A credential of kind GitHub from <Link to="/tools/credentials" className="text-fg underline">Tools → Credentials</Link>. Once chosen it is for Ask only: tasks never receive it.</>}>
               <Select aria-label="GitHub read-only key" value={ask.sources.github.credential ?? NONE} onValueChange={(v) => setSource('github', { credential: v === NONE ? null : v })} options={keysOf('github')} />
             </Field>
             <Field label="Owners it may read" helper="Accounts or organisations, separated by commas.">
@@ -75,7 +75,7 @@ export function AskSettingsPanel({ draft, setDraft }: { draft: Settings; setDraf
         <section aria-labelledby="ask-cloudflare" className="flex flex-col gap-3">
           <h3 id="ask-cloudflare" className="text-h3 text-fg">Cloudflare</h3>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Read-only key" helper={<>A credential of kind Cloudflare from <Link to="/tools/credentials" className="text-fg underline">Tools → Credentials</Link>.</>}>
+            <Field label="Read-only key" helper={<>A credential of kind Cloudflare from <Link to="/tools/credentials" className="text-fg underline">Tools → Credentials</Link>. Once chosen it is for Ask only: tasks never receive it.</>}>
               <Select aria-label="Cloudflare read-only key" value={ask.sources.cloudflare.credential ?? NONE} onValueChange={(v) => setSource('cloudflare', { credential: v === NONE ? null : v })} options={keysOf('cloudflare')} />
             </Field>
             <Field label="Account id" helper="32 characters, from the Cloudflare dashboard's account home.">

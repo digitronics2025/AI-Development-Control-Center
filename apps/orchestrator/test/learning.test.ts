@@ -168,7 +168,7 @@ describe('learning loop', () => {
     learning().enqueue(after, true);
     await learning().idle();
     expect(learning().store.finding(imp!.findingId!)!.taskCount).toBe(learning().store.observationTasks(imp!.findingId!).length);
-  });
+  }, 180_000); // runs several full tasks: ~20 s alone, far longer when the whole suite shares the machine
 
   it('writes a skill, loads it into Claude runs, points other agents at the file, and deletes it when undone', async () => {
     const repoId = await addRepo(t, await makeRepo());

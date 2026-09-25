@@ -101,7 +101,9 @@ session closes when the answer ends, however it ends.
    (`settings.ask.sources.github.credential`, `…cloudflare.credential`), made
    read-only by the operator (the panel lists the permissions to tick). A
    read-only session injects exactly that credential (`envForPinned`), or none:
-   never another credential of the kind, never a `gh` or Wrangler login. In a
+   never another credential of the kind, never a `gh` or Wrangler login. The
+   reverse holds too: a key chosen here is Ask only, and task tools choosing a
+   credential by kind (`envFor`) skip it. In a
    read-only session a classic GitHub token with a write scope (the
    `X-OAuth-Scopes` header) is refused on every call.
 2. **The session cannot reach a write.** Its allow-list is the sources the

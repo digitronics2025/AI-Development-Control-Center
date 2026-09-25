@@ -44,6 +44,15 @@ test('a stored credential never comes back to the page', async ({ page }) => {
   expect(await page.content()).not.toContain(value);
   const listed = await api<Array<{ name: string }>>(page, 'GET', '/api/credentials');
   expect(JSON.stringify(listed)).not.toContain(value);
+  // Chosen as Ask's Cloudflare key, it is labelled Ask only (task tools never receive it).
+  const row = page.getByRole('row').filter({ hasText: 'e2e-api' });
+  await expect(row.getByText('Ask only')).toHaveCount(0);
+  const settings = await api<{ ask: { sources: Record<string, Record<string, unknown>> } }>(page, 'GET', '/api/settings');
+  const withKey = (credential: string | null) => ({ ask: { ...settings.ask, sources: { ...settings.ask.sources, cloudflare: { ...settings.ask.sources.cloudflare, credential } } } });
+  await api(page, 'PATCH', '/api/settings', withKey('e2e-api'));
+  await expect(row.getByText('Ask only')).toBeVisible();
+  await api(page, 'PATCH', '/api/settings', withKey((settings.ask.sources.cloudflare!.credential as string | null) ?? null));
+  await expect(row.getByText('Ask only')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

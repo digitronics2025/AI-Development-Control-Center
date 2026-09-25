@@ -63,6 +63,10 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
 2. A tool call that declares credential kinds (Cloudflare → `cloudflare`) gets
    `envFor(kinds)`: the first in-scope credential of each kind injected as its
    variable (`CREDENTIAL_KIND_ENV`), plus `CLOUDFLARE_ACCOUNT_ID` when stored.
+   A credential named in Settings → Ask (`ask.sources.*.credential`) is **Ask
+   only**: `envFor` skips it, so a read-only key never reaches a task or shadows
+   the deploy key of the same kind. The reservation follows Settings; the
+   Credentials list labels such keys `Ask only`.
    `http.request {auth: {credential}}` uses one by name as a header.
    A read-only session (Ask, [ask.md](ask.md)) uses `envForPinned` instead:
    exactly the credential named in Settings → Ask for each kind, whatever its

@@ -25,7 +25,7 @@ import {
 } from '@acc/ui';
 import { CREDENTIAL_KIND_ENV, CREDENTIAL_KINDS, type CredentialKind, type CredentialSource, type CredentialView, type Repository, type VaultLinkState, type VaultResolveAction } from '@acc/shared';
 import { errorMessage } from '../../api/client';
-import { useRepositories } from '../../api/hooks';
+import { useRepositories, useSettings } from '../../api/hooks';
 import { useCredentialEvents, useCredentialMutations, useCredentials, useVaultBridgeStatus, useVaultOriginMutations } from '../../api/tools';
 import { useConnection } from '../../app/runtime';
 
@@ -379,6 +379,9 @@ export function CredentialsTab() {
   const connection = useConnection();
   const { toast } = useFeedback();
   const repos = repositories.data ?? [];
+  // Keys chosen in Settings → Ask serve only Ask's read-only lookups; task tools never pick them by kind.
+  const askSources = useSettings().data?.ask.sources;
+  const askOnly = new Set([askSources?.github.credential, askSources?.cloudflare.credential].filter((n): n is string => Boolean(n)).map((n) => n.toLowerCase()));
   const [editing, setEditing] = useState<CredentialView | 'new' | null>(null);
   const [removing, setRemoving] = useState<CredentialView | null>(null);
   const [managing, setManaging] = useState<string | null>(null);
@@ -404,7 +407,18 @@ export function CredentialsTab() {
     else if (editing) mutations.replace.mutate({ id: editing.id, value: form.value }, done);
   };
   const columns: Column<CredentialView>[] = [
-    { key: 'name', header: 'Name', primary: true, sortValue: (c) => c.name, cell: (c) => <span className="font-semibold text-fg">{c.name}</span> },
+    {
+      key: 'name',
+      header: 'Name',
+      primary: true,
+      sortValue: (c) => c.name,
+      cell: (c) => (
+        <span className="flex items-center gap-2">
+          <span className="font-semibold text-fg">{c.name}</span>
+          {askOnly.has(c.name.toLowerCase()) ? <Badge title="Chosen in Settings → Ask: used only for Ask's read-only lookups, never given to task tools">Ask only</Badge> : null}
+        </span>
+      ),
+    },
     { key: 'kind', header: 'Kind', cell: (c) => <Badge>{c.kind}</Badge> },
     { key: 'source', header: 'Source', sortValue: (c) => c.source, cell: (c) => <span className="text-body text-fg-secondary">{SOURCE_LABEL[c.source]}</span> },
     {

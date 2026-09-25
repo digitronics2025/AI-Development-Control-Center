@@ -136,6 +136,23 @@ describe('Ask data tools', () => {
     expect(auths).toHaveLength(1);
   });
 
+  it('a key chosen for Ask is never handed to task tools, so it cannot shadow the deploy key', async () => {
+    // The Ask key sorts first by name and uses the same variable: before, a task deploy got it.
+    await credential('ask-cloudflare-read', 'cloudflare', 'read-only-value');
+    await credential('deploy-cloudflare', 'cloudflare', 'deploy-value');
+    await patchAsk({ sources: { github: { credential: null, owners: ['digitronics2025'] }, cloudflare: { credential: 'ASK-cloudflare-read', accountId: null } } });
+    const broker = t.services.credentials;
+    expect(await broker.envFor(['cloudflare'], null)).toEqual({ CLOUDFLARE_API_TOKEN: 'deploy-value' });
+    expect((await broker.envForPinned(['cloudflare'], { cloudflare: 'ask-cloudflare-read' })).env).toEqual({ CLOUDFLARE_API_TOKEN: 'read-only-value' });
+    // With only the Ask key stored, a task gets no Cloudflare key at all rather than the read-only one.
+    const deploy = broker.list().find((c) => c.name === 'deploy-cloudflare')!;
+    expect((await t.api('DELETE', `/api/credentials/${deploy.id}`)).status).toBe(200);
+    expect(await broker.envFor(['cloudflare'], null)).toEqual({});
+    // The reservation follows Settings: a key no longer chosen for Ask is an ordinary credential again.
+    await patchAsk({ sources: { github: { credential: null, owners: ['digitronics2025'] }, cloudflare: { credential: null, accountId: null } } });
+    expect(await broker.envFor(['cloudflare'], null)).toEqual({ CLOUDFLARE_API_TOKEN: 'read-only-value' });
+  });
+
   it('a source switched off in the conversation is not reachable, even when set up', async () => {
     await credential('ask-github-read', 'github', 'pinned-read-token');
     await patchAsk({ sources: { github: { credential: 'ask-github-read', owners: ['digitronics2025'] }, cloudflare: { credential: null, accountId: null } } });

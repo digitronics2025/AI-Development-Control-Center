@@ -25,9 +25,11 @@ test.describe('Installable app', () => {
     await page.goto('/');
     // Load-bearing: the cloud serves the manifest behind Access, which needs the cookie.
     await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('crossorigin', 'use-credentials');
-    // The status bar follows the app's own theme (dark by default), not the OS setting.
+    // The status bar follows the app's own theme, not the OS setting. Other suites leave
+    // the saved theme wherever they finished, so set it first.
     const themeColor = page.locator('meta[name="theme-color"]');
     await expect(themeColor).toHaveCount(1);
+    await setTheme(page, 'dark');
     await expect(themeColor).toHaveAttribute('content', '#090b0f');
     await page.emulateMedia({ colorScheme: 'light' });
     await expect(themeColor).toHaveAttribute('content', '#090b0f');

@@ -9,19 +9,24 @@
 /** Beyond this many files a targeted run saves little; the full run decides. */
 export const MAX_TARGETED_FILES = 50;
 
-/** Programs that accept test files as positional arguments, after an optional launcher. */
+/**
+ * Programs that accept test files as positional arguments, after an optional
+ * launcher. Each runs every test file in its own isolated context, so a file
+ * fails alone as it fails in the suite. pytest is left out: its module state
+ * and conftest order can make a file fail alone that passes in the suite, and
+ * a narrowed run must never prove a failure pre-existing that is not.
+ */
 const RUNNERS: RegExp[] = [
   /^(?:npx(?:\s+--no-install)?\s+)?vitest(?:\s|$)/,
   /^(?:npx(?:\s+--no-install)?\s+)?jest(?:\s|$)/,
   /^(?:npx(?:\s+--no-install)?\s+)?playwright\s+test(?:\s|$)/,
-  /^(?:python3?\s+-m\s+)?pytest(?:\s|$)/,
 ];
 /** An npm script invocation; other package managers pass arguments on differently and are not targeted. */
 const NPM_SCRIPT = /^npm\s+(?:test|t|run(?:-script)?\s+([\w:.@/-]+))$/;
 /** Anything that makes a command more than one program run: chaining, pipes, redirection, substitution, env prefixes. */
 const COMPOUND = /&&|\|\||[;|<>`]|\$\(|^\s*\w+=/;
-/** A relative path that needs no quoting in any shell; no segment starts with a dot, so none is "..". */
-const SAFE_PATH = /^[\w@+-][\w.@+-]*(?:\/[\w@+-][\w.@+-]*)*$/;
+/** A relative path that needs no quoting in any shell; no segment starts with a dot (so none is "..") or a dash (never read as an option). */
+const SAFE_PATH = /^[\w@+][\w.@+-]*(?:\/[\w@+][\w.@+-]*)*$/;
 const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|(?:^|\/)test_[^/]+\.py|_test\.py)$/;
 
 function isRunner(line: string): boolean {

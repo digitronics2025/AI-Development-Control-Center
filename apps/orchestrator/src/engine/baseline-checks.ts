@@ -85,6 +85,8 @@ export class BaselineChecks {
     if (!known || known.status === 'error') {
       const targeted = await this.targeted(input, key, signal);
       if (targeted) return targeted;
+      // Stopped during the narrowed run: no full run (and no install) starts after the stop.
+      if (signal.stopped()) return { classification: 'unknown', baselineCommit, reason: 'stopped before the baseline check finished' };
     }
     let result: BaselineCheckRecord;
     try {

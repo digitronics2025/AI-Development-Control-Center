@@ -54,6 +54,14 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       if (settings.repositoryAutomation.ignoredPaths.some((path) => !n.repositoryAutomation.ignoredPaths.includes(path))) {
         return deny('Bringing back a removed repository can only be done on this machine.');
       }
+      // Where phone alerts go and which token they carry decide where a credential is sent (LEAD_TIME_PLAN §6):
+      // chosen here only. Switching them off (all fields cleared) is always allowed.
+      const phone = n.notifications.phone;
+      const before = settings.notifications.phone;
+      const cleared = !phone.url && !phone.credentialName && !phone.recipientEmail;
+      if (!cleared && (phone.url !== before.url || phone.credentialName !== before.credentialName || phone.recipientEmail !== before.recipientEmail)) {
+        return deny('Where phone alerts are sent, and with which token, can only be changed on this machine.');
+      }
       // Switches that widen what runs without asking are turned on here only; off is always allowed (audit F-50).
       const widened: Array<[boolean, string]> = [
         [n.execution.terminals && !settings.execution.terminals, 'Terminals'],

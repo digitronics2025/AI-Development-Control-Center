@@ -220,3 +220,43 @@ describe('the alert token is the orchestrator’s own', () => {
     expect(outcome.result.summary).toMatch(/No stored credential named "messenger-control-center" is available/);
   }, 60_000);
 });
+
+describe('where alerts go is decided on this machine, with an http token only (review of LEAD_TIME_PLAN)', () => {
+  it('refuses a cloud settings change to the address, token or recipient, and allows switching alerts off', async () => {
+    const { settingsSchema } = await import('@acc/shared');
+    const { guardRemoteCommand } = await import('../src/remote/guards.js');
+    const { DEFAULT_ROLE_DEFAULTS } = await import('../src/services/settings.js');
+    const base = settingsSchema.parse({ roleDefaults: DEFAULT_ROLE_DEFAULTS });
+    const on = { ...base, notifications: { ...base.notifications, phone: { url: MESSENGER, credentialName: 'messenger-control-center', recipientEmail: RECIPIENT, openUrl: '' } } };
+    const ctx = (settings: typeof base) => ({ settings, repository: () => null, workflow: () => null, agent: () => ({ loadUserConfig: false }) }) as never;
+    const phone = (p: Record<string, string>) => ({ notifications: { ...on.notifications, phone: { ...on.notifications.phone, ...p } } });
+    expect(guardRemoteCommand('settings.update', {}, phone({ url: 'https://attacker.example' }), ctx(on)).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, phone({ credentialName: 'cloudflare-deploy' }), ctx(on)).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, phone({ recipientEmail: 'someone@example.com' }), ctx(on)).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { notifications: { ...base.notifications, phone: { url: MESSENGER, credentialName: 'x', recipientEmail: RECIPIENT, openUrl: '' } } }, ctx(base)).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, phone({ url: '', credentialName: '', recipientEmail: '' }), ctx(on)).ok).toBe(true);
+    expect(guardRemoteCommand('settings.update', {}, { notifications: { ...on.notifications, completions: false } }, ctx(on)).ok).toBe(true);
+  });
+
+  it('never sends a provider key named in Phone alerts, and still gives it to the tasks that use it', async () => {
+    const m = await setUp(undefined, { credentialName: 'cloudflare-deploy' });
+    const key = ['cf', 'test', 'k3y', 'Zx9'].join('-');
+    await t!.services.credentials.create({ name: 'cloudflare-deploy', kind: 'cloudflare', envVar: null, description: 'test', repositoryIds: null, value: key });
+    expect((await t!.api('POST', '/api/alerts/test')).body).toEqual({ ok: false, reason: 'the credential is missing, or not saved to MyVault yet' });
+    expect(m.calls).toHaveLength(0);
+    expect((await t!.services.credentials.envFor(['cloudflare'], null)).CLOUDFLARE_API_TOKEN).toBe(key);
+  }, 60_000);
+
+  it('lets no staging secret put read the token; only a production put, which always asks the operator', async () => {
+    await setUp();
+    const work = mkdtempSync(path.join(os.tmpdir(), 'acc-alerts-'));
+    const scope: ToolScope = { taskId: null, stageId: null, sessionId: null, repositoryId: null, cwd: work, roots: [work], stageLevel: 4, autoApproveUpToLevel: 4, mode: 'full', profile: 'operator', escalated: new Set(), protectedPaths: [] } as never;
+    const staging = await t!.services.tools.invoke({ capability: 'cloudflare.secret_put', input: { credential: 'messenger-control-center', secretName: 'ECHO', environment: 'staging' }, origin: 'agent', scope });
+    expect(staging.result.ok).toBe(false);
+    expect(staging.result.summary).toMatch(/No credential named "messenger-control-center" is available/);
+    const production = await t!.services.tools.invoke({ capability: 'cloudflare.secret_put', input: { credential: 'messenger-control-center', secretName: 'ECHO', environment: 'production' }, origin: 'agent', scope });
+    // Level 5: never runs on an agent's word (refused above the stage ceiling, or held for the typed approval).
+    expect(['deny', 'approval']).toContain(production.decision);
+    expect(production.result.ok).toBe(false);
+  }, 60_000);
+});

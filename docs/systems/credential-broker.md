@@ -72,9 +72,14 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
    (`reservedForOrchestrator`, [alerts.ts](../../apps/orchestrator/src/services/alerts.ts)):
    `value()` returns null for it on every tool path (`http.request`, MCP env
    mapping) and `envFor` skips it; only `AlertService` (`reserved:
-   'orchestrator'`) and the approval-gated `cloudflare.secret_put` /
-   `github.secret_put` (`reserved: 'deploy'`, chosen by capability in
-   `ToolService`) read it. `heldForVault` still applies to both.
+   'orchestrator'`) and a **production** `cloudflare.secret_put` /
+   `github.secret_put` (Level 5, always the operator's typed approval;
+   `reserved: 'deploy'`, chosen in `ToolService` from the capability and the
+   call's level) read it. A staging put cannot. Only a credential of kind
+   `http` is reserved, and `AlertService` reads nothing else, so naming a
+   provider key there never sends it anywhere. Where alerts go and with which
+   token is local-only: a cloud `settings.update` that changes it is refused
+   ([remote-node.md](remote-node.md)). `heldForVault` still applies.
    `http.request {auth: {credential}}` uses one by name as a header.
    A read-only session (Ask, [ask.md](ask.md)) uses `envForPinned` instead:
    exactly the credential named in Settings → Ask for each kind, whatever its

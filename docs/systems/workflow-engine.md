@@ -187,8 +187,11 @@ Smoke after a skipped Staging, the unit suite run three times):
   ([targeted-tests.ts](../../apps/orchestrator/src/engine/targeted-tests.ts)):
   files read from the ids that exist at the baseline commit (safe relative
   paths, test-file names, at most 50), appended to an npm script whose body is
-  one `vitest`/`jest`/`playwright test`/`pytest` run, or to such a runner called
-  directly (`npm test -- a.test.ts`). That narrowed run is kept under its own
+  one `vitest`/`jest`/`playwright test` run, or to such a runner called
+  directly (`npm test -- a.test.ts`); never pytest, whose files can fail alone
+  and pass in the suite. File paths never start with `.` or `-`, and
+  Playwright ids relative to a `testDir` below the root are not found at the
+  baseline, so those fall back to the full run. That narrowed run is kept under its own
   command sha and can only prove `preexisting`; when any failure does not
   reproduce, or it cannot be built or finish, the full run decides as before
   (TASK-0008: 17.6 min for the whole unit suite, for 6 failing files).

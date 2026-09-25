@@ -25,6 +25,8 @@ describe('test files named by failure ids', () => {
       'C:/abs/path.test.ts > x',
       'src/.hidden/a.test.ts',
       'src/with space.test.ts > x',
+      '-p/option.test.ts > x',
+      'src/-rf.test.ts > x',
       'src/helpers.ts > x',
     ]) {
       expect(testFileOf(id), id).toBeNull();
@@ -47,7 +49,8 @@ describe('the targeted command', () => {
   it('narrows a runner called directly', () => {
     expect(targetedCommand('npx vitest run', null, ['a.test.ts'])?.commandLine).toBe('npx vitest run a.test.ts');
     expect(targetedCommand('npx playwright test --project=chromium', null, ['e2e/a.spec.ts'])?.commandLine).toBe('npx playwright test --project=chromium e2e/a.spec.ts');
-    expect(targetedCommand('python -m pytest -q', null, ['tests/test_api.py'])?.commandLine).toBe('python -m pytest -q tests/test_api.py');
+    // pytest is never narrowed: a file can fail alone that passes in the suite, which must not prove anything pre-existing.
+    expect(targetedCommand('python -m pytest -q', null, ['tests/test_api.py'])).toBeNull();
     expect(targetedCommand('jest --ci', null, ['src/sum.test.js'])?.commandLine).toBe('jest --ci src/sum.test.js');
   });
 

@@ -635,8 +635,11 @@ export class CredentialBroker {
   async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy' } = {}): Promise<string | null> {
     const r = this.store.credential(name);
     if (!r || !this.inScope(r, repositoryId)) return null;
-    // A credential kept for the orchestrator's own use is read only by it, or deployed by a secret put.
-    if (!opts.reserved && this.reservedForOrchestrator().has(r.name.toLowerCase())) return null;
+    // A credential kept for the orchestrator's own use (an http token) is read only by it, or deployed by a production secret put.
+    const reserved = r.kind === 'http' && this.reservedForOrchestrator().has(r.name.toLowerCase());
+    if (reserved && !opts.reserved) return null;
+    // The orchestrator reads only such a token: naming a provider key in Settings never sends it anywhere.
+    if (opts.reserved === 'orchestrator' && !reserved) return null;
     if (!opts.includeUnsynced && this.heldForVault(r)) return null;
     return this.open(r);
   }
@@ -645,8 +648,11 @@ export class CredentialBroker {
   async envFor(kinds: readonly string[], repositoryId: string | null): Promise<Record<string, string>> {
     if (!kinds.length) return {};
     const env: Record<string, string> = {};
-    const reserved = new Set([...this.reservedForAsk(), ...this.reservedForOrchestrator()]);
-    const all = this.store.listCredentials().filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r) && !reserved.has(r.name.toLowerCase()));
+    const reserved = this.reservedForAsk();
+    const own = this.reservedForOrchestrator();
+    const all = this.store
+      .listCredentials()
+      .filter((r) => this.inScope(r, repositoryId) && !this.heldForVault(r) && !reserved.has(r.name.toLowerCase()) && !(r.kind === 'http' && own.has(r.name.toLowerCase())));
     for (const kind of kinds) {
       for (const r of all.filter((c) => c.kind === kind)) {
         const name = envVarOf(r);

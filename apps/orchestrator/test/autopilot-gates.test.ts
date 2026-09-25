@@ -494,6 +494,29 @@ describe('G. restart guard', () => {
     await s.close();
   }, 60_000);
 
+  it('drains before the first stage when the drain arrives while the worktree is prepared', async () => {
+    t = await createTestApp();
+    const s = await serverWithShutdown(t);
+    // Hold the worktree's preparation (a real install takes minutes) until the drain is in.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const prepare = t.services.tooling.prepareWorktree.bind(t.services.tooling);
+    t.services.tooling.prepareWorktree = async (...args) => {
+      await held;
+      return prepare(...args);
+    };
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Drained early');
+    await waitFor(() => t!.services.store.listEvents(id, { limit: 100 }).some((e) => e.type === 'WORKTREE_CREATED'), (v) => v, 20_000, 'the worktree');
+    expect((await s.post({ mode: 'drain' })).status).toBe(202);
+    release();
+    await waitFor(() => s.calls.length, (n) => n === 1, 20_000, 'the drained shutdown');
+    const task = t.services.store.getTask(id)!;
+    expect(task.status).toBe('INTERRUPTED');
+    expect(t.services.store.listStages(id)).toEqual([]);
+    expect(task.blocker?.message).toContain('Investigate runs when the orchestrator is back');
+    await s.close();
+  }, 60_000);
+
   it('drains: the running stage finishes, the task stops at the boundary, and it resumes by itself after the restart', async () => {
     t = await createTestApp();
     const dataDir = t.dataDir;

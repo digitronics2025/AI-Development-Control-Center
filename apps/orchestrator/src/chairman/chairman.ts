@@ -768,7 +768,10 @@ export class Chairman implements SupervisorHooks {
     for (const task of this.d.store.listTasks({ statuses: ['INTERRUPTED'], limit: 1000 })) {
       const id = task.id;
       if (!task.supervised || task.blocker?.kind !== 'interrupted') continue;
-      const decision = this.decide(task, 'restart', `The orchestrator restarted during ${this.d.views.stageDef(task, task.currentStageKey)?.name ?? 'the task'}. Resuming where it stopped.`, 'Resume after restart');
+      const stageName = this.d.views.stageDef(task, task.currentStageKey)?.name ?? 'the task';
+      // A drained task stopped between stages; anything else was cut off in one.
+      const where = task.blocker.message.startsWith('Stopped between stages') ? `before ${stageName}` : `during ${stageName}`;
+      const decision = this.decide(task, 'restart', `The orchestrator restarted ${where}. Resuming where it stopped.`, 'Resume after restart');
       await this.gateway.execute(id, { type: 'RESUME_TASK', params: {} }, { initiator: 'system', source: 'supervisor', decisionId: decision.id });
     }
   }

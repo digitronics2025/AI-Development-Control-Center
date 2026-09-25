@@ -95,6 +95,15 @@ export class BaselineChecks {
       return { classification: 'unknown', baselineCommit, reason: redact((error as Error).message).slice(0, 300) };
     }
     const classification = classifyFailures(input, result);
+    if (classification === 'new' && result.status !== 'error' && !signal.stopped()) {
+      // A kept answer can be out of date for a test that depends on the clock or the machine: in the
+      // TASK-0010 replay a time-of-day test failed at night on the baseline too, but not in the full run
+      // kept from the afternoon. The failures it does not explain run again on the baseline, now.
+      const explained = new Set(result.status === 'failed' ? result.failures : []);
+      const unexplained = input.failures.filter((id) => !explained.has(id));
+      const fresh = await this.targeted({ ...input, failures: unexplained }, key, signal, { fresh: true });
+      if (fresh) return fresh;
+    }
     const reason = result.status === 'error' ? (result.summary ?? 'the baseline could not be checked') : null;
     return { classification, baselineCommit, reason };
   }
@@ -105,7 +114,7 @@ export class BaselineChecks {
    * decides. Its result is kept under the narrowed command's own sha, so it can
    * never stand in for a full run.
    */
-  private async targeted(input: Parameters<BaselineChecks['classify']>[0], key: BaselineCheckKey, signal: { stopped: () => boolean }): Promise<Classification | null> {
+  private async targeted(input: Parameters<BaselineChecks['classify']>[0], key: BaselineCheckKey, signal: { stopped: () => boolean }, opts: { fresh?: boolean } = {}): Promise<Classification | null> {
     const files = testFilesOf(input.failures);
     if (!files.length || files.length > MAX_TARGETED_FILES || signal.stopped()) return null;
     try {
@@ -124,7 +133,9 @@ export class BaselineChecks {
       const narrowed = targetedCommand(input.command.command, scripts, files);
       if (!narrowed) return null;
       const command = { ...input.command, command: narrowed.commandLine };
-      const record = await this.result({ ...key, commandSha: BaselineChecks.commandSha(narrowed.commandLine) }, { ...input, command }, signal);
+      const narrowedKey = { ...key, commandSha: BaselineChecks.commandSha(narrowed.commandLine) };
+      // Fresh: run now, whatever an earlier run of the same files said (it replaces that row).
+      const record = opts.fresh ? await this.run(narrowedKey, { ...input, command }, signal) : await this.result(narrowedKey, { ...input, command }, signal);
       if (classifyFailures(input, record) !== 'preexisting') return null;
       return { classification: 'preexisting', baselineCommit: key.baselineCommit, reason: null, checkedFiles: files.length };
     } catch {

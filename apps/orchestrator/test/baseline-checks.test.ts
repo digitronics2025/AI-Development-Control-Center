@@ -15,13 +15,15 @@ afterEach(async () => {
  * A stand-in for Vitest, committed with its node_modules/.bin shims so the
  * baseline worktree needs no install. It prints a Vitest FAIL line for each
  * failing test in the files it is given (every file when given none), hangs
- * when asked for slow.test.ts, and exits 1 when anything failed.
+ * when asked for slow.test.ts, fails c.test.ts while the FAKE_NIGHT file exists
+ * (a test that depends on the time of day), and exits 1 when anything failed.
  */
 const FAKE_VITEST = [
   "const files = process.argv.slice(2).filter((a) => a !== 'run');",
   "if (files.includes('slow.test.ts')) setTimeout(() => {}, 120000);",
   "else {",
-  "  const failing = { 'a.test.ts': ['a.test.ts > A > one'], 'b.test.ts': ['b.test.ts > B > two'], 'c.test.ts': [] };",
+  "  const night = process.env.FAKE_NIGHT && require('fs').existsSync(process.env.FAKE_NIGHT);",
+  "  const failing = { 'a.test.ts': ['a.test.ts > A > one'], 'b.test.ts': ['b.test.ts > B > two'], 'c.test.ts': night ? ['c.test.ts > C > at night'] : [] };",
   "  const ran = files.length ? files : Object.keys(failing);",
   "  const failed = ran.flatMap((f) => failing[f] || []);",
   "  for (const f of failed) console.log(' FAIL  ' + f);",
@@ -74,13 +76,15 @@ describe('targeted baseline runs', () => {
     expect(verdict.classification).toBe('new');
     expect(verdict.checkedFiles).toBeUndefined();
     const runs = f.baselineRuns();
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(3);
     expect(runs[0]).toMatch(/npm test -- a\.test\.ts c\.test\.ts$/);
     expect(runs[1]).toMatch(/: npm test$/);
+    // What the full run does not explain runs once more, now: it still passes there, so it stays new.
+    expect(runs[2]).toMatch(/: npm test -- c\.test\.ts$/);
     // Now the full answer is known, and it is used first: nothing more runs.
     expect(f.store.getBaselineCheck(f.fullKey)?.status).toBe('failed');
     expect((await f.checks.classify({ ...f.base, failures: ['b.test.ts > B > two'] }, f.stopped)).classification).toBe('preexisting');
-    expect(f.baselineRuns()).toHaveLength(2);
+    expect(f.baselineRuns()).toHaveLength(3);
   }, 90_000);
 
   it('goes straight to the full run when a failing file did not exist on the baseline', async () => {
@@ -99,8 +103,26 @@ describe('targeted baseline runs', () => {
     // The narrowed run timed out; the full run finished and does not show that failure.
     expect(verdict.classification).toBe('new');
     const runs = f.baselineRuns();
-    expect(runs).toHaveLength(2);
+    expect(runs).toHaveLength(3);
     expect(runs[0]).toMatch(/npm test -- slow\.test\.ts$/);
     expect(runs[1]).toMatch(/: npm test$/);
+    expect(runs[2]).toMatch(/npm test -- slow\.test\.ts$/);
+  }, 90_000);
+
+  it('checks again, now, what a kept full run does not explain: a test that depends on the time of day (TASK-0010)', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    const marker = path.join(t.dataDir, 'night');
+    const input = { ...f.base, env: { ...process.env, FAKE_NIGHT: marker }, failures: ['a.test.ts > A > one', 'c.test.ts > C > at night'] };
+    // In the afternoon the baseline passes c.test.ts: the failure is new, and the full run is kept.
+    expect((await f.checks.classify(input, f.stopped)).classification).toBe('new');
+    expect(f.store.getBaselineCheck(f.fullKey)?.failures).toEqual(['a.test.ts > A > one', 'b.test.ts > B > two']);
+    const before = f.baselineRuns().length;
+    // At night the same test fails on the baseline too: the kept answer is out of date, so c.test.ts runs again now.
+    writeFileSync(marker, '');
+    expect(await f.checks.classify(input, f.stopped)).toMatchObject({ classification: 'preexisting', checkedFiles: 1 });
+    const after = f.baselineRuns();
+    expect(after).toHaveLength(before + 1);
+    expect(after.at(-1)).toMatch(/: npm test -- c\.test\.ts$/);
   }, 90_000);
 });

@@ -196,6 +196,12 @@ Smoke after a skipped Staging, the unit suite run three times):
   command sha and can only prove `preexisting`; when any failure does not
   reproduce, or it cannot be built or finish, the full run decides as before
   (TASK-0008: 17.6 min for the whole unit suite, for 6 failing files).
+  A kept full result can be out of date for a test that depends on the clock or
+  the machine, so when it leaves failures unexplained (`new`), their files run
+  once more on the baseline, now (not from the cache; the row is replaced), and
+  failures that reproduce there are `preexisting` too. Found in the TASK-0010
+  replay: a time-of-day test failed at night on the baseline, but not in the
+  full run kept from the afternoon, and the task stopped for a decision.
   `preexisting` (the baseline failed and every
   failing id is among its failures) is recorded, shown apart ("Already failing
   before this task — do not fix unless asked" in prompts, a report limitation)

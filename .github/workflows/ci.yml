@@ -1,24 +1,61 @@
-# Every push to main and every pull request: the full local suite plus the
-# cloud control plane (Worker integration tests in the Workers runtime and the
-# cloud-mode browser suite). Windows, like the machines the Control Center runs on.
+# Three levels:
+#   Draft PR        -> nothing runs.
+#   Ready PR        -> `static` only: typecheck, lint, docs guard on Ubuntu (~3 min).
+#                      Agents run `pnpm check`, `pnpm e2e` and `pnpm e2e:cloud` locally first.
+#   Push to main    -> `static`, then the full Windows verification once: build, unit /
+#                      integration / Worker tests, local and cloud end-to-end suites.
+#                      deploy-cloud.yml releases only a commit that passed THIS main run.
+#   workflow_dispatch -> the same as main, for any ref (e.g. to verify a docs-only head
+#                      or a Windows-specific PR branch before merging).
 name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Superseded PR runs are cancelled; a main run is allowed to finish, so every merged
+  # commit ends with a recorded verdict the deploy gate can read.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  static:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Docs guard
+        run: pnpm docs:guard
+
+  # Windows, like the machines the Control Center runs on. Main and manual runs only.
   verify:
+    needs: static
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     env:
       PW_CHANNEL: chromium
       WRANGLER_SEND_METRICS: 'false'
@@ -37,12 +74,7 @@ jobs:
           "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
           "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - run: pnpm install --frozen-lockfile
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Lint
-        run: pnpm lint
-      - name: Docs guard
-        run: pnpm docs:guard
+      # Typecheck, lint and docs guard already passed in `static` for this commit.
       # Built first: the Worker tests serve the dashboard build as the Worker's assets.
       - name: Build
         run: pnpm build
@@ -63,4 +95,4 @@ jobs:
             apps/dashboard/playwright-report
             apps/dashboard/playwright-report-cloud
             apps/dashboard/test-results
-          retention-days: 7
+          retention-days: 5

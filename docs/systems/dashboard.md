@@ -293,7 +293,8 @@ Integration / Split the fix rows); Logs label a worker's execution "Stage ·
 Unit". Realtime `workUnit` messages upsert into `TaskDetail.workUnits`
 ([sync.ts](../../apps/dashboard/src/api/sync.ts)). Repository Commands: a
 **Parallel-safe** checkbox for lint/typecheck/test/build/e2e. Usage task page:
-team stages get per-unit sub-rows. Tools → Policy: **Team workers at once**
+team stages get per-unit sub-rows, and the stage row reads "team of N" (workers
+only; its attempts follow the retry lineage, not the member count). Tools → Policy: **Team workers at once**
 (`execution.teamWorkerLimit`). The Drawer body is focusable (a tall read-only
 inspector on a phone must be keyboard-scrollable). Covered by
 `e2e/stage-teams.spec.ts` (both themes, 1440 and 390 px, axe).

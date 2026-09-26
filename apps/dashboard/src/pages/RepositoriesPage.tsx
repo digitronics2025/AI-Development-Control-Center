@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudDownload, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -11,14 +11,16 @@ import {
   Input,
   PageHeader,
   RelativeTime,
+  SegmentedControl,
   Skeleton,
   StatusChip,
   useFeedback,
   type Column,
+  type SegmentOption,
 } from '@acc/ui';
-import type { Repository, RepositoryAutomationStatus, RepositorySyncResult, Settings } from '@acc/shared';
+import { parseCloneUrl, type Repository, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
-import { useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
+import { useCloneDefaults, useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
 
@@ -90,33 +92,55 @@ function AutomationSummary({ status, settings }: { status: RepositoryAutomationS
   );
 }
 
+type AddSource = 'local' | 'online';
+
+const ADD_SOURCES: SegmentOption<AddSource>[] = [
+  { value: 'local', label: 'Folder on this computer', icon: FolderOpen },
+  { value: 'online', label: 'Download from GitHub', icon: CloudDownload },
+];
+
 export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [source, setSource] = useState<AddSource>('local');
   const [path, setPath] = useState('');
+  const [url, setUrl] = useState('');
+  const [parentFolder, setParentFolder] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const { add } = useRepositoryMutations();
+  const { add, clone } = useRepositoryMutations();
+  const defaults = useCloneDefaults(open && source === 'online');
   const { pickFolder } = useRuntime();
   const { toast } = useFeedback();
   const navigate = useNavigate();
+  const parsed = parseCloneUrl(url);
+  const cloneParent = parentFolder.trim() || defaults.data?.parentFolder || '';
+  const done = (repo: Repository, verb: string) => {
+    toast(`${repo.name} ${verb}`);
+    onOpenChange(false);
+    setPath('');
+    setUrl('');
+    setParentFolder('');
+    setName('');
+    navigate(`/repositories/${repo.id}`);
+  };
   const submit = () => {
+    if (source === 'online') {
+      if (!parsed) {
+        setError('Enter a GitHub "owner/name", or an https://, ssh:// or git@ address.');
+        return;
+      }
+      clone.mutate(
+        { url: url.trim(), parentFolder: parentFolder.trim() || undefined, name: name.trim() || undefined },
+        { onSuccess: (repo) => done(repo, 'downloaded and added'), onError: (e) => setError(errorMessage(e)) },
+      );
+      return;
+    }
     if (!path.trim()) {
       setError('Enter the folder path of a local repository.');
       return;
     }
-    add.mutate(
-      { path: path.trim(), name: name.trim() || undefined },
-      {
-        onSuccess: (repo) => {
-          toast(`${repo.name} added`);
-          onOpenChange(false);
-          setPath('');
-          setName('');
-          navigate(`/repositories/${repo.id}`);
-        },
-        onError: (e) => setError(errorMessage(e)),
-      },
-    );
+    add.mutate({ path: path.trim(), name: name.trim() || undefined }, { onSuccess: (repo) => done(repo, 'added'), onError: (e) => setError(errorMessage(e)) });
   };
+  const pending = add.isPending || clone.isPending;
   return (
     <Dialog
       open={open}
@@ -125,14 +149,18 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
         onOpenChange(next);
       }}
       title="Add repository"
-      description="A local folder, normally a Git repository. Lint, test and build commands are detected from its files."
+      description={
+        source === 'local'
+          ? 'A local folder, normally a Git repository. Lint, test and build commands are detected from its files.'
+          : 'A repository that is only online, such as one you just created on GitHub. A copy is downloaded into a new folder and added.'
+      }
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={submit} loading={add.isPending}>
-            Add repository
+          <Button variant="primary" onClick={submit} loading={pending}>
+            {source === 'local' ? 'Add repository' : 'Download and add'}
           </Button>
         </>
       }
@@ -144,20 +172,60 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
           submit();
         }}
       >
-        <Field
-          label="Folder path"
-          error={error}
-          helper={'For example C:\\Users\\you\\code\\my-app'}
-          addon={
-            pickFolder ? (
-              <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setPath(p))}>
-                Browse…
-              </Button>
-            ) : null
-          }
-        >
-          <Input value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
-        </Field>
+        <SegmentedControl
+          label="Where the repository is"
+          value={source}
+          onValueChange={(next) => {
+            setError(null);
+            setSource(next);
+          }}
+          options={ADD_SOURCES}
+          disabled={pending}
+        />
+        {source === 'local' ? (
+          <Field
+            label="Folder path"
+            error={error}
+            helper={'For example C:\\Users\\you\\code\\my-app'}
+            addon={
+              pickFolder ? (
+                <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setPath(p))}>
+                  Browse…
+                </Button>
+              ) : null
+            }
+          >
+            <Input value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
+          </Field>
+        ) : (
+          <>
+            <Field
+              label="Repository address"
+              error={error}
+              helper={
+                parsed && cloneParent
+                  ? `Will be saved in ${cloneParent}${cloneParent.includes('/') ? '/' : '\\'}${parsed.folderName}`
+                  : 'For example owner/my-app, or the address from GitHub’s green Code button.'
+              }
+            >
+              <Input value={url} onChange={(e) => setUrl(e.target.value)} className="font-mono" autoFocus spellCheck={false} placeholder="owner/my-app" />
+            </Field>
+            <Field
+              label="Save in folder"
+              optional
+              helper={defaults.data ? `Defaults to ${defaults.data.parentFolder}. A new folder is created inside it.` : 'A new folder is created inside it.'}
+              addon={
+                pickFolder ? (
+                  <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setParentFolder(p))}>
+                    Browse…
+                  </Button>
+                ) : null
+              }
+            >
+              <Input value={parentFolder} onChange={(e) => setParentFolder(e.target.value)} className="font-mono" spellCheck={false} placeholder={defaults.data?.parentFolder} />
+            </Field>
+          </>
+        )}
         <Field label="Display name" optional helper="Defaults to the folder name.">
           <Input value={name} onChange={(e) => setName(e.target.value)} />
         </Field>

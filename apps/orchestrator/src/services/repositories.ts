@@ -1,8 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { isGitRepository, repositoryStatus, topLevel } from '@acc/git';
-import { repositoryRuntimeSchema, type Repository, type RepositoryCommand, type RepositoryRuntime, type RepositoryStatus, type UpdateRepositoryInput } from '@acc/shared';
+import { cloneRepository, failureText, isGitRepository, repositoryStatus, topLevel } from '@acc/git';
+import { isCloneFolderName, parseCloneUrl, repositoryRuntimeSchema, type CloneRepositoryInput, type Repository, type RepositoryCommand, type RepositoryRuntime, type RepositoryStatus, type UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { SettingsService } from './settings.js';
 import { newId, now, type RepositoryRecord, type Store } from '../store/store.js';
@@ -10,7 +11,7 @@ import { newId, now, type RepositoryRecord, type Store } from '../store/store.js
 export class RepositoryError extends Error {
   constructor(
     message: string,
-    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'DUPLICATE' | 'IN_USE',
+    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'INVALID_URL' | 'DUPLICATE' | 'IN_USE' | 'CLONE_FAILED',
   ) {
     super(message);
   }
@@ -222,6 +223,37 @@ export class RepositoryService {
     const view = await this.toView(rec, true);
     this.bus.publish({ type: 'repository', repository: view });
     return view;
+  }
+
+  /** Where a clone goes when the request names no folder: the first discovery root, else the home folder. */
+  defaultCloneParent(): string {
+    return this.settings.get().repositoryAutomation.roots[0] ?? os.homedir();
+  }
+
+  /**
+   * Download a repository that exists only online (for example one just
+   * created on GitHub) into a new folder, then register it like `add`. The
+   * folder must not exist; if the clone fails, whatever it left is removed.
+   */
+  async clone(input: CloneRepositoryInput): Promise<Repository> {
+    const parsed = parseCloneUrl(input.url);
+    if (!parsed) {
+      throw new RepositoryError('Enter a GitHub "owner/name", or an https://, ssh:// or git@ address without a password in it.', 'INVALID_URL');
+    }
+    const folderName = input.folderName?.trim() || parsed.folderName;
+    if (!isCloneFolderName(folderName)) throw new RepositoryError(`"${folderName}" is not a usable folder name`, 'INVALID_PATH');
+    const parent = path.resolve((input.parentFolder?.trim() || this.defaultCloneParent()).replace(/^"|"$/g, ''));
+    if (!existsSync(parent) || !statSync(parent).isDirectory()) throw new RepositoryError(`"${parent}" is not an existing folder`, 'INVALID_PATH');
+    const destination = path.join(parent, folderName);
+    if (existsSync(destination)) throw new RepositoryError(`${destination} already exists. Choose another folder name, or add that folder instead.`, 'DUPLICATE');
+    const result = await cloneRepository(parsed.url, destination);
+    if (result.code !== 0) {
+      // The folder did not exist before, so anything there now is the failed clone's.
+      await rm(destination, { recursive: true, force: true }).catch(() => undefined);
+      const reason = result.timedOut ? 'the download took longer than 10 minutes' : failureText(result.stderr).split('\n').slice(-3).join(' ').slice(0, 500) || `git exited with ${result.code}`;
+      throw new RepositoryError(`Could not download ${parsed.url}: ${reason}`, 'CLONE_FAILED');
+    }
+    return this.add(destination, input.name);
   }
 
   async update(id: string, patch: UpdateRepositoryInput): Promise<Repository> {

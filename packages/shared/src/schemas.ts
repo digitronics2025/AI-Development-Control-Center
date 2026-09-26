@@ -168,6 +168,68 @@ export const createRepositorySchema = z.object({
   name: z.string().min(1).max(80).optional(),
 });
 
+export interface ParsedCloneUrl {
+  /** What `git clone` receives. */
+  url: string;
+  /** Proposed folder name: the last path segment without `.git`. */
+  folderName: string;
+}
+
+const FOLDER_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+
+/** A single folder name a clone may create: no separators, not `.`/`..`, no leading dash. */
+export function isCloneFolderName(name: string): boolean {
+  return FOLDER_NAME.test(name) && name !== '.' && name !== '..' && !name.startsWith('-');
+}
+
+/**
+ * Accept what a person pastes to clone a repository and return the URL Git
+ * gets, or null. Allowed: `owner/name` (GitHub), `https://host/…`,
+ * `ssh://…`, `git@host:owner/name` and `file://…`. Refused: any other
+ * transport (`ext::` runs commands, `http://` is unencrypted) and a password
+ * in the URL — it would be stored in the clone's config in plain text.
+ */
+export function parseCloneUrl(input: string): ParsedCloneUrl | null {
+  const raw = input.trim();
+  if (!raw || raw.length > 500 || /\s/.test(raw) || raw.startsWith('-')) return null;
+  let url: string;
+  let pathPart: string;
+  const shorthand = /^([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})$/.exec(raw);
+  const scp = /^([A-Za-z0-9._-]+)@([A-Za-z0-9.-]+):([^:\\][^\\]*)$/.exec(raw);
+  if (shorthand) {
+    url = `https://github.com/${shorthand[1]}/${shorthand[2]!.replace(/\.git$/, '')}.git`;
+    pathPart = shorthand[2]!;
+  } else if (scp) {
+    url = raw;
+    pathPart = scp[3]!;
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return null;
+    }
+    if (!['https:', 'ssh:', 'file:'].includes(parsed.protocol)) return null;
+    if (parsed.password) return null;
+    if (parsed.protocol === 'https:' && parsed.username) return null;
+    url = raw;
+    pathPart = decodeURIComponent(parsed.pathname);
+  }
+  const folderName = pathPart.replace(/[\\/]+$/, '').split(/[\\/]/).pop()!.replace(/\.git$/, '');
+  if (!isCloneFolderName(folderName)) return null;
+  return { url, folderName };
+}
+
+export const cloneRepositorySchema = z.object({
+  url: z.string().min(1).max(500),
+  /** Folder the clone is created in; defaults to the first discovery root, else the home folder. */
+  parentFolder: z.string().min(1).max(1000).optional(),
+  /** Name of the new folder; defaults to the repository name. */
+  folderName: z.string().min(1).max(100).optional(),
+  name: z.string().min(1).max(80).optional(),
+});
+export type CloneRepositoryInput = z.infer<typeof cloneRepositorySchema>;
+
 /** A plain Git name for a remote or branch: no spaces, no option-like leading dash, no `..`. */
 const gitNameSchema = z
   .string()

@@ -11,6 +11,7 @@ import {
   assignmentChangeSchema,
   chairmanActionBodySchema,
   chairmanMessageBodySchema,
+  cloneRepositorySchema,
   createRepositorySchema,
   createTaskSchema,
   directiveSchema,
@@ -68,7 +69,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof RepositoryError) {
-      const status = { NOT_FOUND: 404, INVALID_PATH: 400, DUPLICATE: 409, IN_USE: 409 }[error.code];
+      const status = { NOT_FOUND: 404, INVALID_PATH: 400, INVALID_URL: 400, DUPLICATE: 409, IN_USE: 409, CLONE_FAILED: 502 }[error.code];
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof WorkflowError) {
@@ -468,6 +469,11 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     const body = createRepositorySchema.parse(request.body);
     return reply.code(201).send(await s.repositories.add(body.path, body.name));
   });
+  /** Download a repository that exists only online into a new folder and register it. */
+  app.post('/api/repositories/clone', async (request, reply) => {
+    return reply.code(201).send(await s.repositories.clone(cloneRepositorySchema.parse(request.body)));
+  });
+  app.get('/api/repositories/clone-defaults', async () => ({ parentFolder: s.repositories.defaultCloneParent() }));
   app.get('/api/repositories/:id', async (request) => s.repositories.get(idParam.parse(request.params).id, true));
   app.patch('/api/repositories/:id', async (request) => {
     const patch = updateRepositorySchema.parse(request.body);

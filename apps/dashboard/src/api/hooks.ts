@@ -13,6 +13,7 @@ import type {
   ChairmanActionInput,
   ChairmanMessage,
   ChairmanOverview,
+  CloneRepositoryInput,
   CreateTaskInput,
   Directive,
   Execution,
@@ -388,12 +389,19 @@ export function useUpdateSettings() {
   });
 }
 
+/** Where a clone goes by default; shown in the Add repository dialog. */
+export function useCloneDefaults(enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: ['repositories', 'clone-defaults'], enabled, queryFn: ({ signal }) => api.get<{ parentFolder: string }>('/api/repositories/clone-defaults', signal) });
+}
+
 export function useRepositoryMutations() {
   const api = useApi();
   const qc = useQueryClient();
   const refresh = () => void qc.invalidateQueries({ queryKey: keys.repositories });
   return {
     add: useMutation({ mutationFn: (input: { path: string; name?: string }) => api.post<Repository>('/api/repositories', input), onSuccess: refresh }),
+    clone: useMutation({ mutationFn: (input: CloneRepositoryInput) => api.post<Repository>('/api/repositories/clone', input), onSuccess: refresh }),
     update: useMutation({
       mutationFn: ({ id, patch }: { id: string; patch: UpdateRepositoryInput }) => api.patch<Repository>(`/api/repositories/${id}`, patch),
       onSuccess: (repo) => {

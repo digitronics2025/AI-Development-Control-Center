@@ -58,9 +58,46 @@ Paths compare through `pathKey` (resolved, trailing separator removed,
 lowercased on Windows); `add` uses the same check, so a case variant is a
 `DUPLICATE`.
 
+Discovery only sees disk. A repository that exists only online (for
+example one just created on GitHub) is never found by it — see *Download
+from GitHub* below.
+
 **Ignore list.** Removing a repository appends its path to `ignoredPaths`;
 adding it again by hand removes it. Settings → Repositories shows the list
 with **Allow again**.
+
+## Download from GitHub (clone)
+
+`RepositoryService.clone` in
+[repositories.ts](../../apps/orchestrator/src/services/repositories.ts)
+clones into a **new** folder and then registers it through `add`. The
+Add repository dialog's **Download from GitHub** option calls it.
+
+- Address: `parseCloneUrl` ([schemas.ts](../../packages/shared/src/schemas.ts))
+  accepts `owner/name` (becomes `https://github.com/owner/name.git`),
+  `https://`, `ssh://`, `git@host:path` and `file://`. It refuses any other
+  transport (`ext::` runs commands, `http://`/`git://` are unencrypted) and a
+  username or password in an `https` address, which Git would keep in plain
+  text in the clone's config. `cloneRepository`
+  ([source-control.ts](../../packages/git/src/source-control.ts)) also sets
+  `protocol.allow=never` with only those transports allowed, and passes `--`.
+- Folder: `parentFolder`, else the first discovery root, else the home folder
+  (`GET /api/repositories/clone-defaults`); name = `folderName` or the
+  repository name, a single plain segment. An existing destination is
+  `DUPLICATE` (409) — nothing is ever cloned into an existing folder.
+- Failure: `CLONE_FAILED` (502) with Git's last lines; the destination is
+  removed (it did not exist before). 10-minute limit.
+- Sign-in: started by the operator, so like a Source Control fetch it may
+  use Git Credential Manager's cached sign-in; it is not run unattended.
+- An empty repository clones fine and shows **No upstream** until its first
+  push.
+
+| Method | Path | |
+|---|---|---|
+| POST | `/api/repositories/clone` | `{ url, parentFolder?, folderName?, name? }` → 201 `Repository` |
+| GET | `/api/repositories/clone-defaults` | `{ parentFolder }` |
+
+Not a remote operation (like adding a folder, it names paths on this PC).
 
 ## Background sync
 
@@ -146,4 +183,4 @@ Repositories edits every field above.
 - Results live in memory: after a restart the page shows nothing until the
   startup run finishes.
 
-Last verified: 2026-09-23
+Last verified: 2026-09-26

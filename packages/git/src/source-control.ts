@@ -384,6 +384,21 @@ export async function fetchRemote(cwd: string, remote: string, options: { unatte
   return git(cwd, ['fetch', '--no-write-fetch-head', remote], { timeoutMs: REMOTE_TIMEOUT_MS, ...(options.unattended ? { env: UNATTENDED_REMOTE_ENV } : {}) });
 }
 
+/** Cloning can download a whole history; a slow link gets longer than a fetch. */
+const CLONE_TIMEOUT_MS = 600_000;
+
+/**
+ * Clone `url` into `destination`, which must not exist yet. The URL must
+ * already have passed `parseCloneUrl` (packages/shared); `--` keeps it from
+ * ever being read as an option, and `protocol.allow` limits the transports
+ * to the ones that parser accepts, so `ext::` can never run a command.
+ */
+export async function cloneRepository(url: string, destination: string): Promise<GitResult> {
+  if (url.startsWith('-') || destination.startsWith('-')) throw new Error('Invalid clone source or destination');
+  const args = ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'protocol.file.allow=always', 'clone', '--', url, destination];
+  return git(path.dirname(destination), args, { timeoutMs: CLONE_TIMEOUT_MS });
+}
+
 /** Move the current branch to `ref` only if that is a fast-forward. Never merges. */
 export async function fastForward(cwd: string, ref: string): Promise<GitResult> {
   return git(cwd, ['merge', '--ff-only', '--no-edit', ref], { timeoutMs: 120_000 });

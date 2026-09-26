@@ -35,6 +35,7 @@ import {
   type GitMode,
   type PolicyMode,
   type RepositoryRuntime,
+  type TestSelectionMode,
   type PermissionLevel,
   type RepositoryCommand,
   type RoleAssignments,
@@ -57,6 +58,7 @@ interface Draft {
   commands: RepositoryCommand[];
   roleOverrides: RoleAssignments;
   release: ReleaseForm;
+  testSelection: TestSelectionMode;
 }
 
 /** design.md §7.7 — repository defaults, commands, permissions, Git behaviour and task history. */
@@ -88,6 +90,7 @@ export function RepositoryDetailPage() {
         commands: structuredClone(repo.data.commands),
         roleOverrides: structuredClone(repo.data.roleOverrides),
         release: releaseForm(repo.data.release),
+        testSelection: repo.data.testSelection,
       });
       setPathsText(null);
     }
@@ -96,7 +99,7 @@ export function RepositoryDetailPage() {
   const original = useMemo(
     () =>
       repo.data
-        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, policyMode: repo.data.policyMode, runtime: repo.data.runtime, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides, release: releaseForm(repo.data.release) })
+        ? JSON.stringify({ defaultWorkflowId: repo.data.defaultWorkflowId, autoApproveUpToLevel: repo.data.autoApproveUpToLevel, gitMode: repo.data.gitMode, policyMode: repo.data.policyMode, runtime: repo.data.runtime, commands: repo.data.commands, roleOverrides: repo.data.roleOverrides, release: releaseForm(repo.data.release), testSelection: repo.data.testSelection })
         : '',
     [repo.data],
   );
@@ -311,6 +314,22 @@ export function RepositoryDetailPage() {
             ))}
           </ul>
         )}
+        <div className="flex flex-wrap items-start justify-between gap-4 border-t border-border-subtle px-4 py-3">
+          <div className="flex min-w-0 max-w-prose flex-col">
+            <span className="text-body font-semibold text-fg">
+              Run only affected unit tests
+            </span>
+            <span id="affected-tests-help" className="text-small text-fg-secondary">
+              Vitest <code className="font-mono text-code">test</code> commands in npm scripts. The whole suite still runs when configuration, data, test setup, or deleted or renamed files change. Lint, typecheck, build and end-to-end always run in full.
+            </span>
+          </div>
+          <Switch
+            aria-label="Run only affected unit tests"
+            aria-describedby="affected-tests-help"
+            checked={draft.testSelection === 'changed'}
+            onCheckedChange={(v) => setDraft({ ...draft, testSelection: v ? 'changed' : 'full' })}
+          />
+        </div>
       </Panel>
 
       <ReleasePanel repositoryId={id} form={draft.release} onChange={(release) => setDraft({ ...draft, release })} />

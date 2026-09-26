@@ -44,8 +44,13 @@ At least one proof is required. Repository detection never turns release on.
 2. **Tested** — `git rev-parse <sha>^{tree}` must be one of `testedTrees()`:
    for each SUCCESS `tests` stage, the `tree_id` of its last-finished check,
    when every check passed, failed only as on the baseline, or was flaky
-   (its failing files passed when run again on the same files); repair and
-   re-run rows excluded. No tree recorded → "No record of which version passed the checks".
+   (its failing files passed when run again on the same files); repair,
+   re-run and superseded rows excluded (a run of affected tests replaced by the
+   whole suite, [workflow-engine.md](workflow-engine.md#affected-tests-only)).
+   No tree recorded → "No record of which version passed the checks". When the
+   last passing Test stage ran only the unit tests affected by the change
+   (`affectedOnly()`), the approval's reason ends "Unit tests on this commit
+   covered only the tests affected by the change."
 3. **Safe to publish** (under the repository writer lock) — the remote exists;
    `fetchBranch` updates only `refs/remotes/<remote>/<branch>`; that ref must be
    an ancestor of the commit ("`<branch>` has moved…"); every outgoing commit
@@ -149,4 +154,4 @@ and waits for them to save (`close()`).
   the first was released; the stage updates itself, the button refuses —
   background sync (or a pull) before starting avoids both.
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

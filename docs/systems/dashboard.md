@@ -94,7 +94,9 @@ cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New T
 (Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation), Agents, Repositories (+ detail; a Remote column, the automation summary
-line and **Check now**, see [repository-automation.md](repository-automation.md)),
+line and **Check now**, see [repository-automation.md](repository-automation.md); the
+Commands panel ends with **Run only affected unit tests**, see
+[workflow-engine.md](workflow-engine.md#affected-tests-only)),
 Tools (`/tools/:tab`: Overview, Processes, Terminals, MCP servers,
 Credentials, Connected apps (local and VS Code only), Policy — see
 [tool-system.md](tool-system.md); Connected apps is

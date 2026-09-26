@@ -40,6 +40,7 @@ import type {
  *   [sim:learning-unsafe]    the learning review proposes a lesson the safety scan must reject
  *   [sim:learning-uncited]   the learning review cites a signal that does not exist
  *   [sim:big-diff]           the implementer also writes three 60 KB files, more diff than a prompt shows
+ *   [sim:source-only]        implementer and fixer change sim-output.ts (a TypeScript module) instead of sim-output.md
  *   [sim:review-miss-coverage]      reviewer and verifier never name the files the diff did not show
  *   [sim:review-miss-coverage-once] ...only on their first run
  *
@@ -273,9 +274,10 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           const folders = existsSync(path.join(input.cwd, '.git'))
             ? []
             : (await readdir(input.cwd, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory() && existsSync(path.join(input.cwd, d.name, '.git'))).map((d) => d.name);
-          const files = folders.length ? folders.map((folder) => `${folder}/sim-output.md`) : ['sim-output.md'];
+          const out = has('source-only') ? 'sim-output.ts' : 'sim-output.md';
+          const files = folders.length ? folders.map((folder) => `${folder}/${out}`) : [out];
           for (const rel of files) {
-            await appendFile(path.join(input.cwd, rel), `- ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
           }
           if (has('big-diff') && role === 'implementer') {

@@ -211,6 +211,7 @@ export class RepositoryService {
       policyMode: null,
       runtime: detected.runtime,
       preexistingFailures: 'allow',
+      testSelection: 'full',
       // Detection never turns a release on (RELEASE_STAGE_PLAN §3.2).
       release: { method: 'none' },
       createdAt: ts,

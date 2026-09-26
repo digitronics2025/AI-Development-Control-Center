@@ -15,7 +15,7 @@ import {
   treeOfCommit,
 } from '@acc/git';
 import { redact } from '@acc/security';
-import { RELEASE_STATE_LABEL, nonBlockingFailure, type EventType, type PushReleaseConfig, type ReleaseEvidence, type ReleaseSetupCheck, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { RELEASE_STATE_LABEL, nonBlockingFailure, supersededRun, type EventType, type PushReleaseConfig, type ReleaseEvidence, type ReleaseSetupCheck, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import { matchesAny } from '../chairman/rules.js';
 import type { ApprovalGate } from '../engine/approvals.js';
@@ -97,7 +97,7 @@ export function testedTrees(store: Store, task: TaskRecord, repositoryId: string
   const all = store.listTestRuns(task.id);
   for (const stage of store.listStages(task.id)) {
     if (stage.kind !== 'tests' || stage.status !== 'SUCCESS') continue;
-    const rows = all.filter((r) => r.stageId === stage.id && (r.repositoryId ?? task.repositoryId) === repositoryId && !r.summary?.startsWith('Repair: ') && !r.summary?.startsWith('Re-run: '));
+    const rows = all.filter((r) => r.stageId === stage.id && (r.repositoryId ?? task.repositoryId) === repositoryId && !r.summary?.startsWith('Repair: ') && !r.summary?.startsWith('Re-run: ') && !supersededRun(r));
     if (!rows.length) continue;
     const counts = (r: TestRun) => r.status === 'passed' || nonBlockingFailure(r);
     if (!rows.every(counts)) continue;
@@ -105,6 +105,17 @@ export function testedTrees(store: Store, task: TaskRecord, repositoryId: string
     if (last.treeId) trees.add(last.treeId);
   }
   return trees;
+}
+
+/**
+ * Whether the task's last passing Test stage ran only the unit tests affected by the
+ * change in this repository, so the approval can say so (AFFECTED_TESTS_PLAN §3.5).
+ */
+export function affectedOnly(store: Store, task: TaskRecord, repositoryId: string): boolean {
+  const stage = [...store.listStages(task.id)].reverse().find((s) => s.kind === 'tests' && s.status === 'SUCCESS');
+  if (!stage) return false;
+  const tests = store.listTestRuns(task.id, stage.id).filter((r) => r.kind === 'test' && (r.repositoryId ?? task.repositoryId) === repositoryId && !supersededRun(r) && !r.summary?.startsWith('Re-run: '));
+  return tests.length > 0 && tests.every((r) => r.selection === 'changed');
 }
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : '—');
@@ -190,7 +201,7 @@ export class ReleaseService {
     ].join('; and ');
     return {
       action: `Push ${sha} to ${config.remote}/${config.branch}`,
-      reason: `Releasing sends work to your live site. ${repo.name}: push ${sha} to ${config.remote}/${config.branch}. ${proof}, and ${config.liveUrl} answers.`,
+      reason: `Releasing sends work to your live site. ${repo.name}: push ${sha} to ${config.remote}/${config.branch}. ${proof}, and ${config.liveUrl} answers.${affectedOnly(this.d.store, task, repo.id) ? ' Unit tests on this commit covered only the tests affected by the change.' : ''}`,
       riskExplanation: `Only a fast-forward push of the commit that passed this task's checks; never forced, and your working folder is not touched. Nothing is sent if ${config.branch} has moved, if a file under ${config.manualPaths.length ? config.manualPaths.join(', ') : 'your manual paths'} changed, if the commits include secret material, or if the live site is not answering.`,
       environment: 'production',
     };

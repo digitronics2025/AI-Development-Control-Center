@@ -449,6 +449,31 @@ export async function changedPaths(cwd: string, from: string, to: string): Promi
   return [...new Set(result.stdout.split('\0').filter(Boolean))];
 }
 
+/**
+ * Every path whose content differs between `commit` and the working tree, with
+ * how: tracked changes (committed since `commit`, staged or not) with renames
+ * split into a deletion and an addition, plus untracked files that are not
+ * ignored. Unlike `changesSince`, the status is always relative to `commit`,
+ * so a deletion committed since then still reads as one
+ * (docs/plans/AFFECTED_TESTS_PLAN.md §3.2 rule 4).
+ */
+export async function pathStatusSince(cwd: string, commit: string): Promise<Array<{ path: string; status: 'added' | 'modified' | 'deleted' }>> {
+  const [tracked, untracked] = await Promise.all([
+    git(cwd, ['diff', '--name-status', '-z', '--no-renames', commit, '--']),
+    git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+  ]);
+  if (tracked.code !== 0) throw gitFailure('diff', tracked);
+  if (untracked.code !== 0) throw gitFailure('ls-files', untracked);
+  const out = new Map<string, 'added' | 'modified' | 'deleted'>();
+  const parts = tracked.stdout.split('\0').filter(Boolean);
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const code = parts[i]!.charAt(0);
+    out.set(parts[i + 1]!, code === 'A' ? 'added' : code === 'D' ? 'deleted' : 'modified');
+  }
+  for (const path of untracked.stdout.split('\0').filter(Boolean)) if (!out.has(path)) out.set(path, 'added');
+  return [...out].map(([path, status]) => ({ path, status }));
+}
+
 /** Commits reachable from `to` and not from `from`, newest first (at most `limit`). */
 export async function commitsInRange(cwd: string, from: string, to: string, limit = 1000): Promise<string[]> {
   const result = await git(cwd, ['rev-list', `--max-count=${limit}`, to, '--not', from, '--']);

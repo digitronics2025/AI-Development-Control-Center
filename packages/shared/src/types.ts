@@ -371,7 +371,15 @@ export interface TestRun {
   treeId?: string | null;
   /** The earlier passing run this one reuses instead of running again (§3.E). */
   reusedFrom?: string | null;
+  /**
+   * Which tests a `test` command ran (docs/plans/AFFECTED_TESTS_PLAN.md): `changed`, only
+   * those the task's changes can affect; `full`, the whole suite although the repository
+   * asked for affected tests (the summary says why); null, the whole suite as always.
+   */
+  selection?: TestSelectionMode | null;
 }
+
+export type TestSelectionMode = 'changed' | 'full';
 
 /**
  * new: not failing on the baseline; preexisting: every failure already failed there;
@@ -387,6 +395,17 @@ export type TestFailureClass = 'new' | 'preexisting' | 'flaky' | 'unknown';
  */
 export function nonBlockingFailure(run: Pick<TestRun, 'status' | 'classification'>): boolean {
   return run.status === 'failed' && (run.classification === 'preexisting' || run.classification === 'flaky');
+}
+
+/** How a superseded run's summary starts (docs/plans/AFFECTED_TESTS_PLAN.md §3.4). */
+export const SUPERSEDED_PREFIX = 'Superseded: ';
+
+/**
+ * A run of affected tests that could not run any test and was replaced by a
+ * whole-suite run in the same stage: shown, but neither a pass nor a failure.
+ */
+export function supersededRun(run: Pick<TestRun, 'status' | 'summary'>): boolean {
+  return run.status === 'not_run' && Boolean(run.summary?.startsWith(SUPERSEDED_PREFIX));
 }
 
 export interface ChangedFile {
@@ -494,6 +513,8 @@ export interface Repository {
   runtime: RepositoryRuntime;
   /** allow: failures already on the baseline commit are reported but do not block; block: every failure blocks. */
   preexistingFailures: 'allow' | 'block';
+  /** changed: a tests stage's Vitest `test` command runs only the tests the change can affect (docs/plans/AFFECTED_TESTS_PLAN.md). */
+  testSelection: TestSelectionMode;
   /** How tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md). */
   release: ReleaseConfig;
   status: RepositoryStatus;

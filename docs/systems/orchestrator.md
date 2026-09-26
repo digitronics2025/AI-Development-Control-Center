@@ -78,7 +78,9 @@ with `test_runs.failures`, `classification`, `tree_id`, `reused_from` and
 `repositories.preexisting_failures` (migration 16,
 [workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)), and
 `repositories.release` (migration 17, default `{"method":"none"}`; a task's
-release lives in `tasks.git`, [release.md](release.md)). Access goes through
+release lives in `tasks.git`, [release.md](release.md)), and
+`repositories.test_selection` (default `'full'`) with `test_runs.selection`
+(migration 18, [workflow-engine.md](workflow-engine.md#affected-tests-only)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 

@@ -70,6 +70,15 @@ export function testFailureSummary(lines: string[]): string {
   return lastMatching(lines, /\S/) ?? 'Command failed';
 }
 
+/**
+ * Whether the output carries a test runner's totals line at all (passed or
+ * failed counts). A narrowed run that failed without one never ran its tests
+ * (docs/plans/AFFECTED_TESTS_PLAN.md §3.4).
+ */
+export function hasTestTotals(lines: string[]): boolean {
+  return testPassSummary(lines) !== null || lastMatching(lines, /\b\d+\s+(?:failed|failing)\b/i) !== null || nodeTestTotals(lines) !== null;
+}
+
 // ---------------------------------------------------------------------------
 // Failing test ids (docs/plans/AUTOPILOT_GATES_PLAN.md §3.B): which tests
 // failed, read from the whole output while it streams, so a failure can be

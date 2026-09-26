@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import { nonBlockingFailure, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -99,6 +99,13 @@ export interface ReportResult {
   limitations: string[];
 }
 
+/** `npm test -- --changed <sha> --passWithNoTests` → "Unit tests (`npm test`): only …" (AFFECTED_TESTS_PLAN §3.5). */
+export function affectedTestsLine(run: Pick<TestRun, 'command'>): string {
+  const sha = /--changed ([0-9a-f]{40,64})/.exec(run.command)?.[1];
+  const base = run.command.replace(/\s+(?:--\s+)?--changed [0-9a-f]{40,64} --passWithNoTests$/, '');
+  return `- Unit tests (\`${base}\`): only the tests affected by the change ran (Vitest \`--changed ${sha ? sha.slice(0, 7) : '?'}\`); the whole suite did not run.`;
+}
+
 /**
  * Completion report (PLAN §34). Built from recorded facts — test runs,
  * verdicts, the Git diff — never from an agent's own claim of success.
@@ -111,7 +118,8 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   // instance proves nothing — and it must come after the last change (audit F-06, as gate.ts).
   const lastTestStage = [...stages].reverse().find((s) => s.kind === 'tests' && (s.status === 'SUCCESS' || s.status === 'FAILED' || s.status === 'SKIPPED'));
   const lastWrite = [...stages].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
-  const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id) : [];
+  // A run of affected tests replaced by the whole suite in the same stage is neither a pass nor a failure (AFFECTED_TESTS_PLAN §3.4).
+  const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id && !supersededRun(r)) : [];
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
   // Failures that already existed on the baseline commit are reported, not counted against the task (§3.B).
   const preexistingRuns = latestRuns.filter((r) => r.status === 'failed' && r.classification === 'preexisting');
@@ -153,6 +161,9 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const taskFiles = files?.filter((f) => f.origin !== 'preexisting') ?? [];
   const multi = (input.repositories?.length ?? 0) > 1 ? input.repositories! : null;
   const finalStatus: FinalStatus = limitations.length === 0 ? 'READY' : 'NEEDS_USER_ACTION';
+
+  // Information, not a limitation: the operator chose affected tests for the repository (AFFECTED_TESTS_PLAN §3.5).
+  const affectedLines = latestRuns.filter((r) => r.kind === 'test' && r.selection === 'changed').map(affectedTestsLine);
 
   const lines = [
     `# ${finalStatus === 'READY' ? 'TASK COMPLETED' : 'TASK COMPLETED — NEEDS USER ACTION'}`,
@@ -213,10 +224,11 @@ export function buildFinalReport(input: ReportInput): ReportResult {
           `- Verified: ${input.verification.satisfied.join(', ') || 'nothing yet'}`,
           ...(input.verification.missing.length ? [`- Not verified: ${input.verification.missing.join(', ')}`] : []),
           ...(input.browserRechecks?.length ? [`- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`] : []),
+          ...affectedLines,
           '',
         ]
-      : input.browserRechecks?.length
-        ? ['## Verification coverage', '', `- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`, '']
+      : input.browserRechecks?.length || affectedLines.length
+        ? ['## Verification coverage', '', ...(input.browserRechecks?.length ? [`- Operator-observed browser evidence: ${input.browserRechecks.join(', ')}`] : []), ...affectedLines, '']
         : []),
     ...(input.executionLines?.length ? ['## Execution', '', ...input.executionLines, ''] : []),
     ...(input.timeLines?.length ? ['## Where the time went', '', ...input.timeLines, ''] : []),

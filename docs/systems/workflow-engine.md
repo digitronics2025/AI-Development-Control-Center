@@ -231,6 +231,60 @@ Smoke after a skipped Staging, the unit suite run three times):
   records no tree. Implementer and fixer prompts say to run only the tests for
   the files they changed.
 
+## Affected tests only
+
+What [AFFECTED_TESTS_PLAN.md](../plans/AFFECTED_TESTS_PLAN.md) added: a
+repository set to `testSelection: 'changed'` (Repositories → a repository →
+Commands → **Run only affected unit tests**; `full` by default, and for every
+repository that existed before migration 18) runs, in a tests stage, only the
+unit tests whose imports reach a file the task changed.
+
+- **Which command.** Only a `test`-kind command of a `tests` stage, and only a
+  Vitest run: an npm script whose body is one `vitest` run, or `vitest` called
+  directly (`runnerInvocation`/`narrowCommand` in
+  [targeted-tests.ts](../../apps/orchestrator/src/engine/targeted-tests.ts),
+  the same parser the targeted baseline uses). It gets
+  `--changed <baseline commit> --passWithNoTests`: the only text added is the
+  commit id (40 or 64 lowercase hex), and Vitest reads the changes from Git
+  itself and builds the import graph. Lint, typecheck, build and e2e, Jest,
+  pytest, Playwright and pnpm/yarn scripts always run in full.
+- **When the whole suite runs anyway**
+  ([test-selection.ts](../../apps/orchestrator/src/engine/test-selection.ts),
+  first rule that fails, reason in the summary): no baseline commit; the
+  changes cannot be read or there are none; a file was deleted or renamed; a
+  changed file is not `.js/.jsx/.ts/.tsx/.mjs/.cjs/.mts/.cts` (JSON fixtures,
+  snapshots, `.env`, `tsconfig.json`, lockfiles, docs: tests read them without
+  importing them); a changed file is test infrastructure (a name with
+  `setup`, `global-setup`, `teardown` or `config` as a word, or a folder named
+  `__mocks__`, `__fixtures__`, `fixtures`, `test-utils` or `testing`, in any
+  case); an npm script with a `pre`/`post` hook (npm runs it around the tests,
+  and it may write or delete files); or the command is not one Vitest run, or
+  already watches or selects its own files. The selection is made before the
+  stage's commands run (so the approval gate classifies both the narrowed and
+  the original line) and made again right before a narrowed test command runs,
+  so a file an earlier command in the stage wrote or deleted is seen.
+  The changes are read with `pathStatusSince` (packages/git) against the
+  baseline commit, so a deletion committed at a Git checkpoint still counts;
+  pre-existing user work in the folder is included too.
+- **Fallback.** A narrowed run that failed with no failing test ids and no
+  totals line never ran a test (an old Vitest, no Git, a config error): its
+  row becomes `not_run`, `Superseded: …`, and `<name> · whole suite` runs the
+  original command once in the same stage and decides. A superseded row is
+  neither a pass nor a failure for the report or the release's tested trees. A
+  narrowed failure with test ids is a real failure: the baseline comparison
+  and the flaky re-run use the **original** command (a `--changed` run on the
+  baseline would select nothing), narrowed to the failing files as before.
+- **Recorded.** `test_runs.selection`: `changed`, `full` (the repository asked,
+  but the whole suite ran; the summary says why) or null (as always). Summaries
+  start `Affected by the change (N changed files): …`, `No test imports the N
+  changed files`, `Whole suite — <reason>: …` or `Whole suite (the affected
+  tests could not run): …`. Reuse matches the command line, so a run of
+  affected tests is never reused as a whole-suite pass. The final report's
+  Verification coverage says `Unit tests (`npm test`): only the tests affected
+  by the change ran …` (information, not a limitation), and a Release approval
+  of such a commit says so. Only this machine can turn the setting on
+  ([remote-node.md](remote-node.md)).
+
 ## Live control
 
 - **Pause** cancels the running execution; the stage is PAUSED and re-runs on resume.

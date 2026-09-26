@@ -271,6 +271,33 @@ describe('multi-repository tasks migration (v12 → v13)', () => {
   });
 });
 
+/**
+ * Affected tests only (docs/plans/AFFECTED_TESTS_PLAN.md): migration 18 adds
+ * two columns with safe defaults. Every repository reads as the whole suite and
+ * every old test run as "the whole suite as always"; nothing else changes.
+ */
+describe('affected tests migration (v17 → v18)', () => {
+  it('reads every existing repository as full and every existing test run as unselected', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-affected-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 17);
+    migrate(db, previous);
+    const ts = '2026-09-26T12:00:00.000Z';
+    db.prepare("INSERT INTO repositories (id, name, path, created_at, updated_at) VALUES ('r1', 'api', ?, ?, ?)").run(path.join(dataDir, 'api'), ts, ts);
+    db.prepare(
+      `INSERT INTO tasks (id, seq, title, description, repository_id, workflow_id, workflow_snapshot, mode, status, current_stage_key, auto_approve_level, max_fix_cycles, fix_cycles, created_at, updated_at)
+       VALUES ('TASK-0001', 1, 'Old', 'Before affected tests', 'r1', 'quick-change', '{}', 'autopilot', 'COMPLETED', 'complete', 3, 3, 0, ?, ?)`,
+    ).run(ts, ts);
+    db.prepare("INSERT INTO test_runs (id, task_id, name, kind, command, status) VALUES ('tr1', 'TASK-0001', 'test', 'test', 'npm test', 'passed')").run();
+    const before = { repos: db.prepare('SELECT * FROM repositories').all(), runs: db.prepare('SELECT * FROM test_runs').all() };
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 18))).toEqual([18]);
+    expect(db.prepare('SELECT * FROM repositories').all()).toEqual(before.repos.map((r) => ({ ...(r as object), test_selection: 'full' })));
+    expect(db.prepare('SELECT * FROM test_runs').all()).toEqual(before.runs.map((r) => ({ ...(r as object), selection: null })));
+    expect(migrate(db, previous)).toEqual([]);
+    db.close();
+  });
+});
+
 /** Audit F-29: a shipped migration that was renamed, renumbered or edited is refused before anything runs. */
 describe('migration identity', () => {
   it('refuses a database whose applied migrations differ from the code, and fingerprints older rows once', () => {

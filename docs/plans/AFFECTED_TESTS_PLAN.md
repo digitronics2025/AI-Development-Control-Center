@@ -2,7 +2,7 @@
 title: A Test stage runs only the unit tests the change can affect, on repositories that opt in, and runs the whole suite whenever that cannot be proven safe
 source: conversation 2026-09-26 (investigation of the tests stage after LEAD_TIME_PLAN)
 created: 2026-09-26
-status: proposed
+status: in progress
 ---
 
 # AFFECTED_TESTS_PLAN — run only the tests a change can affect
@@ -264,3 +264,14 @@ Implement `docs/plans/AFFECTED_TESTS_PLAN.md` in `AI-Development-Control-Center`
 - Finish with the real checks in §7 and verify every item in §8. Report what was checked, what couldn't be checked, and why.
 
 /goal Implement PLAN.md end-to-end on full autopilot. Inspect and investigate the real project first. Make all normal technical decisions yourself. Do not ask unnecessary questions. Fix root causes and blockers, test real behavior, re-test after fixes, protect existing data and functionality, avoid unrelated scope expansion, and only finish when all success criteria are verified.
+
+## Ledger
+
+- 2026-09-26 — steps 1–8 implemented in one change on `claude/workflow-tests-optimization-uu6skg` (restarted from `main` at 977d16c after PR #2 merged). Every "What happens today" statement was re-checked against the code first; all held.
+- step 1 — `runnerInvocation` now returns the runner's `body` as well, so `narrowCommand` can refuse a Vitest run that already watches or selects its own files (`--watch`/`-w`, `--changed`, `--related`, `vitest watch|dev|related|bench|list|init|typecheck`). `targetedCommand`'s tests are unchanged and pass.
+- step 2 — deviation: the changes are read with a new `pathStatusSince(cwd, commit)` in packages/git (`git diff --name-status --no-renames <commit>` plus untracked files), not `changesSince`. `changesSince` takes each file's status from `git status` (the working tree against HEAD), so after a Git checkpoint commit a committed deletion read as "modified" and rule 4 would have missed it. Renames arrive as a deletion plus an addition, so rule 4 still sees them.
+- step 4 — deviation: a narrowed run that falls back to the whole suite ends `not_run` with a summary starting `Superseded: ` (`supersededRun()` in packages/shared), not `failed`. The report and the release's `testedTrees` leave it out; otherwise a task whose whole-suite fallback passed would have read as failing. A `[sim:source-only]` marker was added to the simulated agent (it changes `sim-output.ts` instead of `sim-output.md`) so the engine-level tests can reach the narrowed path; the default simulation exercises rule 5.
+- step 4 — not written: a multi-repository integration case. The selection is computed per job from that job's own repository, working folder and baseline commit (`withSelections` keys its reads by working folder); single-repository engine tests plus the unit rules cover it.
+- step 6 — the release approval text comes from `affectedOnly()`: the last passing Test stage's `test` rows for that repository, all `selection = 'changed'`.
+- step 9 — not done here: this session runs in a cloud container with no live orchestrator and no `tenten-accounting-in-replay` checkout, so the TASK-0011 replay (§7 Real, §8 timing criteria) and the on/off/fixture comparison tasks are still to be run on the operator's machine: turn the switch on for that repository, replay the task on this build, and record the unit row's summary, `selection` and duration, the Test stage duration and `GET /api/tasks/:id/time`.
+- 2026-09-26 — review of PR #3 (Codex): (1) the selection is now made again right before a narrowed test command runs, since an earlier command in the stage (a formatter, a generator) may have written or deleted files; the gate classifies the original command too, which the fallback and this re-check may run; (2) infrastructure folders and source extensions match in any case; (3) an npm script with a `pre`/`post` lifecycle hook runs the whole suite, reason named. Tests added for each.

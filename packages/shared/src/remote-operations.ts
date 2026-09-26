@@ -106,6 +106,7 @@ export const REMOTE_OPERATIONS: readonly RemoteOperation[] = [
   r('task.approvals', 'GET', '/api/tasks/:id/approvals'),
   r('task.changes', 'GET', '/api/tasks/:id/changes'),
   r('task.diff', 'GET', '/api/tasks/:id/diff'),
+  r('task.time', 'GET', '/api/tasks/:id/time'),
   // chairman
   r('chairman.overview', 'GET', '/api/tasks/:id/chairman'),
   r('chairman.messages', 'GET', '/api/tasks/:id/chairman/messages'),

@@ -65,4 +65,8 @@ refused unknown operations, unlisted packages, bad ports, unlisted services
 and a tampered signature. Actual elevation was not exercised in tests (it
 needs a person at the UAC prompt).
 
-Last verified: 2026-09-23
+## Team workers
+
+`execution.teamWorkerLimit` (1–4, default 3; Tools → Policy → Team workers at once) caps Stage Team workers running at once across every task. A worker's permission level is always its stage's ([stage-teams.md](stage-teams.md)).
+
+Last verified: 2026-09-26

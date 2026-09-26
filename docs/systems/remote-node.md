@@ -261,4 +261,8 @@ classification, dropped escapes, expiry) run against the in-process
 Worker: `apps/cloud-control/test/*.test.ts` (see
 [cloud-control.md](cloud-control.md#tests)).
 
+## Stage Teams
+
+`workUnit` realtime messages are live-only (never mirrored); `task.workUnits` reads `GET /api/tasks/:id/work-units`. Units hold no local paths; a worker's checkout path appears only in its execution's `cwd`, which egress already scrubs ([stage-teams.md](stage-teams.md)).
+
 Last verified: 2026-09-26

@@ -50,4 +50,8 @@ Integration test: a repository whose test needs a `file:` dependency that is
 not installed fails, `npm ci` fails for lack of a lockfile, `npm install`
 succeeds, the test is re-run and passes, the task completes.
 
-Last verified: 2026-09-24
+## Parallel-safe checks
+
+In a batch of parallel-safe checks, repairs (an install, freeing a port) run one at a time, and a check stopped because a sibling failed first is recorded `not_run`, not repaired ([stage-teams.md](stage-teams.md#parallel-safe-checks)).
+
+Last verified: 2026-09-26

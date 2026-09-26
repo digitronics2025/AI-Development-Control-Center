@@ -120,4 +120,8 @@ single-repository variables; the prompt tells agents to read each folder's
   cwd is the workspace.
 - Usage and budgets attribute the whole task to the primary repository.
 
-Last verified: 2026-09-25
+## Stage Teams
+
+A team that changes files runs as one agent in a task across repositories (child checkouts per repository are not built yet); read-only teams run as usual ([stage-teams.md](stage-teams.md)).
+
+Last verified: 2026-09-26

@@ -113,4 +113,8 @@ and are documented in [source-control.md](source-control.md). `git()` takes
 `UNATTENDED_REMOTE_ENV` (`GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`)
 so background fetches fail instead of opening a credential window.
 
-Last verified: 2026-09-25
+## Stage Team helpers
+
+[team.ts](../../packages/git/src/team.ts): `addChildWorktree` (detached, `core.autocrlf=false`), `changedPathsBetween` (renames as D+A), `combineResults` (private index, refuses two units on one path, refs only under `refs/acc/team/`), `applyIfUnchanged` (writes only while the working tree equals the base, via `restoreCheckpoint`), `treeOf`. Used by [stage-teams.md](stage-teams.md).
+
+Last verified: 2026-09-26

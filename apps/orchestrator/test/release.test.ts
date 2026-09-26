@@ -215,6 +215,66 @@ describe('Release stage', () => {
   }, 150_000);
 });
 
+/** Someone else pushes to origin/main while the task runs. */
+async function pushElsewhere(remote: string, file: string, content: string): Promise<string> {
+  const other = mkdtempSync(path.join(os.tmpdir(), 'acc-other-'));
+  await run(os.tmpdir(), ['clone', remote, other]);
+  for (const args of [['config', 'user.email', 'o@example.com'], ['config', 'user.name', 'O'], ['config', 'commit.gpgsign', 'false']]) await run(other, args);
+  writeFileSync(path.join(other, file), content);
+  await run(other, ['add', '.']);
+  await run(other, ['commit', '-m', 'someone else']);
+  await run(other, ['push']);
+  return run(remote, ['rev-parse', 'refs/heads/main']);
+}
+
+describe('Update from the target branch (§9)', () => {
+  it('main moved while the task waited: the task merges it in its worktree, re-tests, and the second approval goes live', async () => {
+    const { repo, remote, repositoryId, before } = await setup();
+    const id = await fullTask(repositoryId);
+    const first = await waitFor(() => releaseApproval(id), (a) => a !== undefined, 90_000, 'the release approval');
+    const moved = await pushElsewhere(remote, 'elsewhere.txt', 'someone else\n');
+    expect((await t!.api('POST', `/api/approvals/${first!.id}/approve`, { confirmation: id })).status).toBe(200);
+    // Refused as moved, updated, re-tested — then the Release stage asks again (a new approval).
+    const second = await waitFor(() => releaseApproval(id), (a) => a !== undefined && a.id !== first!.id, 90_000, 'the second release approval');
+    const task = t!.services.store.getTask(id)!;
+    const merge = task.git.commits.at(-1)!;
+    expect(task.git.baselineCommit).toBe(moved);
+    expect(await run(repo, ['rev-list', '--parents', '-n', '1', merge])).toContain(moved);
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(moved);
+    const types = events(id).filter((e) => e.type === 'GIT_COMMIT' && e.data?.updateFromTarget === true);
+    expect(types).toHaveLength(1);
+    // The checks ran again, on the merged files.
+    const testStages = t!.services.store.listStages(id).filter((s) => s.stageKey === 'test');
+    expect(testStages.length).toBeGreaterThanOrEqual(2);
+    expect((await t!.api('POST', `/api/approvals/${second!.id}/approve`, { confirmation: id })).status).toBe(200);
+    const done = await waitForStatus(t!, id, ['COMPLETED'], 60_000);
+    expect(done.git.release).toMatchObject({ state: 'live', commit: merge });
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(merge);
+    // Only the task's own change reached the reviewers' diff: the baseline moved with main.
+    const changes = (await t!.api('GET', `/api/tasks/${id}/changes`)).body as { files: Array<{ path: string }> };
+    expect(changes.files.map((f) => f.path)).not.toContain('elsewhere.txt');
+    // The operator's folder was never touched.
+    expect(await folderState(repo)).toEqual({ head: before.head, branch: before.branch, status: before.status });
+  }, 240_000);
+
+  it('a conflicting move is never merged: the merge is aborted, the files are named, and nothing is sent', async () => {
+    const { remote, repositoryId } = await setup();
+    const id = await fullTask(repositoryId);
+    const approval = await waitFor(() => releaseApproval(id), (a) => a !== undefined, 90_000, 'the release approval');
+    // The simulated implementer wrote sim-output.md; someone else adds a different one.
+    const moved = await pushElsewhere(remote, 'sim-output.md', 'a different file\n');
+    await t!.api('POST', `/api/approvals/${approval!.id}/approve`, { confirmation: id });
+    const done = await waitForStatus(t!, id, ['COMPLETED'], 60_000);
+    const stage = t!.services.store.listStages(id).filter((s) => s.stageKey === 'release').at(-1)!;
+    expect(stage.status).toBe('FAILED');
+    expect(stage.summary).toContain('moved and conflicts with this task in: sim-output.md');
+    expect(done.finalStatus).toBe('NEEDS_USER_ACTION');
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(moved);
+    // The worktree was left clean: no half-done merge.
+    expect(events(id).some((e) => e.type === 'GIT_COMMIT' && e.data?.updateFromTarget === true)).toBe(false);
+  }, 180_000);
+});
+
 describe('Refusals send nothing', () => {
   it('refuses when the target branch moved since the task started', async () => {
     const { remote, repositoryId } = await setup();

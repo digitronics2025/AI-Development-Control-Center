@@ -326,7 +326,7 @@ Then an eye check in the operator's browser at desktop and phone width.
 
 ## 9. Found for later
 
-- **Update from `main` and re-test.** When the target branch has moved, merge it into the task branch in a worktree, re-run Test, Review and Verify, then offer Release again. This is the most common refusal on busy repositories. **Priority: high.**
+- **Update from `main` and re-test.** *Implemented 2026-09-26 for the Release stage (the button still refuses); see [release.md](../systems/release.md).* When the target branch has moved, merge it into the task branch in a worktree, re-run Test, Review and Verify, then offer Release again. This is the most common refusal on busy repositories. **Priority: high.**
 - **Direct-upload releases.** `cloudflare.deploy` (Workers) and `cloudflare.pages_deploy` (a built folder) as release methods. They go through the existing Level 5 tools rather than a free-form command, and the proof comes from the returned `versionId` or deployment id. **Priority: high,** for Worker-based apps.
 - **Remote database migrations before release,** for example `npm run db:migrate:all:remote` for the accounting app. This would be a separate, approval-gated pre-release step for changes that touch `manualPaths`. **Priority: high.**
 - **Exposing the commit in the accounting app.** A public, secret-free `/api/version` returning `CF_PAGES_COMMIT_SHA` (the app already reads it at `functions/api/_middleware.ts:622`) would give a second, provider-independent proof. This is work in that repository. **Priority: medium.**

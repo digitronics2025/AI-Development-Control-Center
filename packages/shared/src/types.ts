@@ -122,6 +122,8 @@ export interface TaskRelease {
   evidence: ReleaseEvidence;
   /** Why it was refused, failed or is unconfirmed, in plain words. */
   reason: string | null;
+  /** `moved`: the target branch moved since the task's base; the Release stage can update the task from it and re-test. */
+  refusal?: 'moved' | null;
 }
 
 /** One repository a task works in (docs/plans/MULTI_REPO_TASKS_PLAN.md). */

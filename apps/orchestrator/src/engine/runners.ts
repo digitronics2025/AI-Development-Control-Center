@@ -58,6 +58,8 @@ export type StageOutcome =
   | { kind: 'blocked'; stageId: string }
   /** A work stage needs the operator's decision before the task can be done right. */
   | { kind: 'needs_operator'; stageId: string; questions: string[] }
+  /** Continue at another stage of the workflow (a release that updated the task from its target branch re-runs the checks). */
+  | { kind: 'goto'; stageId: string; stageKey: string; message: string }
   | { kind: 'stopped'; stageId: string; reason: StopReason };
 
 /** What a `redirect` stop applies once the loop has let go of the task. */
@@ -1053,6 +1055,19 @@ export class StageRunners {
     }
     // Stopped before anything was sent: a pause, not a result; the stage runs again (and asks again) on resume.
     if (record.state === 'refused' && !record.publishedAt && control.stopReason) return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
+    // The target branch moved while the task ran (RELEASE_STAGE_PLAN §9): update the task from it and run the checks again.
+    const testsStage = task.workflow.stages.find((s) => s.kind === 'tests');
+    if (record.state === 'refused' && record.refusal === 'moved' && testsStage) {
+      const updated = await release.updateFromTarget(task.id, stage.id);
+      if (updated.ok) {
+        const summary = `${record.target.branch} had moved: merged ${updated.target.slice(0, 7)} into the task (${updated.commit.slice(0, 7)}); the checks run again, then the release asks again`;
+        publisher.updateStage(stage.id, { status: 'SKIPPED', summary, finishedAt: now() });
+        return { kind: 'goto', stageId: stage.id, stageKey: testsStage.key, message: summary };
+      }
+      const why = updated.reason;
+      publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'COMMAND_FAILURE', errorMessage: why, summary: why, finishedAt: now() });
+      return { kind: 'optional_failed', stageId: stage.id, message: why, limitation: `Not released: ${why}` };
+    }
     publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'COMMAND_FAILURE', errorMessage: line, summary: line, finishedAt: now() });
     return { kind: 'optional_failed', stageId: stage.id, message: line, limitation: line };
   }

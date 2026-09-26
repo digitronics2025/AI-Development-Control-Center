@@ -96,6 +96,20 @@ At least one proof is required. Repository detection never turns release on.
   status). Approving it runs the same service in the background against a
   synthetic `release` stage record.
 
+**Update from the target branch** (plan §9). When the stage's release is
+refused only because the target branch moved (`refusal: 'moved'`), and the
+task still has its isolated worktree, `updateFromTarget` merges
+`<remote>/<branch>` into the task branch there (`--no-ff`, under the writer
+lock, never in the operator's folder), appends the merge commit to
+`task.git.commits`, moves the task's baseline (commit and snapshot) to the
+target so reviews and baseline checks see only the task's own changes, and
+the stage returns `goto` to the workflow's tests stage: the checks, reviews
+and verification run again, and the Release stage asks again. A conflict
+aborts the merge and fails the stage naming the files; more than
+`MAX_UPDATES_FROM_TARGET` (3) updates, uncommitted changes or no worktree
+leave it refused. The Release button (a completed task, worktree gone) still
+refuses a moved branch.
+
 `POST /api/tasks/:id/release/check` (**Check again**) re-runs step 5 only, in
 the background, for a release whose commit was sent. `POST
 /api/repositories/:id/release/check` (**Check setup**) checks the saved setting
@@ -131,7 +145,8 @@ and waits for them to save (`close()`).
 - A check that changes tracked files (a build writing a committed `dist/`)
   records no tree; a Test stage ending on such a check proves nothing, and the
   release is refused until the checks run again.
-- A second task started from a stale local branch is refused as "moved" once
-  the first was released; background sync (or a pull) fixes it.
+- A second task started from a stale local branch meets a moved target once
+  the first was released; the stage updates itself, the button refuses —
+  background sync (or a pull) before starting avoids both.
 
 Last verified: 2026-09-25

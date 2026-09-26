@@ -1,5 +1,7 @@
 import { existsSync } from 'node:fs';
 import {
+  git,
+  headCommit,
   changedPaths,
   changesSince,
   commitsInRange,
@@ -142,6 +144,11 @@ interface RunOptions {
 
 /** A check that stopped the release before anything was sent. */
 class Refusal extends Error {}
+/** The target branch moved since the task's base: the Release stage may update the task from it (§9). */
+class Moved extends Refusal {}
+
+/** How many times one task may be updated from the target branch before the release is left to the operator. */
+export const MAX_UPDATES_FROM_TARGET = 3;
 
 export class ReleaseService {
   private readonly running = new Set<string>();
@@ -268,7 +275,7 @@ export class ReleaseService {
       if (!remoteSha) throw new Refusal(`${config.remote} has no branch ${config.branch}.`);
       const already = remoteSha === sha;
       if (!already) {
-        if (!(await isAncestor(repo.path, remoteSha, sha))) throw new Refusal(`${config.branch} has moved since this task started. Update the task and re-test first.`);
+        if (!(await isAncestor(repo.path, remoteSha, sha))) throw new Moved(`${config.branch} has moved since this task started. Update the task and re-test first.`);
         const outgoing = await commitsInRange(repo.path, remoteSha, sha);
         const foreign = outgoing.filter((c) => !task.git.commits.includes(c));
         if (foreign.length) {
@@ -312,7 +319,7 @@ export class ReleaseService {
       this.event(taskId, 'RELEASE_PUBLISHED', already ? `${short(sha)} was already on ${config.remote}/${config.branch}; checking that it is live` : `Sent ${short(sha)} to ${config.remote}/${config.branch}; checking that it is live`, { commit: sha, target: record.target }, opts.stageId);
     } catch (error) {
       if (!(error instanceof Refusal)) throw error;
-      record = { ...record, state: 'refused', reason: error.message };
+      record = { ...record, state: 'refused', reason: error.message, refusal: error instanceof Moved ? 'moved' : null };
       step(`Refused: ${error.message} Nothing was sent.`);
       return await this.finish(taskId, record, opts.stageId, log);
     } finally {
@@ -484,6 +491,58 @@ export class ReleaseService {
     ];
     await this.d.artifacts.write(taskId, { name: 'release.md', type: 'stage-output', content: redact(lines.join('\n')), stageId, stageKey: 'release' }).catch(() => undefined);
     return record;
+  }
+
+  // ===========================================================================
+  // Update from the target branch (RELEASE_STAGE_PLAN §9)
+  // ===========================================================================
+
+  /**
+   * The target branch moved while the task ran: merge it into the task's own
+   * branch, in the task's isolated worktree, and move the task's baseline to
+   * it, so the checks run again on what would really be sent and reviews see
+   * only the task's changes. Never in the operator's folder, never with a
+   * conflict (the merge is aborted and the files are named), at most
+   * MAX_UPDATES_FROM_TARGET times per task.
+   */
+  async updateFromTarget(taskId: string, stageId: string): Promise<{ ok: true; commit: string; target: string } | { ok: false; reason: string }> {
+    const task = this.task(taskId);
+    const repo = this.repo(task);
+    const config = this.config(repo);
+    const wt = task.git.worktreePath;
+    if (!config) return { ok: false, reason: 'No release is set up for this repository any more.' };
+    if (!task.git.isolated || !wt || !existsSync(wt)) return { ok: false, reason: `${config.branch} has moved, and this task has no isolated worktree to update. Update the task and re-test first.` };
+    const done = this.d.store.listEvents(taskId, { limit: 5000 }).filter((e) => e.type === 'GIT_COMMIT' && e.data?.updateFromTarget === true).length;
+    if (done >= MAX_UPDATES_FROM_TARGET) return { ok: false, reason: `${config.branch} has moved again after ${done} updates of this task; release it when ${config.branch} is quieter.` };
+    const ref = `refs/remotes/${config.remote}/${config.branch}`;
+    let unlock: (() => void) | null = null;
+    try {
+      unlock = await this.d.coordinator.acquireWriter(repo.id, task.id, 'Update from target');
+      const fetched = await fetchBranch(repo.path, config.remote, config.branch);
+      if (fetched.code !== 0) return { ok: false, reason: `Could not read ${config.remote}/${config.branch}: ${gitMessage(fetched)}` };
+      const target = await revParse(repo.path, ref);
+      if (!target) return { ok: false, reason: `${config.remote} has no branch ${config.branch}.` };
+      if ((await status(wt)).length) return { ok: false, reason: 'The task has uncommitted changes, so it cannot be updated safely. Update the task and re-test first.' };
+      const message = `${task.id}: update from ${config.remote}/${config.branch}\n\nThe target branch moved while the task ran; merged so the checks run on what a release would send (AI Development Control Center).`;
+      const merge = await git(wt, ['merge', '--no-edit', '--no-ff', '-m', message, target], { timeoutMs: 120_000 });
+      if (merge.code !== 0) {
+        const conflicted = await git(wt, ['diff', '--name-only', '--diff-filter=U']);
+        await git(wt, ['merge', '--abort']);
+        const files = conflicted.stdout.split('\n').filter(Boolean);
+        return { ok: false, reason: files.length ? `${config.branch} moved and conflicts with this task in: ${files.slice(0, 20).join(', ')}. Resolve it in the task, then release.` : `Could not merge ${config.branch} into the task: ${gitMessage(merge)}` };
+      }
+      const commit = await headCommit(wt);
+      if (!commit) return { ok: false, reason: 'The merge left no commit.' };
+      const fresh = this.task(taskId);
+      const snapshotId = newId();
+      this.d.store.insertSnapshot({ id: snapshotId, taskId, stageId, kind: 'baseline', branch: fresh.git.taskBranch, head: target, files: [], createdAt: now() });
+      this.d.publisher.updateTask(taskId, { git: { ...fresh.git, commits: [...fresh.git.commits, commit], baselineCommit: target, baselineSnapshotId: snapshotId } });
+      this.event(taskId, 'GIT_COMMIT', `Updated from ${config.remote}/${config.branch} (${short(target)}): merged as ${short(commit)}; the task's baseline is now ${short(target)} and the checks run again`, { commit, target, updateFromTarget: true }, stageId);
+      return { ok: true, commit, target };
+    } finally {
+      unlock?.();
+      this.d.repositories.invalidate(repo.id);
+    }
   }
 
   // ===========================================================================

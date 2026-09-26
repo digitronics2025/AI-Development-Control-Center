@@ -1319,6 +1319,12 @@ export class TaskEngine {
         return this.handleError(task, def, stage, outcome, control);
       case 'blocked':
         return false;
+      case 'goto': {
+        control.autoRetries.delete(def.key);
+        this.publisher.updateTask(taskId, { currentStageKey: outcome.stageKey });
+        this.publisher.event(taskId, 'TASK_REDIRECTED', `Redirected to ${this.d.views.stageDef(task, outcome.stageKey)?.name ?? outcome.stageKey} · ${outcome.message}`, { stageKey: outcome.stageKey }, stage.id);
+        return true;
+      }
       case 'needs_operator': {
         // Not a failure: no fix loop or recovery can settle a question only the operator may answer.
         const message = outcome.questions.length === 1 ? outcome.questions[0]! : outcome.questions.map((q, i) => `(${i + 1}) ${q}`).join(' ');

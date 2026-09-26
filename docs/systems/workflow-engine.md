@@ -91,6 +91,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
 | other errors | automatic retry up to `retry.maxAttempts`, then `FAILED` |
 | an optional stage fails (`optional_failed`) | stage FAILED, event `STAGE_OPTIONAL_FAILED`, the message (or the outcome's own `limitation`, as a release gives) becomes a report limitation, go to `next` — never a fix cycle or a recovery |
+| a release stage finds its target branch moved (`goto`) | the task is updated from it in its worktree and continues at the tests stage; the release asks again ([release.md](release.md)) |
 | a `stage_permission` approval for a `release` stage is denied | stage SKIPPED "Release declined", event `RELEASE_DECLINED`, go to `next` (every other denied approval fails the task) |
 | `REVIEW_INCOMPLETE` (a verdict stage passed twice without naming files the diff did not show) | an error like any other: retried, then (supervised) the Chairman retries or changes agent; never a code fix |
 | a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |

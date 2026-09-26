@@ -285,7 +285,8 @@ control ([StageTeamEditor.tsx](../../apps/dashboard/src/pages/StageTeamEditor.ts
 single agent, fixed team (2–4 worker rows: key, focus, agent/model/effort,
 "Primary reviewer" only on verdict stages, exactly one) or adaptive team,
 plus maximum workers; server validation issues show per field; built-ins show
-it read-only. Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
+it read-only. A fixed team's row names its workers' agents ("Codex + Claude
+Code"; a worker without a pin counts as the stage's agent). Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
 done" ([team.ts](../../apps/dashboard/src/pages/task/team.ts)); Execution has a
 **Stage Team** panel (units, agent, status, live duration, errors, reused,
 Integration / Split the fix rows); Logs label a worker's execution "Stage ·

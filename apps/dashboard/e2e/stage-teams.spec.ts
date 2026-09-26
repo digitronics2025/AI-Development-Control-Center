@@ -111,6 +111,8 @@ for (const theme of ['dark', 'light'] as const) {
         await page.setViewportSize({ width: size.width, height: size.height });
         await page.goto('/workflows/architecture');
         await expect(page.getByText('Fixed team of 2').first()).toBeVisible();
+        // A fixed team's agent column names every worker's agent, not the stage's alone.
+        if (size.name === 'desktop') await expect(page.getByRole('button', { name: /^\d+\.\s*Architecture assessment/ })).toContainText(/Codex.*\+ Claude Code/);
         await page.getByRole('button', { name: /^\d+\.\s*Review/ }).click();
         const inspector = size.name === 'desktop' ? page.locator('aside').filter({ has: page.getByRole('heading', { name: 'Stage: Review' }) }) : page.getByRole('dialog');
         await expect(inspector.getByRole('combobox', { name: 'Execution' })).toHaveText(/Fixed team/);

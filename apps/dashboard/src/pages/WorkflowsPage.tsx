@@ -342,7 +342,15 @@ export function WorkflowsPage() {
             <ol className="flex flex-col divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface">
               {draft.stages.map((s, index) => {
                 const stageIssues = issuesFor(issues, index);
-                const agent = s.kind === 'agent' ? names(s.agentId ?? settings.data?.roleDefaults[s.role]?.agentId) + (s.agentId ? '' : ' (role default)') : 'System';
+                const stageAgent = s.agentId ?? settings.data?.roleDefaults[s.role]?.agentId;
+                // A fixed team runs on its workers' agents (a worker without a pin uses the stage's); an adaptive team's workers all use the stage's.
+                const teamAgents = s.kind === 'agent' && s.team?.mode === 'fixed' && s.team.workers?.length ? [...new Set(s.team.workers.map((w) => w.agentId ?? stageAgent))] : null;
+                const agent =
+                  s.kind !== 'agent'
+                    ? 'System'
+                    : teamAgents
+                      ? teamAgents.map((id) => names(id)).join(' + ')
+                      : names(stageAgent) + (s.agentId ? '' : ' (role default)');
                 return (
                   <li key={`${s.key}-${index}`} className={cn('flex items-center gap-2 px-2', stageIndex === index && 'bg-accent-muted')}>
                     <button

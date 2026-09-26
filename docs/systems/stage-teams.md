@@ -38,7 +38,12 @@ with an agent) moves every worker. Adaptive workers inherit the stage's.
 Built-in: **Architecture** ([architecture.yaml](../../workflows/architecture.yaml))
 — fixed Codex + Claude assessment (replaces the old serial second assessment),
 adaptive Implement (max 3), fixed review (primary correctness + risk reviewer),
-adaptive Fix (max 2). Other built-ins have no teams.
+adaptive Fix (max 2). **Full Autopilot**
+([full-autopilot.yaml](../../workflows/full-autopilot.yaml)) — fixed investigation
+(one worker on the stage's agent, one pinned to Claude Code), adaptive Implement
+(max 3, two attempts so a crashed worker's siblings are reused), fixed review
+(primary correctness + risk), adaptive Fix (max 2); Test, App check, Verify, Git
+checkpoint, staging and Release unchanged. Other built-ins have no teams.
 
 ## Manifest
 

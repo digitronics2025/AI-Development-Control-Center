@@ -311,6 +311,36 @@ describe('Stage Teams', () => {
     expect(units(id, 'implement').filter((u) => u.kind === 'worker').map((u) => u.status)).toEqual(['SUCCESS', 'SUCCESS']);
   }, 200_000);
 
+  it('runs the built-in Full Autopilot with its teams through every gate to a committed, READY task', async () => {
+    t = await createTestApp();
+    expect(t.services.workflows.get('full-autopilot').stages.filter((s) => s.team).map((s) => [s.key, s.team!.mode])).toEqual([
+      ['investigate', 'fixed'],
+      ['implement', 'adaptive'],
+      ['review', 'fixed'],
+      ['fix', 'adaptive'],
+    ]);
+    const repoPath = await makeRepo();
+    const repoId = await addRepo(t, repoPath);
+    const id = await createTask(t, repoId, 'Build both halves [sim:team] [sim:review-fail-once]', { workflowId: 'full-autopilot', supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 120_000);
+    expect(task.blocker?.message ?? null).toBeNull();
+    expect(task.status).toBe('COMPLETED');
+    expect(task.finalStatus).toBe('READY');
+    expect(units(id, 'investigate').map((u) => u.unitKey)).toEqual(['code', 'risks']);
+    expect(units(id, 'implement').map((u) => [u.kind, u.status])).toEqual([
+      ['worker', 'SUCCESS'],
+      ['worker', 'SUCCESS'],
+      ['integration', 'SUCCESS'],
+    ]);
+    // Review failed once with a team, the fix was split and integrated, and every later gate still ran.
+    const stages = t.services.store.listStages(id);
+    expect(stages.filter((s) => s.stageKey === 'review').map((s) => s.verdict)).toEqual(['FAIL', 'PASS']);
+    expect(units(id, 'fix').some((u) => u.kind === 'worker' && u.status === 'SUCCESS')).toBe(true);
+    expect(stages.find((s) => s.stageKey === 'verify')?.status).toBe('SUCCESS');
+    expect(stages.find((s) => s.stageKey === 'git')?.status).toBe('SUCCESS');
+    expect((await sh(repoPath, ['show', `${task.git.taskBranch}:team-a/sim-alpha.md`])).code).toBe(0);
+  }, 150_000);
+
   it('after a restart, marks units that were running as interrupted and sweeps their partial checkouts without following shared links', async () => {
     const { repoId } = await setup([ASSESS]);
     const id = await createTask(t!, repoId, 'Parked', { workflowId: 'assess-team', start: false, supervised: false });

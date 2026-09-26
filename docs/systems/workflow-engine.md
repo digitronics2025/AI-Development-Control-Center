@@ -155,7 +155,8 @@ without asking for approval (`skipsForLackOfCommands`).
 
 An agent stage with a `team` runs as a **Stage Team** — several workers, write
 workers in their own checkouts, one outcome — or falls back to one agent
-([stage-teams.md](stage-teams.md)). A tests stage runs consecutive commands the
+([stage-teams.md](stage-teams.md)); the built-in Architecture and Full Autopilot
+workflows use teams. A tests stage runs consecutive commands the
 repository marked `parallelSafe` together, stopping the batch at the first
 real failure; everything else runs one at a time, in order.
 

@@ -2,7 +2,10 @@
 # branch; staging deploy is optional and always approval-gated. The Release
 # stage sends the tested commit live only after your typed Level 5 approval,
 # and is skipped when the repository has no release set up
-# (docs/plans/RELEASE_STAGE_PLAN.md).
+# (docs/plans/RELEASE_STAGE_PLAN.md). Investigation, implementation, review and
+# fix run as Stage Teams (docs/systems/stage-teams.md): two investigators and two
+# reviewers side by side, and implementation or fixes split into parallel workers
+# only when the work divides into independent parts — otherwise one agent, as before.
 id: full-autopilot
 name: Full Autopilot
 description: Full implementation, review and verification loop
@@ -14,6 +17,15 @@ stages:
     permissionLevel: 1
     retry: { maxAttempts: 2 }
     next: plan
+    team:
+      mode: fixed
+      maxWorkers: 2
+      workers:
+        - key: code
+          focus: The code involved, root cause and the smallest fitting change
+        - key: risks
+          focus: Risks, tests to add or change, and what could break
+          agentId: claude
   - key: plan
     name: Plan
     role: planner
@@ -25,7 +37,11 @@ stages:
     role: implementer
     permissionLevel: 2
     timeoutSec: 3600
+    retry: { maxAttempts: 2 }
     next: test
+    team:
+      mode: adaptive
+      maxWorkers: 3
   - key: test
     name: Test
     role: tester
@@ -55,12 +71,24 @@ stages:
     retry: { maxAttempts: 2 }
     next: verify
     onFail: fix
+    team:
+      mode: fixed
+      maxWorkers: 2
+      workers:
+        - key: correctness
+          focus: Correctness of the whole diff
+          primary: true
+        - key: risk
+          focus: Security, data and regression risks
   - key: fix
     name: Fix
     role: fixer
     permissionLevel: 2
     timeoutSec: 3600
     next: test
+    team:
+      mode: adaptive
+      maxWorkers: 2
   - key: verify
     name: Verify
     role: verifier

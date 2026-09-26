@@ -96,6 +96,11 @@ for (const theme of ['dark', 'light'] as const) {
       await panel.getByLabel('Version URL').fill('');
       await expect(panel.getByText('Choose at least one way to prove the release is live')).toBeVisible();
       await expect(page.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+      // Filling the field scrolled the page; wherever that lands, a button can sit under the sticky top bar
+      // and axe reports it as obscured. Check the page from the top, as every other page check does.
+      await page.evaluate(() => {
+        for (const el of [document.scrollingElement, ...document.querySelectorAll('main, [data-scroll-container]')]) if (el) el.scrollTop = 0;
+      });
       await expectNoAxeViolations(page, testInfo);
       expect(errors).toEqual([]);
     });

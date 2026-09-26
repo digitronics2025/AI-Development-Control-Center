@@ -11,7 +11,7 @@ import { mergeSettings } from '../services/settings.js';
  */
 export interface GuardContext {
   settings: Settings;
-  repository: (id: string) => Pick<Repository, 'runtime' | 'autoApproveUpToLevel' | 'policyMode'> | null;
+  repository: (id: string) => Pick<Repository, 'runtime' | 'autoApproveUpToLevel' | 'policyMode' | 'testSelection'> | null;
   workflow: (id: string) => Pick<WorkflowProfile, 'stages'> | null;
   /** The task works in more than one repository (docs/systems/multi-repository-tasks.md). */
   isMultiRepositoryTask?: (taskId: string) => boolean;
@@ -85,6 +85,8 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
         const nextLevel = typeof b.autoApproveUpToLevel === 'number' ? b.autoApproveUpToLevel : settings.autoApproveUpToLevel;
         if (nextLevel > currentLevel) return deny('Raising the auto-approve level can only be done on this machine.');
       }
+      // Running only the affected tests narrows a gate, so only this machine may turn it on (AFFECTED_TESTS_PLAN §3.6).
+      if (b.testSelection === 'changed' && repo.testSelection !== 'changed') return deny('Running only affected tests can only be turned on on this machine.');
       const currentPolicy = repo.policyMode ?? settings.execution.policyMode;
       if ('policyMode' in b) {
         const nextPolicy = typeof b.policyMode === 'string' ? (b.policyMode as PolicyMode) : settings.execution.policyMode;

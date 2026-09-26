@@ -1233,4 +1233,16 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE repositories ADD COLUMN release TEXT NOT NULL DEFAULT '{"method":"none"}';
     `,
   },
+  {
+    // Affected tests only (docs/plans/AFFECTED_TESTS_PLAN.md): a repository opts in to
+    // running only the unit tests a change can affect. Every existing repository reads
+    // as 'full' and every existing test run as NULL (the whole suite): behaviour is
+    // unchanged until someone turns it on. Additive only.
+    version: 18,
+    name: 'affected tests',
+    sql: `
+      ALTER TABLE repositories ADD COLUMN test_selection TEXT NOT NULL DEFAULT 'full';
+      ALTER TABLE test_runs ADD COLUMN selection TEXT;
+    `,
+  },
 ];

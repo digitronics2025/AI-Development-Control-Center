@@ -44,6 +44,7 @@ import type {
   PolicyMode,
   ReleaseConfig,
   RepositoryRuntime,
+  TestSelectionMode,
 } from '@acc/shared';
 import { releaseConfigSchema, repositoryRuntimeSchema } from '@acc/shared';
 import type { AgentDetectionResult, AgentHealth } from '@acc/agent-sdk';
@@ -157,6 +158,8 @@ export interface RepositoryRecord {
   runtime: RepositoryRuntime;
   /** allow: failures already on the baseline are reported but do not block; block: every failure blocks (§3.B). */
   preexistingFailures: 'allow' | 'block';
+  /** changed: affected unit tests only (docs/plans/AFFECTED_TESTS_PLAN.md); anything else reads as full. */
+  testSelection: TestSelectionMode;
   /** How tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md); `none` never releases. */
   release: ReleaseConfig;
   createdAt: string;
@@ -362,6 +365,7 @@ const toTestRun = (r: Row): TestRun => ({
   classification: r.classification ?? null,
   treeId: r.tree_id ?? null,
   reusedFrom: r.reused_from ?? null,
+  selection: r.selection === 'changed' || r.selection === 'full' ? r.selection : null,
 });
 
 /** A stored release setting that no longer validates reads as `none`: it never releases on a guess. */
@@ -384,6 +388,7 @@ const toRepository = (r: Row): RepositoryRecord => ({
   policyMode: r.policy_mode ?? null,
   runtime: repositoryRuntimeSchema.parse(parse(r.runtime, {})),
   preexistingFailures: r.preexisting_failures === 'block' ? 'block' : 'allow',
+  testSelection: r.test_selection === 'changed' ? 'changed' : 'full',
   release: readRelease(r.release),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -524,8 +529,8 @@ export class Store {
   insertRepository(rec: RepositoryRecord): void {
     this.db
       .prepare(
-        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime, preexisting_failures, release)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO repositories (id, name, path, default_workflow_id, role_overrides, commands, git_mode, auto_approve_level, tooling, last_task_id, created_at, updated_at, policy_mode, runtime, preexisting_failures, release, test_selection)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         rec.id,
@@ -544,6 +549,7 @@ export class Store {
         json(rec.runtime),
         rec.preexistingFailures ?? 'allow',
         json(rec.release ?? { method: 'none' }),
+        rec.testSelection === 'changed' ? 'changed' : 'full',
       );
   }
 
@@ -561,6 +567,7 @@ export class Store {
     if (patch.runtime !== undefined) cols.runtime = json(patch.runtime);
     if (patch.preexistingFailures !== undefined) cols.preexisting_failures = patch.preexistingFailures;
     if (patch.release !== undefined) cols.release = json(patch.release);
+    if (patch.testSelection !== undefined) cols.test_selection = patch.testSelection === 'changed' ? 'changed' : 'full';
     cols.updated_at = now();
     const keys = Object.keys(cols);
     this.db.prepare(`UPDATE repositories SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
@@ -1176,16 +1183,16 @@ export class Store {
   insertTestRun(t: TestRun): void {
     this.db
       .prepare(
-        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at, repository_id, failures, classification, tree_id, reused_from)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_runs (id, task_id, stage_id, execution_id, name, kind, command, status, exit_code, duration_ms, summary, started_at, finished_at, repository_id, failures, classification, tree_id, reused_from, selection)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         t.id, t.taskId, t.stageId, t.executionId, t.name, t.kind, t.command, t.status, t.exitCode, t.durationMs, t.summary, t.startedAt, t.finishedAt, t.repositoryId ?? null,
-        t.failures ? json(t.failures) : null, t.classification ?? null, t.treeId ?? null, t.reusedFrom ?? null,
+        t.failures ? json(t.failures) : null, t.classification ?? null, t.treeId ?? null, t.reusedFrom ?? null, t.selection ?? null,
       );
   }
 
-  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt' | 'failures' | 'classification' | 'treeId' | 'reusedFrom'>>): TestRun {
+  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt' | 'failures' | 'classification' | 'treeId' | 'reusedFrom' | 'selection'>>): TestRun {
     const map: Record<string, string> = {
       status: 'status',
       exitCode: 'exit_code',
@@ -1198,6 +1205,7 @@ export class Store {
       classification: 'classification',
       treeId: 'tree_id',
       reusedFrom: 'reused_from',
+      selection: 'selection',
     };
     const entries = Object.entries(patch)
       .filter(([k]) => map[k])

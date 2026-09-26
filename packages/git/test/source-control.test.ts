@@ -20,6 +20,7 @@ import {
   listRemotes,
   operationInProgress,
   outgoingPatch,
+  pathStatusSince,
   parsePorcelainV2,
   pathDiff,
   pushRef,
@@ -433,5 +434,27 @@ describe('remote identity', () => {
     expect(remoteOwnerKey('C:\\Users\\me\\remotes\\app.git')).toBe('local:c:/users/me/remotes');
     expect(remoteOwnerKey('/srv/git/app.git')).toBe('local:/srv/git');
     expect(remoteOwnerKey('')).toBeNull();
+  });
+});
+
+/** Affected tests only (docs/plans/AFFECTED_TESTS_PLAN.md §3.2 rule 4): statuses against the baseline commit. */
+describe('pathStatusSince', () => {
+  it('reads committed, staged, unstaged and untracked changes against the commit, a rename as a deletion and an addition', async () => {
+    const baseline = (await run(repo, ['rev-parse', 'HEAD'])).trim();
+    expect(await pathStatusSince(repo, baseline)).toEqual([]);
+    // Committed after the baseline (as the Git checkpoint does): still a deletion, not "modified".
+    await run(repo, ['rm', '-q', 'b.txt']);
+    await run(repo, ['commit', '-m', 'drop b']);
+    await run(repo, ['mv', 'a.txt', 'moved.txt']); // staged rename
+    mkdirSync(path.join(repo, 'src'));
+    writeFileSync(path.join(repo, 'src', 'new.ts'), 'export {};\n'); // untracked
+    writeFileSync(path.join(repo, 'ignored.log'), 'x\n');
+    writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    const byPath = Object.fromEntries((await pathStatusSince(repo, baseline)).map((c) => [c.path, c.status]));
+    expect(byPath).toEqual({ 'a.txt': 'deleted', 'b.txt': 'deleted', 'moved.txt': 'added', 'src/new.ts': 'added', '.gitignore': 'added' });
+  });
+
+  it('fails loudly on an unknown commit, so the caller runs the whole suite', async () => {
+    await expect(pathStatusSince(repo, 'f'.repeat(40))).rejects.toThrow();
   });
 });

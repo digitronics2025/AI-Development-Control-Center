@@ -182,6 +182,8 @@ export const updateRepositorySchema = z.object({
   runtime: repositoryRuntimeSchema.optional(),
   /** allow: failures already on the baseline commit do not block a task; block: every failure blocks. */
   preexistingFailures: z.enum(['allow', 'block']).optional(),
+  /** changed: run only the unit tests the change can affect (Vitest); full: the whole suite (docs/plans/AFFECTED_TESTS_PLAN.md). */
+  testSelection: z.enum(['full', 'changed']).optional(),
   /** How tested work goes live; `none` (the default) never releases. */
   release: releaseConfigSchema.optional(),
 });

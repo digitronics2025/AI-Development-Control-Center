@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TARGETED_FILES, targetedCommand, testFileOf, testFilesOf } from '../src/engine/targeted-tests.js';
+import { MAX_TARGETED_FILES, narrowCommand, runnerInvocation, targetedCommand, testFileOf, testFilesOf } from '../src/engine/targeted-tests.js';
 
 /** Targeted baseline runs (docs/plans/LEAD_TIME_PLAN.md §3.1). */
 
@@ -75,5 +75,44 @@ describe('the targeted command', () => {
     expect(targetedCommand('npx vitest run', null, [])).toBeNull();
     expect(targetedCommand('npx vitest run', null, ['a b.test.ts'])).toBeNull();
     expect(targetedCommand('npx vitest run', null, Array.from({ length: MAX_TARGETED_FILES + 1 }, (_, i) => `t${i}.test.ts`))).toBeNull();
+  });
+});
+
+/** Affected tests only (docs/plans/AFFECTED_TESTS_PLAN.md §3.2 rule 7). */
+describe('the command narrowed to the tests a change can affect', () => {
+  const sha = 'a'.repeat(40);
+  const scripts = { test: 'vitest run', 'test:unit': 'vitest run --project unit', jest: 'jest --ci', e2e: 'playwright test', watch: 'vitest', dev: 'vitest watch', related: 'vitest related src/a.ts', changed: 'vitest run --changed HEAD~1', w: 'vitest run -w', chained: 'vitest run && node after.js' };
+
+  it('names the runner of an npm script or a direct call', () => {
+    expect(runnerInvocation('npm test', scripts)).toMatchObject({ runner: 'vitest', body: 'vitest run' });
+    expect(runnerInvocation('npm run jest', scripts)?.runner).toBe('jest');
+    expect(runnerInvocation('npx playwright test', null)?.runner).toBe('playwright');
+    expect(runnerInvocation('npm run chained', scripts)).toBeNull();
+  });
+
+  it('appends --changed <baseline> --passWithNoTests to one Vitest run', () => {
+    expect(narrowCommand('npm test', scripts, sha)).toBe(`npm test -- --changed ${sha} --passWithNoTests`);
+    expect(narrowCommand('npm run test:unit', scripts, sha)).toBe(`npm run test:unit -- --changed ${sha} --passWithNoTests`);
+    expect(narrowCommand('npx vitest run', null, sha)).toBe(`npx vitest run --changed ${sha} --passWithNoTests`);
+    expect(narrowCommand('vitest run', null, 'b'.repeat(64))).toBe(`vitest run --changed ${'b'.repeat(64)} --passWithNoTests`);
+    // A bare `vitest` script runs once without a terminal, as the orchestrator starts it.
+    expect(narrowCommand('npm run watch', scripts, sha)).toBe(`npm run watch -- --changed ${sha} --passWithNoTests`);
+  });
+
+  it('leaves every other command to the whole suite', () => {
+    expect(narrowCommand('npm run jest', scripts, sha)).toBeNull(); // Jest: Found for Later
+    expect(narrowCommand('npm run e2e', scripts, sha)).toBeNull(); // Playwright
+    expect(narrowCommand('python -m pytest', null, sha)).toBeNull();
+    expect(narrowCommand('pnpm test', scripts, sha)).toBeNull(); // passes arguments on differently
+    expect(narrowCommand('npm run chained', scripts, sha)).toBeNull();
+    expect(narrowCommand('npm run dev', scripts, sha)).toBeNull(); // watch mode
+    expect(narrowCommand('npm run w', scripts, sha)).toBeNull();
+    expect(narrowCommand('npm run related', scripts, sha)).toBeNull(); // already chooses its files
+    expect(narrowCommand('npm run changed', scripts, sha)).toBeNull();
+    expect(narrowCommand('npm test', null, sha)).toBeNull(); // no package.json
+  });
+
+  it('adds nothing but a plain hex commit id to the command line', () => {
+    for (const bad of ['HEAD', 'main', 'a'.repeat(39), 'A'.repeat(40), `${'a'.repeat(40)};rm -rf /`, `${'a'.repeat(39)} `, '']) expect(narrowCommand('npm test', scripts, bad), bad).toBeNull();
   });
 });

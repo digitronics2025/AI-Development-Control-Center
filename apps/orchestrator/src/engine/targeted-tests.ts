@@ -41,6 +41,35 @@ function isRunner(line: string): boolean {
   return !COMPOUND.test(line) && RUNNERS.some((r) => r.test(line));
 }
 
+export type TestRunner = 'vitest' | 'jest' | 'playwright';
+
+export interface RunnerInvocation {
+  runner: TestRunner;
+  /** The single runner call: the npm script's body, or the command line itself. */
+  body: string;
+  /** The command line with `args` passed on to the runner (already shell-safe). */
+  append(args: string[]): string;
+}
+
+/**
+ * How extra arguments reach the test runner of `commandLine`, or null when the
+ * command is not one runner call that can take them: an npm script whose body
+ * is one `vitest`/`jest`/`playwright test` run (arguments after `--`), or such a
+ * runner called directly. `scripts` are the package.json scripts to read the
+ * body from (null when there are none). Shared by the targeted baseline run and
+ * the affected-tests selection (docs/plans/AFFECTED_TESTS_PLAN.md §3.2).
+ */
+export function runnerInvocation(commandLine: string, scripts: Record<string, string> | null): RunnerInvocation | null {
+  const line = commandLine.trim().replace(/\s+/g, ' ');
+  const script = NPM_SCRIPT.exec(line);
+  const body = script ? scripts?.[script[1] ?? 'test'] : line;
+  if (typeof body !== 'string') return null;
+  const trimmed = body.trim().replace(/\s+/g, ' ');
+  if (!isRunner(trimmed)) return null;
+  const runner: TestRunner = RUNNERS[0]!.test(trimmed) ? 'vitest' : RUNNERS[1]!.test(trimmed) ? 'jest' : 'playwright';
+  return { runner, body: trimmed, append: (args) => (script ? `${line} -- ${args.join(' ')}` : `${line} ${args.join(' ')}`) };
+}
+
 /**
  * The file a failure id names: Playwright `[project] › file › title`, Vitest
  * `file > suite > title` or `file [ file ]`, pytest `file::test`, Jest `file`.
@@ -71,13 +100,26 @@ export interface TargetedCommand {
  */
 export function targetedCommand(commandLine: string, scripts: Record<string, string> | null, files: string[]): TargetedCommand | null {
   if (!files.length || files.length > MAX_TARGETED_FILES || files.some((f) => !safePath(f))) return null;
-  const line = commandLine.trim().replace(/\s+/g, ' ');
-  const script = NPM_SCRIPT.exec(line);
-  if (script) {
-    const body = scripts?.[script[1] ?? 'test'];
-    if (typeof body !== 'string' || !isRunner(body.trim())) return null;
-    return { commandLine: `${line} -- ${files.map(shellArg).join(' ')}`, files };
-  }
-  if (!isRunner(line)) return null;
-  return { commandLine: `${line} ${files.map(shellArg).join(' ')}`, files };
+  const invocation = runnerInvocation(commandLine, scripts);
+  return invocation ? { commandLine: invocation.append(files.map(shellArg)), files } : null;
+}
+
+/** A Git commit id: 40 (SHA-1) or 64 (SHA-256) lowercase hex characters, the only text a narrowed command gains. */
+export const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** Vitest runs that already choose their own files, or never finish: watch mode and the other subcommands. */
+const VITEST_SELF_SELECTING = /(?:^|\s)(?:--changed|--related|--watch|-w)(?:[\s=]|$)|\bvitest (?:watch|dev|related|bench|list|init|typecheck)\b/;
+
+/**
+ * The same Vitest command narrowed to the tests whose imports reach a file
+ * changed since `baselineCommit` (AFFECTED_TESTS_PLAN §3.2 rule 7), or null
+ * when it cannot be: not one Vitest run, a run that already selects its own
+ * files or watches, or a commit id that is not plain hex. Vitest reads the
+ * changes from Git itself (committed since the commit, staged, unstaged and
+ * untracked) and runs everything when package.json or its config changed.
+ */
+export function narrowCommand(commandLine: string, scripts: Record<string, string> | null, baselineCommit: string): string | null {
+  if (!COMMIT_ID.test(baselineCommit)) return null;
+  const invocation = runnerInvocation(commandLine, scripts);
+  if (!invocation || invocation.runner !== 'vitest' || VITEST_SELF_SELECTING.test(invocation.body)) return null;
+  return invocation.append(['--changed', baselineCommit, '--passWithNoTests']);
 }

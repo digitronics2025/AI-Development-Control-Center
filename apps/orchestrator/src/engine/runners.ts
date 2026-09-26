@@ -2,13 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
-import { changesSince, commitPaths, committableTree } from '@acc/git';
+import { changesSince, commitPaths, committableTree, pathStatusSince } from '@acc/git';
 import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
   DEFAULT_VERIFY_COMMAND_KINDS,
   ERROR_CLASS_LABEL,
   ROLE_ACTIVITY,
+  SUPERSEDED_PREFIX,
   type ArtifactType,
   type CommandKind,
   type ErrorClass,
@@ -35,8 +36,9 @@ import { LogSink } from './log-sink.js';
 import { extractOperatorBlockers } from './report.js';
 import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
-import { FailureIdCollector, testFailureSummary, testPassSummary } from './test-summary.js';
+import { FailureIdCollector, hasTestTotals, testFailureSummary, testPassSummary } from './test-summary.js';
 import { targetedCommand, testFilesOf } from './targeted-tests.js';
+import { selectTests, type PathChange, type Selection } from './test-selection.js';
 import type { EngineTooling } from './tooling.js';
 import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
@@ -194,6 +196,35 @@ interface RepoUnit {
   /** The repository's folder in the task workspace; null for a single-repository task. */
   folder: string | null;
   git: TaskRecord['git'];
+}
+
+/** The scripts of `workdir`'s package.json; null when it has none or cannot be read. */
+function packageScripts(workdir: string): Record<string, string> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(workdir, 'package.json'), 'utf8')) as { scripts?: unknown };
+    return parsed.scripts && typeof parsed.scripts === 'object' ? (parsed.scripts as Record<string, string>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The stored `test_runs.selection`: null when nothing asked for a narrower run (AFFECTED_TESTS_PLAN §3.1). */
+const selectionMode = (selection: Selection): TestRun['selection'] => (selection.mode === 'changed' ? 'changed' : selection.reason ? 'full' : null);
+
+/** A failed run with no failing test ids and no totals line ran no tests at all (AFFECTED_TESTS_PLAN §3.4). */
+function neverRanTests(exec: CommandRun): boolean {
+  return !exec.passed && !exec.result.cancelled && !exec.result.timedOut && exec.failures.length === 0 && !exec.overflow && !hasTestTotals(exec.tail);
+}
+
+/** The summary says which tests ran, first (AFFECTED_TESTS_PLAN §3.3). */
+function scopedSummary(selection: Selection, fellBack: boolean, summary: string | null): string | null {
+  if (fellBack) return `Whole suite (the affected tests could not run)${summary ? `: ${summary}` : ''}`;
+  if (selection.mode === 'changed') {
+    const files = `${selection.files} changed file${selection.files === 1 ? '' : 's'}`;
+    return summary ? `Affected by the change (${files}): ${summary}` : `No test imports the ${files}`;
+  }
+  if (selection.reason) return `Whole suite — ${selection.reason}${summary ? `: ${summary}` : ''}`;
+  return summary;
 }
 
 /** "web · test" in a multi-repository task, plain "test" otherwise. */
@@ -474,7 +505,7 @@ export class StageRunners {
     const units = this.units(task, repo);
     const repoNames = units.map((u) => u.repo.name).join(', ');
     const configured = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
-    const jobs = configured.filter((j) => !waived.has(j.command.kind));
+    const jobs = await this.withSelections(def, configured.filter((j) => !waived.has(j.command.kind)));
     const commands = jobs.map((j) => j.command);
     // One-shot requests are consumed by the stage that runs them.
     if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
@@ -533,11 +564,11 @@ export class StageRunners {
 
     // Classify every command before running any of them.
     for (const job of jobs) {
-      const blocked = this.gateCommand(task, def, stage, job.unit.repo, job.name, job.command.command, job.unit.workdir);
+      const blocked = this.gateCommand(task, def, stage, job.unit.repo, job.name, job.effective.command, job.unit.workdir);
       if (blocked) return blocked;
     }
 
-    const runs: TestRun[] = jobs.map(({ unit, command: c, name }) => ({
+    const runs: TestRun[] = jobs.map(({ unit, effective: c, name, selection }) => ({
       id: newId(),
       taskId: task.id,
       stageId: stage.id,
@@ -546,6 +577,7 @@ export class StageRunners {
       ...(unit.folder ? { repositoryId: unit.repo.id } : {}),
       kind: c.kind,
       command: redact(c.command),
+      selection: selectionMode(selection),
       status: 'not_run',
       exitCode: null,
       durationMs: null,
@@ -577,9 +609,10 @@ export class StageRunners {
     };
 
     for (let i = 0; i < jobs.length; i++) {
-      const { command, unit, name } = jobs[i]!;
+      const { command, unit, name, selection } = jobs[i]!;
+      let { effective } = jobs[i]!;
       const { workdir } = unit;
-      const run = runs[i]!;
+      let run = runs[i]!;
       if (control.stopReason) break;
       const treeId = await treeOf(workdir);
 
@@ -603,14 +636,14 @@ export class StageRunners {
       // lock), repair and run it again — a bounded number of times.
       const attempted: RepairStrategy[] = [];
       const repairs: string[] = [];
-      let exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
+      let exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
       while (exec && !exec.passed && !exec.result.cancelled && !control.stopReason) {
         const classified = this.d.tooling.classify(exec.tail, exec.result.timedOut);
         // A repair that fails hands over to the next strategy (a locked install, then a normal one).
         let repaired = false;
         for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !control.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
           attempted.push(plan.strategy);
-          const row = this.d.tooling.recordRepair(task, stage.id, command.command, classified, plan, attempted.length);
+          const row = this.d.tooling.recordRepair(task, stage.id, effective.command, classified, plan, attempted.length);
           const result = await this.applyRepair(task, stage, unit.repo, workdir, plan, env, control);
           this.d.tooling.finishRepair(row.id, result.ok, result.detail);
           if (result.ok) {
@@ -620,7 +653,20 @@ export class StageRunners {
           }
         }
         if (!repaired) break;
-        exec = await this.executeCommand(task, stage, workdir, command, env, control, run);
+        exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
+      }
+      // A narrowed run that failed without running any test (an old Vitest, no Git, a config
+      // error) proves nothing: the whole suite runs once instead and decides (AFFECTED_TESTS_PLAN §3.4).
+      if (exec && selection.mode === 'changed' && neverRanTests(exec) && !control.stopReason) {
+        const why = exec.summary ?? 'Command failed';
+        this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', exitCode: exec.result.exitCode, durationMs: exec.result.durationMs, summary: redact(`${SUPERSEDED_PREFIX}could not run only the affected tests (${why}); the whole suite ran instead`), finishedAt: now() }));
+        report.push(`○ ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s   could not run only the affected tests; running the whole suite`);
+        publisher.event(task.id, 'TEST_FAILED', `${name}: could not run only the affected tests (${why}); running the whole suite instead`, { executionId: exec.executionId, selection: 'fallback' }, stage.id);
+        effective = command;
+        run = { ...run, id: newId(), name: `${name} · whole suite`, command: redact(command.command), selection: 'full', status: 'running', executionId: null, exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null, treeId };
+        store.insertTestRun(run);
+        this.publishTestRun(run);
+        exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
       }
       if (!exec || exec.result.cancelled) {
         this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now(), durationMs: exec?.result.durationMs ?? null }));
@@ -629,7 +675,7 @@ export class StageRunners {
       // A command that changed the files (a formatter, a code generator) ran on a tree that no longer exists: not reusable.
       const after = await treeOf(workdir, true);
       const repairedNote = repairs.length ? ` (after repair: ${repairs.join('; ')})` : '';
-      let summary = exec.passed && repairs.length ? `${exec.summary ?? 'Passed'}${repairedNote}` : exec.summary;
+      let summary = scopedSummary(selection, selection.mode === 'changed' && effective === command, exec.passed && repairs.length ? `${exec.summary ?? 'Passed'}${repairedNote}` : exec.summary);
       const failures = exec.passed ? null : exec.failures.map((f) => redact(f));
 
       // A failure is compared with the baseline commit before it may block (§3.B).
@@ -736,14 +782,7 @@ export class StageRunners {
   ): Promise<{ passed: boolean; files: number } | null> {
     const files = testFilesOf(failures);
     if (!files.length || !files.every((f) => existsSync(path.join(unit.workdir, f)))) return null;
-    let scripts: Record<string, string> | null = null;
-    try {
-      const parsed = JSON.parse(readFileSync(path.join(unit.workdir, 'package.json'), 'utf8')) as { scripts?: unknown };
-      if (parsed.scripts && typeof parsed.scripts === 'object') scripts = parsed.scripts as Record<string, string>;
-    } catch {
-      scripts = null;
-    }
-    const narrowed = targetedCommand(command.command, scripts, files);
+    const narrowed = targetedCommand(command.command, packageScripts(unit.workdir), files);
     if (!narrowed) return null;
     const again: RepositoryCommand = { ...command, id: `${command.id}-again`, name: `${name} · failing files again`, command: narrowed.commandLine };
     const row: TestRun = { id: newId(), taskId: task.id, stageId: stage.id, executionId: null, name: again.name, ...(failedRun.repositoryId ? { repositoryId: failedRun.repositoryId } : {}), kind: command.kind, command: redact(again.command), status: 'running', exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null };
@@ -765,6 +804,34 @@ export class StageRunners {
   }
 
   /** A passing run of the same command, in the same repository, on the same files, earlier in this task (§3.E). */
+  /**
+   * Which tests each job runs (AFFECTED_TESTS_PLAN §3.2–3.3). The task's changes and the
+   * package.json scripts are read once per repository, and only where it opted in; any
+   * error reading them runs the whole suite.
+   */
+  private async withSelections<J extends { unit: RepoUnit; command: RepositoryCommand }>(def: StageDefinition, jobs: J[]): Promise<Array<J & { effective: RepositoryCommand; selection: Selection }>> {
+    const inputs = new Map<string, Promise<{ changed: PathChange[] | null; scripts: Record<string, string> | null }>>();
+    const read = (unit: RepoUnit) => {
+      let found = inputs.get(unit.workdir);
+      if (!found) {
+        found = (async () => ({
+          changed: unit.git.baselineCommit ? await pathStatusSince(unit.workdir, unit.git.baselineCommit).catch(() => null) : null,
+          scripts: packageScripts(unit.workdir),
+        }))();
+        inputs.set(unit.workdir, found);
+      }
+      return found;
+    };
+    const out: Array<J & { effective: RepositoryCommand; selection: Selection }> = [];
+    for (const job of jobs) {
+      const optedIn = def.kind === 'tests' && job.command.kind === 'test' && job.unit.repo.testSelection === 'changed';
+      const { changed, scripts } = optedIn ? await read(job.unit) : { changed: null, scripts: null };
+      const selection = selectTests({ repo: job.unit.repo, command: job.command, stageKind: def.kind, baselineCommit: job.unit.git.baselineCommit, changed, scripts });
+      out.push({ ...job, selection, effective: selection.mode === 'changed' ? { ...job.command, command: selection.commandLine } : job.command });
+    }
+    return out;
+  }
+
   private reusablePass(taskId: string, treeId: string, run: TestRun): TestRun | null {
     try {
       return this.d.store.findReusableRun(taskId, treeId, run.command, run.repositoryId ?? null);

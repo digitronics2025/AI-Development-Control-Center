@@ -29,7 +29,8 @@ const repos: Record<string, string> = {};
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage();
   await page.goto('/');
-  for (const theme of ['dark', 'light']) repos[theme] = (await api<{ id: string }>(page, 'POST', '/api/repositories', { path: fixtureRepo(), name: `affected-${theme}` })).id;
+  // Named to sort after the demo's api-gateway: Source Control opens the first repository by name.
+  for (const theme of ['dark', 'light']) repos[theme] = (await api<{ id: string }>(page, 'POST', '/api/repositories', { path: fixtureRepo(), name: `test-selection-${theme}` })).id;
   await page.close();
 });
 

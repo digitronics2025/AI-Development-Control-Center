@@ -51,6 +51,11 @@ describe('which tests a tests stage runs', () => {
     for (const path of ['vitest.setup.ts', 'test/setup.ts', 'src/global-setup.ts', 'test/globalSetup.ts', 'test/teardown.js', 'vitest.config.ts', 'src/app.config.ts', 'src/__mocks__/fs.ts', 'test/fixtures/users.ts', 'src/test-utils/render.tsx', 'src/testing/helpers.ts', 'src/__fixtures__/a.ts']) {
       expect(selectTests({ ...base, changed: [{ path, status: 'modified' }] }), path).toEqual({ mode: 'full', reason: `${path} configures or supports every test` });
     }
+    // Folder names in any case (Windows repositories, found in review).
+    for (const path of ['test/Fixtures/users.ts', 'src/Test-Utils/render.tsx', 'src/__MOCKS__/api.ts']) {
+      expect(fullSuiteReason({ path, status: 'modified' }), path).toBe(`${path} configures or supports every test`);
+    }
+    expect(fullSuiteReason({ path: 'src/Price.TS', status: 'modified' })).toBeNull();
     // A name that only contains the word is ordinary source.
     expect(fullSuiteReason({ path: 'src/configurator.ts', status: 'modified' })).toBeNull();
     expect(fullSuiteReason({ path: 'src/setupWizard.ts', status: 'modified' })).toBeNull();
@@ -60,6 +65,14 @@ describe('which tests a tests stage runs', () => {
     expect(selectTests({ ...base, command: { kind: 'test', command: 'npm run jest' } })).toEqual({ mode: 'full', reason: 'Only Vitest commands can run affected tests' });
     expect(selectTests({ ...base, command: { kind: 'test', command: 'pnpm test' } })).toEqual({ mode: 'full', reason: 'Only Vitest commands can run affected tests' });
     expect(selectTests({ ...base, scripts: null })).toEqual({ mode: 'full', reason: 'Only Vitest commands can run affected tests' });
+  });
+
+  it('rule 7: an npm script with a pre or post hook runs the whole suite (npm runs it around the tests)', () => {
+    expect(selectTests({ ...base, scripts: { test: 'vitest run', pretest: 'node gen-fixtures.js' } })).toEqual({ mode: 'full', reason: 'npm runs the pretest script around it, which may change files' });
+    expect(selectTests({ ...base, scripts: { test: 'vitest run', posttest: 'node cleanup.js' } })).toEqual({ mode: 'full', reason: 'npm runs the posttest script around it, which may change files' });
+    // A hook of another script does not matter; a direct call runs no hooks.
+    expect(selectTests({ ...base, scripts: { test: 'vitest run', prebuild: 'node x.js' } }).mode).toBe('changed');
+    expect(selectTests({ ...base, command: { kind: 'test', command: 'npx vitest run' }, scripts: { pretest: 'node x.js' } }).mode).toBe('changed');
   });
 
   it('checks the rules in order and names the first file that needs the whole suite', () => {

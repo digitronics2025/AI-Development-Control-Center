@@ -7,7 +7,7 @@
  */
 import type { RepositoryCommand, StageKind } from '@acc/shared';
 import type { RepositoryRecord } from '../store/store.js';
-import { COMMIT_ID, narrowCommand } from './targeted-tests.js';
+import { COMMIT_ID, narrowCommand, runnerInvocation } from './targeted-tests.js';
 
 export interface PathChange {
   path: string;
@@ -20,7 +20,7 @@ export type Selection =
   | { mode: 'full'; reason: string | null };
 
 /** JavaScript and TypeScript modules: the only files a Vitest import graph can see. */
-const SOURCE = /\.(?:[cm]?[jt]sx?)$/;
+const SOURCE = /\.(?:[cm]?[jt]sx?)$/i;
 /** Files that configure or support every test, whatever imports them. */
 const INFRASTRUCTURE_NAME = /(?:^|[.\-_])(?:setup|global-setup|globalsetup|teardown|config)(?:[.\-_]|$)/i;
 const INFRASTRUCTURE_DIR = new Set(['__mocks__', '__fixtures__', 'fixtures', 'test-utils', 'testing']);
@@ -31,7 +31,7 @@ export function fullSuiteReason(change: PathChange): string | null {
   const segments = change.path.split('/');
   const name = segments.at(-1) ?? change.path;
   if (!SOURCE.test(name)) return `${change.path} is not source code; tests may read it`;
-  if (INFRASTRUCTURE_NAME.test(name) || segments.slice(0, -1).some((s) => INFRASTRUCTURE_DIR.has(s))) return `${change.path} configures or supports every test`;
+  if (INFRASTRUCTURE_NAME.test(name) || segments.slice(0, -1).some((s) => INFRASTRUCTURE_DIR.has(s.toLowerCase()))) return `${change.path} configures or supports every test`;
   return null;
 }
 
@@ -57,7 +57,10 @@ export function selectTests(input: {
     const reason = fullSuiteReason(change);
     if (reason) return { mode: 'full', reason };
   }
-  // Rule 7
+  // Rule 7: npm runs a script's pre/post hooks around it, and they may write or delete files the import graph cannot see.
+  const script = runnerInvocation(input.command.command, input.scripts)?.script;
+  const hook = script ? [`pre${script}`, `post${script}`].find((h) => input.scripts?.[h] !== undefined) : undefined;
+  if (hook) return { mode: 'full', reason: `npm runs the ${hook} script around it, which may change files` };
   const commandLine = narrowCommand(input.command.command, input.scripts, input.baselineCommit);
   if (!commandLine) return { mode: 'full', reason: 'Only Vitest commands can run affected tests' };
   return { mode: 'changed', commandLine, baselineCommit: input.baselineCommit, files: input.changed.length };

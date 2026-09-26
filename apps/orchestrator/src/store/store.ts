@@ -1192,7 +1192,7 @@ export class Store {
       );
   }
 
-  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt' | 'failures' | 'classification' | 'treeId' | 'reusedFrom' | 'selection'>>): TestRun {
+  updateTestRun(id: string, patch: Partial<Pick<TestRun, 'status' | 'exitCode' | 'durationMs' | 'summary' | 'finishedAt' | 'executionId' | 'startedAt' | 'failures' | 'classification' | 'treeId' | 'reusedFrom' | 'selection' | 'command'>>): TestRun {
     const map: Record<string, string> = {
       status: 'status',
       exitCode: 'exit_code',
@@ -1206,6 +1206,7 @@ export class Store {
       treeId: 'tree_id',
       reusedFrom: 'reused_from',
       selection: 'selection',
+      command: 'command',
     };
     const entries = Object.entries(patch)
       .filter(([k]) => map[k])

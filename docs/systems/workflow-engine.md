@@ -256,8 +256,13 @@ unit tests whose imports reach a file the task changed.
   snapshots, `.env`, `tsconfig.json`, lockfiles, docs: tests read them without
   importing them); a changed file is test infrastructure (a name with
   `setup`, `global-setup`, `teardown` or `config` as a word, or a folder named
-  `__mocks__`, `__fixtures__`, `fixtures`, `test-utils` or `testing`); or the
-  command is not one Vitest run, or already watches or selects its own files.
+  `__mocks__`, `__fixtures__`, `fixtures`, `test-utils` or `testing`, in any
+  case); an npm script with a `pre`/`post` hook (npm runs it around the tests,
+  and it may write or delete files); or the command is not one Vitest run, or
+  already watches or selects its own files. The selection is made before the
+  stage's commands run (so the approval gate classifies both the narrowed and
+  the original line) and made again right before a narrowed test command runs,
+  so a file an earlier command in the stage wrote or deleted is seen.
   The changes are read with `pathStatusSince` (packages/git) against the
   baseline commit, so a deletion committed at a Git checkpoint still counts;
   pre-existing user work in the folder is included too.

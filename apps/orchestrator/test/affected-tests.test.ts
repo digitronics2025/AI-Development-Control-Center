@@ -111,6 +111,19 @@ describe('a tests stage on a repository that runs only affected tests', () => {
     expect(t!.services.store.getTask(id)!.finalStatus).toBe('READY');
   }, 120_000);
 
+  it('decides again right before the tests: a file an earlier command wrote runs the whole suite (found in review)', async () => {
+    t = await createTestApp();
+    const { repo, log } = await stubRepo('pass');
+    const writesFixture = { id: 'lint', name: 'lint', command: 'node -e "require(\'fs\').writeFileSync(\'gen.json\', \'{}\')"', kind: 'lint', enabled: true, timeoutSec: 120 };
+    const repoId = await addRepo(t, repo, { ...IN_PLACE, testSelection: 'changed', commands: [writesFixture, COMMANDS[1]] });
+    const id = await createTask(t, repoId, 'Change the price module [sim:source-only]', { supervised: false });
+    expect((await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000)).status).toBe('COMPLETED');
+    const test = t.services.store.listTestRuns(id).find((r) => r.kind === 'test')!;
+    expect(test).toMatchObject({ status: 'passed', selection: 'full', command: 'npm test' });
+    expect(test.summary).toMatch(/^Whole suite — gen\.json is not source code; tests may read it: .*9 passed/);
+    expect(calls(log)).toEqual([['run']]);
+  }, 120_000);
+
   it('compares a failure of the narrowed run with the baseline using the original command', async () => {
     const classify = vi.spyOn(BaselineChecks.prototype, 'classify').mockImplementation(async (input) => ({ classification: 'preexisting', baselineCommit: input.baselineCommit, reason: null }));
     const { task, runs } = await runTask({ testSelection: 'changed' }, 'fail-with-ids', 'Change the price module [sim:source-only]');

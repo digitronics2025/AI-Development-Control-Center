@@ -47,6 +47,8 @@ export interface RunnerInvocation {
   runner: TestRunner;
   /** The single runner call: the npm script's body, or the command line itself. */
   body: string;
+  /** The npm script's name, or null when the runner is called directly. */
+  script: string | null;
   /** The command line with `args` passed on to the runner (already shell-safe). */
   append(args: string[]): string;
 }
@@ -67,7 +69,7 @@ export function runnerInvocation(commandLine: string, scripts: Record<string, st
   const trimmed = body.trim().replace(/\s+/g, ' ');
   if (!isRunner(trimmed)) return null;
   const runner: TestRunner = RUNNERS[0]!.test(trimmed) ? 'vitest' : RUNNERS[1]!.test(trimmed) ? 'jest' : 'playwright';
-  return { runner, body: trimmed, append: (args) => (script ? `${line} -- ${args.join(' ')}` : `${line} ${args.join(' ')}`) };
+  return { runner, body: trimmed, script: script ? (script[1] ?? 'test') : null, append: (args) => (script ? `${line} -- ${args.join(' ')}` : `${line} ${args.join(' ')}`) };
 }
 
 /**
@@ -113,7 +115,9 @@ const VITEST_SELF_SELECTING = /(?:^|\s)(?:--changed|--related|--watch|-w)(?:[\s=
  * The same Vitest command narrowed to the tests whose imports reach a file
  * changed since `baselineCommit` (AFFECTED_TESTS_PLAN §3.2 rule 7), or null
  * when it cannot be: not one Vitest run, a run that already selects its own
- * files or watches, or a commit id that is not plain hex. Vitest reads the
+ * files or watches, an npm script with a `pre`/`post` lifecycle hook (npm runs
+ * it around the tests, and it may write or delete files the import graph cannot
+ * see), or a commit id that is not plain hex. Vitest reads the
  * changes from Git itself (committed since the commit, staged, unstaged and
  * untracked) and runs everything when package.json or its config changed.
  */
@@ -121,5 +125,6 @@ export function narrowCommand(commandLine: string, scripts: Record<string, strin
   if (!COMMIT_ID.test(baselineCommit)) return null;
   const invocation = runnerInvocation(commandLine, scripts);
   if (!invocation || invocation.runner !== 'vitest' || VITEST_SELF_SELECTING.test(invocation.body)) return null;
+  if (invocation.script && (scripts?.[`pre${invocation.script}`] !== undefined || scripts?.[`post${invocation.script}`] !== undefined)) return null;
   return invocation.append(['--changed', baselineCommit, '--passWithNoTests']);
 }

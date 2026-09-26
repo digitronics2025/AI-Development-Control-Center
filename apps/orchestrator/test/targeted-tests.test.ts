@@ -110,6 +110,8 @@ describe('the command narrowed to the tests a change can affect', () => {
     expect(narrowCommand('npm run related', scripts, sha)).toBeNull(); // already chooses its files
     expect(narrowCommand('npm run changed', scripts, sha)).toBeNull();
     expect(narrowCommand('npm test', null, sha)).toBeNull(); // no package.json
+    expect(narrowCommand('npm test', { ...scripts, pretest: 'node gen.js' }, sha)).toBeNull(); // npm runs the hook first
+    expect(narrowCommand('npm run test:unit', { ...scripts, 'posttest:unit': 'node x.js' }, sha)).toBeNull();
   });
 
   it('adds nothing but a plain hex commit id to the command line', () => {

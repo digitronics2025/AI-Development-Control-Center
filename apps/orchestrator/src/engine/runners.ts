@@ -563,9 +563,12 @@ export class StageRunners {
     }
 
     // Classify every command before running any of them.
+    // A narrowed job may run its original command too (a fallback, or a re-check that needs the whole suite): classify both.
     for (const job of jobs) {
-      const blocked = this.gateCommand(task, def, stage, job.unit.repo, job.name, job.effective.command, job.unit.workdir);
-      if (blocked) return blocked;
+      for (const line of new Set([job.effective.command, job.command.command])) {
+        const blocked = this.gateCommand(task, def, stage, job.unit.repo, job.name, line, job.unit.workdir);
+        if (blocked) return blocked;
+      }
     }
 
     const runs: TestRun[] = jobs.map(({ unit, effective: c, name, selection }) => ({
@@ -609,11 +612,22 @@ export class StageRunners {
     };
 
     for (let i = 0; i < jobs.length; i++) {
-      const { command, unit, name, selection } = jobs[i]!;
-      let { effective } = jobs[i]!;
+      const { command, unit, name } = jobs[i]!;
+      let { effective, selection } = jobs[i]!;
       const { workdir } = unit;
       let run = runs[i]!;
       if (control.stopReason) break;
+      // Earlier commands in this stage (a formatter, a generator) may have changed the files since the
+      // selection was made: decide again, now, before running only the affected tests (§3.2).
+      if (selection.mode === 'changed') {
+        const fresh = await this.selectionFor(def, unit, command);
+        if (fresh.mode !== 'changed') {
+          selection = fresh;
+          effective = command;
+          run = store.updateTestRun(run.id, { command: redact(command.command), selection: selectionMode(fresh) });
+          this.publishTestRun(run);
+        }
+      }
       const treeId = await treeOf(workdir);
 
       // The same command already passed on exactly these files in this task: that result stands (§3.E).
@@ -824,12 +838,18 @@ export class StageRunners {
     };
     const out: Array<J & { effective: RepositoryCommand; selection: Selection }> = [];
     for (const job of jobs) {
-      const optedIn = def.kind === 'tests' && job.command.kind === 'test' && job.unit.repo.testSelection === 'changed';
-      const { changed, scripts } = optedIn ? await read(job.unit) : { changed: null, scripts: null };
-      const selection = selectTests({ repo: job.unit.repo, command: job.command, stageKind: def.kind, baselineCommit: job.unit.git.baselineCommit, changed, scripts });
+      const selection = await this.selectionFor(def, job.unit, job.command, () => read(job.unit));
       out.push({ ...job, selection, effective: selection.mode === 'changed' ? { ...job.command, command: selection.commandLine } : job.command });
     }
     return out;
+  }
+
+  /** One job's selection; the changes and scripts are read now unless `inputs` supplies them. */
+  private async selectionFor(def: StageDefinition, unit: RepoUnit, command: RepositoryCommand, inputs?: () => Promise<{ changed: PathChange[] | null; scripts: Record<string, string> | null }>): Promise<Selection> {
+    const optedIn = def.kind === 'tests' && command.kind === 'test' && unit.repo.testSelection === 'changed';
+    const read = inputs ?? (async () => ({ changed: unit.git.baselineCommit ? await pathStatusSince(unit.workdir, unit.git.baselineCommit).catch(() => null) : null, scripts: packageScripts(unit.workdir) }));
+    const { changed, scripts } = optedIn ? await read() : { changed: null, scripts: null };
+    return selectTests({ repo: unit.repo, command, stageKind: def.kind, baselineCommit: unit.git.baselineCommit, changed, scripts });
   }
 
   private reusablePass(taskId: string, treeId: string, run: TestRun): TestRun | null {

@@ -1,9 +1,12 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { git } from '@acc/git';
 import type { Execution, StageWorkUnit, WorkflowProfileInput } from '@acc/shared';
 import { afterEach, describe, expect, it } from 'vitest';
+import { clipTitle } from '../src/engine/stage-team.js';
 import { newId, now } from '../src/store/store.js';
 import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
@@ -16,6 +19,8 @@ let t: TestApp | null = null;
 afterEach(async () => {
   await t?.close();
   t = null;
+  // Every test's first task is TASK-0001: a once-per-task marker ([sim:review-fail-once]) must fire again in the next test.
+  SimulatedAgentAdapter.reset();
 });
 
 const FULL: WorkflowProfileInput = {
@@ -48,6 +53,29 @@ const ASSESS: WorkflowProfileInput = {
   stages: [{ key: 'assess', name: 'Assessment', role: 'investigator', permissionLevel: 1, next: 'complete', retry: { maxAttempts: 2 }, team: { mode: 'fixed', maxWorkers: 2, workers: [{ key: 'arch', focus: 'Architecture' }, { key: 'risk', focus: 'Risks' }] } }],
 };
 
+/** Three read-only assessors, two at a time: the third runs in a second wave. */
+const ASSESS_THREE: WorkflowProfileInput = {
+  id: 'assess-three',
+  name: 'Assess three',
+  stages: [
+    {
+      key: 'assess',
+      name: 'Assessment',
+      role: 'investigator',
+      permissionLevel: 1,
+      next: 'complete',
+      team: { mode: 'fixed', maxWorkers: 2, workers: [{ key: 'arch', focus: 'Architecture' }, { key: 'risk', focus: 'Risks' }, { key: 'tests', focus: 'Tests to add' }] },
+    },
+  ],
+};
+
+/** A write team alone: a Fix split into units run at most two at a time, so three units take two waves. */
+const FIX_ONLY: WorkflowProfileInput = {
+  id: 'fix-only',
+  name: 'Fix only',
+  stages: [{ key: 'fix', name: 'Fix', role: 'fixer', permissionLevel: 2, next: 'complete', team: { mode: 'adaptive', maxWorkers: 2 } }],
+};
+
 async function setup(workflows: WorkflowProfileInput[] = [FULL], settings: Record<string, unknown> = {}) {
   t = await createTestApp();
   for (const wf of workflows) {
@@ -61,6 +89,19 @@ async function setup(workflows: WorkflowProfileInput[] = [FULL], settings: Recor
 
 const units = (taskId: string, stageKey?: string): StageWorkUnit[] => t!.services.store.listWorkUnits(taskId).filter((u) => !stageKey || u.stageKey === stageKey);
 const agentExecs = (taskId: string): Execution[] => t!.services.store.listExecutions(taskId).filter((e) => e.kind === 'agent');
+const events = (taskId: string) => t!.services.store.listEvents(taskId, { limit: 2000 });
+/** The stage-level event of a type for the first (or n-th) run of a stage. */
+const stageEvent = (taskId: string, stageKey: string, type: string, run = 1) => {
+  const stage = t!.services.store.listStages(taskId).filter((s) => s.stageKey === stageKey)[run - 1];
+  return events(taskId).find((e) => e.type === type && e.stageId === stage?.id);
+};
+/** An artifact's text by its exact name. */
+const artifactText = async (taskId: string, name: string) => {
+  const rec = t!.services.store.listArtifacts(taskId).find((a) => a.name === name);
+  expect(rec, name).toBeDefined();
+  return (await t!.services.artifacts.read(rec!)).content;
+};
+const spellings = (p: string) => [p, p.replace(/\\/g, '/')];
 const span = (e: Execution) => [new Date(e.startedAt).getTime(), new Date(e.finishedAt!).getTime()] as const;
 const overlaps = (a: Execution, b: Execution) => span(a)[0] < span(b)[1] && span(b)[0] < span(a)[1];
 
@@ -109,6 +150,46 @@ describe('Stage Teams', () => {
     expect(lead.cwd.startsWith(teamRoot)).toBe(false);
     expect(impl[0]!.baseCommit).toMatch(/^[0-9a-f]{40}$/);
     expect(impl[0]!.resultCommit).toMatch(/^[0-9a-f]{40}$/);
+
+    // Every team run saved the prompt it read, named after its unit (docs/systems/prompts.md).
+    const names = t!.services.store.listArtifacts(id).map((a) => a.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'investigation-prompt-arch.md',
+        'investigation-prompt-risk.md',
+        'implementation-prompt-alpha.md',
+        'implementation-prompt-beta.md',
+        'implementation-prompt-integration.md',
+        'review-prompt-full.md',
+        'review-prompt-risk.md',
+      ]),
+    );
+    // A writer's prompt names only its own checkout: never the task's worktree (where the lead ran), never the operator's folder.
+    const alphaPrompt = await artifactText(id, 'implementation-prompt-alpha.md');
+    expect(alphaPrompt).toContain(alpha.cwd);
+    for (const outside of [...spellings(lead.cwd), ...spellings(repoPath)]) expect(alphaPrompt).not.toContain(outside);
+    expect(alphaPrompt).toContain(`- Path: ${alpha.cwd}\n`);
+
+    // The integration pass is recorded like any unit: the files before and after it, and what it changed.
+    expect(impl[2]!.baseCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(impl[2]!.resultCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(impl[2]!.baseCommit).not.toBe(impl[2]!.resultCommit);
+    const implEvents = events(id).filter((e) => e.stageId === impl[0]!.stageId);
+    expect(implEvents.map((e) => e.message)).toContain('Integration finished · 1 file changed');
+    // The simulated lead writes sim-output.md, outside both units' paths: reported, not refused.
+    expect(implEvents.some((e) => e.type === 'STAGE_TEAM' && /the integration pass changed 1 file outside the work units' paths \(sim-output\.md\)/.test(e.message))).toBe(true);
+
+    // The stage's line credits each unit with its own work and the lead with its reconciliation; the aggregate names the lead's agent.
+    const implStage = t!.services.store.getStage(impl[0]!.stageId)!;
+    expect(implStage.summary).toMatch(/^Team of 2: Alpha part: .+; Beta part: .+; integration: .+$/);
+    expect(await t!.services.artifacts.latestText(id, 'implementation-report')).toContain(`\n## Integration (lead, ${t!.services.agents.adapter(lead.agentId!).displayName})\n`);
+
+    // Wall time and agent time side by side, with the lead's pass apart from the workers'.
+    const implTeam = (stageEvent(id, 'implement', 'STAGE_COMPLETED')!.data as { team: Record<string, number | null> }).team;
+    expect(implTeam).toMatchObject({ workers: 2, reused: 0, integrated: 2, decomposeMs: null });
+    expect(implTeam.agentMs).toBeGreaterThan(0);
+    expect(implTeam.integrationMs).toBeGreaterThan(0);
+    expect(implTeam.wallMs).toBeGreaterThan(0);
 
     // Both halves are on the task branch; the operator's checkout never saw any of it.
     const branch = task.git.taskBranch!;
@@ -287,7 +368,141 @@ describe('Stage Teams', () => {
       ['worker', 'beta', 'SUCCESS'],
       ['integration', 'integration', 'SUCCESS'],
     ]);
+
+    // The FAIL carries the stage's timing and team data, and names the reviewer that asked for changes.
+    const failed = stageEvent(id, 'review', 'REVIEW_FAILED')!;
+    expect(failed.message).toMatch(/^Review requested changes \((The whole diff|Security and data risks)\)$/);
+    expect(failed.data).toMatchObject({ verdict: 'FAIL', team: { workers: 2 } });
+    expect(typeof failed.data.durationMs).toBe('number');
+
+    // The decomposer and the lead finish on the timeline like any worker, and every run's prompt is saved.
+    const fixMessages = events(id).filter((e) => e.type === 'WORK_UNIT' && e.stageId === fix[0]!.stageId).map((e) => e.message);
+    expect(fixMessages).toContain('Split the fix finished · 2 units: Alpha part, Beta part');
+    expect(fixMessages).toContain('Integration finished · 1 file changed');
+    expect(t!.services.store.listArtifacts(id).map((a) => a.name)).toEqual(expect.arrayContaining(['fix-decomposition-prompt.md', 'fix-decomposition.md', 'fix-prompt-alpha.md', 'fix-prompt-beta.md', 'fix-prompt-integration.md']));
+    const fixTeam = (stageEvent(id, 'fix', 'STAGE_COMPLETED')!.data as { team: Record<string, number | null> }).team;
+    expect(fixTeam.decomposeMs).toBeGreaterThan(0);
+    expect(fixTeam.integrationMs).toBeGreaterThan(0);
   }, 60_000);
+
+  it('parks a supervised team at the task\'s own agent-run limit, and goes on once a resume extends it', async () => {
+    const { repoPath, repoId } = await setup([ASSESS_THREE]);
+    // As Git for Windows sets it: the task's files are CRLF on disk and LF in Git.
+    await sh(repoPath, ['config', 'core.autocrlf', 'true']);
+    // The task's own limit, below the global setting (which allows 60 runs and never changes here).
+    const withRuns = async (description: string, maxAgentRuns: number) => {
+      const taskId = await createTask(t!, repoId, description, { workflowId: 'assess-three', supervised: true, start: false });
+      const limits = t!.services.store.getTask(taskId)!.limits!;
+      t!.services.store.updateTask(taskId, { limits: { ...limits, maxAgentRuns } });
+      await t!.services.engine.start(taskId);
+      return taskId;
+    };
+    expect(t!.services.settings.get().chairman.maxAgentRuns).toBeGreaterThan(3);
+    const id = await withRuns('Assess in two waves', 2);
+    const parked = await waitForStatus(t!, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED'], 60_000);
+    // A limit, as before any stage — not an error — and the third worker never started.
+    expect(parked.blocker).toMatchObject({ kind: 'limit', stageKey: 'assess' });
+    expect(parked.blocker!.message).toBe('Agent run limit reached (2 of 2).');
+    expect(units(id).map((u) => [u.unitKey, u.status])).toEqual([
+      ['arch', 'SUCCESS'],
+      ['risk', 'SUCCESS'],
+      ['tests', 'CANCELLED'],
+    ]);
+    expect(agentExecs(id).length).toBe(2);
+    expect(events(id).some((e) => e.type === 'TASK_WAITING' && e.message.startsWith('Paused at a limit: Agent run limit reached'))).toBe(true);
+
+    // A plain `git status` in the task's folder (a real worker, the operator's editor) refreshes its index: the files are still the same files.
+    const env = { ...process.env };
+    delete env.GIT_OPTIONAL_LOCKS;
+    execFileSync('git', ['status', '--porcelain'], { cwd: parked.git.worktreePath ?? repoPath, env });
+
+    // Resuming extends this task's limits; the stage runs again and reuses the first wave.
+    expect((await t!.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
+    const done = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(done.blocker?.message ?? null).toBeNull();
+    expect(done.status).toBe('COMPLETED');
+    expect(done.limits!.maxAgentRuns).toBeGreaterThan(2);
+    expect(units(id).slice(3).map((u) => [u.unitKey, u.status])).toEqual([
+      ['arch', 'REUSED'],
+      ['risk', 'REUSED'],
+      ['tests', 'SUCCESS'],
+    ]);
+    expect(t!.services.store.listStages(id).map((s) => s.status)).toEqual(['CANCELLED', 'SUCCESS']);
+    expect(agentExecs(id).length).toBe(3);
+
+    // A wave that would not fit in the runs left does not start at all: no worker is started only to be wasted.
+    const second = await withRuns('Assess with one run left', 1);
+    const waiting = await waitForStatus(t!, second, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED'], 60_000);
+    expect(waiting.blocker).toMatchObject({ kind: 'limit', message: 'Agent run limit reached for Assessment: it needs 2 more agent runs, and 1 of 1 is left.' });
+    expect(agentExecs(second)).toEqual([]);
+    expect(units(second).map((u) => u.status)).toEqual(['CANCELLED', 'CANCELLED', 'CANCELLED']);
+  }, 90_000);
+
+  it('parks a write team after a wave was integrated, and on resume reuses the split and that wave instead of redoing it', async () => {
+    const { repoId } = await setup([FIX_ONLY]);
+    const id = await createTask(t!, repoId, 'Three repairs [sim:team] [sim:team-three]', { workflowId: 'fix-only', supervised: true, start: false });
+    // The split and the first wave (alpha, beta) fit; the second wave (gamma) and the lead's pass after it do not.
+    t!.services.store.updateTask(id, { limits: { ...t!.services.store.getTask(id)!.limits!, maxAgentRuns: 4 } });
+    await t!.services.engine.start(id);
+    const parked = await waitForStatus(t!, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED'], 60_000);
+    expect(parked.blocker).toMatchObject({ kind: 'limit', stageKey: 'fix', message: 'Agent run limit reached for Fix: it needs 2 more agent runs, and 1 of 4 is left.' });
+    expect(units(id).map((u) => [u.kind, u.unitKey, u.status])).toEqual([
+      ['decomposer', 'decompose', 'SUCCESS'],
+      ['worker', 'alpha', 'SUCCESS'],
+      ['worker', 'beta', 'SUCCESS'],
+      ['worker', 'gamma', 'CANCELLED'],
+    ]);
+    // The first wave is already in the task's files while it waits.
+    const fixerLines = (text: string) => text.split('\n').filter((l) => l.includes('fixer change')).length;
+    const worktree = parked.git.worktreePath!;
+    expect(['team-a/sim-alpha.md', 'team-b/sim-beta.md'].map((f) => fixerLines(readFileSync(path.join(worktree, f), 'utf8')))).toEqual([1, 1]);
+
+    expect((await t!.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
+    const done = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(done.blocker?.message ?? null).toBeNull();
+    expect(done.status).toBe('COMPLETED');
+    expect(t!.services.store.listStages(id).map((s) => s.status)).toEqual(['CANCELLED', 'SUCCESS']);
+    // Same failures, same split: nothing is split again, and what the first run integrated is not redone.
+    const resumed = units(id).slice(4);
+    expect(resumed.map((u) => [u.kind, u.unitKey, u.status])).toEqual([
+      ['decomposer', 'decompose', 'REUSED'],
+      ['worker', 'alpha', 'REUSED'],
+      ['worker', 'beta', 'REUSED'],
+      ['worker', 'gamma', 'SUCCESS'],
+      ['integration', 'integration', 'SUCCESS'],
+    ]);
+    expect(resumed[1]!.reusedFrom).toBe(units(id)[1]!.id);
+    // An integrated unit keeps the base its result was made on.
+    expect([resumed[1]!.baseCommit, resumed[1]!.resultCommit]).toEqual([units(id)[1]!.baseCommit, units(id)[1]!.resultCommit]);
+    const messages = events(id).filter((e) => e.stageId === resumed[0]!.stageId).map((e) => e.message);
+    expect(messages).toContain('Split the fix: reused its earlier result (the same failures, split before the run stopped)');
+    expect(messages).toContain("Alpha part: reused its earlier result (already in the task's files)");
+    // One run each: the decomposer, alpha and beta before the limit; gamma and the lead after it.
+    const runsOf = (key: string) => agentExecs(id).filter((e) => units(id).some((u) => u.id === e.workUnitId && u.unitKey === key)).length;
+    expect(['decompose', 'alpha', 'beta', 'gamma', 'integration'].map(runsOf)).toEqual([1, 1, 1, 1, 1]);
+    expect(agentExecs(id).length).toBe(5);
+    const fixTeam = (stageEvent(id, 'fix', 'STAGE_COMPLETED', 2)!.data as { team: Record<string, number | null> }).team;
+    expect(fixTeam).toMatchObject({ workers: 3, reused: 2, integrated: 3, decomposeMs: null });
+
+    // Every unit's change is in the task exactly once.
+    for (const file of ['team-a/sim-alpha.md', 'team-b/sim-beta.md', 'team-c/sim-gamma.md']) {
+      const shown = await sh(t!.services.store.getRepository(repoId)!.path, ['show', `${done.git.taskBranch}:${file}`]);
+      expect(shown.code, file).toBe(0);
+      expect(fixerLines(shown.out), file).toBe(1);
+    }
+  }, 90_000);
+
+  it('keeps every built-in worker focus short enough to be its title, and clips a long one at a word', async () => {
+    t = await createTestApp();
+    const builtins = t.services.workflows.list().filter((w) => w.builtin);
+    expect(builtins.map((w) => w.id)).toEqual(expect.arrayContaining(['architecture', 'full-autopilot']));
+    const focuses = builtins.flatMap((w) => w.stages.flatMap((s) => (s.team?.workers ?? []).map((wk) => `${w.id}/${s.key}/${wk.key}: ${wk.focus}`)));
+    expect(focuses.length).toBeGreaterThan(0);
+    for (const f of focuses) expect(f.slice(f.indexOf(': ') + 2).length, f).toBeLessThanOrEqual(60);
+    expect(clipTitle('The code involved, root cause and the smallest fitting change')).toBe('The code involved, root cause and the smallest fitting…');
+    expect(clipTitle('Short focus')).toBe('Short focus');
+    expect(clipTitle('x'.repeat(80))).toBe(`${'x'.repeat(59)}…`);
+  });
 
   it('runs the built-in Architecture workflow with its teams: both assessments at once, then a split implementation', async () => {
     t = await createTestApp();

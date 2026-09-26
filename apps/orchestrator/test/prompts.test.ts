@@ -100,12 +100,22 @@ describe('rendered stage prompts', () => {
   };
 
   it('are saved for every agent stage under the role name', async () => {
-    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Add a greeting');
-    expect((await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'])).status).toBe('COMPLETED');
+    const repoPath = await makeRepo();
+    const id = await createTask(t, await addRepo(t, repoPath), 'Add a greeting');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('COMPLETED');
     const names = t.services.store.listArtifacts(id).map((a) => a.name);
     for (const name of ['investigation-prompt.md', 'plan-prompt.md', 'implementation-prompt.md', 'review-prompt.md', 'verification-prompt.md']) expect(names).toContain(name);
     expect(promptOf(id, 'investigate')).toContain('stage "Investigate" of the "Normal Development" workflow');
     expect(promptOf(id, 'verify')).toContain('Fix cycles used so far: 0 of 3.');
+    // An isolated task's agents are pointed at its worktree, never at the operator's checkout.
+    expect(task.git.isolated).toBe(true);
+    const implement = promptOf(id, 'implement');
+    const workdir = /^Working directory: (.+)$/m.exec(implement)?.[1];
+    expect(workdir).toBeDefined();
+    expect(workdir).not.toBe(repoPath);
+    expect(implement).toContain(`- Path: ${workdir}\n`);
+    expect(implement).not.toContain(`- Path: ${repoPath}\n`);
   });
 
   it('show the fixer the review, the checks to run and the reports; show the second review its predecessor; show the verifier the reports', async () => {
@@ -114,6 +124,10 @@ describe('rendered stage prompts', () => {
     expect((await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'])).status).toBe('COMPLETED');
     const firstReview = readFileSync(path.join(t.dataDir, 'tasks', id, 'review.md'), 'utf8');
     expect(firstReview).toContain('VERDICT: FAIL');
+    // A single reviewer's FAIL carries its duration, as a completion would.
+    const failed = t.services.store.listEvents(id, { limit: 1000 }).find((e) => e.type === 'REVIEW_FAILED')!;
+    expect(failed.message).toBe('Review requested changes');
+    expect(typeof failed.data.durationMs).toBe('number');
 
     const fix = promptOf(id, 'fix');
     expect(fix).toContain('This is fix cycle 1 of 3');

@@ -4,15 +4,17 @@ import path from 'node:path';
 import {
   addChildWorktree,
   applyIfUnchanged,
+  captureResult,
   changedPathsBetween,
   combineResults,
-  createCheckpoint,
+  committableTree,
+  createWaveBase,
   deleteRefs,
   git,
   removeWorktree,
   treeOf,
-  workingTreeTree,
   type PathChange,
+  type WaveBase,
 } from '@acc/git';
 import { redact } from '@acc/security';
 import {
@@ -24,10 +26,13 @@ import {
   type ErrorClass,
   type StageDefinition,
   type StageInstance,
+  type StageStatus,
   type StageWorkUnit,
+  type WorkUnitKind,
   type WorkUnitManifestUnit,
 } from '@acc/shared';
 import type { Bus } from '../bus.js';
+import { limitReached } from '../chairman/policy.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
@@ -45,11 +50,12 @@ import { readManifest, stableHash } from './work-units.js';
  * `AgentRegistry.launch`, returning one ordinary `StageOutcome` to the engine.
  *
  * Read-only workers share the task's working tree. Write workers each get a
- * disposable detached checkout of a hidden checkpoint of it; their results are
- * captured as hidden commits, checked against the paths they own, combined,
- * and written back only while the task's files still equal the wave's base.
- * Whenever a team cannot run safely, `run` returns null and the stage runs as
- * one agent, exactly as without a team.
+ * disposable detached checkout of a hidden commit of it (as a commit would
+ * record its files, so line endings look as they do in the task); their
+ * results are captured as hidden commits, checked against the paths they own,
+ * combined, and written back only while the task's files still equal the
+ * wave's base. Whenever a team cannot run safely, `run` returns null and the
+ * stage runs as one agent, exactly as without a team.
  */
 
 export interface StageTeamDeps {
@@ -86,6 +92,8 @@ interface UnitResult {
   output: string | null;
   /** Write units: the paths it changed, relative to the wave's base. */
   changes: PathChange[];
+  /** Its changes are already in the task's files (an interrupted run integrated them): nothing to write, but they count as integrated. */
+  alreadyIntegrated?: boolean;
   failure: { errorClass: ErrorClass; message: string } | null;
   stopped: StopReason | null;
   questions: string[];
@@ -97,6 +105,34 @@ const BLOCKING: readonly ErrorClass[] = ['USAGE_LIMIT', 'AUTH_FAILURE', 'MODEL_U
 const MAX_WORKER_IN_AGGREGATE = 30_000;
 /** How deep the task's checkout is searched for installed dependency folders to share with a child checkout. */
 const DEPENDENCY_DEPTH = 3;
+/** Unit titles in timelines and events are kept to this many characters. */
+const MAX_TITLE = 60;
+/** One unit's line in the stage summary, and the whole summary, are kept within these. */
+const MAX_UNIT_SUMMARY = 100;
+const MAX_STAGE_SUMMARY = 500;
+/** A stage run that was stopped before it finished — parked at a limit or rerouted, paused, cut off by a restart — rather than failed. */
+const STOPPED: readonly StageStatus[] = ['CANCELLED', 'PAUSED', 'INTERRUPTED'];
+/** A stage run that ended without finishing, for whatever reason; what it integrated may already be in the task. */
+const UNFINISHED: readonly StageStatus[] = [...STOPPED, 'FAILED'];
+const DECOMPOSE_FOCUS = 'Read-only: split the failures into independent repairs';
+
+/** A write wave that ran: its units, and the base they started from. */
+interface WriteWave {
+  results: UnitResult[];
+  base: WaveBase;
+}
+
+/** A run the team needed but the task's own limits did not allow (see `limitFor`). */
+interface LimitHit {
+  kind: 'limit';
+  message: string;
+}
+
+/** The integration pass's report and whose it is. */
+interface LeadReport {
+  output: string;
+  agentId: string | null;
+}
 
 /**
  * Worker slots shared by every task on this machine (Settings → Execution →
@@ -142,6 +178,8 @@ export class StageTeamRunner {
   async run(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome | null> {
     const team = def.team;
     if (!team || def.kind !== 'agent') return null;
+    // The stage clock starts before planning: a decomposition run is part of the stage's wall time.
+    const startedMs = Date.now();
     if (def.permissionLevel >= 4) return this.fallback(task, def, stage, 'staging and production stages never run as a team');
     const write = def.permissionLevel >= 2;
     if (write) {
@@ -155,7 +193,7 @@ export class StageTeamRunner {
     if (team.mode === 'fixed') {
       planned = (team.workers ?? []).map((w) => ({
         key: w.key,
-        title: w.focus.length > 60 ? `${w.focus.slice(0, 59)}…` : w.focus,
+        title: clipTitle(w.focus),
         focus: w.focus,
         goal: null,
         dependsOn: [],
@@ -169,6 +207,7 @@ export class StageTeamRunner {
     } else {
       const manifest = await this.manifestFor(task, def, stage, repo, control);
       if (manifest.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: manifest.reason };
+      if (manifest.kind === 'limit') return this.parkAtLimit(task, def, stage, new Map(), [], [], manifest.message);
       if (manifest.kind === 'none') return this.fallback(task, def, stage, manifest.reason);
       const units = manifest.units;
       if (units.length < 2) return this.fallback(task, def, stage, 'the plan has only one work unit, so one agent does it');
@@ -180,12 +219,10 @@ export class StageTeamRunner {
         return this.fallback(task, def, stage, 'every work unit depends on the one before it, so nothing could run in parallel');
       }
       const base = this.assignment(task, def, stage);
-      planned = units.map((u) => ({ key: u.key, title: u.title, focus: u.goal, goal: u.goal, dependsOn: u.dependsOn, pathScope: write ? u.pathPrefixes : [], checks: u.checks, primary: false, ...base }));
+      planned = units.map((u) => ({ key: u.key, title: clipTitle(u.title), focus: u.goal, goal: u.goal, dependsOn: u.dependsOn, pathScope: write ? u.pathPrefixes : [], checks: u.checks, primary: false, ...base }));
       fingerprint = { stage: def.key, manifest: manifest.hash };
     }
-    // Directives change what a worker is told, so a result from before one is not reused.
-    const directives = this.d.store.listDirectives(task.id).filter((d) => d.state === 'active' && d.kind !== 'routing').map((d) => d.id);
-    const hash = stableHash({ fingerprint, directives, permissionLevel: def.permissionLevel });
+    const hash = stableHash({ fingerprint, directives: this.directiveIds(task), permissionLevel: def.permissionLevel });
     const cap = Math.min(team.maxWorkers, planned.length);
 
     // Persist every unit before any starts: the database always knows the whole team.
@@ -232,7 +269,6 @@ export class StageTeamRunner {
       stage.id,
     );
 
-    const startedMs = Date.now();
     const results: UnitResult[] = [];
     const done = new Set<string>();
     let integratedUnits = 0;
@@ -256,10 +292,13 @@ export class StageTeamRunner {
       }
       coverage = built.coverage;
       const others = (p: PlannedUnit) => planned.filter((o) => o.key !== p.key);
+      // The last wave of a write team also reserves the lead's integration pass that follows it.
+      const reserve = write && batch.length === pending.length ? 1 : 0;
       const waveResults = write
-        ? await this.writeWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, wave)
+        ? await this.writeWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, wave, reserve)
         : await this.readWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier);
       if ('outcome' in waveResults) return waveResults.outcome;
+      if ('kind' in waveResults) return this.parkAtLimit(task, def, stage, rows, pending, results, waveResults.message);
       results.push(...waveResults.results);
       pending = pending.filter((p) => !batch.includes(p));
 
@@ -278,14 +317,15 @@ export class StageTeamRunner {
         await this.writeAggregate(task, def, stage, results);
         return this.failTeam(stage, failed, waveResults.results.length, write);
       }
-      if (write) {
-        const integration = await this.integrate(task, def, stage, waveResults.results, wave);
+      if (waveResults.base) {
+        const integration = await this.integrate(task, def, stage, waveResults.results, wave, waveResults.base);
         if (integration.kind === 'failed') {
           this.markRemaining(rows, pending, 'SKIPPED', 'The team could not integrate an earlier wave');
           await this.writeAggregate(task, def, stage, results);
           return this.d.runners.failStage(stage, 'UNKNOWN', integration.message);
         }
-        integratedUnits += integration.units;
+        // A unit an interrupted run already integrated counts too: the lead still reconciles it with the rest.
+        integratedUnits += integration.units + waveResults.results.filter((r) => r.alreadyIntegrated).length;
       }
       for (const r of waveResults.results) done.add(r.planned.key);
     }
@@ -295,30 +335,29 @@ export class StageTeamRunner {
     }
 
     // Several writers' patches can each be right and still not fit together: one short lead pass reconciles them.
-    let lead: string | null = null;
+    let lead: LeadReport | null = null;
     if (write && integratedUnits >= 2) {
       const pass = await this.integrationPass(task, def, stage, repo, control, results);
       if (pass.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: pass.reason };
+      if (pass.kind === 'limit') return this.parkAtLimit(task, def, stage, rows, [], results, pass.message);
       if (pass.kind === 'failed') {
         await this.writeAggregate(task, def, stage, results);
         return this.d.runners.failStage(stage, pass.errorClass, `Integration pass: ${pass.message}`);
       }
-      lead = pass.output;
+      lead = pass.lead;
     }
 
-    const aggregate = await this.writeAggregate(task, def, stage, results, lead);
-    const wallMs = Date.now() - startedMs;
-    const agentMs = results.reduce((sum, r) => sum + (r.unit.startedAt && r.unit.finishedAt && r.unit.status === 'SUCCESS' ? new Date(r.unit.finishedAt).getTime() - new Date(r.unit.startedAt).getTime() : 0), 0);
-    const teamData = { workers: results.length, reused: results.filter((r) => r.unit.status === 'REUSED').length, wallMs, agentMs, integrated: integratedUnits };
-
+    await this.writeAggregate(task, def, stage, results, lead);
     let verdict: 'PASS' | 'FAIL' | null = null;
+    const failedBy: string[] = [];
     if (def.verdict || def.role === 'reviewer' || def.role === 'verifier') {
       const verdicts = results.map((r) => ({ r, v: parseVerdict(r.output ?? '') }));
       const missing = verdicts.filter((x) => !x.v);
       if (def.verdict && missing.length) {
         return this.d.runners.failStage(stage, 'UNKNOWN', `${missing.map((x) => x.r.planned.title).join(', ')} did not end with "VERDICT: PASS" or "VERDICT: FAIL"`);
       }
-      verdict = verdicts.some((x) => x.v === 'FAIL') ? 'FAIL' : verdicts.some((x) => x.v === 'PASS') ? 'PASS' : null;
+      failedBy.push(...verdicts.filter((x) => x.v === 'FAIL').map((x) => x.r.planned.title));
+      verdict = failedBy.length ? 'FAIL' : verdicts.some((x) => x.v === 'PASS') ? 'PASS' : null;
       if (def.verdict && verdict === 'PASS') {
         // A PASS counts only when the primary reviewer accounted for every changed file the diff did not show (AUTOPILOT_GATES_PLAN §3.A).
         const primary = results.find((r) => r.planned.primary) ?? results[0]!;
@@ -326,25 +365,45 @@ export class StageTeamRunner {
         if (gaps.length) {
           const retried = await this.coverageFollowUp(task, def, stage, repo, control, primary, gaps);
           if (retried.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: retried.reason };
+          if (retried.kind === 'limit') return this.parkAtLimit(task, def, stage, rows, [], results, retried.message);
           if (retried.kind === 'failed') return this.d.runners.failStage(stage, retried.errorClass, retried.message);
+          // The stage's report carries the follow-up, as a single reviewer's second report replaces its first.
+          primary.output = retried.output;
+          await this.writeAggregate(task, def, stage, results, lead);
           const again = parseVerdict(retried.output);
           if (!again) return this.d.runners.failStage(stage, 'UNKNOWN', `${primary.planned.title} did not end its follow-up with a VERDICT line`);
-          if (again === 'FAIL') verdict = 'FAIL';
-          else {
+          if (again === 'FAIL') {
+            verdict = 'FAIL';
+            failedBy.push(primary.planned.title);
+          } else {
             const still = unreviewedFiles(retried.output, coverage);
             if (still.length) return this.d.runners.failStage(stage, 'REVIEW_INCOMPLETE', `${def.name} (primary reviewer) gave PASS twice without reviewing ${still.length} changed file${still.length === 1 ? '' : 's'} the diff did not show: ${still.slice(0, 20).join(', ')}${still.length > 20 ? ', …' : ''}`);
           }
         }
       }
     }
-    const first = lead ?? results.find((r) => r.planned.primary)?.output ?? results.find((r) => r.output)?.output ?? aggregate;
-    const summary = `Team of ${results.length}${teamData.reused ? ` (${teamData.reused} reused)` : ''}: ${summarize(first, 200) ?? 'done'}`;
-    return this.d.runners.completeAgentStage(task, def, stage, summary, verdict, wallMs, { team: teamData });
+
+    const time = this.agentTime(task, stage);
+    const teamData = {
+      workers: results.length,
+      reused: results.filter((r) => r.unit.status === 'REUSED').length,
+      wallMs: Date.now() - startedMs,
+      agentMs: time.worker ?? 0,
+      decomposeMs: time.decomposer ?? null,
+      integrationMs: time.integration ?? null,
+      integrated: integratedUnits,
+    };
+    return this.d.runners.completeAgentStage(task, def, stage, this.stageSummary(results, lead), verdict, teamData.wallMs, { team: teamData }, failedBy);
   }
 
   // ---------------------------------------------------------------------------
   // Planning
   // ---------------------------------------------------------------------------
+
+  /** Directives change what a worker is told, so a result from before one is not reused. */
+  private directiveIds(task: TaskRecord): string[] {
+    return this.d.store.listDirectives(task.id).filter((d) => d.state === 'active' && d.kind !== 'routing').map((d) => d.id);
+  }
 
   /** The stage's assignment for a worker: a fixed worker's own pin, else the stage's; a task reroute of the stage moves every worker. */
   private assignment(task: TaskRecord, def: StageDefinition, stage: StageInstance, worker?: { agentId?: string; model?: string; effort?: string }): { agentId: string; model: string | null; effort: string | null } {
@@ -365,7 +424,7 @@ export class StageTeamRunner {
     stage: StageInstance,
     repo: RepositoryRecord,
     control: RunControl,
-  ): Promise<{ kind: 'units'; units: WorkUnitManifestUnit[]; hash: string } | { kind: 'none'; reason: string } | { kind: 'stopped'; reason: StopReason }> {
+  ): Promise<{ kind: 'units'; units: WorkUnitManifestUnit[]; hash: string } | { kind: 'none'; reason: string } | { kind: 'stopped'; reason: StopReason } | LimitHit> {
     if (def.role !== 'fixer') {
       const plan = await this.d.artifacts.latestText(task.id, 'plan');
       if (!plan) return { kind: 'none', reason: 'there is no plan to take work units from' };
@@ -375,7 +434,11 @@ export class StageTeamRunner {
     return this.decompose(task, def, stage, repo, control);
   }
 
-  private async decompose(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<{ kind: 'units'; units: WorkUnitManifestUnit[]; hash: string } | { kind: 'none'; reason: string } | { kind: 'stopped'; reason: StopReason }> {
+  private async decompose(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<{ kind: 'units'; units: WorkUnitManifestUnit[]; hash: string } | { kind: 'none'; reason: string } | { kind: 'stopped'; reason: StopReason } | LimitHit> {
+    // What the split was asked with: a directive changes it, so a split from before one is not reused.
+    const key = stableHash({ stage: def.key, directives: this.directiveIds(task), permissionLevel: def.permissionLevel });
+    const split = await this.reusedSplit(task, def, stage, key);
+    if (split) return split;
     let built;
     try {
       built = await this.d.context.build(task, def, stage);
@@ -383,10 +446,16 @@ export class StageTeamRunner {
       return { kind: 'none', reason: `the failure could not be read for decomposition (${(error as Error).message})` };
     }
     const unit = this.d.store.insertWorkUnit({
-      ...this.blankUnit(task, def, stage, 'decompose', 'decomposer', 'Split the fix', 'Read-only: split the failures into independent repairs'),
+      ...this.blankUnit(task, def, stage, 'decompose', 'decomposer', 'Split the fix', DECOMPOSE_FOCUS),
       ...this.assignment(task, def, stage),
+      manifestHash: key,
     });
     this.publish(unit);
+    const limit = this.limitFor(task, def, 1);
+    if (limit) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', errorMessage: 'Not started: the task reached its agent run limit', finishedAt: now() }));
+      return { kind: 'limit', message: limit };
+    }
     const prompt = [
       built.prompt.replace(/^Role: \w+$/m, 'Role: decomposer'),
       '',
@@ -396,8 +465,12 @@ export class StageTeamRunner {
       '',
       `End your answer with exactly one fenced block tagged \`acc-work-units\` holding JSON: {"version":1,"stage":"${def.key}","units":[{"key":"slug","title":"short title","goal":"what to repair","dependsOn":[],"pathPrefixes":["repository/relative/folder/"],"checks":["test"]}]}. Path prefixes are repository-relative folders or files each unit alone may change; units that may run together must not share any.`,
     ].join('\n');
+    await this.savePrompt(task, def, stage, `${def.key}-decomposition-prompt.md`, prompt);
     const release = await this.slots.acquire(() => control.stopReason !== null);
-    if (!release) return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
+    if (!release) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', finishedAt: now() }));
+      return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
+    }
     this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'RUNNING', startedAt: now() }));
     let run: AgentRun;
     try {
@@ -405,18 +478,51 @@ export class StageTeamRunner {
     } finally {
       release();
     }
-    if (run.kind === 'stopped') {
-      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', finishedAt: now() }));
-      return { kind: 'stopped', reason: run.reason };
-    }
-    if (run.kind === 'failed') {
-      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'FAILED', errorClass: run.errorClass, errorMessage: redact(run.message).slice(0, 500), finishedAt: now() }));
-      return { kind: 'none', reason: `the decomposition run failed (${run.message.slice(0, 120)})` };
+    if (run.kind !== 'ok') {
+      this.settleRow(unit, run);
+      this.unitEvent(task, stage, unit, run.kind === 'stopped' ? 'stopped' : `failed: ${redact(run.message).slice(0, 200)}`, run.kind === 'failed' ? { errorClass: run.errorClass } : {});
+      return run.kind === 'stopped' ? { kind: 'stopped', reason: run.reason } : { kind: 'none', reason: `the decomposition run failed (${run.message.slice(0, 120)})` };
     }
     await this.d.artifacts.write(task.id, { name: `${def.key}-decomposition.md`, type: 'stage-output', content: run.output, stageId: stage.id, stageKey: def.key });
     const read = readManifest(run.output, def.key);
-    this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'SUCCESS', summary: read.ok ? `${read.manifest.units.length} unit(s): ${read.manifest.units.map((u) => u.title).join(', ')}` : read.reason, finishedAt: now() }));
-    return read.ok ? { kind: 'units', units: read.manifest.units, hash: read.hash } : { kind: 'none', reason: read.reason };
+    const units = read.ok ? read.manifest.units : [];
+    this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'SUCCESS', summary: read.ok ? `${units.length} unit(s): ${units.map((u) => u.title).join(', ')}` : read.reason, finishedAt: now() }));
+    this.unitEvent(
+      task,
+      stage,
+      unit,
+      !read.ok ? `finished · no usable split (${read.reason})` : units.length === 1 ? 'finished · found one repair' : `finished · ${units.length} units: ${units.map((u) => u.title).join(', ')}`,
+      { units: units.map((u) => u.key) },
+    );
+    return read.ok ? { kind: 'units', units, hash: read.hash } : { kind: 'none', reason: read.reason };
+  }
+
+  /**
+   * The split made by the run of this stage just before this one, when that
+   * run was stopped rather than failed (parked at a limit, paused, cut off by
+   * a restart) and no other stage ran in between: the failures are the same,
+   * and a fresh split would name its units differently, so none of the work
+   * that run did could be reused. A failed run's split is not reused — it may
+   * be why the run failed.
+   */
+  private async reusedSplit(task: TaskRecord, def: StageDefinition, stage: StageInstance, key: string): Promise<{ kind: 'units'; units: WorkUnitManifestUnit[]; hash: string } | null> {
+    const stages = this.d.store.listStages(task.id);
+    const previous = stages[stages.findIndex((s) => s.id === stage.id) - 1];
+    if (!previous || previous.stageKey !== def.key || !STOPPED.includes(previous.status)) return null;
+    const prev = this.d.store.listWorkUnits(task.id, previous.id).find((u) => u.kind === 'decomposer' && u.manifestHash === key && (u.status === 'SUCCESS' || u.status === 'REUSED'));
+    if (!prev) return null;
+    const content = await this.stageArtifact(task, previous.id, `${def.key}-decomposition`);
+    const read = readManifest(content, def.key);
+    if (!read.ok) return null;
+    // This run's report is the same split, so every run of the stage has its own `<stage>-decomposition.md`.
+    await this.d.artifacts.write(task.id, { name: `${def.key}-decomposition.md`, type: 'stage-output', content, stageId: stage.id, stageKey: def.key });
+    const unit = this.d.store.insertWorkUnit({
+      ...this.blankUnit(task, def, stage, 'decompose', 'decomposer', 'Split the fix', DECOMPOSE_FOCUS),
+      ...this.assignment(task, def, stage),
+      manifestHash: key,
+    });
+    this.markReused(task, stage, unit, prev, 'the same failures, split before the run stopped');
+    return { kind: 'units', units: read.manifest.units, hash: read.hash };
   }
 
   private fallback(task: TaskRecord, def: StageDefinition, stage: StageInstance, reason: string): null {
@@ -441,25 +547,30 @@ export class StageTeamRunner {
     others: (p: PlannedUnit) => PlannedUnit[],
     hash: string,
     earlier: StageWorkUnit[],
-  ): Promise<{ results: UnitResult[] } | { outcome: StageOutcome }> {
+  ): Promise<{ results: UnitResult[]; base: null } | LimitHit> {
     const cwd = agentWorkdir(task, repo);
+    // Reuse is decided first: only the units that must run count against the task's limits.
+    const reused = await Promise.all(batch.map((p) => this.reusedOutput(task, stage, rows.get(p.key)!, hash, earlier)));
+    const limit = this.limitFor(task, def, reused.filter((r) => r === null).length);
+    if (limit) return { kind: 'limit', message: limit };
     const results = await Promise.all(
-      batch.map(async (p): Promise<UnitResult> => {
+      batch.map(async (p, i): Promise<UnitResult> => {
         const unit = rows.get(p.key)!;
-        const reused = await this.reusedOutput(task, stage, unit, hash, earlier);
-        if (reused !== null) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output: reused, changes: [], failure: null, stopped: null, questions: [] };
+        const output = reused[i];
+        if (output !== null && output !== undefined) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output, changes: [], failure: null, stopped: null, questions: [] };
         const prompt = basePrompt + this.unitSection(def, p, others(p), false);
-        const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false);
+        const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false, `${this.promptBase(def)}-${p.key}.md`);
         return this.settle(task, def, stage, unit, p, run, []);
       }),
     );
-    return { results };
+    return { results, base: null };
   }
 
   /**
-   * Write workers, each in its own disposable checkout of a hidden checkpoint
-   * of the task's working tree. Their results are captured and checked here;
-   * nothing reaches the task until `integrate`.
+   * Write workers, each in its own disposable checkout of the wave's base (the
+   * task's files as a commit would record them). Their results are captured
+   * and checked here; nothing reaches the task until `integrate`. `reserve`
+   * runs are kept for what follows this wave (the lead's integration pass).
    */
   private async writeWave(
     task: TaskRecord,
@@ -474,20 +585,29 @@ export class StageTeamRunner {
     hash: string,
     earlier: StageWorkUnit[],
     wave: number,
-  ): Promise<{ results: UnitResult[] } | { outcome: StageOutcome }> {
+    reserve: number,
+  ): Promise<WriteWave | { outcome: StageOutcome } | LimitHit> {
     const parent = task.git.worktreePath!;
-    let base;
+    let base: WaveBase;
     try {
-      base = await createCheckpoint(parent, `${this.refPrefix(task)}${stage.id}/w${wave}-base`, `${task.id}: ${def.name} team wave ${wave} base`);
+      base = await createWaveBase(parent, `${this.refPrefix(task)}${stage.id}/w${wave}-base`, `${task.id}: ${def.name} team wave ${wave} base`);
     } catch (error) {
       for (const p of batch) this.publish(this.d.store.updateWorkUnit(rows.get(p.key)!.id, { status: 'FAILED', errorClass: 'UNKNOWN', errorMessage: 'The team could not record its starting point', finishedAt: now() }));
       return { outcome: this.d.runners.failStage(stage, 'UNKNOWN', `The team could not record the task's files before starting: ${(error as Error).message}`) };
     }
-    const results = await Promise.all(
-      batch.map(async (p): Promise<UnitResult> => {
+    // Reuse is decided first: only the units that must run count against the task's limits.
+    const interrupted = this.interruptedRun(task, stage);
+    const prepared = await Promise.all(
+      batch.map(async (p) => {
         const unit = this.d.store.updateWorkUnit(rows.get(p.key)!.id, { baseCommit: base.commit });
-        const reused = await this.reusedResult(parent, unit, hash, earlier, base.tree);
-        if (reused) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output: reused.output, changes: reused.changes, failure: null, stopped: null, questions: [] };
+        return { p, unit, reused: await this.reusedResult(parent, unit, hash, earlier, base, interrupted) };
+      }),
+    );
+    const limit = this.limitFor(task, def, prepared.filter((x) => !x.reused).length + reserve);
+    if (limit) return { kind: 'limit', message: limit };
+    const results = await Promise.all(
+      prepared.map(async ({ p, unit, reused }): Promise<UnitResult> => {
+        if (reused) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output: reused.output, changes: reused.changes, alreadyIntegrated: reused.alreadyIntegrated, failure: null, stopped: null, questions: [] };
         const dir = path.join(this.root(), task.id, `${stage.id.slice(0, 8)}-${p.key}`);
         let links: string[] = [];
         try {
@@ -501,11 +621,12 @@ export class StageTeamRunner {
           return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output: null, changes: [], failure: { errorClass: 'UNKNOWN', message }, stopped: null, questions: [] };
         }
         try {
-          const prompt = rewritePaths(basePrompt, parent, dir) + this.unitSection(def, p, others(p), true);
-          const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, dir, true);
+          // The worker never needs the task's folder or the operator's checkout: every spelling of either names its own checkout.
+          const prompt = rewritePaths(basePrompt, [parent, repo.path], dir) + this.unitSection(def, p, others(p), true);
+          const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, dir, true, `${this.promptBase(def)}-${p.key}.md`);
           if (run.kind !== 'ok') return this.settle(task, def, stage, unit, p, run, []);
           // Capture everything the worker left — new, deleted, binary files included — as a hidden commit, then check its paths.
-          const result = await createCheckpoint(dir, `${this.refPrefix(task)}${stage.id}/${p.key}`, `${task.id}: ${def.name} · ${p.title}`);
+          const result = await captureResult(dir, `${this.refPrefix(task)}${stage.id}/${p.key}`, `${task.id}: ${def.name} · ${p.title}`);
           const changes = await changedPathsBetween(parent, base.commit, result.commit);
           const outside = changes.filter((c) => !pathInScope(c.path, p.pathScope));
           this.d.store.updateWorkUnit(unit.id, { resultCommit: result.commit });
@@ -522,15 +643,14 @@ export class StageTeamRunner {
         }
       }),
     );
-    return { results };
+    return { results, base };
   }
 
-  /** Write every unit of a finished wave into the task's working tree at once — or nothing. */
-  private async integrate(task: TaskRecord, def: StageDefinition, stage: StageInstance, results: UnitResult[], wave: number): Promise<{ kind: 'ok'; units: number } | { kind: 'failed'; message: string }> {
+  /** Write every unit of a finished wave into the task's working tree at once — or nothing. A unit already there is not written again. */
+  private async integrate(task: TaskRecord, def: StageDefinition, stage: StageInstance, results: UnitResult[], wave: number, base: WaveBase): Promise<{ kind: 'ok'; units: number } | { kind: 'failed'; message: string }> {
     const parent = task.git.worktreePath!;
-    const base = results[0]?.unit.baseCommit;
-    const withChanges = results.filter((r) => r.changes.length);
-    if (!base || !withChanges.length) return { kind: 'ok', units: 0 };
+    const withChanges = results.filter((r) => r.changes.length && !r.alreadyIntegrated);
+    if (!withChanges.length) return { kind: 'ok', units: 0 };
     const owners = new Map<string, string>();
     for (const r of withChanges) {
       for (const c of r.changes) {
@@ -540,8 +660,9 @@ export class StageTeamRunner {
       }
     }
     try {
-      const combined = await combineResults(parent, base, withChanges.map((r) => ({ changes: r.changes })), `${this.refPrefix(task)}${stage.id}/w${wave}-combined`, `${task.id}: ${def.name} team wave ${wave}`);
-      const applied = await applyIfUnchanged(parent, base, combined.commit, new Set(owners.keys()));
+      const combined = await combineResults(parent, base.commit, withChanges.map((r) => ({ changes: r.changes })), `${this.refPrefix(task)}${stage.id}/w${wave}-combined`, `${task.id}: ${def.name} team wave ${wave}`);
+      // Byte-exact against byte-exact: the task's files now against the same files when the wave started.
+      const applied = await applyIfUnchanged(parent, base.exactTree, combined.commit, withChanges.flatMap((r) => r.changes));
       if (!applied) return { kind: 'failed', message: `The task's files changed while the team worked, so nothing from wave ${wave} was integrated (no file was overwritten)` };
       const files = applied.restored.length + applied.removed.length;
       this.d.publisher.event(
@@ -557,8 +678,14 @@ export class StageTeamRunner {
     }
   }
 
-  /** The lead's short consistency pass over the integrated change, in the task's own working tree. */
-  private async integrationPass(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, results: UnitResult[]): Promise<AgentRun> {
+  /**
+   * The lead's short consistency pass over the integrated change, in the
+   * task's own working tree. The files before and after it are recorded as
+   * the unit's base and result trees (as a commit would record them, so an
+   * index refresh or a line-ending rewrite is no change), which is how its
+   * own edits are counted and checked against the units' paths.
+   */
+  private async integrationPass(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, results: UnitResult[]): Promise<Exclude<AgentRun, { kind: 'ok' }> | LimitHit | { kind: 'ok'; lead: LeadReport }> {
     let built;
     try {
       built = await this.d.context.build(this.task(task.id), def, stage);
@@ -572,6 +699,11 @@ export class StageTeamRunner {
       dependencies: results.map((r) => r.planned.key),
     });
     this.publish(unit);
+    const limit = this.limitFor(task, def, 1);
+    if (limit) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', errorMessage: 'Not started: the task reached its agent run limit', finishedAt: now() }));
+      return { kind: 'limit', message: limit };
+    }
     const prompt = [
       built.prompt,
       '',
@@ -579,24 +711,65 @@ export class StageTeamRunner {
       '',
       `The Control Center ran this stage as ${results.length} work units, each in its own checkout, and has already integrated their changes into this working tree:`,
       '',
-      ...results.map((r) => `- ${r.planned.title} (${r.planned.pathScope.join(', ')}): ${r.unit.summary ?? 'no summary'}`),
+      ...results.map((r) => `- ${r.planned.title} (${r.planned.pathScope.join(', ')}): ${this.d.store.getWorkUnit(r.unit.id)?.summary ?? 'no summary'}`),
       '',
-      'Your job is the final consistency pass: read the integrated diff above and reconcile contracts, types, imports and interfaces between the units. Fix only integration problems; do not redo or extend the units\' work. Run only the targeted checks for the areas touched. Do not commit. Then write your report as the template asks, covering the whole combined change.',
+      'Your job is the final consistency pass: read the integrated diff above and reconcile contracts, types, imports and interfaces between the units. Fix only integration problems; do not redo or extend the units\' work. Run only the targeted checks for the areas touched. Do not commit.',
+      '',
+      'Then write your report as the template asks, covering the whole combined change: describe it as the work units\' changes — each credited to its unit, from the list above — plus your own reconciliation, and say plainly which edits are yours. Your Summary line is shown as the integration pass\'s own result, so let it say what you reconciled (or that nothing needed it).',
     ].join('\n');
+    const cwd = agentWorkdir(task, repo);
+    const before = await committableTree(cwd).catch(() => null);
+    this.d.store.updateWorkUnit(unit.id, { baseCommit: before });
     const release = await this.slots.acquire(() => control.stopReason !== null);
-    if (!release) return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
+    if (!release) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', finishedAt: now() }));
+      return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
+    }
     let run: AgentRun;
     try {
-      run = await this.runUnit(task, def, stage, repo, control, unit, prompt, agentWorkdir(task, repo), false, true);
+      run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false, `${this.promptBase(def)}-integration.md`, true);
     } finally {
       release();
     }
-    this.settleRow(unit, run);
-    return run;
+    if (run.kind !== 'ok') {
+      this.settleRow(unit, run);
+      this.unitEvent(task, stage, unit, run.kind === 'stopped' ? 'stopped' : `failed: ${redact(run.message).slice(0, 200)}`, run.kind === 'failed' ? { errorClass: run.errorClass } : {});
+      return run;
+    }
+
+    const after = await committableTree(cwd).catch(() => null);
+    const changed = before && after ? await changedPathsBetween(cwd, before, after).catch(() => null) : null;
+    const summary = summarize(run.output);
+    this.publish(
+      this.d.store.updateWorkUnit(unit.id, {
+        status: 'SUCCESS',
+        resultCommit: after,
+        summary: changed?.length ? `${summary ?? 'Done'} (${changed.length} file${changed.length === 1 ? '' : 's'})` : summary,
+        finishedAt: now(),
+      }),
+    );
+    const files = changed === null ? 'changes not recorded' : changed.length ? `${changed.length} file${changed.length === 1 ? '' : 's'} changed` : 'no changes';
+    this.unitEvent(task, stage, unit, `finished · ${files}`, { files: changed?.length ?? null });
+    // Reconciling across units is the lead's job, so a change outside their paths is reported, not refused.
+    const scope = results.filter((r) => r.changes.length).flatMap((r) => r.planned.pathScope);
+    const outside = (changed ?? []).filter((c) => !pathInScope(c.path, scope));
+    if (outside.length) {
+      const names = outside.slice(0, 10).map((c) => c.path).join(', ') + (outside.length > 10 ? ', …' : '');
+      this.d.publisher.event(
+        task.id,
+        'STAGE_TEAM',
+        `${def.name}: the integration pass changed ${outside.length} file${outside.length === 1 ? '' : 's'} outside the work units' paths (${names}); kept, and reviewed with the rest of the change`,
+        { warning: 'integration_outside_scope', workUnitId: unit.id, paths: outside.map((c) => c.path) },
+        stage.id,
+      );
+    }
+    return { kind: 'ok', lead: { output: run.output, agentId: unit.agentId } };
   }
 
   /** Ask the primary reviewer once more for the files its PASS did not account for (same unit, a second execution). */
-  private async coverageFollowUp(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, primary: UnitResult, missing: string[]): Promise<AgentRun> {
+  private async coverageFollowUp(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, primary: UnitResult, missing: string[]): Promise<AgentRun | LimitHit> {
+    const limit = this.limitFor(task, def, 1);
+    if (limit) return { kind: 'limit', message: limit };
     const names = missing.slice(0, 20).join(', ') + (missing.length > 20 ? `, and ${missing.length - 20} more` : '');
     this.d.publisher.event(task.id, 'STAGE_RETRY', `${primary.planned.title} passed without accounting for ${missing.length} changed file${missing.length === 1 ? '' : 's'} the diff did not show (${names}); asking once more`, { missing, workUnitKey: primary.planned.key }, stage.id);
     const built = await this.d.context.build(this.task(task.id), def, stage);
@@ -615,6 +788,7 @@ export class StageTeamRunner {
       '',
       (primary.output ?? '').length > 20_000 ? `${primary.output!.slice(0, 20_000)}\n[previous report truncated]` : (primary.output ?? ''),
     ].join('\n');
+    await this.savePrompt(task, def, stage, `${this.promptBase(def)}-${primary.planned.key}-coverage.md`, prompt);
     const run = await this.d.runners.launchAgent(task, def, stage, repo, control, { prompt, agentId: primary.unit.agentId!, model: primary.unit.model, effort: primary.unit.effort, cwd: agentWorkdir(task, repo), workUnit: { id: primary.unit.id, key: primary.unit.unitKey, title: primary.unit.title } });
     if (run.kind === 'ok') {
       await this.d.artifacts.write(task.id, { name: `${this.artifactBase(def)}-${primary.planned.key}.md`, type: 'stage-output', content: run.output, stageId: stage.id, stageKey: def.key });
@@ -627,9 +801,9 @@ export class StageTeamRunner {
   // One unit
   // ---------------------------------------------------------------------------
 
-  private async runUnit(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, unit: StageWorkUnit, prompt: string, cwd: string, confine: boolean, slotHeld = false): Promise<AgentRun> {
-    const limit = this.runLimit(task);
-    if (limit) return { kind: 'failed', errorClass: 'PERMISSION_DENIED', message: limit };
+  /** Launch one unit's run. Its final prompt is saved first (`promptName`), so every run can be debugged from what it read. */
+  private async runUnit(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, unit: StageWorkUnit, prompt: string, cwd: string, confine: boolean, promptName: string, slotHeld = false): Promise<AgentRun> {
+    await this.savePrompt(task, def, stage, promptName, prompt);
     const release = slotHeld ? () => undefined : await this.slots.acquire(() => control.stopReason !== null);
     if (!release) return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
     this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'RUNNING', startedAt: now(), finishedAt: null }));
@@ -649,14 +823,46 @@ export class StageTeamRunner {
   }
 
   /**
-   * The Chairman's agent-run limit counts every worker (docs/plans/STAGE_TEAMS_PLAN.md §3.10):
-   * a supervised team stops starting workers at the limit.
+   * Whether the task's own limits allow `runs` more agent runs now: the same
+   * `limitReached` over `task.limits` that the Chairman checks before every
+   * stage (and extends when the operator resumes past a limit), with the
+   * runs about to start counted in (docs/plans/STAGE_TEAMS_PLAN.md §3.10).
+   * Usage is read as the Chairman reads it: the task's agent executions and
+   * their time.
    */
-  private runLimit(task: TaskRecord): string | null {
-    if (!task.supervised) return null;
-    const max = this.d.settings.get().chairman.maxAgentRuns;
-    const runs = this.d.store.listExecutions(task.id).filter((e) => e.kind === 'agent').length;
-    return runs >= max ? `Agent run limit reached (${runs} of ${max}) while the team was working; no further worker was started` : null;
+  private limitFor(task: TaskRecord, def: StageDefinition, runs: number): string | null {
+    if (runs <= 0) return null;
+    const current = this.task(task.id);
+    if (!current.supervised || !current.limits) return null;
+    const executions = this.d.store.listExecutions(task.id);
+    const usage = {
+      recoveryCycle: current.recoveryCycle,
+      agentRuns: executions.filter((e) => e.kind === 'agent').length,
+      workMs: executions.reduce((sum, e) => sum + (e.durationMs ?? (e.status === 'running' ? Date.now() - new Date(e.startedAt).getTime() : 0)), 0),
+    };
+    const reached = limitReached(current.limits, usage);
+    if (reached) return reached;
+    const { maxAgentRuns } = current.limits;
+    if (usage.agentRuns + runs <= maxAgentRuns) return null;
+    const left = maxAgentRuns - usage.agentRuns;
+    return `Agent run limit reached for ${def.name}: it needs ${runs} more agent run${runs === 1 ? '' : 's'}, and ${left} of ${maxAgentRuns} ${left === 1 ? 'is' : 'are'} left.`;
+  }
+
+  /**
+   * Stop the team where the task's limit stops it and park the task exactly
+   * as the Chairman does before a stage (blocker `limit`, "Paused at a
+   * limit"): no further run starts, and a resume extends the limits and runs
+   * the stage again, reusing every unit whose result still holds.
+   */
+  private async parkAtLimit(task: TaskRecord, def: StageDefinition, stage: StageInstance, rows: Map<string, StageWorkUnit>, pending: PlannedUnit[], results: UnitResult[], message: string): Promise<StageOutcome> {
+    this.markRemaining(rows, pending, 'CANCELLED', 'Not started: the task reached its agent run limit');
+    if (results.length) await this.writeAggregate(task, def, stage, results);
+    const summary = `Paused at a limit: ${message}`;
+    this.d.publisher.updateStage(stage.id, { status: 'CANCELLED', summary, finishedAt: now() });
+    this.d.publisher.event(task.id, 'STAGE_TEAM', `${def.name} stopped starting workers: ${message}`, { limit: true, finished: results.length }, stage.id);
+    this.d.publisher.updateTask(task.id, { status: 'WAITING_FOR_USER', blocker: { kind: 'limit', message, stageKey: def.key }, pauseRequested: false, pauseAfterStage: false });
+    this.d.publisher.event(task.id, 'TASK_WAITING', summary);
+    return { kind: 'blocked', stageId: stage.id };
   }
 
   /** Record a unit's result: its row, its own artifact, and what the stage needs from it. */
@@ -675,6 +881,11 @@ export class StageTeamRunner {
     return { ...base, unit: row, output: run.output, questions: extractOperatorBlockers(run.output) };
   }
 
+  /** A timeline line for a unit the orchestrator adds (the decomposer, the integration pass), shaped like a worker's. */
+  private unitEvent(task: TaskRecord, stage: StageInstance, unit: StageWorkUnit, what: string, data: Record<string, unknown> = {}): void {
+    this.d.publisher.event(task.id, 'WORK_UNIT', `${unit.title} ${what}`, { workUnitId: unit.id, workUnitKey: unit.unitKey, ...data }, stage.id);
+  }
+
   private settleRow(unit: StageWorkUnit, run: AgentRun): StageWorkUnit {
     if (run.kind === 'stopped') return this.publishRow(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', finishedAt: now() }));
     if (run.kind === 'failed') return this.publishRow(this.d.store.updateWorkUnit(unit.id, { status: 'FAILED', errorClass: run.errorClass, errorMessage: redact(run.message).slice(0, 500), finishedAt: now() }));
@@ -687,12 +898,14 @@ export class StageTeamRunner {
 
   /**
    * An earlier successful run of the same read-only unit on the same files and
-   * instructions: its report stands. A read-only unit records the tree it read
-   * as its base (a unit that writes nothing needs no checkpoint commit).
+   * instructions: its report stands. A read-only unit records the files it
+   * read as its base, as a commit would record them (`committableTree`): a
+   * worker's own `git status` refreshing the task's index, or a file whose
+   * only change is its line endings, is not different files.
    */
   private async reusedOutput(task: TaskRecord, stage: StageInstance, unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[]): Promise<string | null> {
     const repo = this.d.store.getRepository(task.repositoryId);
-    const tree = repo ? await workingTreeTree(agentWorkdir(task, repo)).catch(() => null) : null;
+    const tree = repo ? await committableTree(agentWorkdir(task, repo)).catch(() => null) : null;
     if (!tree) return null;
     this.d.store.updateWorkUnit(unit.id, { baseCommit: tree });
     for (const prev of this.candidates(unit, hash, earlier)) {
@@ -705,24 +918,45 @@ export class StageTeamRunner {
     return null;
   }
 
-  /** An earlier successful write unit whose base had exactly these files: its captured result applies unchanged. */
-  private async reusedResult(parent: string, unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[], baseTree: string): Promise<{ output: string; changes: PathChange[] } | null> {
+  /**
+   * An earlier successful write unit whose result still holds. Either its base
+   * had exactly these files — its captured result is integrated with this
+   * wave — or it ran in `interrupted`, the run of this stage just before this
+   * one, which stopped after integrating it: the task's files still hold its
+   * result at every path it changed, so it is reused as is and nothing is
+   * written again. (A unit that changed nothing has no result to find there
+   * and runs again on the new files.)
+   */
+  private async reusedResult(parent: string, unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[], base: WaveBase, interrupted: string | null): Promise<{ output: string; changes: PathChange[]; alreadyIntegrated: boolean } | null> {
     for (const prev of this.candidates(unit, hash, earlier)) {
       if (!prev.baseCommit || !prev.resultCommit) continue;
       try {
-        if ((await treeOf(parent, prev.baseCommit)) !== baseTree) continue;
         const changes = await changedPathsBetween(parent, prev.baseCommit, prev.resultCommit);
         if (changes.some((c) => !pathInScope(c.path, unit.pathScope))) continue;
+        const sameBase = (await treeOf(parent, prev.baseCommit)) === base.tree;
+        if (!sameBase) {
+          if (prev.stageId !== interrupted || !changes.length) continue;
+          const paths = new Set(changes.map((c) => c.path));
+          if ((await changedPathsBetween(parent, base.commit, prev.resultCommit)).some((c) => paths.has(c.path))) continue;
+        }
         const task = this.task(unit.taskId);
         const output = await this.unitOutput(task, prev);
-        this.d.store.updateWorkUnit(unit.id, { resultCommit: prev.resultCommit });
-        this.markReused(task, this.d.store.getStage(unit.stageId)!, unit, prev);
-        return { output: output || prev.summary || 'Reused an earlier result', changes };
+        // An integrated result keeps the base it was made on, so base → result stays the unit's own change.
+        this.d.store.updateWorkUnit(unit.id, sameBase ? { resultCommit: prev.resultCommit } : { baseCommit: prev.baseCommit, resultCommit: prev.resultCommit });
+        this.markReused(task, this.d.store.getStage(unit.stageId)!, unit, prev, sameBase ? undefined : "already in the task's files");
+        return { output: output || prev.summary || 'Reused an earlier result', changes, alreadyIntegrated: !sameBase };
       } catch {
         // A result whose objects are gone (refs cleaned) is simply not reusable.
       }
     }
     return null;
+  }
+
+  /** The run of this stage just before `stage`, when it ended without finishing (parked at a limit, paused, failed, cut off by a restart). */
+  private interruptedRun(task: TaskRecord, stage: StageInstance): string | null {
+    const runs = this.d.store.listStages(task.id).filter((s) => s.stageKey === stage.stageKey);
+    const previous = runs[runs.findIndex((s) => s.id === stage.id) - 1];
+    return previous && UNFINISHED.includes(previous.status) ? previous.id : null;
   }
 
   private candidates(unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[]): StageWorkUnit[] {
@@ -731,7 +965,7 @@ export class StageTeamRunner {
       .reverse();
   }
 
-  private markReused(task: TaskRecord, stage: StageInstance, unit: StageWorkUnit, prev: StageWorkUnit): void {
+  private markReused(task: TaskRecord, stage: StageInstance, unit: StageWorkUnit, prev: StageWorkUnit, why = 'same files, same instructions'): void {
     const row = this.d.store.updateWorkUnit(unit.id, {
       status: 'REUSED',
       reusedFrom: prev.reusedFrom ?? prev.id,
@@ -740,16 +974,21 @@ export class StageTeamRunner {
       finishedAt: now(),
     });
     this.publish(row);
-    this.d.publisher.event(task.id, 'WORK_UNIT', `${unit.title}: reused its earlier result (same files, same instructions)`, { workUnitId: unit.id, reusedFrom: row.reusedFrom }, stage.id);
+    this.d.publisher.event(task.id, 'WORK_UNIT', `${unit.title}: reused its earlier result (${why})`, { workUnitId: unit.id, reusedFrom: row.reusedFrom }, stage.id);
   }
 
-  /** The latest report an earlier unit wrote: its own artifact `<role>-<unit>.md`, possibly numbered. */
+  /** The latest report an earlier unit wrote — for a reused unit, the run it reused (a reused unit writes none): its own artifact `<role>-<unit>.md`, possibly numbered. */
   private async unitOutput(task: TaskRecord, prev: StageWorkUnit): Promise<string> {
-    const def = task.workflow.stages.find((s) => s.key === prev.stageKey);
-    const stem = `${def ? this.artifactBase(def) : prev.stageKey}-${prev.unitKey}`;
+    const source = prev.reusedFrom ? (this.d.store.getWorkUnit(prev.reusedFrom) ?? prev) : prev;
+    const def = task.workflow.stages.find((s) => s.key === source.stageKey);
+    return this.stageArtifact(task, source.stageId, `${def ? this.artifactBase(def) : source.stageKey}-${source.unitKey}`);
+  }
+
+  /** The latest `<stem>.md` (or a numbered repeat) one stage run wrote; empty when there is none. */
+  private async stageArtifact(task: TaskRecord, stageId: string, stem: string): Promise<string> {
     const found = this.d.store
       .listArtifacts(task.id)
-      .filter((a) => a.stageId === prev.stageId && (a.name === `${stem}.md` || (a.name.startsWith(`${stem}-`) && /^-\d+\.md$/.test(a.name.slice(stem.length)))))
+      .filter((a) => a.stageId === stageId && (a.name === `${stem}.md` || (a.name.startsWith(`${stem}-`) && /^-\d+\.md$/.test(a.name.slice(stem.length)))))
       .at(-1);
     if (!found) return '';
     return (await this.d.artifacts.read(found).catch(() => ({ content: '' }))).content;
@@ -760,20 +999,46 @@ export class StageTeamRunner {
   // ---------------------------------------------------------------------------
 
   /** One bounded report for the stage, under the role's usual artifact, so later stages read the team as one. */
-  private async writeAggregate(task: TaskRecord, def: StageDefinition, stage: StageInstance, results: UnitResult[], lead: string | null = null): Promise<string> {
+  private async writeAggregate(task: TaskRecord, def: StageDefinition, stage: StageInstance, results: UnitResult[], lead: LeadReport | null = null): Promise<string> {
     const withOutput = results.filter((r) => r.output);
     if (!withOutput.length && !lead) return '';
     const parts = [`# ${def.name} — team of ${results.length}`, ''];
-    if (lead) parts.push('## Integration (lead)', '', lead, '');
+    if (lead) parts.push(`## Integration (lead, ${this.agentName(lead.agentId)})`, '', lead.output, '');
     for (const r of withOutput) {
-      const agent = this.d.agents.has(r.unit.agentId ?? '') ? this.d.agents.adapter(r.unit.agentId!).displayName : (r.unit.agentId ?? 'agent');
       const text = r.output!.length > MAX_WORKER_IN_AGGREGATE ? `${r.output!.slice(0, MAX_WORKER_IN_AGGREGATE)}\n\n[truncated — the full report is ${this.artifactBase(def)}-${r.planned.key}.md]` : r.output!;
-      parts.push(`## ${r.planned.title} (${agent}${r.planned.primary ? ', primary' : ''}${r.unit.status === 'REUSED' ? ', reused' : ''})`, '', text, '');
+      parts.push(`## ${r.planned.title} (${this.agentName(r.unit.agentId)}${r.planned.primary ? ', primary' : ''}${r.unit.status === 'REUSED' ? ', reused' : ''})`, '', text, '');
     }
     const content = parts.join('\n');
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
     await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content, stageId: stage.id, stageKey: def.key });
     return content;
+  }
+
+  /**
+   * The stage's one line, composed from the units: each worker's own result,
+   * then what the lead reconciled — the integration pass is never credited
+   * with the workers' work.
+   */
+  private stageSummary(results: UnitResult[], lead: LeadReport | null): string {
+    const reused = results.filter((r) => r.unit.status === 'REUSED').length;
+    const units = results.map((r) => `${r.planned.title}: ${clipText(this.d.store.getWorkUnit(r.unit.id)?.summary ?? summarize(r.output ?? '') ?? 'done', MAX_UNIT_SUMMARY)}`);
+    const integration = lead ? `; integration: ${clipText(summarize(lead.output) ?? 'done', MAX_UNIT_SUMMARY)}` : '';
+    return clipText(`Team of ${results.length}${reused ? ` (${reused} reused)` : ''}: ${units.join('; ')}${integration}`, MAX_STAGE_SUMMARY);
+  }
+
+  /** Agent time this stage instance spent, per kind of unit: its executions' durations (a coverage follow-up counts to its worker). */
+  private agentTime(task: TaskRecord, stage: StageInstance): Partial<Record<WorkUnitKind, number>> {
+    const kinds = new Map(this.d.store.listWorkUnits(task.id).filter((u) => u.stageId === stage.id).map((u) => [u.id, u.kind]));
+    const out: Partial<Record<WorkUnitKind, number>> = {};
+    for (const e of this.d.store.listExecutions(task.id)) {
+      const kind = e.stageId === stage.id && e.workUnitId ? kinds.get(e.workUnitId) : undefined;
+      if (kind) out[kind] = (out[kind] ?? 0) + (e.durationMs ?? 0);
+    }
+    return out;
+  }
+
+  private agentName(agentId: string | null): string {
+    return agentId && this.d.agents.has(agentId) ? this.d.agents.adapter(agentId).displayName : (agentId ?? 'agent');
   }
 
   private failTeam(stage: StageInstance, failed: UnitResult[], total: number, write: boolean): StageOutcome {
@@ -834,6 +1099,20 @@ export class StageTeamRunner {
 
   private artifactBase(def: StageDefinition): string {
     return (ROLE_ARTIFACT[def.role]?.name ?? `${def.key}.md`).replace(/\.md$/, '');
+  }
+
+  /** The role's prompt artifact name without `.md` (`implementation-prompt`); a unit's prompt is `<base>-<unit>.md`. */
+  private promptBase(def: StageDefinition): string {
+    return (ROLE_ARTIFACT[def.role]?.prompt ?? `${def.key}-prompt.md`).replace(/\.md$/, '');
+  }
+
+  /**
+   * What one run actually read, saved before it starts, as a single agent
+   * stage saves its prompt (docs/systems/prompts.md); the artifact service
+   * numbers repeats. A prompt that cannot be saved never stops the run.
+   */
+  private async savePrompt(task: TaskRecord, def: StageDefinition, stage: StageInstance, name: string, prompt: string): Promise<void> {
+    await this.d.artifacts.write(task.id, { name, type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key }).catch(() => undefined);
   }
 
   // ---------------------------------------------------------------------------
@@ -928,12 +1207,37 @@ export class StageTeamRunner {
   }
 }
 
-/** Replace every spelling of the task's folder in a prompt with the worker's own checkout. */
-export function rewritePaths(prompt: string, from: string, to: string): string {
-  const variants = new Set([from, path.resolve(from), from.replace(/\\/g, '/'), path.resolve(from).replace(/\\/g, '/')]);
-  let out = prompt;
-  for (const v of [...variants].sort((a, b) => b.length - a.length)) if (v) out = out.split(v).join(to);
-  return out;
+/**
+ * Replace every spelling of the given folders (the task's worktree, the
+ * operator's checkout) in a prompt with the worker's own checkout. One pass,
+ * longest spelling first, so a folder inside another and the replacement
+ * itself are never rewritten twice.
+ */
+export function rewritePaths(prompt: string, from: string | readonly string[], to: string): string {
+  const variants = new Set<string>();
+  for (const folder of typeof from === 'string' ? [from] : from) {
+    if (!folder) continue;
+    for (const v of [folder, path.resolve(folder)]) {
+      variants.add(v);
+      variants.add(v.replace(/\\/g, '/'));
+    }
+  }
+  if (!variants.size) return prompt;
+  const pattern = new RegExp([...variants].sort((a, b) => b.length - a.length).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  return prompt.replace(pattern, () => to);
+}
+
+/** A worker's focus or a unit's title as a timeline title: at most `max` characters, cut at a word boundary. */
+export function clipTitle(text: string, max = MAX_TITLE): string {
+  const clean = text.trim().replace(/\s+/g, ' ');
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space >= max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.–—-]+$/, '')}…`;
+}
+
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 /**

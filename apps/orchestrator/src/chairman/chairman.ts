@@ -230,7 +230,9 @@ export class Chairman implements SupervisorHooks {
 
   afterSuccess(taskId: string, def: StageDefinition, stage: StageInstance): void {
     this.outcomes.reconcile(taskId);
-    const source: FailureSource | null = def.kind === 'tests' ? 'tests' : stage.verdict === 'PASS' ? (def.role === 'verifier' ? 'verify' : 'review') : null;
+    // The engine passes the instance as created; the runner wrote the verdict to the row afterwards (TASK-0018 ended UNKNOWN).
+    const verdict = this.d.store.getStage(stage.id)?.verdict ?? stage.verdict;
+    const source: FailureSource | null = def.kind === 'tests' ? 'tests' : verdict === 'PASS' ? (def.role === 'verifier' ? 'verify' : 'review') : null;
     if (!source) return;
     const task = this.task(taskId);
     const failures = this.store.listFailures(taskId, { recoveryCycle: task.recoveryCycle }).filter((f) => f.source === source);

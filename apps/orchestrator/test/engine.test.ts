@@ -56,7 +56,9 @@ describe('normal development workflow', () => {
     expect(changes.body.files).toEqual([expect.objectContaining({ path: 'sim-output.md', origin: 'task', status: 'untracked' })]);
     const report = readFileSync(path.join(t.dataDir, 'tasks', id, 'final-report.md'), 'utf8');
     expect(report).toContain('TASK COMPLETED');
-    expect(report).toContain('3 passed · 0 failed · 0 not run');
+    // Commands, not tests: the unit tests row carries its runner's own count.
+    expect(report).toContain('3 commands passed · 0 failed · 0 not run');
+    expect(report).toMatch(/^- ✓ unit tests \(\d+\.\ds\) — 5 passed$/m);
     expect(report).toContain('READY');
     // Every prompt tells the agent it is a subagent whose reply is a task record, not a chat answer.
     const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');

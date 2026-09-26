@@ -9,7 +9,7 @@ type Row = Record<string, any>;
  * Every anomaly states the rule, the threshold and the measured value.
  */
 export const ANOMALY_RULES = {
-  /** Attempts of one stage in one task. */
+  /** Attempts of one stage in one task (a Stage Team's parallel members are one attempt). */
   excessiveRetries: 4,
   /** An identical prompt sent again this soon after a successful attempt. */
   duplicateWindowMs: 10 * 60_000,
@@ -22,12 +22,12 @@ export const ANOMALY_RULES = {
   abnormalTaskCostFactor: 3,
   abnormalTaskCostMinHistory: 5,
   historyDays: 90,
-  /** Growth between consecutive attempts of one stage. */
+  /** Growth between consecutive attempts of one stage and work unit. */
   tokenGrowthFactor: 2,
   tokenGrowthMinTokens: 50_000,
   /** Input-price ratio of a reroute that counts as an escalation. */
   escalationPriceFactor: 1.5,
-  /** Fixer attempts in one task. */
+  /** Fix cycles (fixer stage runs) in one task. */
   reviewFixLoop: 3,
 } as const;
 
@@ -78,13 +78,28 @@ export class AnomalyDetector {
     return found.sort((a, b) => weight[a.severity] - weight[b.severity] || (b.costNanos ?? 0) - (a.costNanos ?? 0));
   }
 
+  /**
+   * A stage's attempts are its runs or the longest lineage in it (one work unit's
+   * attempts; outside a team, every attempt of the stage), whichever is more — so a
+   * Stage Team's parallel members count once and a member's own re-runs still count.
+   */
   private excessiveRetries(f: Partial<UsageFilter>): Omit<UsageAnomaly, 'detectedAt'>[] {
     const w = range(f);
     const rows = this.db
       .prepare(
-        `SELECT e.task_id, e.workflow_step, COUNT(*) AS n, SUM(e.display_cost_nanos) AS cost, GROUP_CONCAT(e.id) AS ids
-         FROM usage_events e WHERE ${w.sql} AND e.origin = 'stage' AND e.task_id IS NOT NULL
-         GROUP BY e.task_id, e.workflow_step HAVING n >= ?`,
+        `WITH scoped AS (
+           SELECT e.id, e.task_id, e.workflow_step, e.work_unit_key, e.run_id, e.display_cost_nanos
+           FROM usage_events e WHERE ${w.sql} AND e.origin = 'stage' AND e.task_id IS NOT NULL
+         ),
+         lineages AS (
+           SELECT task_id, workflow_step, MAX(n) AS longest
+           FROM (SELECT task_id, workflow_step, COUNT(*) AS n FROM scoped GROUP BY task_id, workflow_step, work_unit_key)
+           GROUP BY task_id, workflow_step
+         )
+         SELECT s.task_id, s.workflow_step, MAX(COUNT(DISTINCT s.run_id), l.longest) AS n, COUNT(*) AS calls,
+                SUM(s.display_cost_nanos) AS cost, GROUP_CONCAT(s.id) AS ids
+         FROM scoped s JOIN lineages l ON l.task_id = s.task_id AND l.workflow_step = s.workflow_step
+         GROUP BY s.task_id, s.workflow_step HAVING n >= ?`,
       )
       .all(...w.params, R.excessiveRetries) as Row[];
     return rows.map((r) => ({
@@ -92,7 +107,7 @@ export class AnomalyDetector {
       kind: 'excessive_retries',
       severity: r.n >= R.excessiveRetries * 2 ? 'critical' : 'warning',
       title: `${r.task_id}: stage "${r.workflow_step}" ran ${r.n} times`,
-      explanation: `Rule: ${R.excessiveRetries} or more attempts of one stage in one task. Measured: ${r.n} attempts costing ${formatUsd(r.cost)}.`,
+      explanation: `Rule: ${R.excessiveRetries} or more attempts of one stage in one task (a Stage Team's parallel members count as one). Measured: ${r.n} attempts${r.calls > r.n ? ` (${r.calls} agent runs, team members included)` : ''} costing ${formatUsd(r.cost)}.`,
       taskId: r.task_id,
       runId: null,
       eventIds: ids(r.ids),
@@ -213,20 +228,21 @@ export class AnomalyDetector {
     return out;
   }
 
+  /** Each attempt against the one before it in its own lineage (the ledger's): a Stage Team sibling is never the baseline. */
   private tokenGrowth(f: Partial<UsageFilter>): Omit<UsageAnomaly, 'detectedAt'>[] {
     const w = range(f);
     const rows = this.db
       .prepare(
-        `SELECT e.id, e.task_id, e.run_id, e.workflow_step, e.input_tokens, e.cache_read_tokens, e.cache_write_tokens, e.display_cost_nanos
+        `SELECT e.id, e.task_id, e.run_id, e.workflow_step, e.work_unit_key, e.input_tokens, e.cache_read_tokens, e.cache_write_tokens, e.display_cost_nanos
          FROM usage_events e WHERE ${w.sql} AND e.origin = 'stage' AND e.task_id IS NOT NULL AND e.total_tokens IS NOT NULL
-         ORDER BY e.task_id, e.workflow_step, e.started_at`,
+         ORDER BY e.task_id, e.workflow_step, e.work_unit_key, e.started_at`,
       )
       .all(...w.params) as Row[];
     const out: Omit<UsageAnomaly, 'detectedAt'>[] = [];
     for (let i = 1; i < rows.length; i++) {
       const a = rows[i - 1]!;
       const b = rows[i]!;
-      if (a.task_id !== b.task_id || a.workflow_step !== b.workflow_step) continue;
+      if (a.task_id !== b.task_id || a.workflow_step !== b.workflow_step || a.work_unit_key !== b.work_unit_key) continue;
       const before = tokensOf(a);
       const after = tokensOf(b);
       if (before > 0 && after >= R.tokenGrowthMinTokens && after >= before * R.tokenGrowthFactor) {
@@ -234,8 +250,8 @@ export class AnomalyDetector {
           id: `abnormal_token_growth:${b.id}`,
           kind: 'abnormal_token_growth',
           severity: 'warning',
-          title: `${b.task_id}: "${b.workflow_step}" context grew ${(after / before).toFixed(1)}×`,
-          explanation: `Rule: an attempt sending at least ${R.tokenGrowthFactor}× the context of the previous attempt of the same stage (and at least ${R.tokenGrowthMinTokens.toLocaleString('en-US')} tokens). Measured: ${before.toLocaleString('en-US')} → ${after.toLocaleString('en-US')} tokens.`,
+          title: `${b.task_id}: "${b.workflow_step}"${b.work_unit_key ? ` (${b.work_unit_key})` : ''} context grew ${(after / before).toFixed(1)}×`,
+          explanation: `Rule: an attempt sending at least ${R.tokenGrowthFactor}× the context of the previous attempt of the same stage and work unit (and at least ${R.tokenGrowthMinTokens.toLocaleString('en-US')} tokens). Measured: ${before.toLocaleString('en-US')} → ${after.toLocaleString('en-US')} tokens.`,
           taskId: b.task_id,
           runId: b.run_id,
           eventIds: [a.id, b.id],
@@ -278,11 +294,12 @@ export class AnomalyDetector {
     return out;
   }
 
+  /** A fix cycle is one fixer stage run; a Stage Team's decomposer, workers and integration pass all log as fixers inside it. */
   private fixLoops(f: Partial<UsageFilter>): Omit<UsageAnomaly, 'detectedAt'>[] {
     const w = range(f);
     const rows = this.db
       .prepare(
-        `SELECT e.task_id, COUNT(*) AS n, SUM(e.display_cost_nanos) AS cost, GROUP_CONCAT(e.id) AS ids
+        `SELECT e.task_id, COUNT(DISTINCT COALESCE(e.run_id, e.id)) AS n, COUNT(*) AS calls, SUM(e.display_cost_nanos) AS cost, GROUP_CONCAT(e.id) AS ids
          FROM usage_events e WHERE ${w.sql} AND e.agent_role = 'fixer' AND e.task_id IS NOT NULL
          GROUP BY e.task_id HAVING n >= ?`,
       )
@@ -292,7 +309,7 @@ export class AnomalyDetector {
       kind: 'review_fix_loop',
       severity: 'warning',
       title: `${r.task_id}: ${r.n} fix cycles`,
-      explanation: `Rule: ${R.reviewFixLoop} or more fixer attempts in one task (review or tests kept failing). Measured: ${r.n} fixer attempts costing ${formatUsd(r.cost)}.`,
+      explanation: `Rule: ${R.reviewFixLoop} or more fix cycles (fixer stage runs) in one task (review or tests kept failing). Measured: ${r.n} fix cycles${r.calls > r.n ? ` (${r.calls} fixer agent runs, team members included)` : ''} costing ${formatUsd(r.cost)}.`,
       taskId: r.task_id,
       runId: null,
       eventIds: ids(r.ids),

@@ -404,6 +404,13 @@ export class UsageQueries {
       return t;
     };
     const models = (list: UsageEvent[]) => [...new Set(list.map((e) => e.providerModelId ?? e.model))];
+    // A team's members run side by side, not after each other: a run's attempts are the most any one lineage
+    // (a work unit, or the stage outside a team) made in it, as the ledger links them. Team size is `workUnits`.
+    const attemptsOf = (list: UsageEvent[]): number => {
+      const perLineage = new Map<string | null, number>();
+      for (const e of list) perLineage.set(e.workUnitKey ?? null, (perLineage.get(e.workUnitKey ?? null) ?? 0) + 1);
+      return Math.max(0, ...perLineage.values());
+    };
     // A team stage splits its cost per work unit; the stage row still carries the sum.
     const workUnitsOf = (list: UsageEvent[]): Pick<UsageStageCost, 'workUnits'> => {
       if (!list.some((e) => e.workUnitKey)) return {};
@@ -423,7 +430,7 @@ export class UsageQueries {
         role: stage.role,
         agentId: stage.agentId,
         models: models(list),
-        attempts: list.length,
+        attempts: attemptsOf(list),
         status: stage.status,
         totals: sum(list),
         ...workUnitsOf(list),
@@ -431,7 +438,18 @@ export class UsageQueries {
     }
     // Runs whose stage row is gone, and runs outside a stage (Chairman), keep their cost visible.
     for (const [runId, list] of byRun) {
-      rows.push({ runId, stageKey: list[0]!.workflowStep ?? 'stage', stageName: list[0]!.workflowStep ?? 'Stage', role: list[0]!.agentRole, agentId: list[0]!.agentId, models: models(list), attempts: list.length, status: null, totals: sum(list) });
+      rows.push({
+        runId,
+        stageKey: list[0]!.workflowStep ?? 'stage',
+        stageName: list[0]!.workflowStep ?? 'Stage',
+        role: list[0]!.agentRole,
+        agentId: list[0]!.agentId,
+        models: models(list),
+        attempts: attemptsOf(list),
+        status: null,
+        totals: sum(list),
+        ...workUnitsOf(list),
+      });
     }
     for (const [step, list] of other) {
       rows.push({

@@ -31,7 +31,7 @@ hooks). Chat works for all tasks.
 | Hook | When | Effect |
 |---|---|---|
 | `beforeStage` | after the Git baseline, before a stage instance | limits check (→ `limit` blocker); checkpoint before every write-capable agent stage |
-| `afterSuccess` | a stage succeeded | judges open strategies on the recorded results; a passing check marks progress |
+| `afterSuccess` | a stage succeeded | judges open strategies on the recorded results; a passing check (tests, or a review/verify PASS) after a failure from the same source this cycle sets health PROGRESSING. The verdict is read from the stored stage row: the instance the engine passes predates the runner's update and has none |
 | `onFailure` | tests failed / verdict FAIL | records the failure signature, classifies progress, judges the previous strategy on it, then `local_fix` (normal onFail route, "Fix attempt N of M") or a recovery cycle |
 | `onError` | `blocked`: usage/model/auth → hand the stage to another healthy agent, else legacy wait; `exhausted`: retries used → recovery cycle |
 | `beforeComplete` | loop reaches `complete` | completion gate (also the observation that resolves open strategies); remediable failures start a cycle, else complete with the unmet checks as limitations |

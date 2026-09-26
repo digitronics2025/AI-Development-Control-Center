@@ -194,12 +194,13 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '',
     '## Tests',
     '',
+    // Counts are of commands, not tests: each row carries its runner's own totals.
     latestRuns.length
-      ? `${passed} passed · ${failed} failed · ${notRun} not run`
+      ? `${passed} command${passed === 1 ? '' : 's'} passed · ${failed} failed · ${notRun} not run`
       : input.testsSkipped
         ? 'Skipped with approval'
         : 'Not run',
-    ...latestRuns.map((r) => `- ${r.status === 'passed' ? '✓' : r.status === 'failed' ? '✕' : '○'} ${r.name}${r.durationMs !== null ? ` (${(r.durationMs / 1000).toFixed(1)}s)` : ''}${r.summary && r.status === 'failed' ? ` — ${r.summary}` : ''}`),
+    ...latestRuns.map((r) => `- ${r.status === 'passed' ? '✓' : r.status === 'failed' ? '✕' : '○'} ${r.name}${r.durationMs !== null ? ` (${(r.durationMs / 1000).toFixed(1)}s)` : ''}${r.summary && (r.status === 'failed' || r.status === 'passed') ? ` — ${r.summary}` : ''}`),
     '',
     '## Build',
     '',

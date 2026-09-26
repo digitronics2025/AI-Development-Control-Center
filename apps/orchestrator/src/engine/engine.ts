@@ -1480,7 +1480,9 @@ export class TaskEngine {
       try {
         files = await changesSince(workdir, baseline);
         const { diff, truncated } = await diffSince(workdir, baseline, { maxBytes: 5_000_000 });
-        await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: truncated ? `${diff}\n[truncated]` : diff });
+        // Git's own trailing newline is lost when its output is read line by line; without it `git apply` calls the patch corrupt.
+        const content = truncated ? `${diff}\n[truncated]` : diff;
+        await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: content && !content.endsWith('\n') ? `${content}\n` : content });
       } catch (error) {
         this.publisher.event(task.id, 'FILE_CHANGED', `Final diff could not be captured: ${(error as Error).message}`);
       }

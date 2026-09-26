@@ -202,14 +202,14 @@ measured value.
 
 | Rule | Triggers when |
 |---|---|
-| Excessive retries | 4 or more attempts of one stage |
+| Excessive retries | 4 or more attempts of one stage: its runs (distinct `run_id`) or its longest lineage (attempts of one work unit, or of the stage outside a team), whichever is more |
 | Duplicate request | same prompt hash, agent and model resent within 10 minutes of a successful attempt |
 | Repeated context | 3 or more attempts of 150k or more context tokens in one task |
 | Failed-attempt spend | any cost on failed attempts (a warning from $1) |
 | Unusual task cost | more than 3× the median of 5 or more same-workflow tasks in 90 days |
-| Context growth | 2× or more between consecutive attempts of a stage, and at least 50k tokens |
+| Context growth | 2× or more between consecutive attempts of a stage and work unit, and at least 50k tokens |
 | Model escalation | a reroute to a model with a 1.5× or higher input price |
-| Review and fix loop | 3 or more fixer attempts in one task |
+| Review and fix loop | 3 or more fix cycles in one task: distinct fixer stage runs (`run_id`), not fixer attempts |
 
 ## API (`/api/usage`, bearer token)
 
@@ -258,5 +258,29 @@ A team worker's attempt carries `usage_events.work_unit_key` (migration 19).
 Retry lineage is per task, stage key **and** work unit, so parallel siblings
 are never counted as retries of each other; the task flow splits a team stage's
 cost into `workUnits` ([stage-teams.md](stage-teams.md)).
+
+The read side follows the same lineage. For single-agent stages
+(`work_unit_key` NULL) the counts are the per-attempt counts they always were;
+only a fixer stage run that made two attempts now counts as one fix cycle.
+
+- **Anomalies.** Excessive retries counts a stage's runs or its longest
+  lineage, so a team run is one attempt and a member's own re-run (the primary
+  reviewer asked once more) is another. The review and fix loop counts fixer
+  stage runs: a Fix run's decomposer, workers and integration pass are all
+  logged with role `fixer` but make one cycle. Context growth compares an
+  attempt only with the previous attempt of the same stage and work unit, never
+  with a sibling; its title names the unit. When a team is involved the
+  explanation also gives the number of agent runs behind the count.
+- **Cost flow.** A stage run's `attempts` is the most attempts any one lineage
+  made in it, so a Fix of a decomposer, two workers and an integration pass
+  that each ran once reads 1, not 4. `workUnits` lists every unit with its own
+  `attempts`; a run's rows without a unit, such as the single agent after a Fix
+  decomposition fell back, are grouped as `lead`. `workUnits` carry no unit
+  kind, so the task ledger counts team members by key: everything except
+  `decompose`, `integration` and `lead`, the same workers the Stage Timeline's
+  "Team of N" counts. It shows "team of N", adding "M attempts by one member"
+  when a member re-ran; a run with no worker (the fallback) reads as one agent.
+- Repeated context still counts every large send, team members included: each
+  member really sends that context.
 
 Last verified: 2026-09-26

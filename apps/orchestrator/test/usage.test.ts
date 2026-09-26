@@ -343,7 +343,7 @@ describe('usage API', () => {
     expect(overview.trackingStartedAt).toBeTruthy();
     expect(overview.anomalies.map((a) => a.kind)).toEqual(expect.arrayContaining(['review_fix_loop', 'excessive_retries']));
     const loop = overview.anomalies.find((a) => a.kind === 'review_fix_loop')!;
-    expect(loop.explanation).toMatch(/Rule: 3 or more fixer attempts.*Measured: 3 fixer attempts/);
+    expect(loop.explanation).toMatch(/Rule: 3 or more fix cycles.*Measured: 3 fix cycles costing/);
 
     const models = (await t.api('GET', `/api/usage/breakdown/model?${range()}`)).body;
     expect(models[0]).toMatchObject({ key: 'sim-standard', extra: { provider: 'simulated' } });

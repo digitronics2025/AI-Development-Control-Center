@@ -22,7 +22,7 @@ stages:
       maxWorkers: 2
       workers:
         - key: code
-          focus: The code involved, root cause and the smallest fitting change
+          focus: The code involved, the root cause and the smallest fix
         - key: risks
           focus: Risks, tests to add or change, and what could break
           agentId: claude

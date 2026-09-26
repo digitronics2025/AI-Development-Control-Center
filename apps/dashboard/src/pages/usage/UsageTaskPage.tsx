@@ -18,12 +18,28 @@ import {
   durationBetween,
   formatDuration,
 } from '@acc/ui';
-import { TASK_STATUSES, formatRatio, formatTokens, formatUsd, type TaskStatus } from '@acc/shared';
+import { TASK_STATUSES, formatRatio, formatTokens, formatUsd, type TaskStatus, type UsageStageCost } from '@acc/shared';
 import { useUsageTaskLedger } from '../../api/usage';
 import { useBreadcrumb } from '../../app/breadcrumbs';
 import { EventDrawer } from './EventDrawer';
 import { eventColumns } from './EventsTab';
 import { costWithGaps, unpricedNote } from './common';
+
+/**
+ * Units that are not team members: the keys the engine gives a Fix's decomposer and the integration
+ * pass (engine/stage-team.ts), and the ledger's bucket for rows with no unit (usage/queries.ts). The
+ * ledger's `workUnits` carry no kind, so the key is all there is; the task page counts the same workers.
+ */
+const NOT_TEAM_MEMBERS = new Set(['decompose', 'integration', 'lead']);
+
+/** A Stage Team's members ran side by side, so they read as a team, never as attempts of each other. */
+function runLabel(f: UsageStageCost): string {
+  const members = (f.workUnits ?? []).filter((u) => !NOT_TEAM_MEMBERS.has(u.unitKey));
+  // No worker ran (a Fix whose split fell back to one agent): the stage ran as one agent.
+  if (!members.length) return f.attempts > 1 ? ` · ${f.attempts} attempts` : '';
+  const most = Math.max(...members.map((u) => u.attempts));
+  return ` · team of ${members.length}${most > 1 ? ` · ${most} attempts by one member` : ''}`;
+}
 
 /** design.md §7.10 — task ledger: where the tokens and money went, stage by stage. */
 export function UsageTaskPage() {
@@ -108,7 +124,7 @@ export function UsageTaskPage() {
                     <span className="text-small text-fg-secondary">
                       {' '}
                       · {f.agentId ?? '—'} · {f.models.join(', ')}
-                      {f.attempts > 1 ? ` · ${f.attempts} attempts` : ''}
+                      {runLabel(f)}
                     </span>
                   </span>
                   <span className="tabular text-fg">

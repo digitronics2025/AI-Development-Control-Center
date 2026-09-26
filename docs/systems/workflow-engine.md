@@ -106,7 +106,13 @@ They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
 
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
-task record. Both carry **Where the time went**
+task record. A non-empty `git-diff.patch` ends in exactly one newline (an
+empty one is an empty file): `git()` reads Git's output line by line and loses
+its final newline, and without it `git apply` calls the patch corrupt. The
+patch still does not apply when a file committed with CRLF endings changed
+(the same line reading drops each `\r`), when a binary file changed
+(`diffSince` passes no `--binary`, so Git prints only "Binary files … differ"),
+or when it was cut at 5,000,000 characters and marked `[truncated]`. Both carry **Where the time went**
 ([time-breakdown.ts](../../apps/orchestrator/src/engine/time-breakdown.ts),
 also `GET /api/tasks/:id/time`, measured up to now for a running task): every
 millisecond from creation to the end in exactly one bucket, by precedence
@@ -364,5 +370,9 @@ runner's totals line, e.g. `Tests 429 passed | 1 skipped (430)`, or for
 `node --test` (which prints `# pass 2` / `ℹ pass 2`, one total per line)
 a composed `1 failed | 2 passed (3)`
 ([test-summary.ts](../../apps/orchestrator/src/engine/test-summary.ts)).
+The final report's Tests line counts commands, not tests
+(`1 command passed · 0 failed · 0 not run`), and each passing or failing
+row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
+([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
 Last verified: 2026-09-26

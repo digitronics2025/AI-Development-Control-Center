@@ -148,10 +148,15 @@ export class ContextBuilder {
     return (await this.artifacts.latestText(taskId, type, MAX_SECTION_CHARS)) ?? '';
   }
 
+  /**
+   * `Path` is where the agent works: the task's own worktree when the task is
+   * isolated — an agent never needs, and must not be pointed at, the
+   * operator's checkout.
+   */
   private repositoryFacts(repo: RepositoryRecord, task: TaskRecord): string {
     const commands = repo.commands.filter((c) => c.enabled).map((c) => `- ${c.name} (${c.kind}): \`${c.command}\``);
     return [
-      `- Path: ${repo.path}`,
+      `- Path: ${taskWorkdir(task, repo)}`,
       `- Tooling: ${repo.tooling.join(', ') || 'not detected'}`,
       `- Task branch: ${task.git.taskBranch ?? 'not created yet'}`,
       `- Baseline commit: ${task.git.baselineCommit ?? 'not recorded yet'}`,

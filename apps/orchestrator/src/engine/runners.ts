@@ -479,12 +479,17 @@ export class StageRunners {
     return this.completeAgentStage(task, def, stage, summarize(output), verdict, first.durationMs);
   }
 
-  /** An agent stage (one agent or a whole team) that ran to the end: record it and say where the workflow goes. */
-  completeAgentStage(task: TaskRecord, def: StageDefinition, stage: StageInstance, summary: string | null, verdict: 'PASS' | 'FAIL' | null, durationMs: number, data: Record<string, unknown> = {}): StageOutcome {
+  /**
+   * An agent stage (one agent or a whole team) that ran to the end: record it
+   * and say where the workflow goes. A FAIL carries the same timing (and team)
+   * data a completion would, and `failedBy` names the reviewers of a team that
+   * asked for changes.
+   */
+  completeAgentStage(task: TaskRecord, def: StageDefinition, stage: StageInstance, summary: string | null, verdict: 'PASS' | 'FAIL' | null, durationMs: number, data: Record<string, unknown> = {}, failedBy: string[] = []): StageOutcome {
     const { publisher } = this.d;
     publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary, finishedAt: now() });
     if (verdict === 'FAIL') {
-      publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes`, { verdict }, stage.id);
+      publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes${failedBy.length ? ` (${failedBy.join(', ')})` : ''}`, { verdict, durationMs, ...data }, stage.id);
       if (def.verdict) return { kind: 'verdict_fail', stageId: stage.id };
     }
     if (verdict === 'PASS') publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed`, { verdict }, stage.id);

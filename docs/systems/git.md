@@ -115,6 +115,6 @@ so background fetches fail instead of opening a credential window.
 
 ## Stage Team helpers
 
-[team.ts](../../packages/git/src/team.ts): `addChildWorktree` (detached, `core.autocrlf=false`), `changedPathsBetween` (renames as D+A), `combineResults` (private index, refuses two units on one path, refs only under `refs/acc/team/`), `applyIfUnchanged` (writes only while the working tree equals the base, via `restoreCheckpoint`), `treeOf`. Used by [stage-teams.md](stage-teams.md).
+[team.ts](../../packages/git/src/team.ts): `createWaveBase` (a normalised commit of the task's files — what `git add -A` would record, parent = task HEAD — plus the byte-exact tree, under `refs/acc/team/`), `addChildWorktree` (detached, the repository's own line-ending settings, so a child's `git status` starts clean), `captureResult` (the worker's result, normalised the same way), `changedPathsBetween` (renames as D+A), `combineResults` (private index, refuses two units on one path, refs only under `refs/acc/team/`), `applyIfUnchanged` (compares byte-exact with byte-exact, then writes only the changed paths with line-ending conversion on; deletions delete, binary files byte-exact), `treeOf`. Used by [stage-teams.md](stage-teams.md).
 
 Last verified: 2026-09-26

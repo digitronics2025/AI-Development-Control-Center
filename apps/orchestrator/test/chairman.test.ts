@@ -96,6 +96,16 @@ describe('supervised recovery (plan §7.2)', () => {
     expect(t.services.chairman.store.listCheckpoints(id).map((c) => c.label)).toEqual(['Before Implement', 'Before Fix']);
   });
 
+  it('a review that fails once and then passes leaves the task PROGRESSING, not UNKNOWN', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Fix it [sim:review-fail-once]');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(task).toMatchObject({ status: 'COMPLETED', finalStatus: 'READY', supervised: true, recoveryCycle: 0, fixCycles: 1 });
+    expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'review').map((s) => s.verdict)).toEqual(['FAIL', 'PASS']);
+    expect(t.services.chairman.store.listFailures(id, { recoveryCycle: 0 }).map((f) => f.source)).toEqual(['review']);
+    // The PASS is read from the stored stage row: the instance the engine hands over still has no verdict (TASK-0018).
+    expect(t.services.chairman.store.session(id).health).toBe('PROGRESSING');
+  });
+
   it('B: exhausting the local fix attempts starts a recovery cycle instead of failing', async () => {
     const repo = await repoWith("const f = 6 - n; if (f > 0) { console.log('FAIL test/a.test.js > adds'); console.log(f + ' failed, 3 passed'); process.exit(1); } console.log('9 passed');");
     const id = await createTask(t, await addRepo(t, repo), 'Fix the adder');

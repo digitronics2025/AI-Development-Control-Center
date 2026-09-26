@@ -60,6 +60,14 @@ last valid block for the stage (≤20 000 chars) and hashes it canonically.
 A **Fix** stage never reuses the plan's manifest: one read-only (Level 1)
 decomposition run (unit kind `decomposer`) reads the fresh test and review
 evidence and answers with a manifest; its report is `<stage>-decomposition.md`.
+The decomposer's `manifest_hash` holds a hash of the stage, its level and the
+active directive ids. When the run of the Fix just before this one was
+stopped rather than failed (`CANCELLED` — parked at a limit or rerouted —
+`PAUSED` or `INTERRUPTED`), with no other stage in between and the same
+directives, its split is reused (decomposer `REUSED`, its report copied to
+this run's `<stage>-decomposition.md`). The failures are the same, and a fresh
+split would name its units differently, so none of that run's units could be
+reused. A failed run's split is never reused.
 
 ## Falling back to one agent
 
@@ -81,16 +89,37 @@ owned paths, other workers, rules: stay in your paths, no commit/push, no
 package installs, no sub-agents; primary vs specialist reviewer).
 
 - **Read-only** (Level 1): workers share the task's working tree.
-- **Write** (Level 2–3, isolated single-repository task): per wave a hidden
-  checkpoint `refs/acc/team/<task>/<stage>/w<n>-base` of the task worktree;
-  each worker gets a detached child checkout of it
-  (`<dataDir>/team-worktrees/<task>/<stage8>-<unit>`, `core.autocrlf=false` so
-  bytes match) as its cwd and only tool root; the task folder's path in the
-  prompt is rewritten to the child's. `node_modules` folders (≤3 levels) are
-  shared by directory junctions, removed — never followed — before the child
-  is deleted. The result is captured as `…/<unit>` and diffed against the base
+- **Write** (Level 2–3, isolated single-repository task): per wave
+  `createWaveBase` ([team.ts](../../packages/git/src/team.ts)) records a hidden
+  commit `refs/acc/team/<task>/<stage>/w<n>-base` of the task worktree **as a
+  commit would record it** (`committableTree`: the repository's own autocrlf
+  and attributes, parent = the task's HEAD), plus the byte-exact tree of the
+  same files (`workingTreeTree`, kept in memory as `exactTree`). Each worker
+  gets a detached child checkout of that commit
+  (`<dataDir>/team-worktrees/<task>/<stage8>-<unit>`, checked out with the
+  repository's normal line-ending settings) as its cwd and only tool root.
+  Every spelling of the task folder **and of the operator's checkout** in the
+  prompt is rewritten to the child's (`rewritePaths`, one pass, longest
+  first). `node_modules` folders (≤3 levels) are shared by directory
+  junctions, removed — never followed — before the child is deleted. The
+  result is captured the same normalised way (`captureResult` →
+  `…/<unit>`, parent = the base) and diffed against the base
   (`changedPathsBetween`, renames as D+A); any path outside the unit's
   prefixes fails it (`SCOPE_VIOLATION`, stage error `UNKNOWN`).
+
+**Line endings.** With `core.autocrlf=true` (Git for Windows) the task's files
+are CRLF on disk and LF in Git. A byte-exact base (the design before
+TASK-0018) put CRLF blobs into every child: `git ls-files --eol` said `i/crlf`,
+`git diff --stat` listed every file, and workers "fixed" line endings and
+reported the repository as committed with CRLF. Now a child's `git status` is
+clean at the start, `git ls-files --eol` shows `i/lf w/crlf` for text, and a
+file that differs only in its line endings is no change. Only the "task
+unchanged since the base" check compares byte-exact trees, with each other;
+read-only reuse and the integration pass record `committableTree`. A
+byte-exact tree is seeded from the task's real index. A plain `git status` in
+the task folder refreshes that index, and the byte-exact tree then changes
+even though no file did (measured with `core.autocrlf=true`). The
+committable tree stays the same.
 
 After a wave: a stop cancels everything (units `CANCELLED`, nothing
 integrated); `BLOCKED ON OPERATOR` from a work unit → `needs_operator`, nothing
@@ -98,34 +127,95 @@ integrated; any failed unit → the stage fails with that unit's class (a
 blocking class such as `USAGE_LIMIT` wins), later units `SKIPPED`, nothing from
 the wave integrated. Otherwise the units' changes are combined in a private
 index into `…/w<n>-combined` (two units touching one path is a conflict) and
-written to the task worktree with `restoreCheckpoint` — only if the task's
-working tree still equals the wave base (`applyIfUnchanged`); else nothing is
-written and the stage fails. No forced checkout or reset.
+written to the task worktree by `applyIfUnchanged` — only if the task's files
+are still byte for byte the wave's `exactTree`; else nothing is written and
+the stage fails. The write is a checkout of exactly the changed paths with
+line-ending conversion on (text in the task's usual convention, binary byte
+for byte); deleted paths are removed. No forced checkout or reset, and the
+task's index and HEAD are not touched.
 
 After two or more write units were integrated, one **integration pass** (unit
 kind `integration`) runs on the task worktree with the stage's assignment: it
 reconciles interfaces between units, runs targeted checks, and writes the
-stage's report. The Test stage stays authoritative after it.
+stage's report, told to credit each change to its unit and name its own
+reconciliation edits. Its `base_commit`/`result_commit` hold the task's
+`committableTree` before and after it (trees, not commits — normalised so an
+index refresh or a line-ending rewrite by the lead is no change); the paths
+between them are its own edits, counted in its finish event. An edit outside
+the union of the integrated units' paths is kept (reconciling across units is
+its job) and reported as a `STAGE_TEAM` warning (`data.warning:
+'integration_outside_scope'`). The Test stage stays authoritative after it.
+
+| Unit kind | `base_commit` | `result_commit` |
+|---|---|---|
+| `worker`, read-only | the task's `committableTree` it read (reuse key) | — |
+| `worker`, write | the wave base commit (normalised); for a unit reused because its result is already in the task, the base that result was made on | its captured result commit |
+| `integration` | `committableTree` before the pass | `committableTree` after it |
+| `decomposer` | — | — |
+
+Unit titles are the worker focus or manifest title, cut at a word boundary to
+60 characters with an ellipsis (`clipTitle`); built-in worker focuses are
+≤ 60 characters (a test loads every built-in workflow to hold that).
 
 ## Outcome and artifacts
 
 Each worker writes `<role-artifact>-<unit>.md` (type `stage-output`); the
 stage's usual artifact (`investigation.md`, `review.md`, …) is the aggregate:
-the integration report, then every worker's report (≤30 000 chars each). Verdict
-teams: every worker must end with a VERDICT; any FAIL → FAIL; a PASS needs the
-primary reviewer to account for the diff's unshown files — one follow-up run of
-the primary, then `REVIEW_INCOMPLETE`. `STAGE_COMPLETED` carries
-`team: { workers, reused, wallMs, agentMs, integrated }` (agent time is the sum
-of worker durations; no savings are claimed beyond those two numbers).
+`## Integration (lead, <agent>)`, then every worker's report (≤30 000 chars
+each). Every team run saves the prompt it read before it starts, as a
+`stage-output` artifact ([prompts.md](prompts.md#prompt-artifacts)):
+`<role prompt>-<unit>.md` for a worker (`implementation-prompt-alpha.md`),
+`<role prompt>-integration.md`, `<stage>-decomposition-prompt.md`, and
+`<role prompt>-<unit>-coverage.md` for a coverage follow-up; repeats are
+numbered by the artifact service. A team stage writes no stage-level
+`<role>-prompt.md`.
+
+The stage summary is composed from the units — `Team of N (k reused): <unit>:
+<its summary>; …; integration: <the lead's summary>` (each ≤100, all ≤500
+characters) — so the lead is never credited with the workers' work.
+
+Verdict teams: every worker must end with a VERDICT; any FAIL → FAIL; a PASS
+needs the primary reviewer to account for the diff's unshown files — one
+follow-up run of the primary (the aggregate is rewritten with it), then
+`REVIEW_INCOMPLETE`. A FAIL emits `REVIEW_FAILED` "<stage> requested changes
+(<titles of the reviewers that failed>)" with `{ verdict, durationMs, team }`
+— a single-agent verdict stage's FAIL carries `durationMs` too.
+`STAGE_COMPLETED` (and `REVIEW_FAILED`) carry
+`team: { workers, reused, wallMs, agentMs, decomposeMs, integrationMs, integrated }`:
+`wallMs` runs from before planning (so it includes the decomposition) to the
+end; `agentMs` is the summed execution time of this stage's workers
+(a coverage follow-up counts to its worker); `decomposeMs` and
+`integrationMs` are the decomposer's and the lead's execution time, `null` when
+that run did not happen. No savings are claimed beyond these numbers.
+
+`WORK_UNIT` events: a worker "`<title>` finished · N files changed" or
+"failed: …", a reuse ("`<title>`: reused its earlier result (same files, same
+instructions)", "… (already in the task's files)", for a split "… (the same
+failures, split before the run stopped)"); the decomposer "Split the fix finished · N units: a, b"
+(or "· found one repair", "· no usable split (…)", "failed: …", "stopped");
+the lead "Integration finished · no changes" / "· N files changed" (or
+"failed: …", "stopped").
 
 ## Retry, restart, limits
 
 - **Reuse:** a unit whose earlier run (same task, stage key, unit key, and
   `manifest_hash` — a hash of the manifest or team config, the stage level and
-  the active directive ids) succeeded is `REUSED` instead of run: read-only when
-  the working tree it read (its `base_commit` holds that tree) is identical;
-  write when its base commit's tree equals the new base tree and its result
-  still lies within its paths. Failed, stopped and interrupted units rerun.
+  the active directive ids) succeeded is `REUSED` instead of run. A read-only
+  unit is reused when the files it read are the same (its `base_commit` holds
+  their `committableTree`). A write unit is reused when its result still lies
+  within its paths and one of two things holds:
+  - its base commit's tree equals the new base tree, so its result is
+    integrated with this wave; or
+  - it ran in the run of this stage just before this one, that run ended
+    without finishing (`CANCELLED`, `PAUSED`, `INTERRUPTED` or `FAILED`), and
+    the new base already holds its result at every path it changed. That run
+    integrated the result before it stopped, so nothing is written again
+    ("already in the task's files"). The unit still counts as integrated for
+    the lead's pass.
+
+  A reused report comes from the run that produced it, never from an empty
+  reused row. Failed, stopped and interrupted units rerun, and so does a unit
+  that changed nothing when its base has moved.
 - **Restart:** `engine.recover()` marks `RUNNING` units `FAILED`/`INTERRUPTED`
   and `QUEUED` ones `CANCELLED`; leftover processes are stopped by the
   existing leftover-execution pass; `team.sweep()` deletes every child checkout
@@ -133,12 +223,30 @@ of worker durations; no savings are claimed beyond those two numbers).
   is never integrated.
 - **Cleanup:** completion and cancel delete `refs/acc/team/<task>/` and the
   task's child folder.
-- **Limits:** every worker, decomposer and integration run is an `agent`
-  execution, so the Chairman's `maxAgentRuns` and runtime count them; a
-  supervised team starts no worker once the run limit is reached (the stage
-  fails `PERMISSION_DENIED`). The watchdog checks every running execution of a
-  task, naming the unit. The Chairman snapshot carries `team` (latest team
-  stage, unit statuses and errors, as EVIDENCE text).
+- **Limits:** every worker, decomposer, integration and coverage follow-up run
+  is an `agent` execution, so the Chairman's run and runtime counts include
+  them. A supervised team checks the **task's own** `task.limits` (what
+  `beforeStage` checks, extended when the operator resumes past a limit) with
+  the Chairman's `limitReached`, before the decomposer, before each wave
+  (counting every unit of the wave that must run — reused units do not — plus,
+  for a write team's last wave, the lead's pass that follows), before the
+  integration pass and before a coverage follow-up. When the runs would not
+  fit, no run of that step starts: its units are `CANCELLED`, the stage
+  `CANCELLED` ("Paused at a limit: …"), and the task parks `WAITING_FOR_USER`
+  with blocker `limit` and a `TASK_WAITING` event, as the Chairman parks it
+  before a stage (the message is the Chairman's "Agent run limit reached (n of
+  m)." or "Agent run limit reached for <stage>: it needs k more agent runs, and
+  j of m are left."). Resume extends the limits and runs the stage again. What
+  is still valid is reused: read-only units on the same files, write units not
+  yet integrated whose base is unchanged, write units whose results are
+  already in the task (including every wave integrated before the park, in a
+  multi-wave team, and a last wave integrated before the lead's check hit the
+  runtime limit), and a Fix's split. Only the work that had not run yet runs
+  after the resume (tested: a three-unit Fix parked after its first wave
+  resumes with the split, alpha and beta `REUSED`, and runs gamma and the
+  lead). The watchdog checks every running execution of a task, naming the unit. The
+  Chairman snapshot carries `team` (latest team stage, unit statuses and
+  errors, as EVIDENCE text).
 
 ## Visibility
 
@@ -169,6 +277,23 @@ tree proof are unchanged; everything unmarked runs one at a time, in order.
 - A restart in the middle of writing a combined result can leave the task
   worktree partly updated; the stage reruns from that state (no reuse, since the
   base differs).
+- After an interrupted run, a write unit is reused as "already in the task"
+  only when every path it changed still holds its result. If a later wave of
+  that run, the operator or the lead changed one of those paths, the unit
+  reruns on top of the current files.
+- A **failed** Fix run's split is not reused. The next run splits the failures
+  again, and its units are reused only if the new split is identical, which is
+  rare.
+- Parking at a limit mid-team records no Chairman decision (the Chairman's
+  `decide` is not reachable from the team runner); the blocker, the stage
+  summary and the `TASK_WAITING`/`STAGE_TEAM` events say why.
+- The "task unchanged since the wave base" check compares byte-exact trees
+  (`workingTreeTree`), which are seeded from the task's real index. A plain
+  `git status` in the task folder during a write wave, for example from an
+  editor opened on it, makes identical files read as changed. The check fails
+  safe: nothing is integrated and the stage fails. The stage's next run
+  reuses that wave's units (the committable base is the same) and integrates
+  them.
 
 ## Observed with real agents (2026-09-26)
 

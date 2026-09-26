@@ -4,6 +4,7 @@ sources:
   - prompts/**
   - packages/shared/src/prompts.ts
   - apps/orchestrator/src/engine/context.ts
+  - apps/orchestrator/src/engine/stage-team.ts
   - apps/orchestrator/src/services/prompts.ts
   - apps/orchestrator/src/engine/report.ts
   - apps/orchestrator/src/chairman/signatures.ts
@@ -55,7 +56,7 @@ Templates saved before the check keep rendering `(none)` for unknown names.
 |---|---|
 | `task_id`, `title`, `request` | the task; `request` is the title as `#` heading plus the description |
 | `role`, `stage_name`, `workflow_name` | the stage definition and the task's workflow snapshot |
-| `repository_name`, `repository_path`, `repository_facts`, `git_status` | the repository record, the task's working directory (its worktree when isolated), `git status` at stage start |
+| `repository_name`, `repository_path`, `repository_facts`, `git_status` | the repository record, the task's working directory (its worktree when isolated — `repository_facts`' `- Path:` too, so an isolated task's agents are never pointed at the operator's checkout), `git status` at stage start. A Stage Team write worker's prompt has every spelling of the task worktree and of the operator's checkout rewritten to its own checkout ([stage-teams.md](stage-teams.md)) |
 | `attachments` | text attachments inline (≤ 50 KB each, redacted), others by path |
 | `directives` | active, non-routing directives for this stage, marked `(constraint)` or `(completion requirement)` |
 | `investigation`, `plan`, `implementation_report`, `review`, `verification_report` | artifacts: every investigation, the latest plan, every implementation and fix report (20 KB each), the latest review, the latest `browser-verification.md` |
@@ -120,7 +121,14 @@ The rendered prompt of every agent stage is saved as a `stage-output`
 artifact before the agent starts (`investigation-prompt.md`,
 `plan-prompt.md`, `implementation-prompt.md`, `fix-prompt.md`,
 `review-prompt.md`, `verification-prompt.md`; other roles `<stage key>-prompt.md`;
-repeats get `-2`, `-3`). [prompts.test.ts](../../apps/orchestrator/test/prompts.test.ts)
+repeats get `-2`, `-3`). A Stage Team stage saves one prompt per run instead,
+before that run starts ([stage-teams.md](stage-teams.md#outcome-and-artifacts)):
+`<role prompt base>-<unit>.md` for each worker (`implementation-prompt-alpha.md`,
+`review-prompt-correctness.md`), `<role prompt base>-integration.md` for the
+lead's pass, `<stage key>-decomposition-prompt.md` for a Fix decomposition and
+`<role prompt base>-<unit>-coverage.md` for a primary reviewer's coverage
+follow-up — numbered the same way on repeats. A reused unit or reused split is
+not a run and saves no prompt. [prompts.test.ts](../../apps/orchestrator/test/prompts.test.ts)
 reads them to prove the loop context: the fixer sees the review and the checks
 to run, a second review sees the first, the verifier sees the reports, a Quick
 Change implementer sees the failing test output, a second investigator sees

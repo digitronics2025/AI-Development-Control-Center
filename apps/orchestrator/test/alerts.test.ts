@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -250,6 +250,15 @@ describe('where alerts go is decided on this machine, with an http token only (r
   it('lets no staging secret put read the token; only a production put, which always asks the operator', async () => {
     await setUp();
     const work = mkdtempSync(path.join(os.tmpdir(), 'acc-alerts-'));
+    // A project-local Wrangler stand-in, so the refusal tested is the reserved credential's
+    // and not "Wrangler is not installed" on a machine without it (the CI runner).
+    const bin = path.join(work, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    if (process.platform === 'win32') writeFileSync(path.join(bin, 'wrangler.cmd'), '@echo 3.0.0\r\n');
+    else {
+      writeFileSync(path.join(bin, 'wrangler'), '#!/bin/sh\necho 3.0.0\n');
+      chmodSync(path.join(bin, 'wrangler'), 0o755);
+    }
     const scope: ToolScope = { taskId: null, stageId: null, sessionId: null, repositoryId: null, cwd: work, roots: [work], stageLevel: 4, autoApproveUpToLevel: 4, mode: 'full', profile: 'operator', escalated: new Set(), protectedPaths: [] } as never;
     const staging = await t!.services.tools.invoke({ capability: 'cloudflare.secret_put', input: { credential: 'messenger-control-center', secretName: 'ECHO', environment: 'staging' }, origin: 'agent', scope });
     expect(staging.result.ok).toBe(false);

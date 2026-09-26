@@ -149,7 +149,10 @@ describe('a real node', () => {
   it('rate-limits pairing attempts', async () => {
     const keys = await manualKeys();
     const statuses: number[] = [];
-    for (let i = 0; i < 30; i++) statuses.push((await post('/node/v1/pair', { ...info, token: `accpair_${'x'.repeat(43)}`, publicKey: keys.publicKey })).status);
+    // The limit is 20 a minute in windows aligned to the wall clock, so attempts that straddle a
+    // minute boundary can split 15 + 15 and never pass it. 41 attempts (2 × 20 + 1, well under a
+    // minute) always put more than 20 into one window; stop at the first refusal.
+    for (let i = 0; i < 41 && !statuses.includes(429); i++) statuses.push((await post('/node/v1/pair', { ...info, token: `accpair_${'x'.repeat(43)}`, publicKey: keys.publicKey })).status);
     expect(statuses).toContain(429);
   });
 });

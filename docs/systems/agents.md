@@ -169,6 +169,7 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:needs-decision]` (implementer stops with `BLOCKED ON OPERATOR:` until a directive says `ANSWER:`),
 `[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`,
 `[sim:big-diff]` (the implementer also writes three 60 KB files),
+`[sim:source-only]` (implementer and fixer change `sim-output.ts` instead of `sim-output.md`),
 `[sim:review-miss-coverage]` / `[sim:review-miss-coverage-once]` (reviewer and verifier
 leave out the files the diff did not show; by default they name them under `## Files reviewed`).
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
@@ -197,4 +198,4 @@ REFUSED with the summary.
   closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
   **Load my CLI customisations** per agent for leaner runs.
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

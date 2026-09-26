@@ -423,6 +423,22 @@ function PolicyTab() {
             <Switch aria-label={t.title} checked={execution[t.key]} disabled={!connection.online} onCheckedChange={(v) => save({ [t.key]: v } as Partial<ExecutionSettings>, 'Saved')} />
           </li>
         ))}
+        <li className="flex flex-wrap items-start justify-between gap-4 px-4 py-3">
+          <span className="flex min-w-0 flex-1 basis-64 flex-col">
+            <span className="text-body font-semibold text-fg">Team workers at once</span>
+            <span id="team-worker-limit-help" className="text-small text-fg-secondary">How many Stage Team workers may run at the same time across every task on this machine. Further workers wait until one finishes.</span>
+          </span>
+          <div className="w-28">
+            <Select
+              aria-label="Team workers at once"
+              aria-describedby="team-worker-limit-help"
+              value={String(execution.teamWorkerLimit)}
+              disabled={!connection.online}
+              onValueChange={(v) => save({ teamWorkerLimit: Number(v) }, `Team workers at once: ${v}`)}
+              options={[1, 2, 3, 4].map((n) => ({ value: String(n), label: String(n) }))}
+            />
+          </div>
+        </li>
       </ul>
     </div>
   );

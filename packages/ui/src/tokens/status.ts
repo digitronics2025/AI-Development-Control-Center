@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   CircleDashed,
   CircleDot,
+  CopyCheck,
   Clock,
   CloudOff,
   Cloud,
@@ -60,6 +61,7 @@ import {
   type ImprovementStatus,
   type ReviewStatus,
   type ReleaseState,
+  type WorkUnitStatus,
 } from '@acc/shared';
 
 /** Semantic tone → token classes. Status is never conveyed by color alone (design.md §4.2). */
@@ -109,6 +111,17 @@ export const STAGE_STATUS_VISUAL: Record<StageStatus, StatusVisual> = {
   CANCELLED: { label: STAGE_STATUS_LABEL.CANCELLED, tone: 'neutral', icon: Square },
   INTERRUPTED: { label: STAGE_STATUS_LABEL.INTERRUPTED, tone: 'warning', icon: PlugZap },
   SKIPPED: { label: STAGE_STATUS_LABEL.SKIPPED, tone: 'neutral', icon: SkipForward },
+};
+
+/** One Stage Team work unit (docs/plans/STAGE_TEAMS_PLAN.md §3.13); REUSED took an earlier proven result. */
+export const WORK_UNIT_STATUS_VISUAL: Record<WorkUnitStatus, StatusVisual> = {
+  QUEUED: { label: 'Queued', tone: 'info', icon: ListOrdered },
+  RUNNING: { label: 'Running', tone: 'accent', icon: CircleDot, active: true },
+  SUCCESS: { label: 'Done', tone: 'success', icon: CheckCircle2 },
+  FAILED: { label: 'Failed', tone: 'danger', icon: XCircle },
+  CANCELLED: { label: 'Cancelled', tone: 'neutral', icon: Square },
+  SKIPPED: { label: 'Skipped', tone: 'neutral', icon: SkipForward },
+  REUSED: { label: 'Reused', tone: 'success', icon: CopyCheck },
 };
 
 export const FAILURE_ICON = AlertOctagon;

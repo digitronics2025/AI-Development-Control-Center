@@ -18,6 +18,7 @@ import type { ChairmanAction, ChairmanDecision, ChairmanMessage, ChairmanState, 
 import type { CapabilityEscalation, ConnectedAppView, CredentialView, McpServerView, RecoveryAttempt, TaskProcess, TerminalSession, ToolExecution, ToolView } from './tools.js';
 import type { UsageEvent } from './usage.js';
 import type { RemoteNodeStatus } from './remote.js';
+import type { StageWorkUnit } from './stage-teams.js';
 
 /**
  * Messages the orchestrator pushes to every connected client. Each carries a
@@ -37,6 +38,8 @@ export type ServerMessage =
   | { type: 'directive'; directive: Directive }
   | { type: 'artifact'; artifact: Artifact }
   | { type: 'testRun'; testRun: TestRun }
+  /** A Stage Team work unit changed state (docs/plans/STAGE_TEAMS_PLAN.md §3.13). */
+  | { type: 'workUnit'; workUnit: StageWorkUnit }
   | { type: 'agents'; agents: AgentInfo[] }
   | { type: 'settings'; settings: Settings }
   | { type: 'repository'; repository: Repository }

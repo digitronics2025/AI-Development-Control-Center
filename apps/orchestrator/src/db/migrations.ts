@@ -1245,4 +1245,49 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE test_runs ADD COLUMN selection TEXT;
     `,
   },
+  {
+    // Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md): the work units a team
+    // stage runs, which execution and which usage attempt belongs to which
+    // unit. Every existing execution and usage row reads NULL — a
+    // single-agent stage, exactly as before. Additive only.
+    version: 19,
+    name: 'stage teams',
+    sql: `
+      CREATE TABLE stage_work_units (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        stage_id TEXT NOT NULL,
+        stage_key TEXT NOT NULL,
+        unit_key TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'worker',
+        title TEXT NOT NULL,
+        focus TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        dependencies_json TEXT NOT NULL DEFAULT '[]',
+        path_scope_json TEXT NOT NULL DEFAULT '[]',
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        manifest_hash TEXT,
+        base_commit TEXT,
+        result_commit TEXT,
+        agent_id TEXT,
+        model TEXT,
+        effort TEXT,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        reused_from TEXT,
+        summary TEXT,
+        error_class TEXT,
+        error_message TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_work_units_task ON stage_work_units(task_id, created_at);
+      CREATE INDEX idx_work_units_stage ON stage_work_units(stage_id, ordinal);
+      CREATE INDEX idx_work_units_status ON stage_work_units(status) WHERE status IN ('QUEUED', 'RUNNING');
+      ALTER TABLE executions ADD COLUMN work_unit_id TEXT;
+      CREATE INDEX idx_executions_work_unit ON executions(work_unit_id) WHERE work_unit_id IS NOT NULL;
+      ALTER TABLE usage_events ADD COLUMN work_unit_key TEXT;
+    `,
+  },
 ];

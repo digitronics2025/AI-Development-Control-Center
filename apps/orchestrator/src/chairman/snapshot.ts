@@ -57,6 +57,8 @@ export interface ChairmanTaskSnapshot {
     outcomeSummary: string | null;
   } | null;
   stages: Array<{ key: string; name: string; role: string; kind: string; agentId: string | null }>;
+  /** The latest Stage Team run and its work units (docs/plans/STAGE_TEAMS_PLAN.md §3.12); null when no stage ran as a team. */
+  team: { stageKey: string; units: Array<{ key: string; kind: string; title: string; status: string; agentId: string | null; error: string | null }> } | null;
 }
 
 /** Chat replies render as Markdown: blank lines keep each fact on its own paragraph. */
@@ -95,6 +97,16 @@ export class SnapshotService {
     const failures = this.chairman.listFailures(task.id, { recoveryCycle: task.recoveryCycle });
     const events = this.store.listEvents(task.id, { limit: 2000 }).filter((e) => !NOISE.has(e.type)).slice(-25);
     const last = this.chairman.listStrategyRuns(task.id, 1)[0] ?? null;
+    const workUnits = this.store.listWorkUnits(task.id);
+    const teamStage = workUnits.at(-1)?.stageId ?? null;
+    const team = teamStage
+      ? {
+          stageKey: workUnits.at(-1)!.stageKey,
+          units: workUnits
+            .filter((u) => u.stageId === teamStage)
+            .map((u) => ({ key: u.unitKey, kind: u.kind, title: u.title, status: u.status, agentId: u.agentId, error: u.errorMessage ? `${u.errorClass ?? 'ERROR'}: ${u.errorMessage}`.slice(0, 300) : null })),
+        }
+      : null;
     return {
       taskId: task.id,
       version: task.version,
@@ -132,6 +144,7 @@ export class SnapshotService {
         kind: s.kind,
         agentId: s.kind === 'agent' ? this.views.assignmentFor(task, s).agentId : null,
       })),
+      team,
     };
   }
 

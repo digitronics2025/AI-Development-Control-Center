@@ -404,6 +404,13 @@ export class UsageQueries {
       return t;
     };
     const models = (list: UsageEvent[]) => [...new Set(list.map((e) => e.providerModelId ?? e.model))];
+    // A team stage splits its cost per work unit; the stage row still carries the sum.
+    const workUnitsOf = (list: UsageEvent[]): Pick<UsageStageCost, 'workUnits'> => {
+      if (!list.some((e) => e.workUnitKey)) return {};
+      const units = new Map<string, UsageEvent[]>();
+      for (const e of list) units.set(e.workUnitKey ?? 'lead', [...(units.get(e.workUnitKey ?? 'lead') ?? []), e]);
+      return { workUnits: [...units].map(([unitKey, l]) => ({ unitKey, agentId: l[0]!.agentId, models: models(l), attempts: l.length, totals: sum(l) })) };
+    };
     const rows: UsageStageCost[] = [];
     for (const stage of stages) {
       const list = byRun.get(stage.id);
@@ -419,6 +426,7 @@ export class UsageQueries {
         attempts: list.length,
         status: stage.status,
         totals: sum(list),
+        ...workUnitsOf(list),
       });
     }
     // Runs whose stage row is gone, and runs outside a stage (Chairman), keep their cost visible.

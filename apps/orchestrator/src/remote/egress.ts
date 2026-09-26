@@ -39,6 +39,7 @@ export const LIVE_MESSAGE_TYPES: ReadonlySet<ServerMessageType> = new Set<Server
   'logs',
   'directive',
   'testRun',
+  'workUnit',
   'settings',
   'workflow',
   'workflow.deleted',

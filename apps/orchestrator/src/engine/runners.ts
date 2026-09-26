@@ -15,6 +15,7 @@ import {
   type ErrorClass,
   type EventType,
   type ExecutionStatus,
+  type PermissionLevel,
   type Role,
   type StageDefinition,
   type StageInstance,
@@ -79,14 +80,90 @@ export interface RedirectPlan {
 /** Per-task control block shared between the engine loop and user commands. */
 export interface RunControl {
   stopReason: StopReason | null;
+  /** Stops everything running for the stage now: one process, or every worker of a Stage Team. */
   cancelCurrent: (() => Promise<void>) | null;
   autoRetries: Map<string, number>;
   redirect: RedirectPlan | null;
   watchdogReason: string | null;
+  /** The running processes `cancelCurrent` stops (see `trackCancel`). */
+  cancels?: Set<() => Promise<void>>;
+  /** Set on a control derived with `childControl`: its processes are the parent's too. */
+  parent?: RunControl;
 }
 
+/**
+ * Register a way to stop one running process. `control.cancelCurrent` then
+ * stops every process registered (a Stage Team or a parallel batch runs
+ * several at once), and so does every ancestor's. Returns the unregister function.
+ */
+export function trackCancel(control: RunControl, cancel: () => Promise<void>): () => void {
+  const chain: RunControl[] = [];
+  for (let c: RunControl | undefined = control; c; c = c.parent) chain.push(c);
+  for (const c of chain) {
+    const set = (c.cancels ??= new Set());
+    set.add(cancel);
+    c.cancelCurrent = async () => {
+      await Promise.all([...set].map((fn) => fn().catch(() => undefined)));
+    };
+  }
+  return () => {
+    for (const c of chain) {
+      c.cancels?.delete(cancel);
+      if (!c.cancels?.size) c.cancelCurrent = null;
+    }
+  };
+}
+
+/**
+ * A control for one of several things running side by side: it stops when
+ * the parent stops, and `stop()` stops only it (a sibling check failed).
+ */
+export function childControl(parent: RunControl): { control: RunControl; stop: (reason?: StopReason) => Promise<void> } {
+  let local: StopReason | null = null;
+  const control: RunControl = {
+    get stopReason() {
+      return parent.stopReason ?? local;
+    },
+    set stopReason(value) {
+      local = value;
+    },
+    cancelCurrent: null,
+    autoRetries: parent.autoRetries,
+    redirect: null,
+    watchdogReason: null,
+    parent,
+  };
+  return {
+    control,
+    stop: async (reason: StopReason = 'cancel') => {
+      local = reason;
+      await control.cancelCurrent?.();
+    },
+  };
+}
+
+/** One agent run launched by `StageRunners.launchAgent`. */
+export interface AgentLaunch {
+  prompt: string;
+  agentId: string;
+  model: string | null;
+  effort: string | null;
+  /** The run's working directory: the task's, or a Stage Team worker's own checkout. */
+  cwd: string;
+  /** Confine the run's Control Center tools to `cwd` alone (a write worker's checkout). */
+  confineTools?: boolean;
+  /** Lower than the stage's level (a read-only decomposition run); never higher. */
+  permissionLevel?: PermissionLevel;
+  workUnit?: { id: string; key: string; title: string };
+}
+
+export type AgentRun =
+  | { kind: 'ok'; output: string; durationMs: number; executionId: string }
+  | { kind: 'stopped'; reason: StopReason }
+  | { kind: 'failed'; errorClass: ErrorClass; message: string };
+
 /** The report artifact each role writes, and the name its rendered prompt is saved under (docs/systems/prompts.md). */
-const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string; prompt: string }>> = {
+export const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: string; prompt: string }>> = {
   investigator: { type: 'investigation', name: 'investigation.md', prompt: 'investigation-prompt.md' },
   planner: { type: 'plan', name: 'plan.md', prompt: 'plan-prompt.md' },
   implementer: { type: 'implementation-report', name: 'implementation-report.md', prompt: 'implementation-prompt.md' },
@@ -245,6 +322,17 @@ export interface RunnerDeps {
   release: ReleaseService;
 }
 
+/** How one command of a tests/command stage ended, with its lines for the stage report. */
+type JobResult =
+  | { kind: 'passed' | 'reused' | 'preexisting' | 'flaky'; lines: string[] }
+  | { kind: 'failed'; lines: string[]; failure: string }
+  | { kind: 'stopped'; lines: string[]; run: string };
+
+/** Parallel-safe checks running at once in one tests stage (STAGE_TEAMS_PLAN §3.11). */
+const MAX_PARALLEL_CHECKS = 4;
+/** Only verification kinds may run side by side; smoke, staging deploys and "other" commands always run alone. */
+const PARALLEL_KINDS: ReadonlySet<CommandKind> = new Set(['lint', 'typecheck', 'test', 'build', 'e2e']);
+
 /** One run of a repository command, as the tests stage and its repairs see it. */
 interface CommandRun {
   executionId: string;
@@ -258,7 +346,15 @@ interface CommandRun {
   overflow: boolean;
 }
 
+/** Runs a stage that has a `team` (docs/plans/STAGE_TEAMS_PLAN.md); null means "run it as one agent". */
+export interface TeamRunner {
+  run(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome | null>;
+}
+
 export class StageRunners {
+  /** Set by the engine once the Stage Team runner exists (it needs these runners). */
+  team: TeamRunner | null = null;
+
   constructor(private readonly d: RunnerDeps) {}
 
   private finishExecution(executionId: string, status: ExecutionStatus, fields: { exitCode?: number | null; errorClass?: ErrorClass | null; errorMessage?: string | null; startedAt: string }): void {
@@ -303,6 +399,12 @@ export class StageRunners {
     }
     if (applied.length) publisher.event(task.id, 'DIRECTIVE_APPLIED', `${applied.length} directive${applied.length > 1 ? 's' : ''} applied to ${def.name}`, { count: applied.length }, stage.id);
 
+    // A Stage Team runs the stage as several workers, or hands it back to run as one agent.
+    if (def.team && this.team) {
+      const outcome = await this.team.run(task, def, stage, repo, control);
+      if (outcome) return outcome;
+    }
+
     let prompt: string;
     let coverage: PromptCoverage;
     try {
@@ -316,7 +418,7 @@ export class StageRunners {
     // What the agent actually read, kept per stage so any run can be debugged from its prompt.
     await this.d.artifacts.write(task.id, { name: ROLE_ARTIFACT[def.role]?.prompt ?? `${def.key}-prompt.md`, type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key });
 
-    const first = await this.executeAgent(task, def, stage, repo, control, prompt, agentName);
+    const first = await this.executeAgent(task, def, stage, repo, control, prompt);
     if ('kind' in first) return first;
     let { output } = first;
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
@@ -358,7 +460,7 @@ export class StageRunners {
           '',
           output.length > 20_000 ? `${output.slice(0, 20_000)}\n[previous report truncated]` : output,
         ].join('\n');
-        const second = await this.executeAgent(task, def, stage, repo, control, followUp, agentName);
+        const second = await this.executeAgent(task, def, stage, repo, control, followUp);
         if ('kind' in second) return second;
         output = second.output;
         await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
@@ -374,13 +476,19 @@ export class StageRunners {
       // workflow (a review-only workflow completes and says changes were requested).
       verdict = parseVerdict(output);
     }
-    publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary: summarize(output), finishedAt: now() });
+    return this.completeAgentStage(task, def, stage, summarize(output), verdict, first.durationMs);
+  }
+
+  /** An agent stage (one agent or a whole team) that ran to the end: record it and say where the workflow goes. */
+  completeAgentStage(task: TaskRecord, def: StageDefinition, stage: StageInstance, summary: string | null, verdict: 'PASS' | 'FAIL' | null, durationMs: number, data: Record<string, unknown> = {}): StageOutcome {
+    const { publisher } = this.d;
+    publisher.updateStage(stage.id, { status: 'SUCCESS', verdict, summary, finishedAt: now() });
     if (verdict === 'FAIL') {
       publisher.event(task.id, 'REVIEW_FAILED', `${def.name} requested changes`, { verdict }, stage.id);
       if (def.verdict) return { kind: 'verdict_fail', stageId: stage.id };
     }
     if (verdict === 'PASS') publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed`, { verdict }, stage.id);
-    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs: first.durationMs }, stage.id);
+    publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs, ...data }, stage.id);
     return { kind: 'success', stageId: stage.id };
   }
 
@@ -389,22 +497,45 @@ export class StageRunners {
    * own log. Returns the redacted output, or the outcome that ends the stage
    * (stopped, failed, empty output).
    */
-  private async executeAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, prompt: string, agentName: string): Promise<{ output: string; durationMs: number } | StageOutcome> {
+  private async executeAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, prompt: string): Promise<{ output: string; durationMs: number } | StageOutcome> {
+    const run = await this.launchAgent(task, def, stage, repo, control, {
+      prompt,
+      agentId: stage.agentId!,
+      model: stage.model,
+      effort: stage.effort,
+      cwd: agentWorkdir(task, repo),
+    });
+    if (run.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: run.reason };
+    if (run.kind === 'failed') return this.failStage(stage, run.errorClass, run.message);
+    return { output: run.output, durationMs: run.durationMs };
+  }
+
+  /**
+   * Launch one agent run for a stage — the stage's own, or one worker of a
+   * Stage Team — through `AgentRegistry.launch` (so the subscription guard and
+   * the usage ledger see it), as its own execution with its own log and tool
+   * session. Never changes the stage row: the caller decides what the result means.
+   */
+  async launchAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, opts: AgentLaunch): Promise<AgentRun> {
     const { store, publisher, agents } = this.d;
-    const agentId = stage.agentId!;
+    const { agentId } = opts;
+    const agentName = agents.has(agentId) ? agents.adapter(agentId).displayName : agentId;
+    if (!agents.has(agentId)) return { kind: 'failed', errorClass: 'PERMISSION_DENIED', message: `Agent "${agentId}" is not installed in this orchestrator. Reroute the stage to another agent.` };
+    if (!agents.isEnabled(agentId)) return { kind: 'failed', errorClass: 'PERMISSION_DENIED', message: `${agentName} is disabled in Settings → Agents & Models. Enable it or reroute the stage.` };
+    if (control.stopReason) return { kind: 'stopped', reason: control.stopReason };
+    const level = opts.permissionLevel !== undefined ? (Math.min(opts.permissionLevel, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
     const executionId = newId();
     const startedAt = now();
-    const workdir = agentWorkdir(task, repo);
     store.insertExecution({
       id: executionId,
       taskId: task.id,
       stageId: stage.id,
       kind: 'agent',
       agentId,
-      model: stage.model,
-      effort: stage.effort,
+      model: opts.model,
+      effort: opts.effort,
       command: agentId,
-      cwd: workdir,
+      cwd: opts.cwd,
       status: 'running',
       exitCode: null,
       errorClass: null,
@@ -413,24 +544,26 @@ export class StageRunners {
       startedAt,
       finishedAt: null,
       durationMs: null,
+      workUnitId: opts.workUnit?.id ?? null,
     });
     this.publishExecution(executionId);
     const sink = new LogSink(store, this.d.bus, task.id, executionId);
     const adapter = agents.adapter(agentId);
+    if (opts.workUnit) sink.push('system', `Stage Team work unit: ${opts.workUnit.title} (${opts.workUnit.key})`);
 
-    // The Control Center's tools, over MCP, scoped to this stage (docs/plans/tool-layer-v2).
-    const bridge = this.d.tooling.openAgentSession(task, def, stage, repo);
+    // The Control Center's tools, over MCP, scoped to this stage (docs/plans/tool-layer-v2) — or to a worker's own checkout.
+    const bridge = this.d.tooling.openAgentSession(task, def, stage, repo, { ...(opts.confineTools ? { root: opts.cwd } : {}), level });
     if (bridge) sink.push('system', 'Control Center tools available to this run (MCP server "acc")');
     let handle;
     try {
       handle = await agents.launch(agentId, {
         ...agents.runtimeOptions(agentId),
         executionId,
-        cwd: workdir,
-        prompt,
-        model: stage.model ?? 'default',
-        effort: stage.effort ?? 'default',
-        permissionLevel: def.permissionLevel,
+        cwd: opts.cwd,
+        prompt: opts.prompt,
+        model: opts.model ?? 'default',
+        effort: opts.effort ?? 'default',
+        permissionLevel: level,
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
@@ -442,6 +575,7 @@ export class StageRunners {
         runId: stage.id,
         workflowId: task.workflowId,
         workflowStep: def.key,
+        workUnitKey: opts.workUnit?.key ?? null,
         agentRole: def.role,
         mode: task.mode,
       });
@@ -452,24 +586,32 @@ export class StageRunners {
       sink.push('system', message);
       sink.flush();
       this.finishExecution(executionId, 'failed', { errorClass, errorMessage: message, startedAt });
-      return this.failStage(stage, errorClass, message);
+      return { kind: 'failed', errorClass, message };
     }
 
     store.updateExecution(executionId, { command: redact(handle.commandLine), pid: handle.pid });
     this.publishExecution(executionId);
-    control.cancelCurrent = () => adapter.cancel(executionId);
+    const release = trackCancel(control, () => adapter.cancel(executionId));
     // A stop requested while the launch was in flight takes effect now.
     if (control.stopReason) void adapter.cancel(executionId);
     publisher.updateStage(stage.id, { status: 'RUNNING' });
-    publisher.event(task.id, 'AGENT_STARTED', `${agentName} started ${ROLE_ACTIVITY[def.role].toLowerCase()}`, { agentId, model: stage.model, effort: stage.effort }, stage.id);
+    publisher.event(
+      task.id,
+      'AGENT_STARTED',
+      `${agentName} started ${ROLE_ACTIVITY[def.role].toLowerCase()}${opts.workUnit ? ` · ${opts.workUnit.title}` : ''}`,
+      { agentId, model: opts.model, effort: opts.effort, ...(opts.workUnit ? { workUnitId: opts.workUnit.id, workUnitKey: opts.workUnit.key } : {}) },
+      stage.id,
+    );
 
-    const result = await handle.done.finally(() => bridge?.close());
-    control.cancelCurrent = null;
+    const result = await handle.done.finally(() => {
+      bridge?.close();
+      release();
+    });
     sink.flush();
 
     if (result.status === 'cancelled') {
       this.finishExecution(executionId, 'cancelled', { exitCode: result.exitCode, startedAt });
-      return { kind: 'stopped', stageId: stage.id, reason: control.stopReason ?? 'cancel' };
+      return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
     }
     if (result.status !== 'succeeded') {
       const errorClass = result.errorClass ?? 'UNKNOWN';
@@ -479,15 +621,13 @@ export class StageRunners {
         errorMessage: result.errorMessage,
         startedAt,
       });
-      return this.failStage(stage, errorClass, result.errorMessage ?? ERROR_CLASS_LABEL[errorClass]);
+      return { kind: 'failed', errorClass, message: result.errorMessage ?? ERROR_CLASS_LABEL[errorClass] };
     }
 
     this.finishExecution(executionId, 'succeeded', { exitCode: result.exitCode, startedAt });
     const output = redact(result.output);
-    if (!output.trim()) {
-      return this.failStage(stage, 'UNKNOWN', `${agentName} finished without producing any output`);
-    }
-    return { output, durationMs: result.durationMs };
+    if (!output.trim()) return { kind: 'failed', errorClass: 'UNKNOWN', message: `${agentName} finished without producing any output` };
+    return { kind: 'ok', output, durationMs: result.durationMs, executionId };
   }
 
   // ---------------------------------------------------------------------------
@@ -596,27 +736,34 @@ export class StageRunners {
     publisher.event(task.id, 'TEST_STARTED', `${def.name} started: ${jobs.map((j) => j.name).join(', ')}`, { count: commands.length }, stage.id);
 
     const { env } = sanitizeEnv(this.d.baseEnv, this.d.settings.get().billingMode);
-    const report: string[] = [];
     let failure: string | null = null;
-    let finished = 0;
     const preexisting: string[] = [];
     const flaky: string[] = [];
     let reused = 0;
     // The files each repository's commands run on (§3.E), read once and again only after a command changed them.
-    const trees = new Map<string, string | null>();
-    const treeOf = async (workdir: string, fresh = false): Promise<string | null> => {
+    const trees = new Map<string, Promise<string | null>>();
+    const treeOf = (workdir: string, fresh = false): Promise<string | null> => {
       if (!fresh && trees.has(workdir)) return trees.get(workdir)!;
-      const tree = await committableTree(workdir).catch(() => null);
+      const tree = committableTree(workdir).catch(() => null);
       trees.set(workdir, tree);
       return tree;
     };
+    // Repairs (an install, freeing a port) change what every command shares: one at a time, even in a parallel batch.
+    let repairLock: Promise<unknown> = Promise.resolve();
+    const serialRepair = <T>(fn: () => Promise<T>): Promise<T> => {
+      const next = repairLock.then(fn, fn);
+      repairLock = next.catch(() => undefined);
+      return next;
+    };
 
-    for (let i = 0; i < jobs.length; i++) {
+    /** One command of the stage, start to verdict; its report lines are kept apart so a parallel batch still reports in order. */
+    const runJob = async (i: number, ctl: RunControl): Promise<JobResult> => {
       const { command, unit, name } = jobs[i]!;
       let { effective, selection } = jobs[i]!;
       const { workdir } = unit;
       let run = runs[i]!;
-      if (control.stopReason) break;
+      const lines: string[] = [];
+      if (ctl.stopReason) return { kind: 'stopped', lines, run: run.id };
       // Earlier commands in this stage (a formatter, a generator) may have changed the files since the
       // selection was made: decide again, now, before running only the affected tests (§3.2).
       if (selection.mode === 'changed') {
@@ -637,11 +784,9 @@ export class StageRunners {
         const earlierStage = earlier.stageId ? (store.getStage(earlier.stageId)?.name ?? 'an earlier stage') : 'an earlier stage';
         const summary = `Reused: same files as ${earlierStage} at ${at}`;
         this.publishTestRun(store.updateTestRun(run.id, { status: 'passed', exitCode: 0, durationMs: 0, summary, startedAt: now(), finishedAt: now(), treeId, reusedFrom: earlier.id }));
-        report.push(`✓ ${name.padEnd(16)} 0.0s   ${summary}`);
+        lines.push(`✓ ${name.padEnd(16)} 0.0s   ${summary}`);
         publisher.event(task.id, 'TEST_PASSED', `${name} passed (reused: nothing changed since ${earlierStage} at ${at})`, { reusedFrom: earlier.id }, stage.id);
-        finished++;
-        reused++;
-        continue;
+        return { kind: 'reused', lines };
       }
       this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now(), treeId }));
 
@@ -650,15 +795,16 @@ export class StageRunners {
       // lock), repair and run it again — a bounded number of times.
       const attempted: RepairStrategy[] = [];
       const repairs: string[] = [];
-      let exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
-      while (exec && !exec.passed && !exec.result.cancelled && !control.stopReason) {
+      let exec = await this.executeCommand(task, stage, workdir, effective, env, ctl, run);
+      while (exec && !exec.passed && !exec.result.cancelled && !ctl.stopReason) {
         const classified = this.d.tooling.classify(exec.tail, exec.result.timedOut);
         // A repair that fails hands over to the next strategy (a locked install, then a normal one).
         let repaired = false;
-        for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !control.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
+        for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !ctl.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
           attempted.push(plan.strategy);
           const row = this.d.tooling.recordRepair(task, stage.id, effective.command, classified, plan, attempted.length);
-          const result = await this.applyRepair(task, stage, unit.repo, workdir, plan, env, control);
+          const current = plan;
+          const result = await serialRepair(() => this.applyRepair(task, stage, unit.repo, workdir, current, env, ctl));
           this.d.tooling.finishRepair(row.id, result.ok, result.detail);
           if (result.ok) {
             repairs.push(plan.description.replace(/, then run it again$/, ''));
@@ -667,24 +813,24 @@ export class StageRunners {
           }
         }
         if (!repaired) break;
-        exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
+        exec = await this.executeCommand(task, stage, workdir, effective, env, ctl, run);
       }
       // A narrowed run that failed without running any test (an old Vitest, no Git, a config
       // error) proves nothing: the whole suite runs once instead and decides (AFFECTED_TESTS_PLAN §3.4).
-      if (exec && selection.mode === 'changed' && neverRanTests(exec) && !control.stopReason) {
+      if (exec && selection.mode === 'changed' && neverRanTests(exec) && !ctl.stopReason) {
         const why = exec.summary ?? 'Command failed';
         this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', exitCode: exec.result.exitCode, durationMs: exec.result.durationMs, summary: redact(`${SUPERSEDED_PREFIX}could not run only the affected tests (${why}); the whole suite ran instead`), finishedAt: now() }));
-        report.push(`○ ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s   could not run only the affected tests; running the whole suite`);
+        lines.push(`○ ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s   could not run only the affected tests; running the whole suite`);
         publisher.event(task.id, 'TEST_FAILED', `${name}: could not run only the affected tests (${why}); running the whole suite instead`, { executionId: exec.executionId, selection: 'fallback' }, stage.id);
         effective = command;
         run = { ...run, id: newId(), name: `${name} · whole suite`, command: redact(command.command), selection: 'full', status: 'running', executionId: null, exitCode: null, durationMs: null, summary: null, startedAt: now(), finishedAt: null, treeId };
         store.insertTestRun(run);
         this.publishTestRun(run);
-        exec = await this.executeCommand(task, stage, workdir, effective, env, control, run);
+        exec = await this.executeCommand(task, stage, workdir, effective, env, ctl, run);
       }
       if (!exec || exec.result.cancelled) {
         this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: 'Stopped', finishedAt: now(), durationMs: exec?.result.durationMs ?? null }));
-        return { kind: 'stopped', stageId: stage.id, reason: control.stopReason ?? 'cancel' };
+        return { kind: 'stopped', lines, run: run.id };
       }
       // A command that changed the files (a formatter, a code generator) ran on a tree that no longer exists: not reusable.
       const after = await treeOf(workdir, true);
@@ -694,20 +840,20 @@ export class StageRunners {
 
       // A failure is compared with the baseline commit before it may block (§3.B).
       let verdict: Classification | null = null;
-      if (!exec.passed && def.kind === 'tests' && unit.repo.preexistingFailures !== 'block' && !control.stopReason) {
+      if (!exec.passed && def.kind === 'tests' && unit.repo.preexistingFailures !== 'block' && !ctl.stopReason) {
         this.publishTestRun(store.updateTestRun(run.id, { summary: `${summary ?? 'Failed'} — checking the baseline commit` }));
         verdict = await this.d.baselines.classify(
           { task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env, failures: failures ?? [], overflow: exec.overflow },
-          { stopped: () => control.stopReason !== null },
+          { stopped: () => ctl.stopReason !== null },
         );
         // The runner's own totals line says how many failed; the ids are not a test count (LEAD_TIME_PLAN §3.2).
         if (verdict.classification === 'preexisting') {
           const narrowed = verdict.checkedFiles ? ` (only the ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} run there)` : '';
           summary = `${summary ?? 'Failed'} — every failure also fails on ${verdict.baselineCommit!.slice(0, 7)}${narrowed}`;
-        } else if (failures?.length && !exec.overflow && !control.stopReason) {
+        } else if (failures?.length && !exec.overflow && !ctl.stopReason) {
           // Not explained by the baseline: run only the failing test files again, on exactly these files.
           // All passing means the failure does not reproduce — a flaky test, reported and not blocking.
-          const again = await this.rerunFailingFiles(task, stage, unit, command, env, control, run, failures, name);
+          const again = await this.rerunFailingFiles(task, stage, unit, command, env, ctl, run, failures, name);
           if (again?.passed) {
             verdict = { classification: 'flaky', baselineCommit: verdict.baselineCommit, reason: null, checkedFiles: again.files };
             summary = `${summary ?? 'Failed'} — the ${again.files} failing test file${again.files === 1 ? '' : 's'} passed when run again on the same files: flaky, not blocking`;
@@ -726,28 +872,74 @@ export class StageRunners {
           treeId: exec.passed && after === treeId ? treeId : exec.passed ? null : treeId,
         }),
       );
-      finished++;
-      report.push(`${exec.passed ? '✓' : '✕'} ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
+      lines.push(`${exec.passed ? '✓' : '✕'} ${name.padEnd(16)} ${(exec.result.durationMs / 1000).toFixed(1)}s${summary ? `   ${summary}` : ''}`);
       if (exec.passed) {
         publisher.event(task.id, 'TEST_PASSED', `${name} passed${repairedNote}`, { executionId: exec.executionId, durationMs: exec.result.durationMs }, stage.id);
-      } else if (verdict?.classification === 'preexisting') {
+        return { kind: 'passed', lines };
+      }
+      if (verdict?.classification === 'preexisting') {
         // Recorded and reported, never a fix cycle: the stage goes on with the next command.
         publisher.event(task.id, 'TEST_FAILED', `${name} failed as it already did before this task (${failures!.length} pre-existing failure${failures!.length === 1 ? '' : 's'} on ${verdict.baselineCommit!.slice(0, 7)}); not blocking`, { executionId: exec.executionId, classification: 'preexisting' }, stage.id);
-        preexisting.push(name);
-      } else if (verdict?.classification === 'flaky') {
-        publisher.event(task.id, 'TEST_FAILED', `${name} failed once, and its ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} passed when run again on the same files: flaky, not blocking (${failures!.slice(0, 3).join('; ')}${failures!.length > 3 ? '; …' : ''})`, { executionId: exec.executionId, classification: 'flaky' }, stage.id);
-        flaky.push(name);
-      } else {
-        const why = verdict ? (verdict.classification === 'new' ? ' · new since the baseline' : ` · compared with the baseline: unknown (${verdict.reason ?? 'no result'}), treated as new`) : '';
-        publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}${why}`, { executionId: exec.executionId, classification: verdict?.classification ?? null }, stage.id);
-        report.push('', `Output of ${name} (last lines):`, ...exec.tail, '');
-        failure = `${name} failed${summary ? `: ${summary}` : ''}`;
-        break;
+        return { kind: 'preexisting', lines };
       }
+      if (verdict?.classification === 'flaky') {
+        publisher.event(task.id, 'TEST_FAILED', `${name} failed once, and its ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} passed when run again on the same files: flaky, not blocking (${failures!.slice(0, 3).join('; ')}${failures!.length > 3 ? '; …' : ''})`, { executionId: exec.executionId, classification: 'flaky' }, stage.id);
+        return { kind: 'flaky', lines };
+      }
+      const why = verdict ? (verdict.classification === 'new' ? ' · new since the baseline' : ` · compared with the baseline: unknown (${verdict.reason ?? 'no result'}), treated as new`) : '';
+      publisher.event(task.id, 'TEST_FAILED', `${name} failed${summary ? ` · ${summary}` : ''}${why}`, { executionId: exec.executionId, classification: verdict?.classification ?? null }, stage.id);
+      lines.push('', `Output of ${name} (last lines):`, ...exec.tail, '');
+      return { kind: 'failed', lines, failure: `${name} failed${summary ? `: ${summary}` : ''}` };
+    };
+
+    // Commands run one at a time, in order — except consecutive commands the repository marked parallel-safe,
+    // which run together in a bounded batch; the first real failure stops the rest of its batch (STAGE_TEAMS_PLAN §3.11).
+    const results: Array<JobResult | undefined> = [];
+    for (let i = 0; i < jobs.length && !failure && !control.stopReason; ) {
+      let end = i + 1;
+      if (this.parallelSafe(def, jobs[i]!)) while (end < jobs.length && end - i < MAX_PARALLEL_CHECKS && this.parallelSafe(def, jobs[end]!)) end++;
+      if (end - i === 1) {
+        results[i] = await runJob(i, control);
+      } else {
+        const batch = Array.from({ length: end - i }, (_, n) => ({ index: i + n, ...childControl(control) }));
+        publisher.event(task.id, 'TEST_STARTED', `${def.name}: running ${batch.map((b) => jobs[b.index]!.name).join(', ')} at the same time (marked parallel-safe)`, { parallel: batch.length }, stage.id);
+        let firstFailure: string | null = null;
+        await Promise.all(
+          batch.map(async (b) => {
+            const result = await runJob(b.index, b.control);
+            results[b.index] = result;
+            if (result.kind === 'failed' && !firstFailure) {
+              firstFailure = jobs[b.index]!.name;
+              await Promise.all(batch.filter((o) => o !== b).map((o) => o.stop('cancel')));
+            }
+          }),
+        );
+        if (firstFailure) {
+          for (const b of batch) {
+            const r = results[b.index];
+            if (r?.kind === 'stopped' && !control.stopReason) this.publishTestRun(store.updateTestRun(r.run, { summary: `Stopped: ${firstFailure} failed first` }));
+          }
+        }
+      }
+      for (let k = i; k < end; k++) {
+        const r = results[k];
+        if (r?.kind === 'failed' && !failure) failure = r.failure;
+        if (r?.kind === 'reused') reused++;
+        if (r?.kind === 'preexisting') preexisting.push(jobs[k]!.name);
+        if (r?.kind === 'flaky') flaky.push(jobs[k]!.name);
+      }
+      if (!failure && results.slice(i, end).some((r) => r?.kind === 'stopped')) break;
+      i = end;
     }
-    for (const run of runs.slice(finished)) report.push(`○ ${run.name.padEnd(16)} not run`);
+    const report: string[] = [];
+    runs.forEach((run, k) => {
+      const r = results[k];
+      if (r && r.kind !== 'stopped') report.push(...r.lines);
+      else report.push(...(r?.lines ?? []), `○ ${run.name.padEnd(16)} not run`);
+    });
     // A stop between two commands is a stop, not a pass with commands missing.
     if (!failure && control.stopReason) return { kind: 'stopped', stageId: stage.id, reason: control.stopReason };
+    if (!failure && results.some((r) => r?.kind === 'stopped')) return { kind: 'stopped', stageId: stage.id, reason: 'cancel' };
 
     if (def.kind === 'tests') {
       await this.d.artifacts.write(task.id, { name: 'tests.log', type: 'tests-log', content: report.join('\n'), stageId: stage.id, stageKey: def.key });
@@ -815,6 +1007,19 @@ export class StageRunners {
       }),
     );
     return exec ? { passed, files: files.length } : null;
+  }
+
+  /**
+   * A command that may run beside others: marked parallel-safe by the
+   * repository, in a tests stage, of a verification kind, and one the command
+   * classifier sees as ordinary local work (never a deploy or a destructive command).
+   */
+  private parallelSafe(def: StageDefinition, job: { unit: RepoUnit; command: RepositoryCommand; effective: RepositoryCommand }): boolean {
+    if (def.kind !== 'tests' || !job.command.parallelSafe || !PARALLEL_KINDS.has(job.command.kind)) return false;
+    return [job.effective.command, job.command.command].every((line) => {
+      const cls = classifyCommand(expandPackageScripts(job.unit.workdir, line));
+      return cls.level <= 2 && !cls.production && !alwaysRequiresApproval(cls);
+    });
   }
 
   /** A passing run of the same command, in the same repository, on the same files, earlier in this task (§3.E). */
@@ -946,10 +1151,9 @@ export class StageRunners {
       },
     });
     store.updateExecution(executionId, { pid: handle.pid });
-    control.cancelCurrent = () => handle.cancel();
+    const release = trackCancel(control, () => handle.cancel());
     if (control.stopReason) void handle.cancel();
-    const result = await handle.done;
-    control.cancelCurrent = null;
+    const result = await handle.done.finally(release);
     sink.flush();
 
     if (result.cancelled) {
@@ -1062,7 +1266,7 @@ export class StageRunners {
 
     const sink = new LogSink(store, this.d.bus, task.id, executionId);
     const controller = new AbortController();
-    control.cancelCurrent = async () => controller.abort();
+    const release = trackCancel(control, async () => controller.abort());
     if (control.stopReason) controller.abort();
     const outcome = await this.d.tooling.tools.invoke({
       capability: 'verify.web',
@@ -1073,8 +1277,7 @@ export class StageRunners {
       signal: controller.signal,
       timeoutMs: def.timeoutSec * 1000,
       onLine: (stream, line) => sink.push(stream, line),
-    });
-    control.cancelCurrent = null;
+    }).finally(release);
     const r = outcome.result;
     for (const line of r.evidence ?? []) sink.push('system', `evidence: ${line}`);
     const problems = ((r.output as { problems?: string[] } | undefined)?.problems ?? []).slice(0, 40);

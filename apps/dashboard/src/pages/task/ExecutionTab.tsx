@@ -15,15 +15,20 @@ import {
   RelativeTime,
   Skeleton,
   StatusChip,
+  WORK_UNIT_STATUS_VISUAL,
+  durationBetween,
   formatDuration,
   useFeedback,
+  useNow,
   type Column,
 } from '@acc/ui';
-import { POLICY_MODE_DESCRIPTION, POLICY_MODE_LABEL, TERMINAL_TASK_STATUSES, type TaskDetail, type ToolExecution } from '@acc/shared';
+import { POLICY_MODE_DESCRIPTION, POLICY_MODE_LABEL, TERMINAL_TASK_STATUSES, type StageWorkUnit, type TaskDetail, type ToolExecution } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useCheckpointMutations, useStopProcess, useTaskExecution } from '../../api/tools';
 import { useConnection } from '../../app/runtime';
 import { TerminalDrawer } from '../../components/terminal';
+import { useAgentNames } from '../../components/agents';
+import { currentTeamStage } from './team';
 import { ESCALATION_VISUAL, LIVE_PROCESS, PROCESS_VISUAL, RECOVERY_VISUAL, REPAIR_LABEL, TOOL_EXECUTION_VISUAL } from '../../components/tools';
 
 const COLUMNS: Column<ToolExecution>[] = [
@@ -34,6 +39,50 @@ const COLUMNS: Column<ToolExecution>[] = [
   { key: 'summary', header: 'Summary', cell: (e) => <span className="text-fg wrap-anywhere">{e.summary ?? '—'}{e.durationMs !== null ? <span className="text-fg-secondary"> · {formatDuration(e.durationMs)}</span> : null}</span> },
   { key: 'level', header: 'Level', cell: (e) => <PermissionBadge level={e.permissionLevel} />, hideStacked: true },
 ];
+
+const UNIT_KIND_LABEL: Record<StageWorkUnit['kind'], string | null> = { worker: null, integration: 'Integration', decomposer: 'Split the fix' };
+
+/**
+ * The Stage Team of the running (or most recent) team stage
+ * (docs/plans/STAGE_TEAMS_PLAN.md §3.13): one row per work unit.
+ */
+function StageTeamPanel({ task }: { task: TaskDetail }) {
+  const team = currentTeamStage(task);
+  const agentName = useAgentNames();
+  const live = team?.units.some((u) => u.status === 'RUNNING') ?? false;
+  const now = useNow(1000, live);
+  if (!team) return null;
+  const workers = team.units.filter((u) => u.kind === 'worker').length;
+  return (
+    <Panel title="Stage Team" headingLevel={3} description={`${team.stageName} · ${workers} worker${workers === 1 ? '' : 's'}`} bodyClassName="p-0">
+      <ul className="divide-y divide-border-subtle">
+        {team.units.map((u) => {
+          const kind = UNIT_KIND_LABEL[u.kind];
+          const duration = u.startedAt ? durationBetween(u.startedAt, u.finishedAt, now) : null;
+          return (
+            <li key={u.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-2.5">
+              <span className="flex min-w-0 flex-1 basis-56 flex-col">
+                <span className="text-body font-semibold text-fg wrap-anywhere">
+                  {kind ? `${kind}${u.title && u.title !== kind ? ` · ${u.title}` : ''}` : u.title}
+                  {u.primary ? <span className="ml-2 text-small font-normal text-fg-secondary">Primary reviewer</span> : null}
+                </span>
+                <span className="text-small text-fg-secondary">
+                  {u.agentId ? agentName(u.agentId) : 'Agent not chosen yet'}
+                  {u.model ? ` · ${u.model}` : ''}
+                  {u.attempt > 1 ? ` · attempt ${u.attempt}` : ''}
+                </span>
+                {u.status === 'FAILED' && u.errorMessage ? <span className="text-small text-danger wrap-anywhere">{u.errorMessage}</span> : null}
+                {u.status === 'REUSED' ? <span className="text-small text-fg-secondary">reused an earlier result with the same files and instructions</span> : null}
+              </span>
+              <StatusChip visual={WORK_UNIT_STATUS_VISUAL[u.status]} size="compact" />
+              <span className="tabular w-16 text-right text-small text-fg-secondary">{duration !== null ? formatDuration(duration) : '—'}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </Panel>
+  );
+}
 
 /**
  * design.md §7.3 "Execution": what the Control Center actually ran for this
@@ -82,6 +131,8 @@ export function ExecutionTab({ task }: { task: TaskDetail }) {
           Open terminal
         </Button>
       </div>
+
+      <StageTeamPanel task={task} />
 
       <Panel title="Background processes" headingLevel={3} description="Servers and watchers the task started. They are stopped when the task stops." bodyClassName="p-0">
         {d.processes.length ? (

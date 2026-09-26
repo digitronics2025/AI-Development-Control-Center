@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { appendFile, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentCapabilities, ModelDescriptor, SkillInfo } from '@acc/shared';
 import { scanSkillDirectory } from './skills.js';
@@ -43,6 +43,15 @@ import type {
  *   [sim:source-only]        implementer and fixer change sim-output.ts (a TypeScript module) instead of sim-output.md
  *   [sim:review-miss-coverage]      reviewer and verifier never name the files the diff did not show
  *   [sim:review-miss-coverage-once] ...only on their first run
+ *   [sim:team]               the planner (and a Fix decomposer) splits the work into units alpha (team-a/) and beta (team-b/)
+ *   [sim:team-chain]         ...with beta depending on alpha
+ *   [sim:team-three]         ...plus an independent gamma (team-c/)
+ *   [sim:team-overlap]       ...both claiming shared/
+ *   [sim:team-out-of-scope]  the beta worker also changes sim-output.md, outside the paths it owns
+ *   [sim:fail-unit-once:<key>] the Stage Team worker of that unit crashes on its first run
+ *
+ * A Stage Team worker (its prompt names `- Unit: … (key: k)` and `- Paths you own: p/`)
+ * writes p/sim-k.md instead of sim-output.md; role `decomposer` answers with a manifest.
  *
  * Usage: every finished or crashed run reports deterministic token counts
  * derived from the prompt and output sizes. The simulated `claude` also
@@ -227,6 +236,12 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       if (cancelled) {
         return { ...base, status: 'cancelled', exitCode: null, output: '', errorClass: null, errorMessage: 'Cancelled' };
       }
+      // [sim:fail-unit-once:<key>]: the Stage Team worker of that unit crashes on its first run only.
+      const teamUnit = /^- Unit: .* \(key: ([a-z0-9-]+)\)$/m.exec(input.prompt)?.[1];
+      if (teamUnit && has(`fail-unit-once:${teamUnit}`) && this.once(`${taskId}:unit:${teamUnit}`)) {
+        emit(`[${role}] simulated crash of unit ${teamUnit}`);
+        return { ...base, usage: this.usage(input, '', sessionId), capacity: this.capacity(), status: 'failed', exitCode: 1, output: '', errorClass: 'PROCESS_CRASH', errorMessage: `Simulated crash of unit ${teamUnit}` };
+      }
       if (has(`fail:${role}`)) {
         emit(`[${role}] simulated crash`);
         return { ...base, usage: this.usage(input, '', sessionId), capacity: this.capacity(), status: 'failed', exitCode: 1, output: '', errorClass: 'PROCESS_CRASH', errorMessage: `Simulated ${role} crash` };
@@ -259,9 +274,20 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         case 'investigator':
           output = `## Findings\n\nThe repository at ${path.basename(input.cwd)} was inspected.\n\n## Relevant files\n\n- README.md\n\n## Risks\n\nNone found.`;
           break;
-        case 'planner':
+        case 'planner': {
           output = `## Goal\n\nComplete the requested change.\n\n## Implementation Plan\n\n1. Update sim-output.md\n\n## Success Criteria\n\n- sim-output.md contains the change\n- tests pass`;
+          // A workflow with an adaptive team stage lists it in the prompt; [sim:team] splits the work for it.
+          const teamStage = /^- `([a-z0-9-]+)` \([^)]*\): up to \d+ workers/m.exec(input.prompt)?.[1];
+          if (teamStage && has('team')) output += `\n\n\`\`\`acc-work-units\n${JSON.stringify(simulatedManifest(teamStage, has))}\n\`\`\``;
           break;
+        }
+        case 'decomposer': {
+          // A Fix split into repairs; without [sim:team] the failures need one repair.
+          const stageKey = /^Stage: ([a-z0-9-]+)/m.exec(input.prompt)?.[1] ?? 'fix';
+          const manifest = has('team') ? simulatedManifest(stageKey, has) : { version: 1, stage: stageKey, units: [{ key: 'all', title: 'Whole fix', goal: 'Repair everything', dependsOn: [], pathPrefixes: ['sim-output.md'], checks: [] }] };
+          output = `## Decomposition\n\nSimulated split of the failures.\n\n\`\`\`acc-work-units\n${JSON.stringify(manifest)}\n\`\`\``;
+          break;
+        }
         case 'implementer':
         case 'fixer': {
           if (has('needs-decision') && !/ANSWER:/.test(input.prompt)) {
@@ -275,7 +301,12 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             ? []
             : (await readdir(input.cwd, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory() && existsSync(path.join(input.cwd, d.name, '.git'))).map((d) => d.name);
           const out = has('source-only') ? 'sim-output.ts' : 'sim-output.md';
-          const files = folders.length ? folders.map((folder) => `${folder}/${out}`) : [out];
+          // A Stage Team worker writes only under the first path it owns (and, with [sim:team-out-of-scope], beta also outside it).
+          const unitKey = /^- Unit: .* \(key: ([a-z0-9-]+)\)$/m.exec(input.prompt)?.[1];
+          const owned = /^- Paths you own: (.+)$/m.exec(input.prompt)?.[1]?.split(', ')[0];
+          const unitFile = unitKey && owned ? (owned.endsWith('/') ? `${owned}sim-${unitKey}.md` : owned) : null;
+          if (unitFile) await mkdir(path.dirname(path.join(input.cwd, unitFile)), { recursive: true });
+          const files = unitFile ? [unitFile, ...(has('team-out-of-scope') && unitKey === 'beta' ? [out] : [])] : folders.length ? folders.map((folder) => `${folder}/${out}`) : [out];
           for (const rel of files) {
             await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
@@ -403,4 +434,18 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       capacity: raw.capacity,
     };
   }
+}
+
+/** The work units a simulated planner or decomposer proposes for `stage`: two by default, steered by markers. */
+function simulatedManifest(stage: string, has: (marker: string) => boolean): unknown {
+  const shared = has('team-overlap');
+  return {
+    version: 1,
+    stage,
+    units: [
+      { key: 'alpha', title: 'Alpha part', goal: 'Deliver the alpha half of the change', dependsOn: [], pathPrefixes: [shared ? 'shared/' : 'team-a/'], checks: ['test'] },
+      { key: 'beta', title: 'Beta part', goal: 'Deliver the beta half of the change', dependsOn: has('team-chain') ? ['alpha'] : [], pathPrefixes: [shared ? 'shared/' : 'team-b/'], checks: ['test'] },
+      ...(has('team-three') ? [{ key: 'gamma', title: 'Gamma part', goal: 'Deliver the gamma third of the change', dependsOn: [], pathPrefixes: ['team-c/'], checks: [] }] : []),
+    ],
+  };
 }

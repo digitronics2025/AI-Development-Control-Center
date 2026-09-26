@@ -63,6 +63,38 @@ export type PartialAssignment = z.infer<typeof partialAssignmentSchema>;
 export const roleAssignmentsSchema = z.partialRecord(roleSchema, partialAssignmentSchema);
 export type RoleAssignments = z.infer<typeof roleAssignmentsSchema>;
 
+/** A Stage Team never has more workers than this (docs/plans/STAGE_TEAMS_PLAN.md §3.2). */
+export const MAX_TEAM_WORKERS = 4;
+
+/**
+ * One configured worker of a fixed Stage Team. Its permission level is always
+ * the stage's; only the agent, model and effort may differ from the stage.
+ */
+export const stageTeamWorkerSchema = z.object({
+  key: slugSchema.max(40),
+  /** What this worker concentrates on; also its label in the dashboard. */
+  focus: z.string().trim().min(1).max(300),
+  agentId: agentIdSchema.optional(),
+  model: modelIdSchema.optional(),
+  effort: effortSchema.optional(),
+  /** The full-coverage reviewer of a verdict team: its PASS must account for every changed file. */
+  primary: z.boolean().default(false),
+});
+export type StageTeamWorker = z.infer<typeof stageTeamWorkerSchema>;
+
+/**
+ * Optional Stage Team of an agent stage (docs/plans/STAGE_TEAMS_PLAN.md §3.2).
+ * fixed: the configured workers run side by side (read-only stages);
+ * adaptive: work units come from the plan's execution manifest, and the stage
+ * runs as one agent whenever they cannot run safely in parallel.
+ */
+export const stageTeamSchema = z.object({
+  mode: z.enum(['fixed', 'adaptive']),
+  maxWorkers: z.number().int().min(2).max(MAX_TEAM_WORKERS).default(3),
+  workers: z.array(stageTeamWorkerSchema).max(MAX_TEAM_WORKERS).optional(),
+});
+export type StageTeam = z.infer<typeof stageTeamSchema>;
+
 export const stageDefinitionSchema = z.object({
   key: slugSchema,
   name: z.string().min(1).max(60),
@@ -94,6 +126,8 @@ export const stageDefinitionSchema = z.object({
    */
   requires: z.array(slugSchema).max(10).optional(),
   description: z.string().max(300).optional(),
+  /** Run this agent stage as a bounded team of workers (docs/plans/STAGE_TEAMS_PLAN.md); absent = one agent, as always. */
+  team: stageTeamSchema.optional(),
 });
 export type StageDefinition = z.infer<typeof stageDefinitionSchema>;
 export type StageDefinitionInput = z.input<typeof stageDefinitionSchema>;
@@ -117,6 +151,11 @@ export const repositoryCommandSchema = z.object({
   kind: z.enum(COMMAND_KINDS),
   enabled: z.boolean().default(true),
   timeoutSec: z.number().int().min(5).max(6 * 3600).default(900),
+  /**
+   * Safe to run at the same time as the stage's other parallel-safe commands
+   * (it neither writes shared files nor holds a port). Absent = false: runs alone, in order.
+   */
+  parallelSafe: z.boolean().optional(),
 });
 export type RepositoryCommand = z.infer<typeof repositoryCommandSchema>;
 

@@ -68,27 +68,36 @@ export class Watchdog {
       for (const { taskId } of this.engine.activeRuns()) {
         const task = this.store.getTask(taskId);
         if (!task?.supervised) continue;
-        const exec = this.store.listExecutions(taskId).filter((e) => e.status === 'running').at(-1);
-        if (!exec) continue;
+        // A Stage Team runs several executions at once: any one stuck or dead stops the stage.
+        const running = this.store.listExecutions(taskId).filter((e) => e.status === 'running');
+        if (!running.length) continue;
         const def = this.views.stageDef(task, task.currentStageKey);
-        const age = nowMs - new Date(exec.startedAt).getTime();
         let reason: string | null = null;
-        if (exec.pid && !this.isAlive(exec.pid)) {
-          const strikes = (this.deadStrikes.get(exec.id) ?? 0) + 1;
-          this.deadStrikes.set(exec.id, strikes);
-          // Two consecutive observations, so a process that is just exiting is not misread.
-          if (strikes >= 2) reason = 'Watchdog: the worker process exited without reporting a result';
-        } else {
-          this.deadStrikes.delete(exec.id);
+        let culprit: (typeof running)[number] | null = null;
+        for (const exec of running) {
+          const age = nowMs - new Date(exec.startedAt).getTime();
+          const who = exec.workUnitId ? ` (${this.store.getWorkUnit(exec.workUnitId)?.title ?? 'a team worker'})` : '';
+          if (exec.pid && !this.isAlive(exec.pid)) {
+            const strikes = (this.deadStrikes.get(exec.id) ?? 0) + 1;
+            this.deadStrikes.set(exec.id, strikes);
+            // Two consecutive observations, so a process that is just exiting is not misread.
+            if (strikes >= 2) reason = `Watchdog: the worker process${who} exited without reporting a result`;
+          } else {
+            this.deadStrikes.delete(exec.id);
+          }
+          if (!reason && def && age > def.timeoutSec * 1000 + TIMEOUT_GRACE_MS) reason = `Watchdog: ${def.name}${who} ran past its ${Math.round(def.timeoutSec / 60)}-minute timeout`;
+          if (!reason && age > stallMs) {
+            const last = this.chairman.store.lastLogAt(exec.id);
+            const silentMs = nowMs - new Date(last ?? exec.startedAt).getTime();
+            if (silentMs > stallMs) reason = `Watchdog: no output${who} for ${Math.round(silentMs / 60_000)} minutes`;
+          }
+          if (reason) {
+            culprit = exec;
+            break;
+          }
         }
-        if (!reason && def && age > def.timeoutSec * 1000 + TIMEOUT_GRACE_MS) reason = `Watchdog: ${def.name} ran past its ${Math.round(def.timeoutSec / 60)}-minute timeout`;
-        if (!reason && age > stallMs) {
-          const last = this.chairman.store.lastLogAt(exec.id);
-          const silentMs = nowMs - new Date(last ?? exec.startedAt).getTime();
-          if (silentMs > stallMs) reason = `Watchdog: no output for ${Math.round(silentMs / 60_000)} minutes`;
-        }
-        if (reason && (await this.engine.watchdogStop(taskId, reason))) {
-          this.deadStrikes.delete(exec.id);
+        if (reason && culprit && (await this.engine.watchdogStop(taskId, reason))) {
+          this.deadStrikes.delete(culprit.id);
           actions.push(`${taskId}: ${reason}`);
         }
       }

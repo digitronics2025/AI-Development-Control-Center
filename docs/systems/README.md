@@ -4,6 +4,7 @@
 |---|---|---|
 | Orchestrator (HTTP, WebSocket, persistence) | [orchestrator.md](orchestrator.md) | `apps/orchestrator` |
 | Workflow engine | [workflow-engine.md](workflow-engine.md) | `apps/orchestrator/src/engine`, `packages/shared/src/workflow.ts`, `workflows/` |
+| Stage Teams (several workers for one stage, isolated writers, parallel-safe checks) | [stage-teams.md](stage-teams.md) | `apps/orchestrator/src/engine/stage-team.ts`, `packages/git/src/team.ts`, `packages/shared/src/stage-teams.ts` |
 | Role prompts (templates, placeholders, marker lines, prompt artifacts) | [prompts.md](prompts.md) | `prompts/`, `packages/shared/src/prompts.ts`, `apps/orchestrator/src/engine/context.ts` |
 | Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
 | Ask (read-only questions outside tasks) | [ask.md](ask.md) | `apps/orchestrator/src/ask`, `packages/shared/src/ask.ts`, `apps/dashboard/src/components/ask.tsx` |
@@ -33,4 +34,4 @@
 | Execution policy and privileged helper | [autopilot.md](autopilot.md) | `packages/tools/src/policy.ts`, `scripts/windows/privileged-helper.ps1` |
 | Pre-release audit (2026-09-24, findings F-01 to F-54, production snapshot) | [../security/prerelease-audit-2026-09-24.md](../security/prerelease-audit-2026-09-24.md) | whole repository, both Cloudflare hostnames, D1 `acc-control-production` |
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

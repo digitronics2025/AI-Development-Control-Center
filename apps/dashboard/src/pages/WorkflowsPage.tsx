@@ -42,6 +42,7 @@ import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection } from '../app/runtime';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
+import { StageTeamEditor, teamLabel } from './StageTeamEditor';
 
 const KIND_LABEL: Record<(typeof STAGE_KINDS)[number], string> = { agent: 'Agent', tests: 'Tests (system)', command: 'Command (system)', git: 'Git checkpoint (system)', verify: 'App verification (system)', release: 'Release (system, Level 5)' };
 
@@ -143,8 +144,18 @@ function StageInspector({
         </Field>
       </div>
       {stage.kind === 'agent' ? (
-        <Checkbox checked={stage.verdict} onCheckedChange={(v) => set('verdict', v)} disabled={readOnly} label="Stage returns a verdict" description='The agent must end with "VERDICT: PASS" or "VERDICT: FAIL"; FAIL takes the failure transition.' />
+        <Checkbox
+          checked={stage.verdict}
+          onCheckedChange={(v) =>
+            // Only a verdict team has a primary reviewer; clear the flag with the verdict.
+            onChange({ ...stage, verdict: v, team: !v && stage.team?.workers ? { ...stage.team, workers: stage.team.workers.map((w) => ({ ...w, primary: false })) } : stage.team })
+          }
+          disabled={readOnly}
+          label="Stage returns a verdict"
+          description='The agent must end with "VERDICT: PASS" or "VERDICT: FAIL"; FAIL takes the failure transition.'
+        />
       ) : null}
+      {stage.kind === 'agent' ? <StageTeamEditor stage={stage} issues={issuesFor(issues, index, 'team')} readOnly={readOnly} onChange={(team) => set('team', team)} /> : null}
       {stage.kind === 'command' ? <Checkbox checked={stage.optional} onCheckedChange={(v) => set('optional', v)} disabled={readOnly} label="Skip when no command is configured" /> : null}
     </fieldset>
   );
@@ -343,7 +354,11 @@ export function WorkflowsPage() {
                       <span className="tabular text-small text-fg-secondary">{index + 1}.</span>
                       <span className="flex min-w-0 flex-col">
                         <span className="truncate text-body font-semibold text-fg">{s.name}</span>
-                        {stageIssues.length ? <span className="truncate text-small text-danger">{stageIssues[0]!.message}</span> : null}
+                        {stageIssues.length ? (
+                          <span className="truncate text-small text-danger">{stageIssues[0]!.message}</span>
+                        ) : s.kind === 'agent' && s.team ? (
+                          <span className="truncate text-small text-fg-secondary">{teamLabel(s.team)}</span>
+                        ) : null}
                       </span>
                       <span className="truncate text-body text-fg-secondary">{ROLE_LABEL[s.role]}</span>
                       <span className="hidden truncate text-body text-fg md:block">{agent}</span>

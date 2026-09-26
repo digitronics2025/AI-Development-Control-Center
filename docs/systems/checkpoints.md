@@ -83,4 +83,12 @@ A rollback holds the writer lock of every repository it rewrites (like a
 stage), unless the task already holds it or works in its own worktree, so a
 Source Control commit can never land on a half-restored tree.
 
-Last verified: 2026-09-25
+## Stage Team checkouts
+
+Write workers of a Stage Team run in detached child checkouts of a hidden
+checkpoint of the task worktree (`refs/acc/team/<task>/…`, folders under
+`<dataDir>/team-worktrees/`); results are captured as hidden commits and
+written back only while the task still equals the base. Swept at start,
+deleted at completion and cancel ([stage-teams.md](stage-teams.md)).
+
+Last verified: 2026-09-26

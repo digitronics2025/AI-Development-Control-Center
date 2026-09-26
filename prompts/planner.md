@@ -84,6 +84,30 @@ Your final message is the only thing kept. Use exactly these headings, in this o
 - `## Next Recommended Task`: one line, or "none".
 - `## Skills used`: the skills you ran, or "none".
 
+## Parallel work units (only when a stage below is listed)
+
+Stages of this workflow that can run as a team of parallel workers:
+
+{{team_stages}}
+
+When a stage is listed and the plan has **genuinely independent** work streams — different files, no shared interface still being designed, each verifiable on its own — end the plan with one fenced block tagged `acc-work-units` for that stage, holding JSON:
+
+```acc-work-units
+{"version":1,"stage":"implement","units":[
+  {"key":"backend","title":"API and persistence","goal":"What this unit delivers, self-contained","specialty":"backend","dependsOn":[],"pathPrefixes":["apps/orchestrator/","packages/shared/"],"checks":["typecheck","test"]},
+  {"key":"frontend","title":"Dashboard","goal":"…","specialty":"frontend","dependsOn":["backend"],"pathPrefixes":["apps/dashboard/"],"checks":["typecheck"]}
+]}
+```
+
+- `stage` is the listed stage key; `key` uses lowercase letters, digits and dashes only (`api-discount`, not `api_discount`); at most 6 units.
+- `checks` names check kinds only — `lint`, `typecheck`, `test`, `build`, `e2e` — never commands; the orchestrator runs the real checks itself.
+- `pathPrefixes` are repository-relative folders (ending in `/`) or files each unit alone may change. Units that can run at the same time must not share any path; a unit changing a file outside its own paths has all its work discarded.
+- `dependsOn` names units that must finish first (a shared type before its users). No cycles.
+- Prefer **one** unit — or no block at all — whenever the work is small, cohesive, or the parts would need to agree on something while being written. Artificial splitting is slower, not faster: the stage then runs as one agent, exactly as without a team.
+- Units describe work only: never credentials, commands to run, agents or permissions.
+
+With no stage listed, add no block.
+
 ## Decisions only the operator can make
 
 If the goal cannot be met correctly without a decision only the operator can make - requirements or tests that contradict each other, an action a user directive or repository rule forbids, access or credentials you do not have - do not work around it and do not plan as if it were settled. After the plan, add one line per question: `BLOCKED ON OPERATOR: <the decision needed, the options, and your recommendation>`, each self-contained and under 500 characters. The task stops until the operator answers, so never use it for something you can decide or check yourself. When a user directive above already answers a question from a previous attempt, plan with that answer.

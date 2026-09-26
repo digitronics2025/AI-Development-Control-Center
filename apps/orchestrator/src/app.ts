@@ -162,7 +162,7 @@ export function createServices(
   const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
   const baselines = new BaselineChecks({ store, bus, tooling, dataDir: config.dataDir });
-  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, baseEnv: options.baseEnv, release: options.release });
+  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, dataDir: config.dataDir, baseEnv: options.baseEnv, release: options.release });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
   const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
@@ -251,6 +251,8 @@ export function createServices(
       void engine.release.recover().catch(() => 0);
       // Baseline checks a restart cut short leave detached worktrees under the data folder (AUTOPILOT_GATES_PLAN §5).
       await baselines.sweep(store.listRepositories()).catch(() => 0);
+      // Stage Team checkouts a restart cut short are partial: removed, never integrated (STAGE_TEAMS_PLAN §3.12).
+      await engine.team.sweep(store.listRepositories()).catch(() => 0);
       await chairman.onStartup();
       chat.recoverPending();
       ask.recoverPending();

@@ -56,6 +56,14 @@ export function LogsTab({ task }: { task: TaskDetail }) {
     const map = new Map(task.stages.map((s) => [s.id, s.name]));
     return (id: string | null) => (id ? (map.get(id) ?? 'Stage') : 'Task');
   }, [task.stages]);
+  // A Stage Team run is named after its work unit: "Implement · Backend changes".
+  const runName = useMemo(() => {
+    const units = new Map((task.workUnits ?? []).map((u) => [u.id, u.title]));
+    return (e: Execution) => {
+      const unit = e.workUnitId ? units.get(e.workUnitId) : undefined;
+      return unit ? `${stageName(e.stageId)} · ${unit}` : stageName(e.stageId);
+    };
+  }, [task.workUnits, stageName]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -87,7 +95,7 @@ export function LogsTab({ task }: { task: TaskDetail }) {
                   setPinned(true);
                   setSelectedId(v);
                 }}
-                options={[...list].reverse().map((e) => ({ value: e.id, label: executionLabel(e, stageName(e.stageId), agentName) }))}
+                options={[...list].reverse().map((e) => ({ value: e.id, label: executionLabel(e, runName(e), agentName) }))}
               />
             </label>
             <label className="flex flex-col gap-1.5">

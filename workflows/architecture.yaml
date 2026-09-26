@@ -1,4 +1,7 @@
-# Significant structural changes (PLAN §13.4).
+# Significant structural changes (PLAN §13.4). Runs its assessment, implementation,
+# review and fix stages as Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md §3.15): the two
+# assessments side by side instead of one after the other, the implementation split
+# only when the plan names independent work units, and a two-reviewer review.
 id: architecture
 name: Architecture
 description: Structural change
@@ -7,21 +10,23 @@ stages:
   - key: assess
     name: Architecture assessment
     role: investigator
-    agentId: codex
-    effort: high
-    permissionLevel: 1
-    timeoutSec: 2700
-    retry: { maxAttempts: 2 }
-    next: second-assessment
-  - key: second-assessment
-    name: Independent assessment
-    role: investigator
-    agentId: claude
     effort: high
     permissionLevel: 1
     timeoutSec: 2700
     retry: { maxAttempts: 2 }
     next: plan
+    team:
+      mode: fixed
+      maxWorkers: 2
+      workers:
+        - key: codex-assessment
+          focus: Architecture assessment
+          agentId: codex
+          effort: high
+        - key: claude-assessment
+          focus: Independent assessment
+          agentId: claude
+          effort: high
   - key: plan
     name: Consolidated plan
     role: planner
@@ -34,7 +39,11 @@ stages:
     role: implementer
     permissionLevel: 2
     timeoutSec: 5400
+    retry: { maxAttempts: 2 }
     next: test
+    team:
+      mode: adaptive
+      maxWorkers: 3
   - key: test
     name: Test
     role: tester
@@ -51,9 +60,21 @@ stages:
     retry: { maxAttempts: 2 }
     next: complete
     onFail: fix
+    team:
+      mode: fixed
+      maxWorkers: 2
+      workers:
+        - key: correctness
+          focus: Correctness of the whole diff
+          primary: true
+        - key: risk
+          focus: Architecture, security and data risks
   - key: fix
     name: Fix
     role: fixer
     permissionLevel: 2
     timeoutSec: 3600
     next: test
+    team:
+      mode: adaptive
+      maxWorkers: 2

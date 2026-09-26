@@ -117,6 +117,26 @@ export function UsageTaskPage() {
                   </span>
                 </div>
                 <Meter ratio={f.totals.costNanos / flowMax} share />
+                {f.workUnits?.length ? (
+                  <ul aria-label={`${f.stageName} team members`} className="ml-3 flex flex-col gap-1 border-l border-border-subtle pl-3">
+                    {f.workUnits.map((u) => (
+                      <li key={u.unitKey} className="flex flex-wrap items-baseline justify-between gap-2 text-small">
+                        <span className="min-w-0 text-fg">
+                          <span className="font-mono">{u.unitKey}</span>
+                          <span className="text-fg-secondary">
+                            {' '}
+                            · {u.agentId} · {u.models.join(', ')}
+                            {u.attempts > 1 ? ` · ${u.attempts} attempts` : ''}
+                          </span>
+                        </span>
+                        <span className="tabular text-fg">
+                          {costWithGaps(u.totals)}
+                          <span className="text-fg-secondary"> · {formatTokens(u.totals.totalTokens)} tokens</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
           </ol>

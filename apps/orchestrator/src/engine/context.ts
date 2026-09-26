@@ -401,6 +401,10 @@ export class ContextBuilder {
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
+      team_stages: task.workflow.stages
+        .filter((s) => s.kind === 'agent' && s.team?.mode === 'adaptive' && s.role !== 'fixer')
+        .map((s) => `- \`${s.key}\` (${s.name}): up to ${s.team!.maxWorkers} workers${s.permissionLevel >= 2 ? ', each changing only the paths its unit owns' : ', read-only'}`)
+        .join('\n'),
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workspace ? agentWorkdir(task, repo) : workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);

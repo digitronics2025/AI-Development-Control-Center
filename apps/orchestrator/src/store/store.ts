@@ -45,6 +45,7 @@ import type {
   ReleaseConfig,
   RepositoryRuntime,
   TestSelectionMode,
+  StageWorkUnit,
 } from '@acc/shared';
 import { releaseConfigSchema, repositoryRuntimeSchema } from '@acc/shared';
 import type { AgentDetectionResult, AgentHealth } from '@acc/agent-sdk';
@@ -282,7 +283,55 @@ const toExecution = (r: Row): Execution => ({
   startedAt: r.started_at,
   finishedAt: r.finished_at,
   durationMs: r.duration_ms,
+  workUnitId: r.work_unit_id ?? null,
 });
+
+const toWorkUnit = (r: Row): StageWorkUnit => ({
+  id: r.id,
+  taskId: r.task_id,
+  stageId: r.stage_id,
+  stageKey: r.stage_key,
+  unitKey: r.unit_key,
+  kind: r.kind,
+  title: r.title,
+  focus: r.focus,
+  status: r.status,
+  ordinal: r.ordinal,
+  dependencies: parse(r.dependencies_json, []),
+  pathScope: parse(r.path_scope_json, []),
+  primary: r.is_primary === 1,
+  manifestHash: r.manifest_hash,
+  baseCommit: r.base_commit,
+  resultCommit: r.result_commit,
+  agentId: r.agent_id,
+  model: r.model,
+  effort: r.effort,
+  attempt: r.attempt,
+  reusedFrom: r.reused_from,
+  summary: r.summary,
+  errorClass: r.error_class,
+  errorMessage: r.error_message,
+  startedAt: r.started_at,
+  finishedAt: r.finished_at,
+  createdAt: r.created_at,
+});
+
+/** Work-unit fields a caller may change after insert, and their columns. */
+const WORK_UNIT_COLUMNS = {
+  status: 'status',
+  baseCommit: 'base_commit',
+  resultCommit: 'result_commit',
+  agentId: 'agent_id',
+  model: 'model',
+  effort: 'effort',
+  reusedFrom: 'reused_from',
+  summary: 'summary',
+  errorClass: 'error_class',
+  errorMessage: 'error_message',
+  startedAt: 'started_at',
+  finishedAt: 'finished_at',
+} as const;
+export type WorkUnitPatch = Partial<Pick<StageWorkUnit, keyof typeof WORK_UNIT_COLUMNS>>;
 
 const toEvent = (r: Row): TaskEvent => ({
   id: r.id,
@@ -923,10 +972,10 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO executions (id, task_id, stage_id, kind, agent_id, model, effort, command, cwd, status, exit_code, error_class,
-           error_message, pid, started_at, finished_at, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           error_message, pid, started_at, finished_at, duration_ms, work_unit_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(e.id, e.taskId, e.stageId, e.kind, e.agentId, e.model, e.effort, e.command, e.cwd, e.status, e.exitCode, e.errorClass, e.errorMessage, e.pid, e.startedAt, e.finishedAt, e.durationMs);
+      .run(e.id, e.taskId, e.stageId, e.kind, e.agentId, e.model, e.effort, e.command, e.cwd, e.status, e.exitCode, e.errorClass, e.errorMessage, e.pid, e.startedAt, e.finishedAt, e.durationMs, e.workUnitId ?? null);
   }
 
   updateExecution(id: string, patch: { status?: ExecutionStatus; exitCode?: number | null; errorClass?: ErrorClass | null; errorMessage?: string | null; pid?: number | null; command?: string; finishedAt?: string | null; durationMs?: number | null }): Execution {
@@ -1176,6 +1225,49 @@ export class Store {
   getSnapshot(id: string): SnapshotRecord | null {
     const row = this.db.prepare('SELECT * FROM git_snapshots WHERE id = ?').get(id) as Row | undefined;
     return row ? toSnapshot(row) : null;
+  }
+
+  // ----- stage team work units (docs/plans/STAGE_TEAMS_PLAN.md §3.4) ---------
+
+  insertWorkUnit(u: StageWorkUnit): StageWorkUnit {
+    this.db
+      .prepare(
+        `INSERT INTO stage_work_units (id, task_id, stage_id, stage_key, unit_key, kind, title, focus, status, ordinal, dependencies_json, path_scope_json,
+           is_primary, manifest_hash, base_commit, result_commit, agent_id, model, effort, attempt, reused_from, summary, error_class, error_message,
+           started_at, finished_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        u.id, u.taskId, u.stageId, u.stageKey, u.unitKey, u.kind, u.title, u.focus, u.status, u.ordinal, json(u.dependencies), json(u.pathScope),
+        u.primary ? 1 : 0, u.manifestHash, u.baseCommit, u.resultCommit, u.agentId, u.model, u.effort, u.attempt, u.reusedFrom, u.summary, u.errorClass, u.errorMessage,
+        u.startedAt, u.finishedAt, u.createdAt,
+      );
+    return this.getWorkUnit(u.id)!;
+  }
+
+  updateWorkUnit(id: string, patch: WorkUnitPatch): StageWorkUnit {
+    const entries = Object.entries(patch).filter(([k]) => k in WORK_UNIT_COLUMNS) as Array<[keyof typeof WORK_UNIT_COLUMNS, unknown]>;
+    if (entries.length) {
+      this.db.prepare(`UPDATE stage_work_units SET ${entries.map(([k]) => `${WORK_UNIT_COLUMNS[k]} = ?`).join(', ')} WHERE id = ?`).run(...entries.map(([, v]) => v), id);
+    }
+    return this.getWorkUnit(id)!;
+  }
+
+  getWorkUnit(id: string): StageWorkUnit | null {
+    const row = this.db.prepare('SELECT * FROM stage_work_units WHERE id = ?').get(id) as Row | undefined;
+    return row ? toWorkUnit(row) : null;
+  }
+
+  /** A task's work units, oldest stage first, in unit order. */
+  listWorkUnits(taskId: string, stageId?: string): StageWorkUnit[] {
+    const rows = stageId
+      ? this.db.prepare('SELECT * FROM stage_work_units WHERE task_id = ? AND stage_id = ? ORDER BY ordinal, rowid').all(taskId, stageId)
+      : this.db.prepare('SELECT * FROM stage_work_units WHERE task_id = ? ORDER BY created_at, ordinal, rowid').all(taskId);
+    return (rows as Row[]).map(toWorkUnit);
+  }
+
+  workUnitsWithStatus(statuses: StageWorkUnit['status'][]): StageWorkUnit[] {
+    return (this.db.prepare(`SELECT * FROM stage_work_units WHERE status IN (${statuses.map(() => '?').join(',')})`).all(...statuses) as Row[]).map(toWorkUnit);
   }
 
   // ----- test runs ----------------------------------------------------------

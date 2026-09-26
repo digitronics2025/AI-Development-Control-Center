@@ -495,3 +495,4 @@ export async function deleteRefs(cwd: string, prefix: string): Promise<number> {
 export * from './source-control.js';
 export * from './worktrees.js';
 export * from './diff-pack.js';
+export * from './team.js';

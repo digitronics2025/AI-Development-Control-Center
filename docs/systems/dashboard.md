@@ -278,4 +278,23 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
   the local cloud e2e harness, which has no Access in front, it lands on the
   Worker's JSON 401 instead.
 
+## Stage Teams
+
+([stage-teams.md](stage-teams.md)) Workflows: agent stages get an **Execution**
+control ([StageTeamEditor.tsx](../../apps/dashboard/src/pages/StageTeamEditor.tsx)):
+single agent, fixed team (2–4 worker rows: key, focus, agent/model/effort,
+"Primary reviewer" only on verdict stages, exactly one) or adaptive team,
+plus maximum workers; server validation issues show per field; built-ins show
+it read-only. Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
+done" ([team.ts](../../apps/dashboard/src/pages/task/team.ts)); Execution has a
+**Stage Team** panel (units, agent, status, live duration, errors, reused,
+Integration / Split the fix rows); Logs label a worker's execution "Stage ·
+Unit". Realtime `workUnit` messages upsert into `TaskDetail.workUnits`
+([sync.ts](../../apps/dashboard/src/api/sync.ts)). Repository Commands: a
+**Parallel-safe** checkbox for lint/typecheck/test/build/e2e. Usage task page:
+team stages get per-unit sub-rows. Tools → Policy: **Team workers at once**
+(`execution.teamWorkerLimit`). The Drawer body is focusable (a tall read-only
+inspector on a phone must be keyboard-scrollable). Covered by
+`e2e/stage-teams.spec.ts` (both themes, 1440 and 390 px, axe).
+
 Last verified: 2026-09-26

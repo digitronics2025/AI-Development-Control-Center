@@ -32,6 +32,7 @@ export const PROMPT_PLACEHOLDERS = {
   previous_attempt: 'How the previous run of this stage ended, with its last output lines',
   fix_cycle: 'Fix cycles used so far (the current one during a fix stage)',
   max_fix_cycles: "The task's fix cycle limit",
+  team_stages: 'Later stages of this workflow that can run as an adaptive Stage Team, with their keys and worker limits, or (none)',
 } as const;
 
 export type PromptPlaceholder = keyof typeof PROMPT_PLACEHOLDERS;

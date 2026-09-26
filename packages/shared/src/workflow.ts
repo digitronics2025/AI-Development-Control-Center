@@ -17,6 +17,39 @@ export interface WorkflowIssue {
 }
 
 /**
+ * Rules a Stage Team must meet (docs/plans/STAGE_TEAMS_PLAN.md §3.2): agent
+ * stages only, never above Level 3, a fixed team only on a read-only stage
+ * (its workers own no paths, so they cannot write side by side), and a
+ * verdict team names exactly one primary, full-coverage reviewer.
+ */
+function teamIssues(stage: StageDefinition): Array<{ field: string; message: string }> {
+  const team = stage.team!;
+  const out: Array<{ field: string; message: string }> = [];
+  if (stage.kind !== 'agent') {
+    out.push({ field: 'team', message: 'Only agent stages can run as a team' });
+    return out;
+  }
+  if (stage.permissionLevel >= 4) out.push({ field: 'team', message: 'Staging and production stages never run as a team' });
+  if (team.mode === 'fixed') {
+    const workers = team.workers ?? [];
+    if (workers.length < 2) out.push({ field: 'team.workers', message: 'A fixed team needs 2 to 4 workers' });
+    if (stage.permissionLevel !== 1) out.push({ field: 'team.mode', message: 'A fixed team runs only on a read-only (Level 1) stage; use an adaptive team for stages that change files' });
+    const keys = new Set<string>();
+    for (const w of workers) {
+      if (keys.has(w.key)) out.push({ field: 'team.workers', message: `Worker key "${w.key}" is used twice` });
+      keys.add(w.key);
+    }
+    const primaries = workers.filter((w) => w.primary).length;
+    if (stage.verdict && primaries !== 1) out.push({ field: 'team.workers', message: 'A review team needs exactly one primary reviewer, who covers the whole diff' });
+    if (!stage.verdict && primaries > 0) out.push({ field: 'team.workers', message: 'Only a review (verdict) team has a primary reviewer' });
+  } else {
+    if (team.workers?.length) out.push({ field: 'team.workers', message: 'An adaptive team takes its work units from the plan, not from a worker list' });
+    if (stage.verdict) out.push({ field: 'team.mode', message: 'A review team is a fixed team of reviewers' });
+  }
+  return out;
+}
+
+/**
  * Semantic validation beyond the Zod shape: transitions must resolve, keys
  * must be unique, every stage must be reachable, and the `next` edges alone
  * must form a DAG. Loops are only legal through `onFail`, which the engine
@@ -85,6 +118,9 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
       if (!stage.requiresApproval) issues.push({ stageIndex: index, field: 'requiresApproval', message: 'Release stages always require approval' });
       if (!stage.optional) issues.push({ stageIndex: index, field: 'optional', message: 'Release stages must be optional: a repository without a release set up skips them' });
       if (stage.commandKinds?.length) issues.push({ stageIndex: index, field: 'commandKinds', message: 'A release uses the repository release setting, not commands' });
+    }
+    if (stage.team) {
+      for (const issue of teamIssues(stage)) issues.push({ stageIndex: index, ...issue });
     }
     if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git' && stage.kind !== 'verify') {
       issues.push({

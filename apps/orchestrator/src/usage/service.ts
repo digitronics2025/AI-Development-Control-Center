@@ -456,6 +456,7 @@ export class UsageService {
             runId: e.runId,
             workflowId: e.workflowId,
             workflowStep: e.workflowStep,
+            workUnitKey: e.workUnitKey ?? null,
             agentRole: e.agentRole,
             effort: e.effort,
             inputTokens: e.tokens.input,

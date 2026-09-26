@@ -255,6 +255,13 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return store.listExecutions(id);
   });
 
+  // Stage Team work units, oldest first (docs/plans/STAGE_TEAMS_PLAN.md §3.13); read-only.
+  app.get('/api/tasks/:id/work-units', async (request) => {
+    const { id } = idParam.parse(request.params);
+    engine.task(id);
+    return store.listWorkUnits(id);
+  });
+
   app.get('/api/tasks/:id/tests', async (request) => {
     const { id } = idParam.parse(request.params);
     engine.task(id);

@@ -5,6 +5,7 @@ import {
   Badge,
   Banner,
   Button,
+  Checkbox,
   ConfirmDialog,
   EmptyState,
   Field,
@@ -48,6 +49,9 @@ import { AssignmentPicker } from '../components/assignment-picker';
 import { useAgentNames } from '../components/agents';
 import { GitState } from './RepositoriesPage';
 import { ReleasePanel, releaseConfig, releaseErrors, releaseForm, type ReleaseForm } from './ReleasePanel';
+
+/** Check kinds a Test stage may run side by side when marked parallel-safe (docs/plans/STAGE_TEAMS_PLAN.md). */
+const PARALLEL_SAFE_KINDS: ReadonlySet<RepositoryCommand['kind']> = new Set(['lint', 'typecheck', 'test', 'build', 'e2e']);
 
 interface Draft {
   defaultWorkflowId: string | null;
@@ -301,7 +305,15 @@ export function RepositoryDetailPage() {
                   <Input value={c.command} onChange={(e) => setCommand(i, { command: e.target.value })} className="font-mono" spellCheck={false} />
                 </Field>
                 <Field label="Kind">
-                  <Select value={c.kind} onValueChange={(v) => setCommand(i, { kind: v as RepositoryCommand['kind'] })} options={COMMAND_KINDS.map((k) => ({ value: k, label: COMMAND_KIND_LABEL[k] }))} />
+                  <Select
+                    value={c.kind}
+                    onValueChange={(v) => {
+                      const kind = v as RepositoryCommand['kind'];
+                      // The flag means nothing outside a check kind; drop it so the command stays as it was saved.
+                      setCommand(i, PARALLEL_SAFE_KINDS.has(kind) ? { kind } : { kind, parallelSafe: undefined });
+                    }}
+                    options={COMMAND_KINDS.map((k) => ({ value: k, label: COMMAND_KIND_LABEL[k] }))}
+                  />
                 </Field>
                 <Field label="Timeout (s)">
                   <Input inputMode="numeric" value={String(c.timeoutSec)} onChange={(e) => setCommand(i, { timeoutSec: Number(e.target.value.replace(/\D/g, '')) || 5 })} />
@@ -310,6 +322,16 @@ export function RepositoryDetailPage() {
                   <Switch aria-label={`${c.name || 'Command'} enabled`} checked={c.enabled} onCheckedChange={(v) => setCommand(i, { enabled: v })} />
                   <IconButton icon={Trash2} label={`Remove ${c.name || 'command'}`} size="compact" onClick={() => setDraft({ ...draft, commands: draft.commands.filter((_, j) => j !== i) })} />
                 </div>
+                {PARALLEL_SAFE_KINDS.has(c.kind) ? (
+                  <div className="md:col-span-5">
+                    <Checkbox
+                      checked={c.parallelSafe ?? false}
+                      onCheckedChange={(v) => setCommand(i, { parallelSafe: v || undefined })}
+                      label="Parallel-safe"
+                      description="Lets this check run at the same time as other parallel-safe checks in a Test stage; leave it off if it writes shared files or holds a port."
+                    />
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

@@ -66,6 +66,7 @@ Templates saved before the check keep rendering `(none)` for unknown names.
 | `preexisting_changes` | files with uncommitted user work at task start, or `none` |
 | `previous_attempt` | the last FAILED, CANCELLED, INTERRUPTED or PAUSED run of this stage with its last 40 log lines |
 | `fix_cycle`, `max_fix_cycles` | `tasks.fix_cycles` (already incremented during a fix stage) and the limit |
+| `team_stages` | adaptive Stage Team stages of the workflow (not Fix) with key and worker limit; the planner may then end its plan with an `acc-work-units` manifest ([stage-teams.md](stage-teams.md)) |
 
 ## Versions
 
@@ -144,4 +145,4 @@ in code and validated as JSON, not editable templates:
 - The multi-repository plan will give each repository its own facts and diff
   block under the same placeholder names.
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26

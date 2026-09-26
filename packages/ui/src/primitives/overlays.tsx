@@ -130,7 +130,10 @@ export function Drawer({
               </button>
             </DialogPrimitive.Close>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+          {/* Keyboard-scrollable even when everything inside is read-only (a disabled form has no focusable control). */}
+          <div tabIndex={0} className="min-h-0 flex-1 overflow-y-auto px-5 py-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus">
+            {children}
+          </div>
           {footer ? <div className="flex flex-wrap justify-end gap-2 border-t border-border-subtle px-5 py-3">{footer}</div> : null}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

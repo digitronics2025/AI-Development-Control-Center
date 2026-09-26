@@ -49,6 +49,7 @@ import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import { ReleaseService, type Probe } from '../release/service.js';
 import type { TaskViews } from './views.js';
+import { StageTeamRunner } from './stage-team.js';
 
 export class EngineError extends Error {
   constructor(
@@ -76,6 +77,8 @@ export interface EngineDeps {
   /** Failed checks compared with the task's baseline commit (AUTOPILOT_GATES_PLAN §3.B). */
   baselines: BaselineChecks;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Where Stage Team workers' disposable checkouts are made (`<dataDir>/team-worktrees`). */
+  dataDir: string;
   /** Release proof reads: a stand-in for the live site in tests, and the poll interval. */
   release?: { probe?: Probe; pollSeconds?: number };
 }
@@ -94,6 +97,8 @@ export class TaskEngine {
   readonly publisher: Publisher;
   readonly approvals: ApprovalGate;
   private readonly stages: StageRunners;
+  /** Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md): several workers for one stage. */
+  readonly team: StageTeamRunner;
   /** Sending tested work live (docs/plans/RELEASE_STAGE_PLAN.md). */
   readonly release: ReleaseService;
   private scheduling = false;
@@ -133,6 +138,18 @@ export class TaskEngine {
       baselines: d.baselines,
       release: this.release,
     });
+    this.team = new StageTeamRunner({
+      store: d.store,
+      bus: d.bus,
+      publisher: this.publisher,
+      agents: d.agents,
+      artifacts: d.artifacts,
+      context: d.context,
+      settings: d.settings,
+      runners: this.stages,
+      dataDir: d.dataDir,
+    });
+    this.stages.team = this.team;
     d.tooling.attachPublisher(this.publisher);
   }
 
@@ -392,6 +409,7 @@ export class TaskEngine {
     for (const a of this.d.store.cancelPendingApprovals(id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
     const repo = this.d.store.getRepository(current.repositoryId);
     await this.d.tooling.cleanup(current, repo, 'task cancelled').catch(() => []);
+    await this.team.cleanupTask(current).catch(() => undefined);
     const multi = isMultiRepository(this.d.store, current);
     if (multi) await this.finalizeWorkspace(current, 'cancelled');
     const gitPatch = !multi && repo && current.git.worktreePath ? await this.d.tooling.finalizeWorktree(current, repo, 'cancelled') : {};
@@ -1477,6 +1495,7 @@ export class TaskEngine {
     );
     // Nothing the task started outlives it; an isolated task's work lands on its branch.
     const cleanup = await this.d.tooling.cleanup(task, repo, 'task completed');
+    await this.team.cleanupTask(task).catch(() => undefined);
     if (multi) {
       // Anything written at the workspace root is in no repository, so on no task branch: say so, never READY.
       const strays = await this.workspaceStrays(task);
@@ -1547,6 +1566,12 @@ export class TaskEngine {
       store.updateExecution(exec.id, { status: 'interrupted', finishedAt: ts, errorMessage: 'Orchestrator stopped during execution' });
     }
     for (const run of store.testRunsWithStatus('running')) store.updateTestRun(run.id, { status: 'not_run', summary: 'Interrupted', finishedAt: ts });
+    // Stage Team units a restart cut short: a running one never delivered (its checkout is partial and is swept, never integrated); a queued one never started.
+    for (const unit of store.workUnitsWithStatus(['RUNNING', 'QUEUED'])) {
+      store.updateWorkUnit(unit.id, unit.status === 'RUNNING'
+        ? { status: 'FAILED', errorClass: 'INTERRUPTED', errorMessage: 'The orchestrator restarted while this unit ran; it runs again when the stage does', finishedAt: ts }
+        : { status: 'CANCELLED', errorMessage: 'The orchestrator restarted before this unit started', finishedAt: ts });
+    }
     for (const stage of store.stagesWithStatus(['STARTING', 'RUNNING', 'RETRYING'])) store.updateStage(stage.id, { status: 'INTERRUPTED', finishedAt: ts });
     const interrupted: string[] = [];
     for (const task of store.listTasks({ statuses: ['RUNNING'], limit: 10_000 })) {

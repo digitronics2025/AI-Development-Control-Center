@@ -211,10 +211,17 @@ export class EngineTooling {
   // Agent tool sessions (V2 plan §30, §44)
   // ===========================================================================
 
-  openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord): AgentToolBridge | null {
+  /**
+   * `opts.root` confines the session to one folder (a Stage Team worker's
+   * disposable checkout: its only working directory and only root);
+   * `opts.level` lowers the level (a read-only decomposition run).
+   */
+  openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, opts: { root?: string; level?: PermissionLevel } = {}): AgentToolBridge | null {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return null;
-    const scope = this.scope(task, repo, { level: def.permissionLevel, stageId: stage.id });
-    const { sessionId: _s, escalated: _e, ...base } = scope;
+    const level = opts.level !== undefined ? (Math.min(opts.level, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
+    const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}) });
+    const { sessionId: _s, escalated: _e, repositories: _r, ...rest } = scope;
+    const base = opts.root ? { ...rest, roots: [opts.root], protectedPaths: [] } : { ...rest, ...(scope.repositories ? { repositories: scope.repositories } : {}) };
     const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000);
     return {
       command: process.execPath,

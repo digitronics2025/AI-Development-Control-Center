@@ -19,6 +19,7 @@ import type {
 } from './constants.js';
 import type { DirectiveKind, DirectiveRule, DirectiveScope, DirectiveState } from './chairman.js';
 import type { PolicyMode, RepositoryRuntime } from './tools.js';
+import type { StageWorkUnit } from './stage-teams.js';
 import type {
   AgentSettings,
   GitMode,
@@ -201,6 +202,8 @@ export interface TaskDetail extends TaskSummary {
   /** Resolved assignment for every stage in the workflow, overrides applied. */
   assignments: Record<string, ResolvedAssignment>;
   stages: StageInstance[];
+  /** Stage Team work units, oldest first (docs/plans/STAGE_TEAMS_PLAN.md); absent from older servers. */
+  workUnits?: StageWorkUnit[];
 }
 
 export interface StageInstance {
@@ -254,6 +257,8 @@ export interface Execution {
   startedAt: Iso;
   finishedAt: Iso | null;
   durationMs: number | null;
+  /** The Stage Team work unit this run belongs to; absent or null for a single-agent stage. */
+  workUnitId?: string | null;
 }
 
 export interface LogLine {

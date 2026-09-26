@@ -47,6 +47,7 @@ import { ExecutionTab } from './ExecutionTab';
 import { LogsTab } from './LogsTab';
 import { OverviewTab } from './OverviewTab';
 import { TestsTab } from './TestsTab';
+import { teamSummary, unitsOfStage } from './team';
 
 const TABS = ['overview', 'activity', 'changes', 'tests', 'artifacts', 'logs', 'execution'] as const;
 type TabKey = (typeof TABS)[number];
@@ -70,6 +71,7 @@ function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefin
     agentName: def.kind === 'agent' ? agentName(latest.get(def.key)?.agentId ?? task.assignments[def.key]?.agentId) : null,
     isCurrent: task.status !== 'COMPLETED' && task.currentStageKey === def.key,
     runs: runs.get(def.key) ?? 0,
+    team: latest.has(def.key) ? teamSummary(unitsOfStage(task, latest.get(def.key)!.id)) : null,
   }));
 }
 

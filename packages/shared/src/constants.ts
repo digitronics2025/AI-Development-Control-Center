@@ -161,6 +161,9 @@ export const EVENT_TYPES = [
   // Phone alerts (docs/plans/LEAD_TIME_PLAN.md §3.4): one per attempt, naming the event or approval it is about.
   'ALERT_SENT',
   'ALERT_NOT_SENT',
+  // Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md): a team started, fell back to one agent or integrated its work; one work unit changed state.
+  'STAGE_TEAM',
+  'WORK_UNIT',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

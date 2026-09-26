@@ -80,7 +80,9 @@ with `test_runs.failures`, `classification`, `tree_id`, `reused_from` and
 `repositories.release` (migration 17, default `{"method":"none"}`; a task's
 release lives in `tasks.git`, [release.md](release.md)), and
 `repositories.test_selection` (default `'full'`) with `test_runs.selection`
-(migration 18, [workflow-engine.md](workflow-engine.md#affected-tests-only)). Access goes through
+(migration 18, [workflow-engine.md](workflow-engine.md#affected-tests-only)), and
+`stage_work_units` with `executions.work_unit_id` and `usage_events.work_unit_key`
+(migration 19, [stage-teams.md](stage-teams.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
@@ -89,7 +91,7 @@ before any row is written.
 | Area | Endpoints |
 |---|---|
 | Service | `GET health`, `GET overview`, `POST service/shutdown` (`{ mode: refuse \| drain \| force }`, default refuse: 409 with the running task ids while stages run; [operations.md](operations.md)) |
-| Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`), `POST tasks/:id/release` and `tasks/:id/release/check`, `POST repositories/:id/release/check` ([release.md](release.md)) |
+| Tasks | `GET/POST tasks`, `GET/PATCH tasks/:id`, `POST tasks/:id/{start,pause,resume,cancel,retry,reroute,assignments,directives}`, `GET tasks/:id/{events,executions,work-units,tests,artifacts,approvals,directives,changes,diff}` (`linkedRepositoryIds` on create, `diff?repositoryId=`), `POST tasks/:id/release` and `tasks/:id/release/check`, `POST repositories/:id/release/check` ([release.md](release.md)) |
 | Chairman | `GET tasks/:id/chairman`, `GET/POST tasks/:id/chairman/messages`, `POST tasks/:id/chairman/actions` ([chairman.md](chairman.md)) |
 | Ask | `GET/POST ask/threads`, `GET/PATCH/DELETE ask/threads/:id`, `POST ask/threads/:id/{messages,cancel}`, `GET ask/sources`, `POST ask/sources/check` ([ask.md](ask.md)) |
 | Logs | `GET executions/:id`, `GET executions/:id/logs?after&limit&stream&q&tail` |

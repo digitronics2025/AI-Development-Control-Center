@@ -132,6 +132,13 @@ Codex loads `~/.codex/skills` and `~/.agents/skills` itself;
 list, bounds it. Not yet observed in a run (the ChatGPT workspace is out of
 credits).
 
+## Stage Team workers
+
+A Stage Team runs each worker as an ordinary run of its adapter through
+`AgentRegistry.launch` — one execution, one tool session, one usage attempt —
+never through a provider's own sub-agents. A write worker's cwd and only tool
+root is its own checkout ([stage-teams.md](stage-teams.md)).
+
 ## Usage reporting
 
 Every result carries `usage` (token lines per model; `null` when the CLI

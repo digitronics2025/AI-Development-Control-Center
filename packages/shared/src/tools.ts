@@ -299,6 +299,8 @@ export const executionSettingsSchema = z.object({
   maxRepairAttempts: z.number().int().min(0).max(5).default(3),
   /** Gather an environment report before the first stage of a task. */
   environmentDiscovery: z.boolean().default(true),
+  /** Stage Team workers running at once across every task on this machine (docs/plans/STAGE_TEAMS_PLAN.md §3.5). */
+  teamWorkerLimit: z.number().int().min(1).max(4).default(3),
 });
 export type ExecutionSettings = z.infer<typeof executionSettingsSchema>;
 

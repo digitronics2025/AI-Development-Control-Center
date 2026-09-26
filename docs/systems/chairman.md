@@ -378,4 +378,12 @@ never the evidence itself.
 - Checkpoint refs live under `refs/acc/checkpoints/<task>/` and are deleted when
   the task finishes; `.gitattributes` EOL rules may make a restore byte-different.
 
-Last verified: 2026-09-25
+## Stage Teams
+
+The Chairman stays at stage level: a team returns one outcome. Its snapshot
+carries `team` (the latest team stage's units, statuses and errors, as EVIDENCE
+text); worker, decomposer and integration runs count toward `maxAgentRuns`
+and runtime; the watchdog checks every running execution of a task
+([stage-teams.md](stage-teams.md)).
+
+Last verified: 2026-09-26

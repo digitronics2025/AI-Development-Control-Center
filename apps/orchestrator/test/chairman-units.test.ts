@@ -732,6 +732,7 @@ describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
     strategySummary: null,
     lastStrategy: { kind: 'retry_stage', targetStageKey: 'fix', diagnosis: 'flaky?', confidence: 'LOW', outcome: 'FAILED', outcomeSummary: 'No improvement' },
     stages: [{ key: 'investigate', name: 'Investigate', role: 'investigator', kind: 'agent', agentId: 'claude' }],
+    team: null,
   });
   const candidates = (): Parameters<typeof recoveryPrompt>[2] => [
     { id: 'rca:investigate', kind: 'rca', level: 3, label: 'Root-cause analysis in Investigate', description: 'Stop patching symptoms.', actions: [], fingerprint: 'f1', targetStageKey: 'investigate', targetAgentId: null },

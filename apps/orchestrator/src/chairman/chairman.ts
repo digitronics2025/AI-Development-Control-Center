@@ -19,7 +19,7 @@ import {
 import type { Bus } from '../bus.js';
 import type { ContextBuilder } from '../engine/context.js';
 import type { TaskEngine } from '../engine/engine.js';
-import { waivedKinds, type RunControl, type StageOutcome } from '../engine/runners.js';
+import { trackCancel, waivedKinds, type RunControl, type StageOutcome } from '../engine/runners.js';
 import type { SupervisorHooks } from '../engine/supervision.js';
 import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
@@ -478,13 +478,14 @@ export class Chairman implements SupervisorHooks {
       reasoner: 'policy',
     };
     if (!this.reasoner.unavailableReason()) {
+      let release: (() => void) | null = null;
       const cancellable = {
         onCancel: (cancel: () => Promise<void>) => {
-          control.cancelCurrent = cancel;
+          release?.();
+          release = trackCancel(control, cancel);
         },
       };
-      const result = await this.reasoner.chooseRecovery(this.snapshots.build(task.id), TRIGGER_LABEL[input.trigger], candidates, this.evidence.render(packet), cancellable, { category: rules.category, summary: rules.summary });
-      control.cancelCurrent = null;
+      const result = await this.reasoner.chooseRecovery(this.snapshots.build(task.id), TRIGGER_LABEL[input.trigger], candidates, this.evidence.render(packet), cancellable, { category: rules.category, summary: rules.summary }).finally(() => release?.());
       if (!result.ok && result.cancelled) {
         this.store.updateSession(task.id, { status: 'supervising' });
         return 'stop';

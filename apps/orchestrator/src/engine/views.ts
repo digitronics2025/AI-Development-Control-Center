@@ -127,6 +127,7 @@ export class TaskViews {
       attachments: task.attachments,
       assignments: this.assignments(task),
       stages,
+      workUnits: this.store.listWorkUnits(task.id),
     };
   }
 

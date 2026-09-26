@@ -25,6 +25,8 @@ export interface UsageAttribution {
   workflowId: string | null;
   /** Stage key, or `chairman` / `commit-message` outside a workflow stage. */
   workflowStep: string | null;
+  /** The Stage Team work unit (docs/plans/STAGE_TEAMS_PLAN.md §3.10); absent or null outside a team. */
+  workUnitKey?: string | null;
   agentRole: string | null;
   mode: string | null;
 }
@@ -77,6 +79,7 @@ export function toUsageEvent(r: Row): UsageEvent {
     runId: r.run_id,
     workflowId: r.workflow_id,
     workflowStep: r.workflow_step,
+    workUnitKey: r.work_unit_key ?? null,
     agentRole: r.agent_role,
     mode: r.mode,
     effort: r.effort,
@@ -173,13 +176,15 @@ export class UsageLedger {
   private lineage(dispatch: UsageDispatch): { retryIndex: number; parentId: string | null; reason: AttemptReason; from: string | null; to: string | null } {
     const a = dispatch.attribution;
     if (a.origin !== 'stage' || !a.taskId || !a.workflowStep) return { retryIndex: 0, parentId: null, reason: 'initial', from: null, to: null };
+    // Workers of one team are siblings, not retries of each other: an attempt follows the same unit's (or, outside a team, the stage's) earlier one.
+    const unit = a.workUnitKey ?? null;
     const previous = this.db
       .prepare(
-        `SELECT id, agent_id, model, provider_model_id, status, (SELECT COUNT(*) FROM usage_events p WHERE p.task_id = ? AND p.workflow_step = ? AND p.origin = 'stage' AND p.started_at <= ?) AS n
-         FROM usage_events WHERE task_id = ? AND workflow_step = ? AND origin = 'stage' AND started_at <= ?
+        `SELECT id, agent_id, model, provider_model_id, status, (SELECT COUNT(*) FROM usage_events p WHERE p.task_id = ? AND p.workflow_step = ? AND p.work_unit_key IS ? AND p.origin = 'stage' AND p.started_at <= ?) AS n
+         FROM usage_events WHERE task_id = ? AND workflow_step = ? AND work_unit_key IS ? AND origin = 'stage' AND started_at <= ?
          ORDER BY started_at DESC, created_at DESC LIMIT 1`,
       )
-      .get(a.taskId, a.workflowStep, dispatch.startedAt, a.taskId, a.workflowStep, dispatch.startedAt) as Row | undefined;
+      .get(a.taskId, a.workflowStep, unit, dispatch.startedAt, a.taskId, a.workflowStep, unit, dispatch.startedAt) as Row | undefined;
     if (!previous) return { retryIndex: 0, parentId: null, reason: 'initial', from: null, to: null };
     const switched = previous.agent_id !== dispatch.agentId || previous.model !== dispatch.model;
     if (switched) return { retryIndex: previous.n, parentId: previous.id, reason: 'reroute', from: `${previous.agent_id}/${effectiveModel(previous)}`, to: `${dispatch.agentId}/${dispatch.model}` };
@@ -224,8 +229,8 @@ export class UsageLedger {
              input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
              retry_index, retry_parent_event_id, attempt_reason, fallback_from_model, fallback_to_model,
              provider_cost_nanos, calculated_cost_nanos, display_cost_nanos, cost_source, pricing_version_id,
-             status, error_class, prompt_chars, prompt_hash, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             status, error_class, prompt_chars, prompt_hash, created_at, work_unit_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -271,6 +276,7 @@ export class UsageLedger {
           dispatch.promptChars,
           dispatch.promptHash,
           new Date().toISOString(),
+          a.workUnitKey ?? null,
         );
       const insertLine = this.db.prepare(
         `INSERT INTO usage_event_lines (event_id, line_no, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens,

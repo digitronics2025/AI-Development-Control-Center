@@ -12,6 +12,7 @@ import type {
   Repository,
   ServerMessage,
   StageInstance,
+  StageWorkUnit,
   TaskDetail,
   TaskEvent,
   TestRun,
@@ -164,6 +165,14 @@ export class CacheSync {
       case 'artifact': {
         const artifact: Artifact = message.artifact;
         qc.setQueryData<Artifact[]>(keys.taskArtifacts(artifact.taskId), (old) => upsert(old, artifact, (a) => a.id));
+        return;
+      }
+      case 'workUnit': {
+        const unit: StageWorkUnit = message.workUnit;
+        // Older cached details have no list yet: start one, the next full fetch reconciles it.
+        qc.setQueryData<TaskDetail>(keys.task(unit.taskId), (old) =>
+          old ? { ...old, workUnits: upsert(old.workUnits ?? [], unit, (u) => u.id) } : old,
+        );
         return;
       }
       case 'testRun': {

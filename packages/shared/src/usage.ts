@@ -122,6 +122,8 @@ export interface UsageEvent {
   runId: string | null;
   workflowId: string | null;
   workflowStep: string | null;
+  /** The Stage Team work unit the attempt ran for; null outside a team (docs/plans/STAGE_TEAMS_PLAN.md §3.10). */
+  workUnitKey?: string | null;
   agentRole: string | null;
   mode: string | null;
   effort: string | null;
@@ -433,6 +435,8 @@ export interface UsageStageCost {
   attempts: number;
   status: string | null;
   totals: UsageTotals;
+  /** A Stage Team run: its cost per work unit (docs/plans/STAGE_TEAMS_PLAN.md §3.10). Absent for a single-agent stage. */
+  workUnits?: Array<{ unitKey: string; agentId: string; models: string[]; attempts: number; totals: UsageTotals }>;
 }
 
 export interface UsageTaskLedger {

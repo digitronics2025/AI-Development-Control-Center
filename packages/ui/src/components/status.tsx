@@ -116,6 +116,8 @@ export interface TimelineStage {
   isCurrent: boolean;
   /** Number of times this stage ran (fix cycles). */
   runs: number;
+  /** Stage Team state of the latest run, e.g. "Team 2/3 running"; absent for a single-agent stage. */
+  team?: string | null;
 }
 
 function TimelineIcon({ state }: { state: ReturnType<typeof railState> }) {
@@ -181,6 +183,7 @@ export function StageTimeline({ stages, now = Date.now(), orientation }: { stage
                 <span className="sr-only">{label}. </span>
                 {stage.def.kind === 'agent' ? (stage.agentName ?? '—') : 'System'}
               </span>
+              {stage.team ? <span className="truncate text-small text-fg-secondary">{stage.team}</span> : null}
               {duration !== null && state !== 'future' ? <span className="tabular text-small text-fg-secondary">{formatDuration(duration)}</span> : null}
               {failedReason ? <span className="line-clamp-2 text-small text-danger">{failedReason}</span> : null}
             </div>

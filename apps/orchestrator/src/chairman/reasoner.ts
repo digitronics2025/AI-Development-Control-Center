@@ -110,6 +110,8 @@ export function splitAgentText(s: ChairmanTaskSnapshot): { state: ChairmanTaskSn
     unresolvedFailures: s.unresolvedFailures.map((f, i) => ({ ...f, message: ref(`failure ${i + 1}`, f.message) })),
     latestReview: verdict('review', s.latestReview),
     latestVerify: verdict('verification', s.latestVerify),
+    // Unit titles come from a plan and errors from agents: untrusted text, kept in EVIDENCE like the rest.
+    team: s.team ? { ...s.team, units: s.team.units.map((u, i) => ({ ...u, title: ref(`team unit ${i + 1}`, u.title), error: ref(`team unit ${i + 1} error`, u.error) })) } : s.team,
     latestTests: s.latestTests.map((x, i) => ({ ...x, summary: ref(`test ${i + 1}`, x.summary) })),
     strategySummary: ref('current guidance', s.strategySummary),
     lastStrategy: s.lastStrategy ? { ...s.lastStrategy, diagnosis: ref('last diagnosis', s.lastStrategy.diagnosis), outcomeSummary: ref('last outcome', s.lastStrategy.outcomeSummary) } : s.lastStrategy,

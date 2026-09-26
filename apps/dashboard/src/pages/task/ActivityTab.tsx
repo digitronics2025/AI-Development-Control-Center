@@ -23,6 +23,8 @@ const TONE: Partial<Record<EventType, string>> = {
   TASK_REDIRECTED: 'text-accent',
   ROLLBACK_COMPLETED: 'text-warning',
   WATCHDOG: 'text-warning',
+  // A stage splitting into a team (or falling back to one agent) changes how the work runs.
+  STAGE_TEAM: 'text-accent',
 };
 
 function dayKey(iso: string) {

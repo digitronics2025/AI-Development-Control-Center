@@ -252,4 +252,11 @@ components ([charts.tsx](../../packages/ui/src/components/charts.tsx)):
   from a committed, checked tree: the dashboard is served live as soon as it is
   rebuilt.
 
-Last verified: 2026-09-24
+## Stage Teams
+
+A team worker's attempt carries `usage_events.work_unit_key` (migration 19).
+Retry lineage is per task, stage key **and** work unit, so parallel siblings
+are never counted as retries of each other; the task flow splits a team stage's
+cost into `workUnits` ([stage-teams.md](stage-teams.md)).
+
+Last verified: 2026-09-26

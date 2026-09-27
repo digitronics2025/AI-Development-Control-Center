@@ -44,8 +44,11 @@ agent's report; the other built-ins keep the fast default.
 
 A `verify` stage (Full Autopilot's **App check**, after Test) starts the app
 from the repository runtime (Repositories → a repository → App runtime),
-waits until it answers, opens each configured path in Chromium at desktop and
-phone widths (or checks HTTP status for APIs/Workers), fails on console
+waits until it answers, opens each configured path in Chromium at the
+runtime's widths (`verifyViewports`, desktop and phone by default; up to all
+five: phone, tablet, narrow-desktop 1024, desktop 1280, wide 1440) and colour
+schemes (`verifyColorSchemes`: empty = light only, or light and dark, each a
+separate pass) (or checks HTTP status for APIs/Workers), fails on console
 errors, page errors, failed same-origin requests or horizontal scrolling,
 saves screenshots and `browser-verification.md`, stops the app, and on
 failure goes to `onFail` like a test failure. It is skipped when no runtime

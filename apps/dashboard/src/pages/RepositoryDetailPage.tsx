@@ -66,6 +66,10 @@ interface Draft {
 }
 
 /** design.md §7.7 — repository defaults, commands, permissions, Git behaviour and task history. */
+/** The widths the App check can open, narrowest first (docs/systems/design-agent.md). */
+const ALL_WIDTHS = ['phone', 'tablet', 'narrow-desktop', 'desktop', 'wide'] as const;
+const fullWidths = (list: readonly string[]) => ALL_WIDTHS.every((w) => list.includes(w));
+
 export function RepositoryDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -267,7 +271,7 @@ export function RepositoryDetailPage() {
               }}
             />
           </Field>
-          <FieldGroup label="Check" inline helper={draft.runtime.verifyMode === 'browser' ? 'Chromium at desktop and phone widths: console errors, failed requests, horizontal scrolling, screenshots.' : 'HTTP status only (APIs and Workers).'}>
+          <FieldGroup label="Check" inline helper={draft.runtime.verifyMode === 'browser' ? 'Chromium at the widths and themes below: console errors, failed requests, horizontal scrolling, screenshots.' : 'HTTP status only (APIs and Workers).'}>
             <SegmentedControl<'browser' | 'http'>
               label="Check"
               value={draft.runtime.verifyMode}
@@ -278,6 +282,32 @@ export function RepositoryDetailPage() {
               ]}
             />
           </FieldGroup>
+          {draft.runtime.verifyMode === 'browser' ? (
+            <>
+              <FieldGroup label="Widths" inline helper={fullWidths(draft.runtime.verifyViewports) ? 'Phone, tablet, small laptop (1024), desktop (1280) and wide (1440).' : 'Desktop (1280) and phone (390).'}>
+                <SegmentedControl<'standard' | 'all'>
+                  label="Widths"
+                  value={fullWidths(draft.runtime.verifyViewports) ? 'all' : 'standard'}
+                  onValueChange={(v) => setDraft({ ...draft, runtime: { ...draft.runtime, verifyViewports: v === 'all' ? [...ALL_WIDTHS] : ['desktop', 'phone'] } })}
+                  options={[
+                    { value: 'standard', label: 'Desktop and phone' },
+                    { value: 'all', label: 'All five' },
+                  ]}
+                />
+              </FieldGroup>
+              <FieldGroup label="Themes" inline helper={draft.runtime.verifyColorSchemes.length ? 'Every page is checked in light and in dark.' : "The browser's default (light) only."}>
+                <SegmentedControl<'default' | 'both'>
+                  label="Themes"
+                  value={draft.runtime.verifyColorSchemes.length ? 'both' : 'default'}
+                  onValueChange={(v) => setDraft({ ...draft, runtime: { ...draft.runtime, verifyColorSchemes: v === 'both' ? ['light', 'dark'] : [] } })}
+                  options={[
+                    { value: 'default', label: 'Light' },
+                    { value: 'both', label: 'Light and dark' },
+                  ]}
+                />
+              </FieldGroup>
+            </>
+          ) : null}
         </div>
       </Panel>
 

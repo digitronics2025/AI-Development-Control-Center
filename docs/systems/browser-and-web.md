@@ -56,6 +56,26 @@ things the agents could not do.
   'accept'}` says otherwise, and are logged either way.
 - **`visible: true`** shows the window on the operator's desktop; with no
   desktop it falls back to headless and says so.
+- **Display.** `browser.open`, `browser.check_page`, `browser.screenshot`,
+  `browser.run_flow` and `browser.accessibility` take `colorScheme` (`light`,
+  `dark`, `no-preference`), `reducedMotion` (`reduce`, `no-preference`) and
+  `deviceScaleFactor` (1-3), applied to the page's context
+  (`contextOptions` in [browser.ts](../../packages/tools/src/packs/browser.ts)).
+  Viewports: `phone` 390×844, `tablet` 768×1024, `narrow-desktop` 1024×768,
+  `desktop` 1280×800, `wide` 1440×900.
+
+## Design checks ([browser.ts](../../packages/tools/src/packs/browser.ts))
+
+| Capability | Level | Does |
+|---|---|---|
+| `browser.visual_matrix` | 1 | The page at up to five widths in light and dark: one contact sheet per scheme for the model (composed in Chromium from `data:` URLs, scripts off, network refused; JPEG ≤3 MB), every capture kept as an artifact, and status, console errors and horizontal overflow per view |
+| `browser.accessibility` | 1 | axe-core WCAG 2.2 AA at a viewport and colour scheme; each violation with up to ten failing elements (axe's CSS selector, the element's HTML and axe's failure summary, redacted) |
+
+Both are in the `LOOK` set of every profile, with `media.image.view` and
+`media.video.frames` ([design-agent.md](design-agent.md)). **Horizontal
+overflow** compares `scrollWidth` with `documentElement.clientWidth`: under
+mobile emulation `innerWidth` grows to the content's width, so comparing with
+it never caught a page wider than the phone.
 
 ## Pictures the model sees
 

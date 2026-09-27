@@ -109,6 +109,9 @@ describe('profiles', () => {
     expect(profileIncludes('web-development', 'android.install_apk')).toBe(false);
     expect(profileIncludes('analysis', 'fs.write')).toBe(true); // level, not profile, stops writes in Analyze stages
     expect(profileIncludes('general', 'mcp.github.create_issue')).toBe(false);
+    // Looking is Level 1 everywhere: accessibility, the visual matrix and viewing media files (docs/systems/design-agent.md).
+    for (const cap of ['browser.accessibility', 'browser.visual_matrix', 'media.image.view', 'media.video.frames']) expect(profileIncludes('analysis', cap), cap).toBe(true);
+    expect(profileIncludes('analysis', 'media.image.generate')).toBe(false);
     expect(profileIncludes('operator', 'mcp.github.create_issue')).toBe(true);
   });
 

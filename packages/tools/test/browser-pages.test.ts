@@ -63,6 +63,14 @@ const PAGES: Record<string, string> = {
   '/other': `<!doctype html><title>Help</title><main><h1>Help centre</h1><p>Returns take 14 days.</p><a href="https://example.com/terms">Terms</a></main>`,
   '/cookie': `<!doctype html><title>Cookie</title><script>document.cookie = 'signed=yes; path=/'</script><p>set</p>`,
   '/whoami': `<!doctype html><title>Who</title><h1 id="c"></h1><script>document.getElementById('c').textContent = document.cookie</script>`,
+  // Themes, motion and a layout that breaks at phone width (docs/systems/design-agent.md).
+  '/themed': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Themed</title><style>
+    :root { color-scheme: light dark; --bg: #ffffff; --fg: #111111; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111111; --fg: #f5f5f5; } }
+    body { background: var(--bg); color: var(--fg); font: 16px system-ui; margin: 0; }
+    .wide { width: 600px; height: 40px; background: #4a7; }
+    .faint { color: #d9d9d9; background: #ffffff; }
+  </style><main><h1>Themed page</h1><p class="faint">Barely readable</p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="10" height="10"><div class="wide"></div></main></html>`,
 };
 
 beforeAll(async () => {
@@ -213,5 +221,66 @@ describe.skipIf(!browser)('pages an agent keeps open (real Chromium)', () => {
     expect(read.stdout).toContain('Returns take 14 days.');
     const checked = await call('browser.check_page', { url: `${base}/other`, viewports: ['desktop', 'phone'] });
     expect(checked.images?.map((i) => i.name)).toEqual(['other-desktop.png', 'other-phone.png']);
+  }, 90_000);
+});
+
+describe.skipIf(!browser)('design checks (real Chromium)', () => {
+  it('shows a page as a dark-mode, reduced-motion, high-density screen would, at the wide and narrow-desktop widths', async () => {
+    const opened = await call('browser.open', { url: `${base}/themed`, viewport: 'wide', colorScheme: 'dark', reducedMotion: 'reduce', deviceScaleFactor: 2, screenshot: false });
+    expect(opened.ok, opened.summary).toBe(true);
+    const { pageId } = opened.output as { pageId: string };
+    const facts = await call('browser.evaluate', {
+      pageId,
+      script: '() => ({ dark: matchMedia("(prefers-color-scheme: dark)").matches, reduce: matchMedia("(prefers-reduced-motion: reduce)").matches, dpr: devicePixelRatio, width: innerWidth, bg: getComputedStyle(document.body).backgroundColor })',
+    });
+    expect(JSON.parse(facts.stdout!)).toEqual({ dark: true, reduce: true, dpr: 2, width: 1440, bg: 'rgb(17, 17, 17)' });
+    await call('browser.act', { pageId, action: 'set_viewport', viewport: 'narrow-desktop' });
+    expect((await call('browser.evaluate', { pageId, script: 'innerWidth' })).stdout).toBe('1024');
+    await call('browser.close', { pageId });
+    // A light page by default.
+    const light = await call('browser.open', { url: `${base}/themed`, screenshot: false });
+    const lightId = (light.output as { pageId: string }).pageId;
+    expect((await call('browser.evaluate', { pageId: lightId, script: 'getComputedStyle(document.body).backgroundColor' })).stdout).toBe('"rgb(255, 255, 255)"');
+    await call('browser.close', { pageId: lightId });
+  }, 60_000);
+
+  it('names the elements that fail an accessibility rule, per colour scheme', async () => {
+    const r = await call('browser.accessibility', { url: `${base}/themed`, viewport: 'phone' });
+    expect(r.ok).toBe(false);
+    const violations = (r.output as { violations: Array<{ id: string; targets: Array<{ target: string; html: string }> }> }).violations;
+    const contrast = violations.find((v) => v.id === 'color-contrast');
+    // axe's own shortest unique selector for the faint paragraph.
+    expect(contrast?.targets[0]?.target).toMatch(/^(?:p|\.faint)$/);
+    expect(contrast?.targets[0]?.html).toContain('Barely readable');
+    expect(violations.find((v) => v.id === 'image-alt')?.targets[0]?.target).toBe('img');
+    expect(r.summary).toMatch(/color-contrast at (?:p|\.faint)/);
+    const dark = await call('browser.accessibility', { url: `${base}/themed`, colorScheme: 'dark' });
+    expect((dark.output as { colorScheme: string }).colorScheme).toBe('dark');
+    expect(dark.summary).toContain('(dark)');
+  }, 60_000);
+
+  it('verifies a page at the chosen widths in each colour scheme', async () => {
+    const r = await call('verify.web', { url: base, paths: ['/themed'], viewports: ['phone', 'desktop'], colorSchemes: ['light', 'dark'] });
+    expect(r.ok).toBe(false);
+    const problems = (r.output as { problems: string[] }).problems;
+    expect(problems).toEqual(expect.arrayContaining(['/themed (light) phone: page scrolls horizontally', '/themed (dark) phone: page scrolls horizontally']));
+    expect(problems.some((p) => p.includes('desktop'))).toBe(false);
+    expect((r.output as { pages: Array<{ colorScheme: string }> }).pages.map((p) => p.colorScheme)).toEqual(['light', 'dark']);
+    expect(r.evidence?.some((e) => e.startsWith('dark: '))).toBe(true);
+    const plain = await call('verify.web', { url: base, paths: ['/other'] });
+    expect(plain.ok, plain.summary).toBe(true);
+    expect(plain.summary).toBe('Verified 1 page(s) at desktop, phone widths');
+  }, 90_000);
+
+  it('returns one contact sheet per colour scheme, with overflow and errors for every view', async () => {
+    const r = await call('browser.visual_matrix', { url: `${base}/themed`, viewports: ['desktop', 'phone'], colorSchemes: ['light', 'dark'], settleMs: 0 });
+    const cells = (r.output as { cells: Array<{ viewport: string; colorScheme: string; horizontalOverflow: boolean }> }).cells;
+    // Widest last: phone first, then desktop, for each scheme.
+    expect(cells.map((c) => `${c.viewport}/${c.colorScheme}`)).toEqual(['phone/light', 'desktop/light', 'phone/dark', 'desktop/dark']);
+    expect(cells.filter((c) => c.horizontalOverflow).map((c) => `${c.viewport}/${c.colorScheme}`)).toEqual(['phone/light', 'phone/dark']);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/page scrolls horizontally/);
+    expect(r.images?.map((i) => [i.name, i.mime])).toEqual([['matrix-light.jpg', 'image/jpeg'], ['matrix-dark.jpg', 'image/jpeg']]);
+    for (const image of r.images!) expect(image.data.length).toBeLessThanOrEqual(3 * 1024 * 1024);
   }, 90_000);
 });

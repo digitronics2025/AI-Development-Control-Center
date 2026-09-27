@@ -326,6 +326,10 @@ export const mediaSettingsSchema = z.object({
 });
 export type MediaSettings = z.infer<typeof mediaSettingsSchema>;
 
+/** Widths the browser tools open pages at (docs/systems/design-agent.md), narrowest real device first. */
+export const BROWSER_VIEWPORTS = ['desktop', 'phone', 'tablet', 'wide', 'narrow-desktop'] as const;
+export type BrowserViewport = (typeof BROWSER_VIEWPORTS)[number];
+
 export const repositoryRuntimeSchema = z.object({
   /** How to start the app for verification (e.g. `pnpm dev --port 5173 --strictPort`). */
   devCommand: z.string().max(1000).nullable().default(null),
@@ -336,6 +340,10 @@ export const repositoryRuntimeSchema = z.object({
   verifyPaths: z.array(z.string().max(300).regex(/^\//)).max(20).default(['/']),
   /** browser: real Chromium at desktop and phone widths; http: status checks only (APIs, Workers). */
   verifyMode: z.enum(['browser', 'http']).default('browser'),
+  /** Widths the browser check opens each page at. */
+  verifyViewports: z.array(z.enum(BROWSER_VIEWPORTS)).min(1).max(5).default(['desktop', 'phone']),
+  /** Colour schemes each page is checked in; empty = the browser's default (light) only. */
+  verifyColorSchemes: z.array(z.enum(['light', 'dark'])).max(2).default([]),
 });
 export type RepositoryRuntime = z.infer<typeof repositoryRuntimeSchema>;
 

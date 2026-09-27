@@ -1277,7 +1277,15 @@ export class StageRunners {
     if (control.stopReason) controller.abort();
     const outcome = await this.d.tooling.tools.invoke({
       capability: 'verify.web',
-      input: { startCommand: runtime.devCommand ?? undefined, url: runtime.devUrl, paths: runtime.verifyPaths, readyTimeoutSec: runtime.readyTimeoutSec, mode: runtime.verifyMode },
+      input: {
+        startCommand: runtime.devCommand ?? undefined,
+        url: runtime.devUrl,
+        paths: runtime.verifyPaths,
+        readyTimeoutSec: runtime.readyTimeoutSec,
+        mode: runtime.verifyMode,
+        viewports: runtime.verifyViewports,
+        ...(runtime.verifyColorSchemes.length ? { colorSchemes: runtime.verifyColorSchemes } : {}),
+      },
       origin: 'engine',
       scope: this.d.tooling.scope(task, repo, { level: def.permissionLevel, stageId: stage.id, cwd: unit.workdir }),
       preApproved: true,

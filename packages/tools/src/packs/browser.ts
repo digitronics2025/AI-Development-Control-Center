@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { credentialFreeEnv, redact } from '@acc/security';
+import { BROWSER_VIEWPORTS } from '@acc/shared';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { z } from 'zod';
 import { guardBrowserContext } from '../net-guard.js';
@@ -20,8 +21,43 @@ export const VIEWPORTS = {
   desktop: { width: 1280, height: 800, isMobile: false },
   phone: { width: 390, height: 844, isMobile: true },
   tablet: { width: 768, height: 1024, isMobile: true },
+  /** A large laptop or monitor (docs/systems/design-agent.md). */
+  wide: { width: 1440, height: 900, isMobile: false },
+  /** A small laptop: where desktop layouts first break. */
+  'narrow-desktop': { width: 1024, height: 768, isMobile: false },
 } as const;
-type ViewportName = keyof typeof VIEWPORTS;
+export type ViewportName = keyof typeof VIEWPORTS;
+export const VIEWPORT_NAMES = BROWSER_VIEWPORTS satisfies readonly ViewportName[];
+export const viewportField = z.enum(VIEWPORT_NAMES);
+
+/**
+ * How the page is shown (docs/systems/design-agent.md): a colour scheme and
+ * reduced motion as the operating system would ask for them, and a pixel
+ * density. Omitted fields keep the browser's defaults (light, motion, 1×).
+ */
+export const displayFields = {
+  colorScheme: z.enum(['light', 'dark', 'no-preference']).optional().describe('prefers-color-scheme the page sees.'),
+  reducedMotion: z.enum(['reduce', 'no-preference']).optional().describe('prefers-reduced-motion the page sees.'),
+  deviceScaleFactor: z.number().min(1).max(3).optional().describe('Pixel density (2 = a retina screen); larger pictures.'),
+};
+export interface DisplayOptions {
+  colorScheme?: 'light' | 'dark' | 'no-preference';
+  reducedMotion?: 'reduce' | 'no-preference';
+  deviceScaleFactor?: number;
+}
+
+/** Browser context options for a viewport and display: what every tool opening a page uses. */
+export function contextOptions(viewport: ViewportName, display: DisplayOptions = {}) {
+  const vp = VIEWPORTS[viewport];
+  return {
+    viewport: { width: vp.width, height: vp.height },
+    isMobile: vp.isMobile,
+    hasTouch: vp.isMobile,
+    deviceScaleFactor: display.deviceScaleFactor ?? 1,
+    ...(display.colorScheme ? { colorScheme: display.colorScheme } : {}),
+    ...(display.reducedMotion ? { reducedMotion: display.reducedMotion } : {}),
+  };
+}
 
 function chromeCandidates(): string[] {
   if (process.platform === 'win32') {
@@ -134,9 +170,8 @@ async function saveScreenshot(ctx: OperationContext, page: Page, name: string, i
   return shot.saved;
 }
 
-async function checkAt(ctx: OperationContext, browser: Browser, input: { url: string; waitUntil: 'load' | 'domcontentloaded' | 'networkidle'; settleMs: number; sameOriginOnly: boolean; screenshot: boolean; timeoutSec: number }, viewport: ViewportName, images?: ResultImage[]): Promise<PageObservation> {
-  const vp = VIEWPORTS[viewport];
-  const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, isMobile: vp.isMobile, hasTouch: vp.isMobile, deviceScaleFactor: 1 });
+async function checkAt(ctx: OperationContext, browser: Browser, input: { url: string; waitUntil: 'load' | 'domcontentloaded' | 'networkidle'; settleMs: number; sameOriginOnly: boolean; screenshot: boolean; timeoutSec: number } & DisplayOptions, viewport: ViewportName, images?: ResultImage[]): Promise<PageObservation> {
+  const context = await browser.newContext(contextOptions(viewport, input));
   await guardBrowserContext(context);
   try {
     const page = await context.newPage();
@@ -157,17 +192,20 @@ async function checkAt(ctx: OperationContext, browser: Browser, input: { url: st
         return { domContentLoadedMs: nav ? Math.round(nav.domContentLoadedEventEnd) : null, loadMs: nav ? Math.round(nav.loadEventEnd) : null };
       })
       .catch(() => ({ domContentLoadedMs: null, loadMs: null }));
-    const horizontalOverflow = await page.evaluate(() => (globalThis as any).document.documentElement.scrollWidth > (globalThis as any).innerWidth + 1).catch(() => false);
+    // Against clientWidth, not innerWidth: with mobile emulation innerWidth grows to the content's width, so a page
+    // wider than the phone never looked like it overflowed.
+    const horizontalOverflow = await page.evaluate(() => (globalThis as any).document.documentElement.scrollWidth > (globalThis as any).document.documentElement.clientWidth + 1).catch(() => false);
     const title = await page.title().catch(() => '');
     const safeName = new URL(input.url).pathname.replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '') || 'root';
-    const screenshot = input.screenshot ? await saveScreenshot(ctx, page, `${safeName}-${viewport}.png`, images).catch(() => null) : null;
+    const scheme = input.colorScheme && input.colorScheme !== 'no-preference' ? `-${input.colorScheme}` : '';
+    const screenshot = input.screenshot ? await saveScreenshot(ctx, page, `${safeName}-${viewport}${scheme}.png`, images).catch(() => null) : null;
     return { viewport, url: input.url, status, title: redact(title), ...seen, timing, horizontalOverflow, screenshot };
   } finally {
     await context.close();
   }
 }
 
-export interface CheckPageInput {
+export interface CheckPageInput extends DisplayOptions {
   url: string;
   viewports: ViewportName[];
   waitUntil: 'load' | 'domcontentloaded' | 'networkidle';
@@ -205,6 +243,84 @@ export async function checkPage(ctx: OperationContext, input: CheckPageInput): P
   });
 }
 
+interface MatrixInput {
+  url: string;
+  viewports: ViewportName[];
+  colorSchemes: Array<'light' | 'dark'>;
+  reducedMotion?: 'reduce' | 'no-preference';
+  settleMs: number;
+  timeoutSec: number;
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/**
+ * One contact sheet: the captures side by side at a common height, each with
+ * its label, drawn by Chromium from `data:` URLs with scripts off and every
+ * request refused. JPEG under the model ceiling.
+ */
+async function contactSheet(browser: Browser, title: string, cells: Array<{ label: string; png: Buffer | null }>): Promise<Buffer | null> {
+  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1600, height: 700 }, deviceScaleFactor: 1 });
+  await guardBrowserContext(context);
+  await context.route('**/*', (route) => route.abort('blockedbyclient'));
+  try {
+    const page = await context.newPage();
+    const figures = cells
+      .map((c) => `<figure style="margin:0;display:flex;flex-direction:column;gap:6px"><figcaption style="font:600 15px system-ui,sans-serif;color:#111">${escapeHtml(c.label)}</figcaption>${c.png ? `<img alt="" src="data:image/png;base64,${c.png.toString('base64')}" style="height:520px;width:auto;border:1px solid #999">` : '<div style="height:520px;width:240px;display:grid;place-items:center;border:1px dashed #999;font:14px system-ui;color:#333">not captured</div>'}</figure>`)
+      .join('');
+    await page.setContent(`<!doctype html><html><body style="margin:0;background:#e6e6e6"><main id="sheet" style="display:inline-flex;flex-direction:column;gap:10px;padding:16px"><h1 style="margin:0;font:700 18px system-ui,sans-serif;color:#111">${escapeHtml(title)}</h1><div style="display:flex;gap:16px;align-items:flex-start">${figures}</div></main></body></html>`, { waitUntil: 'load', timeout: 20_000 });
+    const sheet = page.locator('#sheet');
+    for (const quality of [80, 65, 50]) {
+      const data = await sheet.screenshot({ type: 'jpeg', quality, timeout: 20_000 });
+      if (data.length <= MAX_MODEL_IMAGE_BYTES) return data;
+    }
+    return null;
+  } finally {
+    await context.close();
+  }
+}
+
+/** A page at every width in each colour scheme, as contact sheets for the model (docs/systems/design-agent.md). */
+export async function visualMatrix(ctx: OperationContext, input: MatrixInput): Promise<OperationResult> {
+  const order = [...input.viewports].sort((a, b) => VIEWPORTS[a].width - VIEWPORTS[b].width);
+  return withBrowser(async (browser) => {
+    const cells: Array<PageObservation & { colorScheme: 'light' | 'dark' }> = [];
+    const images: ResultImage[] = [];
+    for (const scheme of input.colorSchemes) {
+      const captures: ResultImage[] = [];
+      const row: Array<{ label: string; png: Buffer | null }> = [];
+      for (const viewport of order) {
+        const before = captures.length;
+        const o = await checkAt(ctx, browser, { url: input.url, waitUntil: 'load', settleMs: input.settleMs, sameOriginOnly: true, screenshot: true, timeoutSec: input.timeoutSec, colorScheme: scheme, reducedMotion: input.reducedMotion }, viewport, captures);
+        cells.push({ ...o, colorScheme: scheme });
+        const vp = VIEWPORTS[viewport];
+        row.push({ label: `${viewport} ${vp.width}×${vp.height}${o.horizontalOverflow ? ' · overflows' : ''}`, png: captures.length > before ? captures.at(-1)!.data : null });
+      }
+      const sheet = await contactSheet(browser, `${input.url} · ${scheme}`, row);
+      if (sheet) images.push({ name: `matrix-${scheme}.jpg`, mime: 'image/jpeg', data: sheet });
+    }
+    const problems = cells.flatMap((c) => {
+      const at = `${c.viewport} ${c.colorScheme}`;
+      return [
+        ...(c.status !== null && c.status >= 400 ? [`${at}: HTTP ${c.status}`] : []),
+        ...c.pageErrors.map((e) => `${at}: page error: ${e}`),
+        ...c.consoleErrors.map((e) => `${at}: console error: ${e}`),
+        ...(c.horizontalOverflow ? [`${at}: page scrolls horizontally`] : []),
+      ];
+    });
+    return {
+      ok: problems.length === 0,
+      summary: problems.length ? `${problems.length} problem(s) across ${cells.length} views of ${input.url}: ${problems[0]}` : `${input.url} at ${order.join(', ')} in ${input.colorSchemes.join(' and ')}: no loading problems`,
+      output: { cells: cells.map((c) => ({ viewport: c.viewport, colorScheme: c.colorScheme, status: c.status, consoleErrors: c.consoleErrors, pageErrors: c.pageErrors, horizontalOverflow: c.horizontalOverflow, screenshot: c.screenshot })), problems },
+      evidence: [`visual matrix of ${input.url}: ${order.length} widths × ${input.colorSchemes.length} schemes, ${problems.length} problem(s)`],
+      artifacts: cells.flatMap((c) => (c.screenshot ? [c.screenshot] : [])),
+      networkTargets: [new URL(input.url).host],
+      ...(images.length ? { images } : {}),
+      ...(problems.length ? { error: { code: 'FAILED' as const, message: problems.slice(0, 5).join('; ') } } : {}),
+    };
+  });
+}
+
 const flowStep = z.discriminatedUnion('action', [
   z.object({ action: z.literal('goto'), url: httpUrl }),
   z.object({ action: z.literal('click'), selector: z.string().min(1).max(500) }),
@@ -216,7 +332,7 @@ const flowStep = z.discriminatedUnion('action', [
   z.object({ action: z.literal('wait_for'), selector: z.string().max(500).optional(), text: z.string().max(500).optional(), timeoutSec: z.number().int().min(1).max(120).default(15) }),
   z.object({ action: z.literal('expect_text'), text: z.string().min(1).max(1000), selector: z.string().max(500).optional() }),
   z.object({ action: z.literal('expect_url'), contains: z.string().min(1).max(1000) }),
-  z.object({ action: z.literal('set_viewport'), viewport: z.enum(['desktop', 'phone', 'tablet']) }),
+  z.object({ action: z.literal('set_viewport'), viewport: viewportField }),
   z.object({ action: z.literal('screenshot'), name: z.string().min(1).max(60).regex(/^[\w-]+$/) }),
   z.object({ action: z.literal('download'), selector: z.string().min(1).max(500) }),
 ]);
@@ -335,12 +451,13 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
         description: 'Open a URL at desktop and phone widths; report HTTP status, console errors, page errors, failed requests, horizontal overflow and screenshots. Use it to verify a web change actually works.',
         input: z.object({
           url: httpUrl,
-          viewports: z.array(z.enum(['desktop', 'phone', 'tablet'])).min(1).max(3).default(['desktop', 'phone']),
+          viewports: z.array(viewportField).min(1).max(5).default(['desktop', 'phone']),
           waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle']).default('load'),
           settleMs: z.number().int().min(0).max(10_000).default(800),
           sameOriginOnly: z.boolean().default(true),
           screenshot: z.boolean().default(true),
           timeoutSec: z.number().int().min(5).max(120).default(30),
+          ...displayFields,
         }),
         level: 1,
         classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
@@ -350,12 +467,12 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
         id: 'browser.screenshot',
         title: 'Screenshot a page',
         description: 'Capture a page at a viewport; the picture is returned for you to look at.',
-        input: z.object({ url: httpUrl, viewport: z.enum(['desktop', 'phone', 'tablet']).default('desktop'), timeoutSec: z.number().int().min(5).max(120).default(30) }),
+        input: z.object({ url: httpUrl, viewport: viewportField.default('desktop'), timeoutSec: z.number().int().min(5).max(120).default(30), ...displayFields }),
         level: 1,
         async run(input, ctx) {
           return withBrowser(async (browser) => {
             const images: ResultImage[] = [];
-            const o = await checkAt(ctx, browser, { url: input.url, waitUntil: 'load', settleMs: 500, sameOriginOnly: true, screenshot: true, timeoutSec: input.timeoutSec }, input.viewport, images);
+            const o = await checkAt(ctx, browser, { url: input.url, waitUntil: 'load', settleMs: 500, sameOriginOnly: true, screenshot: true, timeoutSec: input.timeoutSec, colorScheme: input.colorScheme, reducedMotion: input.reducedMotion, deviceScaleFactor: input.deviceScaleFactor }, input.viewport, images);
             return { ok: Boolean(o.screenshot), summary: o.screenshot ? `Saved ${o.screenshot.name}` : 'Screenshot failed', artifacts: o.screenshot ? [o.screenshot] : [], output: { status: o.status, title: o.title }, ...(images.length ? { images } : {}) };
           });
         },
@@ -368,20 +485,19 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
         input: z.object({
           url: httpUrl,
           steps: z.array(flowStep).min(1).max(60),
-          viewport: z.enum(['desktop', 'phone', 'tablet']).default('desktop'),
+          viewport: viewportField.default('desktop'),
           session: sessionName.optional(),
           saveSession: z.boolean().default(false),
           timeoutSec: z.number().int().min(5).max(600).default(120),
+          ...displayFields,
         }),
         level: 2,
         classify: () => ({ reasons: ['Interacts with a page (may submit forms)'], effects: ['network'] }),
         async run(input, ctx) {
           return withBrowser(async (browser) => {
-            const vp = VIEWPORTS[input.viewport];
             const stateFile = input.session ? sessionFile(ctx, input.session) : null;
             const context: BrowserContext = await browser.newContext({
-              viewport: { width: vp.width, height: vp.height },
-              isMobile: vp.isMobile,
+              ...contextOptions(input.viewport, input),
               acceptDownloads: true,
               ...(stateFile && existsSync(stateFile) ? { storageState: stateFile } : {}),
             });
@@ -429,14 +545,14 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
       operation({
         id: 'browser.accessibility',
         title: 'Accessibility scan',
-        description: 'Run axe-core (WCAG 2.2 AA rules) on a page and list violations.',
-        input: z.object({ url: httpUrl, viewport: z.enum(['desktop', 'phone', 'tablet']).default('desktop') }),
+        description:
+          'Run axe-core (WCAG 2.2 AA rules) on a page and list violations with the elements that fail (CSS selectors), at a viewport and colour scheme: scan both themes, since contrast differs between them.',
+        input: z.object({ url: httpUrl, viewport: viewportField.default('desktop'), ...displayFields }),
         level: 1,
         async run(input) {
           const axeSource = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
           return withBrowser(async (browser) => {
-            const vp = VIEWPORTS[input.viewport];
-            const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
+            const context = await browser.newContext(contextOptions(input.viewport, input));
             await guardBrowserContext(context);
             try {
               const page = await context.newPage();
@@ -445,13 +561,26 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
               const result = (await page.evaluate(async () => {
                 const axe = (globalThis as any).axe;
                 const r = await axe.run((globalThis as any).document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
-                return r.violations.map((v: any) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length }));
-              })) as Array<{ id: string; impact: string; help: string; nodes: number }>;
+                return r.violations.map((v: any) => ({
+                  id: v.id,
+                  impact: v.impact,
+                  help: v.help,
+                  nodes: v.nodes.length,
+                  // Which elements fail, so a fix can go straight to them.
+                  targets: v.nodes.slice(0, 10).map((n: any) => ({ target: (n.target ?? []).join(' ').slice(0, 300), html: String(n.html ?? '').slice(0, 200), summary: String(n.failureSummary ?? '').slice(0, 300) })),
+                }));
+              })) as Array<{ id: string; impact: string; help: string; nodes: number; targets: Array<{ target: string; html: string; summary: string }> }>;
+              for (const v of result) {
+                for (const n of v.targets) {
+                  n.html = redact(n.html);
+                  n.summary = redact(n.summary);
+                }
+              }
               return {
                 ok: result.length === 0,
-                summary: result.length ? `${result.length} accessibility violation(s): ${result.map((v) => v.id).slice(0, 5).join(', ')}` : 'No WCAG A/AA violations found',
-                output: { violations: result },
-                evidence: [`axe on ${input.url}: ${result.length} violation(s)`],
+                summary: result.length ? `${result.length} accessibility violation(s)${input.colorScheme ? ` (${input.colorScheme})` : ''}: ${result.map((v) => `${v.id} at ${v.targets[0]?.target ?? '?'}`).slice(0, 5).join(', ')}` : `No WCAG A/AA violations found${input.colorScheme ? ` (${input.colorScheme})` : ''}`,
+                output: { violations: result, viewport: input.viewport, colorScheme: input.colorScheme ?? 'light' },
+                evidence: [`axe on ${input.url} (${input.viewport}${input.colorScheme ? `, ${input.colorScheme}` : ''}): ${result.length} violation(s)`],
                 ...(result.length ? { error: { code: 'FAILED' as const, message: `${result.length} violation(s)` } } : {}),
               };
             } finally {
@@ -459,6 +588,23 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
             }
           });
         },
+      }),
+      operation({
+        id: 'browser.visual_matrix',
+        title: 'See a page at every width and in both themes',
+        description:
+          'Open a URL at several widths (phone to wide desktop) in light and dark, and get one contact sheet per colour scheme to compare side by side, plus HTTP status, console errors and horizontal overflow for every view. Use it after a UI change to check layout, theme parity and reflow at once.',
+        input: z.object({
+          url: httpUrl,
+          viewports: z.array(viewportField).min(1).max(5).default(['phone', 'tablet', 'desktop', 'wide']),
+          colorSchemes: z.array(z.enum(['light', 'dark'])).min(1).max(2).default(['light', 'dark']),
+          reducedMotion: displayFields.reducedMotion,
+          settleMs: z.number().int().min(0).max(10_000).default(800),
+          timeoutSec: z.number().int().min(5).max(120).default(30),
+        }),
+        level: 1,
+        classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
+        run: (input, ctx) => visualMatrix(ctx, input),
       }),
       operation({
         id: 'browser.storage',

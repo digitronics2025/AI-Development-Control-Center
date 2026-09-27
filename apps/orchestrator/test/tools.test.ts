@@ -229,7 +229,7 @@ describe('engine integration', () => {
     const server = `require('http').createServer((q, s) => { s.setHeader('content-type', 'text/html'); s.end(require('fs').readFileSync(__dirname + '/page.html')); }).listen(${port}, '127.0.0.1');\n`;
     const dir = await makeRepo({ files: { 'server.cjs': server, 'page.html': '<!doctype html><meta name="viewport" content="width=device-width"><title>x</title><script>console.error("broken build")</script><h1>App</h1>' } });
     const id = await addRepo(t, dir);
-    await t.api('PATCH', `/api/repositories/${id}`, { runtime: { devCommand: 'node server.cjs', devUrl: `http://127.0.0.1:${port}`, verifyPaths: ['/'], verifyMode: 'browser', readyTimeoutSec: 30 } });
+    await t.api('PATCH', `/api/repositories/${id}`, { runtime: { devCommand: 'node server.cjs', devUrl: `http://127.0.0.1:${port}`, verifyPaths: ['/'], verifyMode: 'browser', readyTimeoutSec: 30, verifyViewports: ['phone', 'wide'], verifyColorSchemes: ['light', 'dark'] } });
     t.services.workflows.save('verify-loop', {
       name: 'Verify loop',
       maxFixCycles: 1,
@@ -247,6 +247,10 @@ describe('engine integration', () => {
     const stages = t.services.store.listStages(taskId).filter((s) => s.kind === 'verify');
     expect(stages.every((s) => s.status === 'FAILED')).toBe(true);
     expect(stages[0]!.errorMessage).toMatch(/console error: broken build/);
+    // The repository's widths and themes reach the check (docs/systems/design-agent.md).
+    const verifyCall = t.services.toolStore.listExecutions({ taskId, capability: 'verify.web' })[0]!;
+    expect(verifyCall.inputSummary).toContain('"viewports":["phone","wide"]');
+    expect(verifyCall.inputSummary).toContain('"colorSchemes":["light","dark"]');
     const artifacts = t.services.store.listArtifacts(taskId).map((a) => a.type);
     expect(artifacts).toContain('browser-report');
     expect(artifacts).toContain('screenshot');

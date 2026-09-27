@@ -362,6 +362,72 @@ describe('claudeToolPolicy', () => {
     expect(claudeToolPolicy(3).denied).not.toContain('Bash(git push:*)');
   });
 
+  /** Claude Code's `Bash(prefix:*)`: the command is the prefix, or starts with it and a space. */
+  const deniedBy = (rules: string[], command: string) =>
+    rules.some((rule) => {
+      const prefix = /^Bash\((.*):\*\)$/.exec(rule)?.[1];
+      return prefix !== undefined && (command === prefix || command.startsWith(`${prefix} `));
+    });
+
+  it('denies a native push to a release or production branch and a pull-request merge from Level 3 (SEC-1)', () => {
+    const releases = [
+      { remote: 'upstream', branch: 'site' },
+      { remote: 'origin', branch: 'www' },
+    ];
+    for (const level of [3, 4, 5] as const) {
+      const denied = claudeToolPolicy(level, releases).denied;
+      expect(denied, `L${level}`).toContain('Bash(gh pr merge:*)');
+      expect(denied).not.toContain('Bash(git push:*)');
+      for (const command of [
+        'git push upstream site',
+        'git push -u upstream site',
+        'git push --set-upstream upstream HEAD:site',
+        'git push origin www',
+        'git push origin main',
+        'git push -u origin main',
+        'git push --set-upstream origin main',
+        'git push origin HEAD:main',
+        'git push -u origin HEAD:master',
+        'gh pr merge 12 --squash',
+      ]) {
+        expect(deniedBy(denied, command), `${command} at L${level}`).toBe(true);
+      }
+    }
+    // Without a release setting the production-named branches are still denied on origin.
+    expect(deniedBy(claudeToolPolicy(3).denied, 'git push origin main')).toBe(true);
+    expect(deniedBy(claudeToolPolicy(3).denied, 'git push -u origin HEAD:release')).toBe(true);
+    // Level 2 already denies every push and merge.
+    expect(claudeToolPolicy(2, releases).denied).toEqual(expect.arrayContaining(['Bash(git push:*)', 'Bash(gh pr merge:*)']));
+  });
+
+  it('leaves pushes of other branches to a Level 3 agent', () => {
+    const denied = claudeToolPolicy(3, [{ remote: 'origin', branch: 'site' }]).denied;
+    for (const command of ['git push origin feature/login', 'git push -u origin acc/task-12', 'git push origin HEAD:feature/login', 'git push origin main-fixes', 'git push origin product-page', 'git push upstream site', 'git push origin sites']) {
+      expect(deniedBy(denied, command), command).toBe(false);
+    }
+  });
+
+  it('keeps the rules short enough for cmd.exe, which runs claude.cmd on Windows (8191 characters a line)', () => {
+    // cross-spawn quotes each argument and escapes cmd.exe's metacharacters with `^`.
+    const cmdLine = (args: string[]) => args.map((a) => `"${a}"`.replace(/([()\][%!^"`<>&|;, *?])/g, '^$1')).join(' ').length;
+    const releases = ['upstream', 'deploy', 'pages', 'docs', 'www'].map((remote, i) => ({ remote, branch: `release-${i}` }));
+    for (const level of [3, 4, 5] as const) {
+      const policy = claudeToolPolicy(level, releases);
+      const args = ['--tools', policy.tools.join(','), '--allowedTools', [...policy.allowed, 'mcp__acc'].join(','), '--disallowedTools', policy.denied.join(',')];
+      // Five releases on five remotes leave room for the executable, the MCP config and plugin folders.
+      expect(cmdLine(args), `L${level}`).toBeLessThan(5_000);
+      expect(new Set(policy.denied).size).toBe(policy.denied.length);
+    }
+  });
+
+  it('passes the release branch denial to the CLI', async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
+    const argsFile = path.join(cwd, 'args.json');
+    await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 3, releaseBranches: [{ remote: 'origin', branch: 'site' }], env: { FAKE_ARGS_FILE: argsFile } }))).done;
+    const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+    expect(args[args.indexOf('--disallowedTools') + 1]!.split(',')).toEqual(expect.arrayContaining(['Bash(git push origin site:*)', 'Bash(git push -u origin HEAD:site:*)', 'Bash(git push origin main:*)', 'Bash(gh pr merge:*)']));
+  });
+
   it('allows skills at every level inside a closed tool set', () => {
     for (const level of [1, 2, 3, 4, 5] as const) {
       const policy = claudeToolPolicy(level);

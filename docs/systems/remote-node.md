@@ -178,8 +178,13 @@ a grant (10 min without keystrokes or output the cloud is watching, 30 min
 maximum); only granted terminals accept cloud
 keystrokes or send output to the cloud. Every line is classified when Enter
 arrives, against this machine's auto-approve level: a line above it, or one that
-always needs approval (dangerous, production), is cancelled with Ctrl+C and a
-viewer-only notice (`terminal.output` with `notice: true`, never typed into the
+always needs approval (dangerous, production — a push to any repository's
+release branch or a production-named one, or a pull-request merge, judged by
+the release gate after the lines the terminal ran before, and together with
+the earlier lines of a command the shell is still reading, such as an open
+quote or a trailing `\`; a line bash would rewrite from its history, such as
+`!^`: [pty.md](pty.md), [tool-system.md](tool-system.md#the-execution-door-servicets)), is cancelled
+with Ctrl+C and a viewer-only notice (`terminal.output` with `notice: true`, never typed into the
 shell). Escape sequences and Tab are dropped, because history recall and
 completion would change the line without the classifier seeing it. A Level 5
 line is refused remotely rather than turned into an approval: the approval gate

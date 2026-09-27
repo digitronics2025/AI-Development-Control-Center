@@ -13,6 +13,7 @@ import {
   nonBlockingFailure,
   type ArtifactType,
   type CommandKind,
+  type CommandRisk,
   type ErrorClass,
   type EventType,
   type ExecutionStatus,
@@ -24,7 +25,7 @@ import {
   type RepositoryCommand,
   isJudgeRole,
 } from '@acc/shared';
-import type { RepairPlan, RepairStrategy } from '@acc/tools';
+import { packageScriptLines, withReleaseGate, type RepairPlan, type RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ReleaseService } from '../release/service.js';
@@ -240,6 +241,28 @@ export function summarize(output: string, max = 240): string | null {
 export function stageCommands(def: StageDefinition, repo: RepositoryRecord, extraKinds: readonly CommandKind[] = []) {
   const kinds = new Set([...(def.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...(def.kind === 'tests' ? extraKinds : [])]);
   return repo.commands.filter((c) => c.enabled && kinds.has(c.kind));
+}
+
+/**
+ * Where a push deploys each repository of the task that releases by push
+ * (SEC-1), for the agent's native shell rules; nothing when none does.
+ */
+export function releaseBranches(store: Store, task: TaskRecord): { releaseBranches?: Array<{ remote: string; branch: string }> } {
+  const found = taskRepositories(store, task).flatMap(({ repo }) => (repo.release?.method === 'push' ? [{ remote: repo.release.remote, branch: repo.release.branch }] : []));
+  return found.length ? { releaseBranches: found } : {};
+}
+
+/**
+ * The classifier's verdict on a command a stage runs in `workdir`, with the
+ * release gate (SEC-1): a command or package script that pushes to one of
+ * `releaseBranches` or a production-named branch, or merges a pull request,
+ * is Level 5 production, as it is for an agent's tool call — an agent can
+ * edit the script a later stage runs.
+ */
+export function stageCommandRisk(workdir: string, commandLine: string, releaseBranches: readonly string[]): { level: PermissionLevel; risk: CommandRisk; reasons: string[]; production: boolean } {
+  const c = classifyCommand(expandPackageScripts(workdir, commandLine));
+  const r = withReleaseGate({ level: c.level, risk: c.risk, reasons: c.reasons, production: c.production }, packageScriptLines(workdir, commandLine), { cwd: workdir, releaseBranches });
+  return { level: r.level ?? c.level, risk: r.risk ?? c.risk, reasons: r.reasons ?? c.reasons, production: r.production ?? c.production };
 }
 
 /**
@@ -615,6 +638,7 @@ export class StageRunners {
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
         pluginDirs: await this.d.context.pluginDirs(task).catch(() => []),
+        ...releaseBranches(this.d.store, task),
         ...(await this.imageAttachments(task, adapter)),
       }, {
         origin: 'stage',
@@ -801,7 +825,7 @@ export class StageRunners {
     const batches: Array<{ start: number; end: number }> = [];
     for (let i = 0; i < jobs.length; ) {
       let end = i + 1;
-      if (this.parallelSafe(def, jobs[i]!)) while (end < jobs.length && end - i < MAX_PARALLEL_CHECKS && this.parallelSafe(def, jobs[end]!)) end++;
+      if (this.parallelSafe(task, def, jobs[i]!)) while (end < jobs.length && end - i < MAX_PARALLEL_CHECKS && this.parallelSafe(task, def, jobs[end]!)) end++;
       batches.push({ start: i, end });
       i = end;
     }
@@ -1164,10 +1188,11 @@ export class StageRunners {
    * repository, in a tests stage, of a verification kind, and one the command
    * classifier sees as ordinary local work (never a deploy or a destructive command).
    */
-  private parallelSafe(def: StageDefinition, job: { unit: RepoUnit; command: RepositoryCommand; effective: RepositoryCommand }): boolean {
+  private parallelSafe(task: TaskRecord, def: StageDefinition, job: { unit: RepoUnit; command: RepositoryCommand; effective: RepositoryCommand }): boolean {
     if (def.kind !== 'tests' || !job.command.parallelSafe || !PARALLEL_KINDS.has(job.command.kind)) return false;
+    const branches = releaseBranches(this.d.store, task).releaseBranches?.map((b) => b.branch) ?? [];
     return [job.effective.command, job.command.command].every((line) => {
-      const cls = classifyCommand(expandPackageScripts(job.unit.workdir, line));
+      const cls = stageCommandRisk(job.unit.workdir, line, branches);
       return cls.level <= 2 && !cls.production && !alwaysRequiresApproval(cls);
     });
   }
@@ -1244,7 +1269,7 @@ export class StageRunners {
    */
   private gateCommand(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, name: string, commandLine: string, workdir: string = taskWorkdir(task, repo)): StageOutcome | null {
     const { approvals, publisher } = this.d;
-    const cls = classifyCommand(expandPackageScripts(workdir, commandLine));
+    const cls = stageCommandRisk(workdir, commandLine, releaseBranches(this.d.store, task).releaseBranches?.map((b) => b.branch) ?? []);
     const autoLevel = this.d.tooling.autoApproveLevel(task, repo);
     const needs = alwaysRequiresApproval(cls) || (cls.level > def.permissionLevel && cls.level > autoLevel);
     if (!needs) return null;

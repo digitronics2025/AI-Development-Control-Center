@@ -504,3 +504,4 @@ export * from './worktrees.js';
 export * from './diff-pack.js';
 export * from './team.js';
 export * from './patch.js';
+export * from './preflight.js';

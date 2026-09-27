@@ -161,7 +161,11 @@ a patch `git apply` takes back, with nothing unredacted written to disk:
 Repository-level primitives (porcelain v2 status, per-side diffs, literal
 pathspec staging, commit, history, fetch, fast-forward-only, push without
 force) live in [source-control.ts](../../packages/git/src/source-control.ts)
-and are documented in [source-control.md](source-control.md). `git()` takes
+and are documented in [source-control.md](source-control.md), as is the secret
+preflight in [preflight.ts](../../packages/git/src/preflight.ts)
+(`scanOutgoing`, `preflightFindings`), which Source Control, a release and the
+`git.push` tool share; `outgoingPatch` and `outgoingFiles` read merge commits'
+own changes (`--diff-merges=remerge`, `-m` before Git 2.36). `git()` takes
 `maxOutputBytes` (stops Git at the bound, sets `truncated`) and keeps at most
 64 KB of stderr. `fetchRemote(…, { unattended: true })` adds
 `UNATTENDED_REMOTE_ENV` (`GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`)

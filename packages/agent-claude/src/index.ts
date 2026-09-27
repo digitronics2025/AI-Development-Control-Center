@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { AgentCapabilities, ModelDescriptor, PermissionLevel, SkillInfo } from '@acc/shared';
+import { PRODUCTION_BRANCH_NAMES, type AgentCapabilities, type ModelDescriptor, type PermissionLevel, type SkillInfo } from '@acc/shared';
 
 /** Skill names and plugin folders from a `claude -p` init event; null when none was printed. */
 export function readInitEvent(stdout: string): { skills: string[]; plugins: Array<{ name: string; path: string }> } | null {
@@ -121,6 +121,34 @@ const GIT_WRITE = ['git commit', 'git push', 'gh pr create', 'gh pr merge'].map(
 const DEPLOY = ['wrangler deploy', 'wrangler publish', 'npm publish', 'pnpm publish', 'vercel', 'flyctl deploy'].map(
   (cmd) => `Bash(${cmd}:*)`,
 );
+/**
+ * From Level 3 an agent may push, but a push to a branch that deploys — a
+ * repository's release branch, or a production-named one (main, master,
+ * production…) as the `git.push` tool rates it — or a pull-request merge, is
+ * a production deploy (Level 5, which no agent runs): denied from Level 3
+ * (SEC-1). Prefix rules catch the usual spellings (`git push origin main`,
+ * `HEAD:main`, with `-u` / `--set-upstream`): each release branch on its own
+ * remote, the production-named branches on `origin`. Another source (`git
+ * push origin topic:main`), `HEAD:refs/heads/main`, a bare `git push` with
+ * such an upstream, or a production name on another remote is not a prefix
+ * they name.
+ *
+ * The set stays small on purpose: an npm-installed `claude` is `claude.cmd`
+ * on Windows, run through cmd.exe, which refuses a command line over 8191
+ * characters (each rule's spaces and brackets are escaped there too), so a
+ * rule per remote × branch × spelling would stop a multi-repository run from
+ * starting.
+ */
+function releaseDenied(releases: AgentExecutionInput['releaseBranches']): string[] {
+  const targets = new Map<string, { remote: string; branch: string }>();
+  const add = (remote: string, branch: string) => targets.set(`${remote}\0${branch}`, { remote, branch });
+  for (const branch of PRODUCTION_BRANCH_NAMES) add('origin', branch);
+  for (const r of releases ?? []) add(r.remote, r.branch);
+  const pushes = [...targets.values()].flatMap(({ remote, branch }) =>
+    ['', '-u ', '--set-upstream '].flatMap((flag) => [branch, `HEAD:${branch}`].map((dst) => `git push ${flag}${remote} ${dst}`)),
+  );
+  return ['gh pr merge', ...pushes].map((cmd) => `Bash(${cmd}:*)`);
+}
 
 /**
  * Built-in tools that exist in a run (`--tools`). The set is closed on purpose: a
@@ -143,15 +171,15 @@ const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
  * be written as deny rules, so Level 1 has no shell at all: it reads Git through
  * the Control Center's own `git.*` tools, which ToolService judges.
  */
-export function claudeToolPolicy(level: PermissionLevel): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
+export function claudeToolPolicy(level: PermissionLevel, releases?: AgentExecutionInput['releaseBranches']): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
   if (level <= 1) {
     return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill'], denied: ['Bash', ...WRITE_TOOLS] };
   }
   const tools = [...BASE_TOOLS, 'Bash', ...EDIT_TOOLS];
   const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash', 'Skill'];
   if (level === 2) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
-  if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY] };
-  return { mode: 'acceptEdits', tools, allowed, denied: ALWAYS_DENIED };
+  if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY, ...releaseDenied(releases)] };
+  return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...releaseDenied(releases)] };
 }
 
 /**
@@ -450,7 +478,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
   }
 
   protected buildArgs(input: AgentExecutionInput): string[] {
-    const policy = claudeToolPolicy(input.permissionLevel);
+    const policy = claudeToolPolicy(input.permissionLevel, input.releaseBranches);
     const mcpConfig = this.mcpConfigFile(input);
     // Every tool of the Control Center server is allowed here; the Control Center applies its own policy per call.
     if (mcpConfig) policy.allowed.push(`mcp__${input.toolBridge!.name}`);

@@ -420,6 +420,12 @@ unit tests whose imports reach a file the task changed.
   asks again. A command approval that needed a typed confirmation (dangerous,
   Level 5, production) is bound to the stage instance it was asked in. Other
   approvals (a stage or command above the auto-approve level) hold for the task.
+  A command is classified with its package scripts expanded and with the
+  release gate (`stageCommandRisk`, SEC-1): one whose script pushes to a
+  release branch of the task's repositories or a production-named branch, or
+  merges a pull request, is Level 5 production and waits for a typed approval
+  — an agent can edit the script a later stage runs
+  ([tool-system.md](tool-system.md#the-execution-door-servicets)).
 - **Redirect** (Chairman/chat): `redirect()` stops the running loop, waits for it
   to exit, then writes the new stage and re-queues — never two loops per task.
   `pauseAfterStage` pauses at the next boundary. A stop between two commands of

@@ -27,6 +27,7 @@ import {
   remoteMissing,
   remoteOwnerKey,
   repositoryStatus,
+  scanOutgoing,
   outgoingFiles,
   patchHeaderPath,
   splitPatch,
@@ -393,6 +394,28 @@ describe('remote operations', () => {
     const push = await pushRef(local, { remote: 'origin', localBranch: 'feature/x', remoteRef: 'refs/heads/feature/x', setUpstream: true });
     expect(push.code).toBe(0);
     expect((await repositoryStatus(local)).branch).toMatchObject({ upstream: 'origin/feature/x', ahead: 0, behind: 0 });
+  });
+
+  it("scans what a merge commit changes itself, not only ordinary commits (SEC-1)", async () => {
+    const { local } = await withRemote();
+    await run(local, ['switch', '-c', 'feature']);
+    await commitFile(local, 'f.txt', 'f\n', 'feature');
+    await run(local, ['switch', 'main']);
+    await commitFile(local, 'm.txt', 'm\n', 'main');
+    await run(local, ['switch', 'feature']);
+    await run(local, ['merge', '--no-edit', 'main']);
+    expect((await scanOutgoing(local, 'feature', null)).findings).toEqual([]);
+    // A secret written while the merge is open is in no parent: only the merge commit carries it.
+    await run(local, ['switch', '-c', 'leak', 'feature~1']);
+    await run(local, ['merge', '--no-commit', 'main']);
+    const token = ['gh', 'p_', 'Z9y8X7w6'.repeat(4), 'Vv5U'].join('');
+    writeFileSync(path.join(local, 'f.txt'), `f\ntoken=${token}\n`);
+    await run(local, ['add', 'f.txt']);
+    await run(local, ['commit', '--no-edit']);
+    const scan = await scanOutgoing(local, 'leak', 'feature');
+    expect(scan).toEqual({ truncated: false, findings: [{ path: 'f.txt', reason: 'contains what looks like a GitHub token' }] });
+    expect(JSON.stringify(scan)).not.toContain(token);
+    expect(await outgoingFiles(local, { tip: 'leak', exclude: 'feature' })).toEqual(['f.txt']);
   });
 
   it('classifies an unreachable remote as a network failure', async () => {

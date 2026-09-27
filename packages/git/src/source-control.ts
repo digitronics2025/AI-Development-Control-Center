@@ -245,10 +245,24 @@ export async function stagedPatch(cwd: string, options: { hasHead: boolean; maxB
   return { patch: result.stdout, truncated: Boolean(result.truncated) };
 }
 
-/** Patches of every commit reachable from `tip` but not from `exclude` (or from no remote), for the push preflight. */
+/**
+ * `git log` with each merge commit's own changes shown: by default it shows
+ * no diff for a merge, so a secret added while resolving a conflict, or in a
+ * `--no-commit` merge, would go out unread (SEC-1). `--diff-merges=remerge`
+ * (Git 2.36+) shows what the merge changed beyond Git's automatic merge, with
+ * the usual `diff --git` headers; an older Git gets `-m` (the diff against
+ * each parent): more to read, nothing missed.
+ */
+async function logWithMerges(cwd: string, args: (merges: string) => string[], options: { maxOutputBytes?: number; timeoutMs: number }): Promise<GitResult> {
+  const result = await git(cwd, args('--diff-merges=remerge'), options);
+  if (result.code !== 0 && !result.truncated && /diff-merges/i.test(result.stderr)) return git(cwd, args('-m'), options);
+  return result;
+}
+
+/** Patches of every commit reachable from `tip` but not from `exclude` (a ref or a revision option such as `--remotes=<remote>`; or from no remote), merge commits' own changes included, for the push preflight. */
 export async function outgoingPatch(cwd: string, options: { tip: string; exclude: string | null; maxBytes: number }): Promise<{ patch: string; truncated: boolean; commits: number }> {
   const range = options.exclude ? [options.tip, '--not', options.exclude] : [options.tip, '--not', '--remotes'];
-  const result = await git(cwd, ['log', '-p', '-U0', '--no-renames', ...DIFF_SAFETY, '--format=%x00commit %H', ...range, '--'], {
+  const result = await logWithMerges(cwd, (merges) => ['log', merges, '-p', '-U0', '--no-renames', ...DIFF_SAFETY, '--format=%x00commit %H', ...range, '--'], {
     maxOutputBytes: options.maxBytes,
     timeoutMs: 60_000,
   });
@@ -260,7 +274,7 @@ export async function outgoingPatch(cwd: string, options: { tip: string; exclude
 /** Every file the push would carry, from `--name-only -z` so no name is quoted or split (audit F-47). */
 export async function outgoingFiles(cwd: string, options: { tip: string; exclude: string | null }): Promise<string[]> {
   const range = options.exclude ? [options.tip, '--not', options.exclude] : [options.tip, '--not', '--remotes'];
-  const result = await git(cwd, ['log', '--name-only', '-z', '--no-renames', '--format=', ...range, '--'], { timeoutMs: 60_000 });
+  const result = await logWithMerges(cwd, (merges) => ['log', merges, '--name-only', '-z', '--no-renames', '--format=', ...range, '--'], { timeoutMs: 60_000 });
   if (result.code !== 0) throw gitFailure('log', result);
   return [...new Set(result.stdout.split('\0').map((f) => f.replace(/^\n+/, '')).filter(Boolean))];
 }

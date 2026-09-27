@@ -152,8 +152,15 @@ export class RemoteNodeService {
     this.store = new RemoteStore(d.db);
     this.timings = { ...DEFAULT_TIMINGS, ...d.timings };
     this.egress = new EgressSanitizer({ repositories: this.repositoryRoots(), dataDir: d.config.dataDir });
-    this.grants = new TerminalGrants(d.terminals, () => d.settings.get().autoApproveUpToLevel, { idleMs: this.timings.terminalIdleMs, maxMs: this.timings.terminalMaxMs }, Date.now, (terminalId, text) =>
-      this.send({ type: 'event.live', payload: { message: { type: 'terminal.output', terminalId, data: text, cursor: 0, notice: true } } }),
+    this.grants = new TerminalGrants(
+      d.terminals,
+      () => d.settings.get().autoApproveUpToLevel,
+      { idleMs: this.timings.terminalIdleMs, maxMs: this.timings.terminalMaxMs },
+      Date.now,
+      (terminalId, text) => this.send({ type: 'event.live', payload: { message: { type: 'terminal.output', terminalId, data: text, cursor: 0, notice: true } } }),
+      // A remote terminal is not tied to one repository: a push to any repository's release branch deploys (SEC-1).
+      (terminalId, line, before) =>
+        d.terminals.judgeLine(terminalId, line, d.store.listRepositories().flatMap((r) => (r.release?.method === 'push' ? [r.release.branch] : [])), before),
     );
     this.dispatcher = new RemoteDispatcher({
       store: this.store,

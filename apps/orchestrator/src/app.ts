@@ -182,6 +182,10 @@ export function createServices(
   tools.attach({
     events: (taskId, type, message, data, stageId) => engine.publisher.event(taskId, type, message, data ?? {}, stageId ?? null),
     privileged,
+    releaseBranch: (repositoryId) => {
+      const release = store.getRepository(repositoryId)?.release;
+      return release?.method === 'push' ? release.branch : null;
+    },
     checkpoints: (taskId) => ({
       create: async (label) => {
         const task = store.getTask(taskId);

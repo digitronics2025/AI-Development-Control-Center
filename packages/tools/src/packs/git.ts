@@ -3,11 +3,12 @@ import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runShell } from '@acc/executor';
-import { addDetachedWorktree, git, type GitError, type GitResult } from '@acc/git';
+import { addDetachedWorktree, git, scanOutgoing, type GitError, type GitResult } from '@acc/git';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable } from '../detect.js';
 import { isInside, OutsideRootError, resolveInside } from '../paths.js';
+import { deployingBranch, withReleaseGate } from '../release-gate.js';
 import { failure, operation, type OperationContext, type OperationResult, type ToolOperation, type ToolProvider } from '../sdk.js';
 
 /**
@@ -314,15 +315,50 @@ export function gitProvider(): ToolProvider {
       operation({
         id: 'git.push',
         title: 'Push a branch',
-        description: 'Push a branch to a remote. Never force-pushes.',
+        description: "Push a branch to a remote. Never force-pushes. The commits are checked for secrets first; a push to the repository's release branch (or main, master, production…) deploys, so it needs your typed approval.",
         input: z.object({ remote: z.string().regex(/^[\w.-]+$/).default('origin'), branch: z.string().min(1).max(200).regex(/^[\w./-]+$/), setUpstream: z.boolean().default(false) }),
         level: 3,
-        classify: (input) => {
+        classify: (input, ctx) => {
           const c = classifyCommand(`git push ${input.remote} ${input.branch}`);
+          // A push to the branch a Git-connected host builds is a production deploy (SEC-1).
+          const deploys = deployingBranch(input.branch, ctx);
+          if (deploys) return { level: 5, risk: c.risk === 'dangerous' ? 'dangerous' : 'elevated', production: true, reasons: [...c.reasons, `Deploys: ${deploys}`], effects: [...new Set([...c.effects, 'production' as const])] };
           return { level: c.level, risk: c.risk, reasons: c.reasons, effects: c.effects, production: c.production };
         },
         async run(input, ctx) {
-          return out(await git(ctx.cwd, ['push', ...(input.setUpstream ? ['-u'] : []), input.remote, `${input.branch}:${input.branch}`], { timeoutMs: 180_000 }), `Pushed ${input.branch} to ${input.remote}`);
+          // What the push would send — the branch minus what the remote already has — is checked for secret material
+          // first, like Source Control's push and a release (docs/systems/source-control.md#secret-preflight).
+          // A local branch only: a tag or remote-tracking name of the same spelling would be resolved first (`v1`, `origin/x`)
+          // and then created as a remote branch.
+          const name = input.branch.replace(/^(?:refs\/)?heads\//, '');
+          const tip = await git(ctx.cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}^{commit}`]);
+          const sha = tip.stdout.trim();
+          if (tip.code !== 0 || !sha) return failure('INVALID_INPUT', `There is no branch named "${input.branch}" to push`);
+          const tracking = `refs/remotes/${input.remote}/${name}`;
+          const known = await git(ctx.cwd, ['rev-parse', '--verify', '--quiet', `${tracking}^{commit}`]);
+          let scan: Awaited<ReturnType<typeof scanOutgoing>>;
+          try {
+            // Without a tracking branch, what this remote already has — never what another remote has: a secret on a
+            // private remote is still read before its commits first go to a public one.
+            scan = await scanOutgoing(ctx.cwd, sha, known.code === 0 ? tracking : `--remotes=${input.remote}`);
+          } catch (error) {
+            return failure('FAILED', `Could not check the commits to push for secrets: ${redact((error as Error).message).slice(0, 300)}`);
+          }
+          if (scan.truncated) return failure('DENIED', 'The commits to push are too large to check for secrets (over 20 MB). Not pushed; push them from a terminal after checking them yourself.');
+          if (scan.findings.length) {
+            const named = scan.findings.map((f) => `${f.path} ${f.reason}`).join('; ');
+            return failure('DENIED', `Not pushed: the commits to push include secret material (${named}). Remove it from those commits before pushing.`, { output: { findings: scan.findings } });
+          }
+          // The commit that was checked is the one pushed: the branch may move meanwhile (another process, an agent's own shell).
+          const pushed = await git(ctx.cwd, ['push', input.remote, `${sha}:refs/heads/${name}`], { timeoutMs: 180_000 });
+          if (pushed.code !== 0 || !input.setUpstream) return out(pushed, `Pushed ${input.branch} to ${input.remote}`);
+          // `-u` cannot follow a commit id: set the upstream as `push -u` does, in the branch's config. That needs no
+          // remote-tracking branch, which a single-branch or shallow clone's fetch refspec never creates for it.
+          let upstream = await git(ctx.cwd, ['config', `branch.${name}.remote`, input.remote]);
+          if (upstream.code === 0) upstream = await git(ctx.cwd, ['config', `branch.${name}.merge`, `refs/heads/${name}`]);
+          if (upstream.code === 0) return out(pushed, `Pushed ${input.branch} to ${input.remote}`);
+          // The push went out: say so, and that the upstream was not set.
+          return { ...out(pushed, `Pushed ${input.branch} to ${input.remote}, but could not set it as the branch's upstream: ${redact(upstream.stderr.trim()).slice(0, 200)}`), output: { pushed: true, upstreamSet: false } };
         },
       }),
       operation({
@@ -344,9 +380,9 @@ export function gitProvider(): ToolProvider {
         description: 'Run `git bisect` between a good and a bad ref with a test command, in a temporary worktree so your working tree is untouched. Returns the first bad commit.',
         input: z.object({ good: ref, bad: ref.default('HEAD'), command: z.string().min(1).max(2000).describe('Exits 0 when the commit is good.'), timeoutSec: z.number().int().min(30).max(3600).default(900) }),
         level: 2,
-        classify: (input) => {
+        classify: (input, ctx) => {
           const c = classifyCommand(input.command);
-          return { level: Math.max(2, c.level) as 2 | 3 | 4 | 5, risk: c.risk, reasons: ['Runs a test command on older commits', ...c.reasons], effects: [...c.effects, 'git'], production: c.production };
+          return withReleaseGate({ level: Math.max(2, c.level) as 2 | 3 | 4 | 5, risk: c.risk, reasons: ['Runs a test command on older commits', ...c.reasons], effects: [...c.effects, 'git'], production: c.production }, input.command, ctx);
         },
         async run(input, ctx) {
           const dir = path.join(os.tmpdir(), `acc-bisect-${randomBytes(6).toString('hex')}`);

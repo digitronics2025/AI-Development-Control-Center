@@ -87,6 +87,130 @@ a `media` key only by a media tool that asks for kind `media`)
 `tool_executions` row, publish `toolExecution`, and add a `TOOL_CALL` event
 for notable calls (level ≥ 3, long-running, failures, verification evidence).
 
+Between 3 and 4, an agent's call whose input names the Control Center itself
+(its data folder, token or key files, or its listen address in any spelling
+Node's URL parser normalises: `127.1:4317`, `2130706433:4317`,
+`[::ffff:127.0.0.1]:4317`) is denied (`inputReferencesSelf`,
+[security.md](security.md#command-classification-commandsts)).
+`classify()` gets the call's `cwd` (moved by the tool's own `cwd` input, where
+it has one) and the release branches it can reach
+(`ClassifyContext.releaseBranches`, from each release setting that pushes,
+read at each call: the call's repository's and, in a multi-repository task,
+every repository's — a shell in one can `git -C ../other push` as easily as
+one at the workspace root). A push to one of them, or to a
+production-named branch (`PRODUCTION_BRANCH`, from `PRODUCTION_BRANCH_NAMES`:
+main, master, production, prod, release, live — compared without case,
+`refs/heads/` stripped), is Level 5 production: a typed approval for the
+operator, refused for agents; any other branch stays Level 3. So is a
+pull-request merge (`gh pr merge`, or `gh api` `PUT …/pulls/<n>/merge`,
+`POST …/merges`, GraphQL `mergePullRequest`): its base is not on the line.
+That holds for `git.push` and for any command line a tool runs (`shell.*`,
+`process.exec` — its argv quoted word by word, so `C:\Program Files\Git\cmd\git.exe`
+or a branch named `x'` stays one word — `process.start`, `terminal.send`,
+`git.bisect`, `verify.web`'s start command, `node.run_script`'s script bodies
+— the call's args appended to the body as the package manager appends them,
+so `"q": "git push"` run with `origin main` pushes main — `node.exec`'s argv;
+`withReleaseGate` in [release-gate.ts](../../packages/tools/src/release-gate.ts)),
+for the line a terminal runs when Enter arrives, however many sends it
+took (`TerminalService.judgeLine`, agents' and the cloud's input alike, after
+the lines that terminal ran before, and together with the earlier lines of a
+command the shell is still reading: [pty.md](pty.md)), and for the commands
+the engine's own stages run (`stageCommandRisk` in
+[runners.ts](../../apps/orchestrator/src/engine/runners.ts): an agent can
+edit a package script a later stage runs). `gitPushTargets` finds a push in
+the ways a line runs one — behind `then`/`do`/`!`/`{`, PowerShell's `if (…) {`, in
+`$(…)` or backticks, in a PowerShell grouping expression given as an argument
+(`Write-Output (git push …)`, `[void](…)`, `@(…)`; not inside quotes), through
+`bash -lc` (a nested `bash -c "…\"…\""` through its escapes), `cmd /c`,
+`pwsh -c`, PowerShell's `Start-Process`/`saps` (`-FilePath` and each
+`-ArgumentList` value split at commas and spaces) and wrappers (`env`,
+`timeout 60`, `nice`), with an escape inside the program name (`g\it`,
+`g^it`) or as Git's own push programs (`…/git-core/git-push`,
+`git-send-pack`, `git-http-push`) — reads each refspec destination
+(`HEAD:main`, `topic:refs/heads/main`), and reads options as Git's parser
+does: the last of `-n`, `--dry-run` and `--no-dry-run` wins, an unambiguous
+prefix is the option (`--al` is `--all`, `--mirr` is `--mirror`), and an
+unknown or ambiguous option counts as unknown. A line continued with `\`, a
+backtick or `^` at the end of a line is read both joined and not. A `gh api`
+write to a branch is a push to it (`PATCH|DELETE …/git/refs/heads/main`,
+`POST …/git/refs` with `ref=refs/heads/main`, a file written through
+`…/contents/…` with `branch=main`, a branch renamed, `merge-upstream`, and
+its CLI form `gh repo sync <repository>`, which writes `-b` or else the default
+branch; without a repository it syncs the local one and pushes nothing). A
+push with no refspec or `HEAD` is the branch checked out (read from the
+worktree's `HEAD`; a reftable repository keeps a stub there, so Git is asked,
+and a HEAD that cannot be read is a deploy) in each folder the push may run
+in — the working folder and any folder below it the line moved to (`cd web &&
+git push`, `git -C web push`, `pushd web`; every folder a group or a failed
+`cd` may have left the shell in) — plus any branch the
+line checked out first (`git checkout main && git push`, `git stash branch
+main`, or renamed HEAD's branch to: `git branch -M main`), plus where the
+repository's push settings send it (`remote.<name>.push`,
+`push.default=matching|upstream`, read with `git config` only for such a
+push). `--all`/`--mirror`/`:`/a wildcard count as every branch, a dry run as
+none. A subcommand that is not one of Git's own (`git p origin main`) is
+looked up in the aliases where it runs (each folder's aliases read once with
+`git config -z --get-regexp '^alias\.'`, and each name looked up once, so a
+long line of subcommands is not a long wait; followed through an alias of an
+alias), and one that pushes, or runs a shell
+command (`!…`) that pushes, is a deploy. It fails closed: a destination only
+known when the line runs is a deploy — a variable or substitution (`git push
+origin $b`; `$(git branch --show-current)` is read as `HEAD`), a remote that
+may bring refspecs of its own (a PowerShell splat, `git push @b` or `git push
+origin @b`; a variable a POSIX shell splits into words, `git push $r main`),
+one the shell
+rewrites (cmd's `ma^in`, bash's `ma\in` and history designators such as
+`!^`), a subcommand only known when it runs or rewritten first (`git $c`,
+`git "$(…)"`, PowerShell's `git @args`, `git pu\sh`), `send-pack`,
+`http-push`, `subtree push`, an alias the line defines (`-c alias.p=push`,
+`git config alias.p push && git p`), a program named by a variable and given
+`push` (`$GIT push`, `& $git push`, `%GIT% push`), a command held in a
+variable and run, directly or by an interpreter, on a line that says `push`
+as a word of its own (not `pushd`, `Push-Location`, `services/push` or
+`pusher.py`) or gives a variable a value naming Git (`x="git push …"; $x`,
+`eval "$cmd"`, `iex $c`, `x="git pu"; y="sh …"; $x$y`) — in a terminal, an
+earlier line counts only when it gave a variable such a value, so a
+`node server.js --port $PORT` after a feature-branch push is no push — a
+shell alias of Git the line
+defines (`alias g=git`, `Set-Alias g git`), a push run by another command
+(`xargs git push`, `find … -exec git push`), code handed to an interpreter as
+a string (`python -c "…os.system('git push …')"`, `node -e`, a shell nested
+past four levels, a quoted command piped into one: `echo "git push …" | bash`,
+`'…' | iex`; a command built from a substitution's output; Git's own
+`-c core.pager='sh -c "…"'` and `submodule foreach '…'`), a `gh api` write that
+does not name its branch (a file on the default branch, GraphQL
+`createCommitOnBranch`/`updateRef`, a body from `--input`), `gh repo sync` of
+a repository without `-b`, or a push of `HEAD` after the line left the working
+folder (`cd ..`, `git -C ../x`), checked out `-` or a pull request (`gh pr
+checkout`, whose head branch is named only on GitHub), moved through more than
+16 folders, or changed where a push goes (`git
+config push.default …`, `-c remote.origin.push=…`, `GIT_DIR=…`, `HOME=…`, an
+edit of `.git/config`). It reads the line, not the files and programs it runs:
+a script (`bash ship.sh`, `node ship.js`), a program that pushes by itself, a
+shell alias or function defined outside the line (or, in a terminal, outside
+its history), or a value computed while it runs is judged by what the line
+says. Before it pushes, `git.push` runs the
+Source Control secret preflight (`scanOutgoing`,
+[packages/git/src/preflight.ts](../../packages/git/src/preflight.ts), merge
+commits' own changes included) on the branch minus its remote-tracking branch
+(or, when there is none, minus what that remote already has,
+`--remotes=<remote>`: a commit only another remote has is still read, so a
+secret on a private remote is caught before it first goes to a public one) and
+fails `DENIED` naming each file
+and the kind of secret, never the value; a range over 20 MB is refused, not
+partly checked. It pushes a local branch only (`refs/heads/<name>`: a tag or
+remote-tracking name is `INVALID_INPUT`, never created as a remote branch),
+and the commit it checked (`<sha>:refs/heads/<branch>`), not whatever the
+branch points to by then, and sets the upstream afterwards when asked, in the
+branch's config as `push -u` does (`branch.<name>.remote` and `.merge`): that
+needs no remote-tracking branch, which a single-branch or shallow clone never
+makes for it, and a failure there is reported with the push as done. Only
+`git.push` runs this preflight: a push typed as a command line (`shell.run`,
+`terminal.send`, `process.exec`) is rated by the release gate but not
+scanned, and the preflight takes the local remote-tracking branch as what the
+remote has, which a command can move (`git update-ref`). It keeps a secret
+from being pushed by mistake; it does not stop an agent set on pushing one.
+
 Packs that stream a child process's output keep only its last 4000 lines
 (`pushBounded` in [detect.ts](../../packages/tools/src/detect.ts)), so a
 chatty build cannot grow the orchestrator's memory without limit. Package

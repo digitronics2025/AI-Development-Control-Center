@@ -3,6 +3,7 @@ import { classifyCommand } from '@acc/security';
 import { z } from 'zod';
 import { detectExecutable } from '../detect.js';
 import { resolveInside } from '../paths.js';
+import { inFolder, withReleaseGate } from '../release-gate.js';
 import { builtinDetection, failure, operation, type ToolProvider } from '../sdk.js';
 
 /**
@@ -41,9 +42,9 @@ export function hostedProviders(): ToolProvider[] {
           }),
           level: 2,
           longRunning: true,
-          classify: (input) => {
+          classify: (input, ctx) => {
             const c = classifyCommand(input.command);
-            return { level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: ['Starts a background process', ...c.reasons], effects: ['process', ...c.effects], production: c.production };
+            return withReleaseGate({ level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: ['Starts a background process', ...c.reasons], effects: ['process', ...c.effects], production: c.production }, input.command, inFolder(ctx, input.cwd));
           },
           async run(input, ctx) {
             if (!ctx.processes) return failure('UNAVAILABLE', 'Background processes are not available in this session');
@@ -140,9 +141,9 @@ export function hostedProviders(): ToolProvider[] {
           description: 'Send input to a terminal. End a command with "\\n" (Enter). Each line is classified like a command when Enter arrives, however many sends it took; a refused line is cancelled with Ctrl+C. Tab and escape sequences are not typed.',
           input: z.object({ id: z.string().min(1).max(100), input: z.string().min(1).max(20_000) }),
           level: 2,
-          classify: (input) => {
+          classify: (input, ctx) => {
             const c = classifyCommand(input.input);
-            return { level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: c.reasons, effects: c.effects, production: c.production };
+            return withReleaseGate({ level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: c.reasons, effects: c.effects, production: c.production }, input.input, ctx);
           },
           async run(input, ctx) {
             if (!ctx.terminals) return failure('UNAVAILABLE', 'Terminals are not available in this session');

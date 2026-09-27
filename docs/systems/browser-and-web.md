@@ -162,6 +162,32 @@ Verified against the operator's account on 2026-09-24.
 - `http.request`, `web.read` and `web.search` follow redirects by hand, one
   hop at a time (at most 5). A hop into the Control Center's own address, from a
   remote site into this machine, or to a non-http(s) URL is refused (`DENIED`).
+  The first hop to the Control Center's own address is refused too, for every
+  caller and both `http.request` providers (`urlIsSelfAddress`: the address
+  only, so a page whose path merely says `auth-token` still loads). Both checks
+  read the URL as fetch will (`new URL(u).href`), so `127.1:4317`,
+  `2130706433:4317` and `[::ffff:127.0.0.1]:4317` are the listen address, and
+  "this machine" is all of 127/8, 0.0.0.0, `::1`, `::`, the IPv4-mapped forms
+  and `*.localhost` (`isLoopbackHostname`) — for a redirect from a remote site,
+  also any name starting `127.`, which public wildcard DNS resolves to loopback
+  (`127.0.0.1.nip.io`, `127.1.2.3.sslip.io`;
+  [security.md](security.md#command-classification-commandsts)). curl is handed
+  that normalised URL, never the text as typed: it parses some URLs differently
+  (`http://x\@0017700000001:4317/` is host `x` to Node and 127.0.0.1 to curl).
+  curl also refuses a `Host` (or `:authority`) header naming this machine:
+  public names such as `lvh.me` and `*.nip.io` resolve to loopback, and the
+  Control Center answers any request whose Host is a loopback name (fetch
+  sets Host itself). It sends a body with `--data-raw`, so a body starting
+  with `@` is sent as written, never read from that file and uploaded, and
+  each header as one quoted line of the config it reads on stdin (`\` and `"`
+  escaped): a header name or value holding a line break or NUL is refused
+  (`INVALID_INPUT`, by the input schema for both providers and again by curl's
+  for a stored credential), since a new line there would be another curl
+  option (`data-binary = @file`, `output = path`). Both
+  providers judge `expectText` and `expectJson` on the redacted body, so an
+  expectation cannot probe a secret the output hides.
+  An agent's call naming the address anywhere in its input is refused before
+  it runs ([tool-system.md](tool-system.md#the-execution-door-servicets)).
   `http.request` reports a redirect to another origin instead of following it
   (`output.redirectedTo`), so that host is classified on its own; a 303, or a
   301/302 after a non-GET, continues as a GET without a body; credentials never
@@ -169,7 +195,7 @@ Verified against the operator's account on 2026-09-24.
 - Response bodies are read up to 16 MB (`http.request`), 8 MB (`web.read`) and
   4 MB (`web.search`); curl has `--max-filesize`.
 - Every browser context the tools create aborts any request to the Control
-  Center's own address (`guardBrowserContext`): its dashboard page carries the
-  local token.
+  Center's own address (`guardBrowserContext`, in any of the spellings above):
+  its dashboard page carries the local token.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-27

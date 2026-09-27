@@ -10,6 +10,7 @@ import {
   type ChairmanActionType,
   type CommandKind,
   type TaskStatus,
+  isPlanRole,
 } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import { EngineError, type TaskEngine } from '../engine/engine.js';
@@ -282,7 +283,7 @@ export class ActionGateway {
       case 'RETURN_TO_STAGE':
         return this.goTo(task, action.params.stageKey, who, ctx, action.params.guidance);
       case 'REPLAN': {
-        const key = this.stageKeyOf(task, (s) => s.role === 'planner' && s.kind === 'agent', 'planning');
+        const key = this.stageKeyOf(task, (s) => isPlanRole(s.role) && s.kind === 'agent', 'planning');
         return this.goTo(task, key, `re-plan, ${who}`, ctx, action.params.guidance ?? 'Produce a new plan that takes the history of this task into account.');
       }
       case 'ADD_DIRECTIVE': {

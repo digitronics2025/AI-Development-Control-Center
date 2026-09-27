@@ -7,7 +7,7 @@ sources:
   - apps/orchestrator/src/engine/context.ts
   - apps/orchestrator/src/tools/service.ts
   - apps/orchestrator/src/chairman/checkpoints.ts
-verified_at: f6bc77e
+verified_at: 57af61a
 ---
 
 # Tasks across repositories
@@ -89,7 +89,9 @@ The workspace layout, each folder's facts, Git status and changed files, and
 all diffs packed together by priority into one 150 KB budget (folder-prefixed; every file
 not shown is named in `{{diff_coverage}}`, [workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)) replace the
 single-repository variables; the prompt tells agents to read each folder's
-`AGENTS.md`/`CLAUDE.md`.
+`AGENTS.md`/`CLAUDE.md`. `{{design_context}}` reads each repository's own
+design standard and `design/` memory and names them by folder
+(`web/design.md`, `### web/design/brief.md`; [design-agent.md](design-agent.md)).
 
 ## API and clients
 

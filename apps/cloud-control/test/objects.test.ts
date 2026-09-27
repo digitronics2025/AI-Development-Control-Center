@@ -2,7 +2,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { frame, sessionProofMessage, REMOTE_PROTOCOL_VERSION } from '@acc/shared';
-import { httpJson, startCloud, type Cloud } from './harness.js';
+import { httpBytes, httpJson, startCloud, type Cloud } from './harness.js';
 
 /**
  * Storage and the hub at the protocol level, with a hand-driven node:
@@ -124,10 +124,11 @@ describe('objects in R2', () => {
     ]);
     // Download: authenticated, byte-identical, hash in the header.
     const token = await cloud.signer.token();
-    const download = await fetch(`${cloud.url}/api/cloud/artifacts/${node.nodeId}/art-1`, { headers: { 'cf-access-jwt-assertion': token } });
+    // No keep-alive: the local dev proxy resets a reused socket now and then (harness.ts httpJson).
+    const download = await httpBytes(`${cloud.url}/api/cloud/artifacts/${node.nodeId}/art-1`, { 'cf-access-jwt-assertion': token });
     expect(download.status).toBe(200);
     expect(download.headers.get('x-acc-sha256')).toBe(sha);
-    expect(Buffer.from(await download.arrayBuffer()).equals(content)).toBe(true);
+    expect(download.bytes.equals(content)).toBe(true);
     expect((await fetch(`${cloud.url}/api/cloud/artifacts/${node.nodeId}/art-1`)).status).toBe(401);
     expect((await fetch(`${cloud.url}/api/cloud/artifacts/${node.nodeId}/art-2`, { headers: { 'cf-access-jwt-assertion': token } })).status).toBe(404);
 

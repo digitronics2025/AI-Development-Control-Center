@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   budgetInputSchema,
   budgetUpdateSchema,
+  NANOS_PER_USD,
+  type MediaSpendSummary,
   pricingInputSchema,
   usageExportSchema,
   usageFilterSchema,
@@ -78,6 +80,21 @@ export function registerUsageRoutes(app: FastifyInstance, s: AppServices): void 
     reply.header('content-disposition', `attachment; filename="${file.filename}"`);
     reply.header('cache-control', 'no-store');
     return reply.send(file.body);
+  });
+
+  // ----- paid media (docs/systems/design-agent.md) -----------------------------------
+
+  app.get(`${base}/media`, async (request): Promise<MediaSpendSummary> => {
+    const q = z.object({ taskId: z.string().min(1).max(200).optional(), days: z.coerce.number().int().min(1).max(MAX_RANGE_DAYS).default(30) }).parse(request.query);
+    const from = new Date(Date.now() - q.days * 86_400_000).toISOString();
+    const media = s.settings.get().media;
+    return {
+      allowPaidGeneration: media.allowPaidGeneration,
+      taskBudgetNanos: Math.round(media.taskBudgetUsd * NANOS_PER_USD),
+      spentNanos: u.media.spentNanos({ ...(q.taskId ? { taskId: q.taskId } : {}), from }),
+      from,
+      events: u.media.list({ taskId: q.taskId, from, limit: 200 }),
+    };
   });
 
   // ----- budgets -----------------------------------------------------------------

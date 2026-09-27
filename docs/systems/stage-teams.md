@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/engine/work-units.ts
   - packages/git/src/team.ts
   - packages/shared/src/stage-teams.ts
-verified_at: cabbcec
+verified_at: 57af61a
 ---
 
 # Stage Teams
@@ -28,6 +28,7 @@ validated by `teamIssues` in [workflow.ts](../../packages/shared/src/workflow.ts
 |---|---|
 | `mode: fixed` | the listed `workers` (2–4) run side by side. Level 1 stages only — fixed workers own no paths. A verdict stage names exactly one `primary` reviewer |
 | `mode: adaptive` | work units come from the plan's manifest (or, for a `fixer`, a decomposition run). No worker list, no verdict stages |
+| `mode: variants` | the listed `workers` (2–4, each an approach) each do the **whole** stage; a judge keeps one ([Variants](#variants)). Level 1–3 work stages, never a verdict stage or a judge-class role, no `primary`; optional `judge` pin (`agentId`/`model`/`effort`, else the stage's) |
 | `maxWorkers` | 2–4 per stage; also capped machine-wide by Settings → `execution.teamWorkerLimit` (default 3, a semaphore across every task) |
 
 Never on non-agent stages or at Level 4/5. Absent `team` = the stage exactly
@@ -43,7 +44,42 @@ adaptive Fix (max 2). **Full Autopilot**
 (one worker on the stage's agent, one pinned to Claude Code), adaptive Implement
 (max 3, two attempts so a crashed worker's siblings are reused), fixed review
 (primary correctness + risk), adaptive Fix (max 2); Test, App check, Verify, Git
-checkpoint, staging and Release unchanged. Other built-ins have no teams.
+checkpoint, staging and Release unchanged. **Frontend Design**
+([frontend-design.yaml](../../workflows/frontend-design.yaml)) — fixed Design
+brief (three Claude Code workers, bold, calm and contrarian directions, each
+drawing a style tile). Other built-ins have no teams, and none uses variants.
+
+## Variants
+
+[stage-team-variants.md](../plans/stage-team-variants.md). At Level 1 the
+variants run side by side in the task's tree (read-only). At Level 2–3 each
+runs in its own child checkout of the wave base, exactly as a write unit
+does, but owning the whole repository: no `SCOPE_VIOLATION`, because only one
+variant is ever integrated. Each is told it is one of N competing variants,
+its approach, and to do the complete work (`variantSection`).
+
+A failed variant is one approach fewer, not a failed stage; the stage fails
+only when every variant failed. A lone finished variant is kept without a
+judge. Otherwise one **judge** unit (kind `judge`, key `judge`) runs read-only
+at Level 1 in the task's tree, which no variant touched. It gets the stage
+context with `Role: judge`, and each finished variant's approach, agent,
+changed files, diff against its base (40 KB each, 100 KB in all, redacted)
+and report (12 KB). It must end with `WINNER: <key>` (`parseWinner`: the last
+such line); naming no finished variant fails the stage (`UNKNOWN`). Prompt
+`<role prompt>-judge.md`, answer `<role report>-judge.md`.
+
+Then only the winner is integrated (`integrate` with that one unit,
+byte-exact against its wave base; no integration pass) or, at Level 1,
+becomes the stage's result. The role's report is the winner's report plus
+"Variant kept", the variants it was kept over, and the judge's reasons. The
+others stay `SUCCESS` with "Not chosen:" in their summary, their reports as
+unit artifacts and their results as hidden refs. The stage summary reads "N
+variants (k failed); kept X: …", and the completion event's `team` data
+carries `variants: { chosen, finished, judgeMs }`.
+
+Not yet: a running app per variant, so a judge could open each build in a
+browser (the App runtime starts one app per task worktree). Specialty routing
+is deferred until per-worker outcome data exists (the plan's gate).
 
 ## Manifest
 
@@ -203,7 +239,8 @@ the lead "Integration finished · no changes" / "· N files changed" (or
   the active directive ids) succeeded is `REUSED` instead of run. A read-only
   unit is reused when the files it read are the same (its `base_commit` holds
   their `committableTree`). A write unit is reused when its result still lies
-  within its paths and one of two things holds:
+  within its paths (a variant owns the whole repository, so it has none to
+  check) and one of two things holds:
   - its base commit's tree equals the new base tree, so its result is
     integrated with this wave; or
   - it ran in the run of this stage just before this one, that run ended
@@ -215,7 +252,8 @@ the lead "Integration finished · no changes" / "· N files changed" (or
 
   A reused report comes from the run that produced it, never from an empty
   reused row. Failed, stopped and interrupted units rerun, and so does a unit
-  that changed nothing when its base has moved.
+  that changed nothing when its base has moved. A variants judge is never
+  reused: it runs again whenever two or more variants finished, reused or not.
 - **Restart:** `engine.recover()` marks `RUNNING` units `FAILED`/`INTERRUPTED`
   and `QUEUED` ones `CANCELLED`; leftover processes are stopped by the
   existing leftover-execution pass; `team.sweep()` deletes every child checkout
@@ -223,14 +261,15 @@ the lead "Integration finished · no changes" / "· N files changed" (or
   is never integrated.
 - **Cleanup:** completion and cancel delete `refs/acc/team/<task>/` and the
   task's child folder.
-- **Limits:** every worker, decomposer, integration and coverage follow-up run
-  is an `agent` execution, so the Chairman's run and runtime counts include
-  them. A supervised team checks the **task's own** `task.limits` (what
+- **Limits:** every worker, decomposer, integration, judge and coverage
+  follow-up run is an `agent` execution, so the Chairman's run and runtime
+  counts include them. A supervised team checks the **task's own** `task.limits` (what
   `beforeStage` checks, extended when the operator resumes past a limit) with
   the Chairman's `limitReached`, before the decomposer, before each wave
   (counting every unit of the wave that must run — reused units do not — plus,
-  for a write team's last wave, the lead's pass that follows), before the
-  integration pass and before a coverage follow-up. When the runs would not
+  for a write team's last wave, the lead's pass or the variants judge that
+  follows), before the integration pass, before a variants judge and before a
+  coverage follow-up. When the runs would not
   fit, no run of that step starts: its units are `CANCELLED`, the stage
   `CANCELLED` ("Paused at a limit: …"), and the task parks `WAITING_FOR_USER`
   with blocker `limit` and a `TASK_WAITING` event, as the Chairman parks it
@@ -255,7 +294,10 @@ realtime `workUnit` (live-only to the cloud, [remote-node.md](remote-node.md)),
 `executions.work_unit_id`, `usage_events.work_unit_key` (the ledger links
 attempts per unit, so siblings are not retries; the task usage flow lists
 `workUnits` per stage), events `STAGE_TEAM` and `WORK_UNIT`. Migration 19 is
-additive; old rows read NULL.
+additive; old rows read NULL. The Stage Timeline's team line counts workers
+only (`teamSummary`, [team.ts](../../apps/dashboard/src/pages/task/team.ts)):
+`Team 2/3 running`, `Team of 3 · 1 failed`, `Team of 3 · judging` while a
+variants judge runs and no variant failed, `· integrating`, `· done`.
 
 ## Parallel-safe checks
 
@@ -304,6 +346,10 @@ batch or not, waits for it to end before it starts.
   only when every path it changed still holds its result. If a later wave of
   that run, the operator or the lead changed one of those paths, the unit
   reruns on top of the current files.
+- A restart between writing the kept variant into the task and completing
+  the stage leaves the winner in the task's files: on the next run it is
+  reused as "already in the task", while the other variants run again on
+  files that hold it, and the judge may then keep one of those on top of it.
 - A **failed** Fix run's split is not reused. The next run splits the failures
   again, and its units are reused only if the new split is identical, which is
   rare.

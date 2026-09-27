@@ -4,6 +4,7 @@ import { redact } from '@acc/security';
 import {
   FINDING_KIND_LABEL,
   INSTALLABLE_TOOLS,
+  NANOS_PER_USD,
   reviewTrigger,
   type LearningFinding,
   type LearningImprovement,
@@ -29,6 +30,7 @@ import { checkAll, checkLearnedText } from './safety.js';
 import { LOG_PATTERNS, collectSignals } from './signals.js';
 import { ManagedSkills, type MarketplaceSkill } from './skills.js';
 import { LearningStore } from './store.js';
+import { MediaLedger } from '../usage/media.js';
 
 export interface LearningDeps {
   store: Store;
@@ -197,6 +199,7 @@ export class LearningService {
       strategies: this.d.chairman.store.listStrategyRuns(taskId, 200),
       failedTestRuns: this.d.store.listTestRuns(taskId).filter((r) => r.status === 'failed').length,
       providersFor: (capability) => this.d.tools.registry.offering(capability).map((o) => o.provider.id),
+      media: { spentNanos: new MediaLedger(this.d.store.db).spentNanos({ taskId }), budgetNanos: Math.round(this.d.settings.get().media.taskBudgetUsd * NANOS_PER_USD) },
     });
 
     const now = () => new Date().toISOString();

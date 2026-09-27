@@ -4,7 +4,7 @@ sources:
   - packages/security/**
   - apps/orchestrator/src/http/security.ts
   - apps/orchestrator/src/engine/script-resolve.ts
-verified_at: 2d516aa
+verified_at: 57af61a
 ---
 
 # Security
@@ -13,7 +13,7 @@ verified_at: 2d516aa
 
 1. **Host header** must be `127.0.0.1`, `localhost` or `[::1]` → blocks DNS rebinding (421).
 2. **Origin**, when present, must be a loopback `http://` origin, a `vscode-webview://` origin, or listed in `ACC_ALLOWED_ORIGINS` (403). Allowed origins get CORS headers.
-3. **Bearer token** for `/api/*` and `/ws` (`?token=` for WebSockets, compared in constant time). The token lives in the data folder; the dashboard gets it only through its own same-origin HTML. The check is decided on the percent-decoded path **and** the route the router matched, never on the raw request line (the router decodes `/%61pi/…` to `/api/…`); an undecodable path is 400. The tool-session and connected-app exemptions apply only when the matched route is in that group.
+3. **Bearer token** for `/api/*` and `/ws` (`?token=` for WebSockets, compared in constant time); `GET /oauth/mcp/callback`, outside `/api`, is proven by the single-use sign-in state it carries instead ([mcp.md](mcp.md#oauth)), still behind checks 1 and 2. The token lives in the data folder; the dashboard gets it only through its own same-origin HTML. The check is decided on the percent-decoded path **and** the route the router matched, never on the raw request line (the router decodes `/%61pi/…` to `/api/…`); an undecodable path is 400. The tool-session and connected-app exemptions apply only when the matched route is in that group.
 4. Binds to loopback only; `ACC_HOST` elsewhere is refused unless `ACC_ALLOW_REMOTE=1`.
 5. Dashboard HTML ships a strict CSP (`script-src 'self'`, no framing).
 
@@ -25,7 +25,9 @@ loses `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
 keys (case-insensitive). In **every** billing mode each child also loses the
 ambient provider credentials an operator keeps in their own environment
 (`AMBIENT_CREDENTIAL_ENV_VARS`: `CLOUDFLARE_API_TOKEN`, `GH_TOKEN`/`GITHUB_TOKEN`,
-`NPM_TOKEN`, `AWS_*` keys, `DATABASE_URL`, deploy-platform tokens …); a tool that
+`NPM_TOKEN`, `AWS_*` keys, `DATABASE_URL`, deploy-platform tokens, and image,
+video and voice generation keys such as `FAL_KEY`, `REPLICATE_API_TOKEN`,
+`RUNWAYML_API_SECRET`, `ELEVENLABS_API_KEY` …); a tool that
 needs one receives it from the credential broker for that call only. Git — and
 therefore every repository hook — and the Playwright browser run with
 `credentialFreeEnv`, which strips all of the above whatever the mode. At start
@@ -42,8 +44,26 @@ Applied to log lines (stateful across multi-line private keys), command
 strings, directives, artifacts, event messages and error text before storage
 or broadcast. Covers provider key formats, GitHub/GitLab/Slack/AWS/Google/
 Stripe/npm tokens, JWTs, bearer/basic headers, URL credentials, cookies,
-`secret-name=value` pairs, and the literal values of sensitive environment
-variables present on the machine.
+`secret-name=value` pairs, the signature and session parameters of signed URLs
+(`sig`, `signature`, `X-Amz-Signature`, `X-Goog-Signature`,
+`X-Amz-Security-Token`, `X-Amz-Credential`, `X-Goog-Credential`: only their
+values, so host, path and expiry stay readable), and the literal values of
+sensitive environment variables present on the machine.
+
+An `Authorization:` header value is masked whatever it looks like (any
+scheme, any case, all lowercase), `:` included, so both halves of a fal
+`Key <id>:<secret>` go. A `Bearer`/`Basic`/`Token` value elsewhere is masked
+in any case too. Two design spellings stay readable
+([design-agent.md](design-agent.md)) only when they are the whole value, with
+regression tests showing real credentials still masked: a CSS custom property
+(`token --color-accent`, also after `Authorization:`) and, outside that
+header, plain hyphenated words (`Basic typography-scale`); a value that only
+starts with `--` is masked. A `?`/`&` parameter that names a secret
+(`?api_key=…`, a form body's `&client_secret=…`) ends at the next parameter,
+so the rest of the URL stays readable; any other `key=value` secret keeps `&`
+(a password may hold one). After names such as `accentToken` a design value
+(`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`) is skipped only when it
+is the whole value: `#Bad!Pass99` and `2024%SummerPass` are masked.
 
 `detectSecrets` reports which **blocking** rules match (provider keys, cloud
 and registry tokens, credentials in URLs, private keys — not JWTs or the broad
@@ -134,7 +154,10 @@ needs an approval with a typed confirmation (the task ID).
 - Credentials: [credential-broker.md](credential-broker.md), including the
   MyVault bridge: its routes take the local token like any `/api` route, are
   not tools, not MCP and not remote operations, and trusted MyVault origins
-  are added only from the dashboard. Policy and the
+  are added only from the dashboard. A `media` (generation) key opens only for
+  a read that asks for that kind — the media tools, behind the spend gate;
+  `http.request`, a secret put or an MCP server's variables get nothing.
+  Policy and the
   privileged helper: [autopilot.md](autopilot.md). Terminals are loopback only
   ([pty.md](pty.md)).
 - Redaction also covers values the broker hands out
@@ -172,7 +195,9 @@ dials out, stays on `127.0.0.1`, and the local token never leaves the machine.
 The cloud may only ask for typed catalog operations, each mapped to one fixed
 local route, so the classifier, approvals, tool policy and subscription-only
 guard apply unchanged; the node also refuses anything that would loosen what
-runs without asking (billing, auto-approve, policy, repository commands).
+runs without asking or what may be spent (billing, auto-approve, policy,
+repository commands, paid media generation and media budgets), and MCP
+server sign-in and sign-out happen on the machine only.
 Everything sent is allowlisted by message type, stripped of path and secret
 fields, path-scrubbed and redacted ([remote-node.md](remote-node.md#egress)).
 Revocation from the cloud or the admin CLI stops the node for good.

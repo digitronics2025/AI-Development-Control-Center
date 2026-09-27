@@ -66,6 +66,13 @@ describe('latestOperatorItems', () => {
     expect(latestOperatorItems(review, 'All criteria met.')).toEqual([]);
     expect(latestOperatorItems(review, null)).toEqual(['The messenger path is unit-tested only.']);
   });
+
+  it('keeps the list of each review stage, so a visual critique is not hidden by the code review after it', () => {
+    const critique = 'VERDICT: PASS\nNEEDS OPERATOR: The brand font licence is not in the repository.';
+    const code = 'NEEDS OPERATOR: The staging URL is not configured.\nVERDICT: PASS';
+    expect(latestOperatorItems([critique, code, null], null)).toEqual(['The brand font licence is not in the repository.', 'The staging URL is not configured.']);
+    expect(latestOperatorItems([critique, code], 'All criteria met.')).toEqual([]);
+  });
 });
 
 describe('parseVerdict', () => {

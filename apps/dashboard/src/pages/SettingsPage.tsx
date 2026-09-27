@@ -58,6 +58,7 @@ const SECTIONS = [
   { id: 'workflows', label: 'Workflows' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'billing', label: 'Billing' },
+  { id: 'media', label: 'Media generation' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'remote', label: 'Remote access' },
   { id: 'advanced', label: 'Advanced' },
@@ -76,17 +77,23 @@ function Row({ title, description, children }: { title: string; description?: Re
   );
 }
 
-/** A bounded whole-number field; invalid input keeps the last valid value. */
-function LimitField({ label, helper, value, min, max, onChange }: { label: string; helper: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
+/**
+ * A bounded whole-number field; invalid input keeps the last valid value. `cents`: an amount of money, whole cents
+ * allowed (0.50), instead of a whole number.
+ */
+function LimitField({ label, helper, value, min, max, cents = false, onChange }: { label: string; helper: string; value: number; min: number; max: number; cents?: boolean; onChange: (value: number) => void }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
-  const n = Number(text);
-  const invalid = !Number.isInteger(n) || n < min || n > max;
+  const valid = (v: number) => Number.isFinite(v) && (cents ? Math.abs(Math.round(v * 100) - v * 100) < 1e-6 : Number.isInteger(v)) && v >= min && v <= max;
+  // An empty money field is not zero dollars; an empty count keeps reading as 0, as it always has.
+  const blank = (t: string) => cents && t.trim() === '';
+  const invalid = blank(text) || !valid(Number(text));
   return (
-    <Field label={label} inline helper={helper} error={invalid ? `Enter a whole number from ${min} to ${max}.` : null}>
+    <Field label={label} inline helper={helper} error={invalid ? (cents ? `Enter an amount from ${min} to ${max}, in whole cents.` : `Enter a whole number from ${min} to ${max}.`) : null}>
       <Input
         type="number"
-        inputMode="numeric"
+        inputMode={cents ? 'decimal' : 'numeric'}
+        step={cents ? 0.01 : 1}
         min={min}
         max={max}
         value={text}
@@ -94,7 +101,7 @@ function LimitField({ label, helper, value, min, max, onChange }: { label: strin
         onChange={(e) => {
           setText(e.target.value);
           const next = Number(e.target.value);
-          if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+          if (!blank(e.target.value) && valid(next)) onChange(next);
         }}
       />
     </Field>
@@ -565,6 +572,36 @@ export function SettingsPage() {
             setApiConfirmOpen(false);
           }}
         />
+      </Panel>
+    ),
+    media: (
+      <Panel title="Media generation" headingLevel={2} description="Image and video generation the design agent may pay for (fal). Off by default.">
+        <div className="flex flex-col divide-y divide-border-subtle">
+          <Row
+            title="Allow paid generation"
+            description="Each paid call's estimate is reserved first; a call that does not fit the task's budget or a media budget that stops runs is refused. The key is a Tools → Credentials entry of kind media named fal."
+          >
+            <Switch aria-label="Allow paid generation" checked={draft.media.allowPaidGeneration} onCheckedChange={(v) => set('media', { ...draft.media, allowPaidGeneration: v })} />
+          </Row>
+          <div className="py-3">
+            <LimitField
+              label="Budget per task (US dollars)"
+              helper="Estimated media spend one task may reserve."
+              value={draft.media.taskBudgetUsd}
+              min={0}
+              max={1000}
+              cents
+              onChange={(v) => set('media', { ...draft.media, taskBudgetUsd: v })}
+            />
+          </div>
+          <p className="py-3 text-small text-fg-secondary">
+            For a daily, weekly or monthly cap across tasks, add a Paid media generation budget in{' '}
+            <Link to="/usage?tab=budgets" className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus">
+              Usage & Costs → Budgets
+            </Link>
+            . Estimates use conservative default prices; the fal bill is the truth.
+          </p>
+        </div>
       </Panel>
     ),
     notifications: (

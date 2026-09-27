@@ -34,6 +34,8 @@ export const PROMPT_PLACEHOLDERS = {
   fix_cycle: 'Fix cycles used so far (the current one during a fix stage)',
   max_fix_cycles: "The task's fix cycle limit",
   team_stages: 'Later stages of this workflow that can run as an adaptive Stage Team, with their keys and worker limits, or (none)',
+  screenshots: 'Screenshots and images the Control Center kept for this task so far (browser checks, the visual matrix, generated media), newest first, by file path',
+  design_context: "The repository's design standard and design memory: design.md or DESIGN.md, a design/ folder (brief, tokens), a Tailwind theme — by path and size, with a short design brief inline",
 } as const;
 
 export type PromptPlaceholder = keyof typeof PROMPT_PLACEHOLDERS;

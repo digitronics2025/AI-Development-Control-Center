@@ -6,6 +6,9 @@
  *   pnpm verify:agents --run --only claude --claude-model haiku --codex-model gpt-5.6-sol
  *   pnpm verify:agents --only claude --claude-model haiku --skills
  *                                       also proves skills run inside a stage's limits
+ *   pnpm verify:agents --images         also checks the model sees pictures: Claude Code
+ *                                       reading a PNG, Codex given one with -i, and an
+ *                                       MCP image block (docs/systems/design-agent.md)
  *   pnpm verify:agents --only claude --claude-model haiku --permissions
  *                                       also proves a repository's allow rules and hooks cannot widen a stage
  *   pnpm verify:agents --only codex --mcp [--codex-mcp-repo <trusted repo>]
@@ -15,6 +18,7 @@
  * stripped (Subscription Only), and asks the agent to reply with one word.
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { crc32, deflateSync } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -94,10 +98,73 @@ for (const { adapter, model } of adapters) {
 }
 
 if (flag('skills')) await verifySkills();
+if (flag('images')) await verifyImages();
 if (flag('permissions')) await verifyPermissions();
 if (flag('mcp')) await verifyCodexMcp();
 
 console.log(failures ? `\n${failures} check(s) did not pass.` : '\nAll checks passed.');
+
+/** A solid-colour PNG built in memory: a picture a model can describe in one word. */
+function solidPng(size: number, [r, g, b]: [number, number, number]): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body) >>> 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: size }, () => [r, g, b]).flat())]);
+  const raw = Buffer.concat(Array.from({ length: size }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+/**
+ * Real-CLI check that pictures reach the model (docs/systems/design-agent.md):
+ * Claude Code reading a PNG from disk (the designer's reference images), Codex
+ * given one with `-i` (image attachments), and Claude Code shown an MCP image
+ * block (the Control Center's screenshots and media.image.view travel that way).
+ * Each asks for the colour of a solid red square in one word.
+ */
+async function verifyImages() {
+  console.log('\n== Pictures the model sees ==');
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-images-'));
+  const png = path.join(cwd, 'probe.png');
+  writeFileSync(png, solidPng(64, [255, 0, 0]));
+  const expect = (label: string, ok: boolean, detail: string) => {
+    console.log(`${ok ? 'pass' : 'FAIL'}  ${label}${ok ? '' : ` — ${redact.redact(detail).slice(0, 300)}`}`);
+    if (!ok) failures++;
+  };
+  const ask = async (entry: { adapter: AgentAdapter; model: string }, prompt: string, extra: Record<string, unknown> = {}) => {
+    const lines: string[] = [];
+    const handle = await entry.adapter.execute({ ...options, executionId: randomUUID(), cwd, prompt, model: entry.model, effort: 'low', permissionLevel: 1, timeoutMs: 240_000, onLine: (_s, t) => lines.push(t), ...extra });
+    const result = await handle.done;
+    return { ok: result.status === 'succeeded' && /\bred\b/i.test(result.output), detail: `${result.status}: ${result.output || lines.join(' | ')}` };
+  };
+  const oneWord = 'Reply with the single colour that fills it, as one lowercase word, and nothing else.';
+  try {
+    const claude = adapters.find((a) => a.adapter.id === 'claude');
+    const codex = adapters.find((a) => a.adapter.id === 'codex');
+    if (claude) {
+      const read = await ask(claude, `Use the Read tool to open probe.png in this folder and look at it. ${oneWord}`);
+      expect('Claude Code sees a PNG it reads from disk', read.ok, read.detail);
+      const fixture = path.join(import.meta.dirname, '..', 'packages', 'mcp', 'test', 'fixtures', 'red-picture-server.mjs');
+      const mcp = await ask(claude, `Call the tool named picture on the MCP server "acc" and look at the image it returns. ${oneWord}`, { toolBridge: { name: 'acc', command: process.execPath, args: [fixture], env: {} } });
+      expect('Claude Code sees an MCP image block', mcp.ok, mcp.detail);
+    }
+    if (codex) {
+      const attached = await ask(codex, `Look at the attached image. ${oneWord}`, { images: [png] });
+      expect('Codex sees an image passed with -i', attached.ok, attached.detail);
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
 
 /**
  * Real-CLI proof that a Codex run starts no MCP server but the Control Center's

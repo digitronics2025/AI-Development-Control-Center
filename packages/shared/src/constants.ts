@@ -54,8 +54,62 @@ export const ROLES = [
   'verifier',
   'deployer',
   'reporter',
+  'designer',
+  'art-director',
+  'visual-critic',
 ] as const;
 export type Role = (typeof ROLES)[number];
+
+/**
+ * What kind of work a role does, which is what the engine, the gate, the
+ * report and the Chairman act on — never a role's name
+ * (docs/plans/frontend-design-agent.md):
+ *  - `investigate`: finds out; `plan`: decides the approach (Discuss First
+ *    stops after it for approval);
+ *  - `write`: changes code (the READY gate, the report's Changed section,
+ *    "undo last change" and remedies count its edits);
+ *  - `judge`: returns a verdict and lists operator items without stopping
+ *    (`review` or `verify` kind);
+ *  - `test`, `deploy`, `report`: the orchestrator's own stage roles.
+ */
+export type RoleClass = 'investigate' | 'plan' | 'write' | 'judge' | 'test' | 'deploy' | 'report';
+export const ROLE_CLASS: Record<Role, RoleClass> = {
+  investigator: 'investigate',
+  planner: 'plan',
+  implementer: 'write',
+  tester: 'test',
+  reviewer: 'judge',
+  fixer: 'write',
+  verifier: 'judge',
+  deployer: 'deploy',
+  reporter: 'report',
+  designer: 'write',
+  'art-director': 'plan',
+  'visual-critic': 'judge',
+};
+
+export const roleClass = (role: Role | string | null | undefined): RoleClass | null => (role && Object.hasOwn(ROLE_CLASS, role) ? ROLE_CLASS[role as Role] : null);
+
+/** Roles whose agent stage writes code (the `write` class). */
+export const WRITE_ROLES: readonly Role[] = ROLES.filter((r) => ROLE_CLASS[r] === 'write');
+
+export function isWriteRole(role: Role | string | null | undefined): boolean {
+  return roleClass(role) === 'write';
+}
+
+export function isJudgeRole(role: Role | string | null | undefined): boolean {
+  return roleClass(role) === 'judge';
+}
+
+export function isPlanRole(role: Role | string | null | undefined): boolean {
+  return roleClass(role) === 'plan';
+}
+
+/** What a judge's verdict is: a review (reviewer, visual critic) or the final verification (verifier). */
+export function judgeKind(role: Role | string | null | undefined): 'review' | 'verify' | null {
+  if (!isJudgeRole(role)) return null;
+  return role === 'verifier' ? 'verify' : 'review';
+}
 
 /** `release`: send the tested commit live after a typed approval (docs/plans/RELEASE_STAGE_PLAN.md). */
 export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify', 'release'] as const;
@@ -223,6 +277,9 @@ export const ARTIFACT_TYPES = [
   'tool-output',
   /** Page evidence the operator sent from Private Browser (a re-check): never leaves this computer (remote.ts). */
   'operator-evidence',
+  /** Generated or collected media (docs/systems/design-agent.md): masters and previews kept out of the repository. */
+  'image',
+  'video',
 ] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 

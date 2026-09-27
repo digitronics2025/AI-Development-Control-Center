@@ -1,7 +1,7 @@
 import { classifyCommand } from '@acc/security';
 import { z } from 'zod';
 import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
-import { checkPage } from './browser.js';
+import { checkPage, viewportField } from './browser.js';
 import { waitForHttp } from './http.js';
 
 /**
@@ -15,12 +15,17 @@ export const webVerifyInput = z.object({
   startCommand: z.string().min(1).max(2000).optional().describe('Command that starts the app (omit when it is already running).'),
   url: z.string().url().max(1000).describe('Base URL the app serves, e.g. http://127.0.0.1:5173'),
   paths: z.array(z.string().max(500).regex(/^\//)).min(1).max(20).default(['/']),
-  viewports: z.array(z.enum(['desktop', 'phone', 'tablet'])).min(1).max(3).default(['desktop', 'phone']),
+  viewports: z.array(viewportField).min(1).max(5).default(['desktop', 'phone']),
+  /** Check each page in these colour schemes; omitted = the browser's default (light) only. */
+  colorSchemes: z.array(z.enum(['light', 'dark'])).min(1).max(2).optional(),
   readyTimeoutSec: z.number().int().min(5).max(600).default(120),
   mode: z.enum(['browser', 'http']).default('browser'),
   expectStatus: z.number().int().optional(),
 });
 export type WebVerifyInput = z.infer<typeof webVerifyInput>;
+
+/** "desktop and phone", "phone, tablet and desktop": how a summary names a few items. */
+const listed = (items: readonly string[]) => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
 export async function verifyWeb(input: WebVerifyInput, ctx: OperationContext): Promise<OperationResult> {
   const evidence: string[] = [];
@@ -60,15 +65,20 @@ export async function verifyWeb(input: WebVerifyInput, ctx: OperationContext): P
         evidence.push(`GET ${p} → ${res.status}`);
         continue;
       }
-      const result = await checkPage(ctx, { url, viewports: input.viewports, waitUntil: 'load', settleMs: 800, sameOriginOnly: true, screenshot: true, timeoutSec: 45 });
-      pages.push(result.output);
-      evidence.push(...(result.evidence ?? []));
-      artifacts.push(...(result.artifacts ?? []));
-      if (!result.ok) problems.push(...(((result.output as { problems?: string[] })?.problems ?? [result.summary]).map((x) => `${p} ${x}`)));
+      // Each colour scheme asked for is its own pass: contrast, images and theme parity differ between them.
+      for (const scheme of input.colorSchemes ?? [undefined]) {
+        const result = await checkPage(ctx, { url, viewports: input.viewports, waitUntil: 'load', settleMs: 800, sameOriginOnly: true, screenshot: true, timeoutSec: 45, ...(scheme ? { colorScheme: scheme } : {}) });
+        pages.push(scheme ? { colorScheme: scheme, ...(result.output as object) } : result.output);
+        evidence.push(...(result.evidence ?? []).map((e) => (scheme ? `${scheme}: ${e}` : e)));
+        artifacts.push(...(result.artifacts ?? []));
+        if (!result.ok) problems.push(...(((result.output as { problems?: string[] })?.problems ?? [result.summary]).map((x) => `${p}${scheme ? ` (${scheme})` : ''} ${x}`)));
+      }
     }
     return {
       ok: problems.length === 0,
-      summary: problems.length ? `Verification found ${problems.length} problem(s): ${problems[0]}` : `Verified ${input.paths.length} page(s) at ${input.mode === 'browser' ? input.viewports.join(' and ') : 'HTTP'}${input.mode === 'browser' ? ' widths' : ''}`,
+      summary: problems.length
+        ? `Verification found ${problems.length} problem(s): ${problems[0]}`
+        : `Verified ${input.paths.length} page(s) at ${input.mode === 'browser' ? listed(input.viewports) : 'HTTP'}${input.mode === 'browser' ? ` widths${input.colorSchemes ? ` in ${listed(input.colorSchemes)}` : ''}` : ''}`,
       output: { problems, pages },
       evidence,
       artifacts,
@@ -93,7 +103,7 @@ export function verifyProvider(): ToolProvider {
       operation({
         id: 'verify.web',
         title: 'Verify the app end to end',
-        description: 'Start the app (optional), wait until it answers, open each path at desktop and phone widths (or call it over HTTP), report console errors, failed requests and screenshots, then stop it.',
+        description: 'Start the app (optional), wait until it answers, open each path at the chosen widths (desktop and phone by default) and colour schemes (or call it over HTTP), report console errors, failed requests, horizontal scrolling and screenshots, then stop it.',
         input: webVerifyInput,
         level: 2,
         // The start command is a free-form command line run by a shell: it is judged like one (audit F-04).

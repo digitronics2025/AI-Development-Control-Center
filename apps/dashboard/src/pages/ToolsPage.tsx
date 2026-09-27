@@ -1,4 +1,4 @@
-import { KeyRound, Plus, RefreshCw, Server, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import { KeyRound, LogIn, LogOut, Plus, RefreshCw, Server, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
@@ -249,6 +249,11 @@ function TerminalsTab() {
   );
 }
 
+/** When an MCP server's access token renews, or null once it has expired: tokens renew only when the server is next used. */
+export function upcomingRenewal(expiresAt: string | null, now = Date.now()): string | null {
+  return expiresAt && Date.parse(expiresAt) > now ? expiresAt : null;
+}
+
 function McpTab() {
   const servers = useMcpServers();
   const mutations = useMcpMutations();
@@ -258,7 +263,31 @@ function McpTab() {
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<McpServerView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', transport: 'stdio' as 'stdio' | 'http', command: '', args: '', url: '', level: '2', envVar: '', credential: '' });
+  const [form, setForm] = useState({ name: '', transport: 'stdio' as 'stdio' | 'http', command: '', args: '', url: '', level: '2', envVar: '', credential: '', oauth: false, scope: '' });
+  // The sign-in page of the server being signed in to, shown as a link too (a browser may block the new tab).
+  const [signIn, setSignIn] = useState<{ id: string; url: string } | null>(null);
+  const [oauthError, setOauthError] = useState<{ title: string; message: string } | null>(null);
+  // The OAuth callback and the sealed tokens live on the machine itself: the cloud dashboard cannot sign in or out.
+  const local = connection.mode === 'local';
+  const startSignIn = (s: McpServerView) => {
+    setOauthError(null);
+    mutations.signIn.mutate(s.id, {
+      onSuccess: (r) => {
+        if (r.authorized) {
+          setSignIn(null);
+          toast(`${s.name} is signed in`);
+          return;
+        }
+        setSignIn({ id: s.id, url: r.authorizationUrl });
+        window.open(r.authorizationUrl, '_blank', 'noopener,noreferrer');
+      },
+      onError: (e) => setOauthError({ title: 'Sign-in did not start', message: errorMessage(e) }),
+    });
+  };
+  const signOut = (s: McpServerView) => {
+    setOauthError(null);
+    mutations.signOut.mutate(s.id, { onError: (e) => setOauthError({ title: 'Not signed out', message: errorMessage(e) }) });
+  };
   const submit = () => {
     setError(null);
     mutations.create.mutate(
@@ -270,6 +299,8 @@ function McpTab() {
         url: form.transport === 'http' ? form.url.trim() : null,
         permissionLevel: Number(form.level) as PermissionLevel,
         envCredentials: form.envVar.trim() && form.credential ? { [form.envVar.trim()]: form.credential } : {},
+        auth: form.transport === 'http' && form.oauth ? 'oauth' : 'none',
+        oauthScope: form.transport === 'http' && form.oauth && form.scope.trim() ? form.scope.trim() : null,
       },
       {
         onSuccess: (s) => {
@@ -287,6 +318,11 @@ function McpTab() {
           Add server
         </Button>
       </div>
+      {oauthError ? (
+        <Banner tone="danger" role="alert" title={oauthError.title}>
+          {oauthError.message}
+        </Banner>
+      ) : null}
       {servers.isLoading ? (
         <Skeleton className="h-40" />
       ) : servers.data?.length ? (
@@ -297,8 +333,20 @@ function McpTab() {
                 <span className="text-body font-semibold text-fg">{s.name}</span>
                 <StatusChip visual={s.health?.ok ? TOOL_HEALTH_VISUAL.ready : s.health ? TOOL_HEALTH_VISUAL.error : TOOL_HEALTH_VISUAL.unchecked} size="compact" />
                 <Badge>{s.transport === 'stdio' ? 'Local process' : 'HTTP'}</Badge>
+                {s.auth === 'oauth' ? <Badge>OAuth</Badge> : null}
                 <PermissionBadge level={s.permissionLevel} />
                 <span className="flex-1" />
+                {s.auth === 'oauth' ? (
+                  s.oauth?.signedIn ? (
+                    <Button size="compact" icon={LogOut} onClick={() => signOut(s)} loading={mutations.signOut.isPending && mutations.signOut.variables === s.id} disabled={!local || !connection.online} disabledReason={local ? 'Offline' : 'Sign out on the machine itself'}>
+                      Sign out
+                    </Button>
+                  ) : (
+                    <Button size="compact" icon={LogIn} onClick={() => startSignIn(s)} loading={mutations.signIn.isPending && mutations.signIn.variables === s.id} disabled={!local || !connection.online} disabledReason={local ? 'Offline' : 'Sign in on the machine itself'}>
+                      Sign in
+                    </Button>
+                  )
+                ) : null}
                 <Switch aria-label={`${s.name} enabled`} checked={s.enabled} onCheckedChange={(enabled) => mutations.toggle.mutate({ id: s.id, enabled })} disabled={!connection.online} />
                 <Button size="compact" icon={RefreshCw} onClick={() => mutations.check.mutate(s.id)} loading={mutations.check.isPending && mutations.check.variables === s.id} disabled={!connection.online}>
                   Check
@@ -306,6 +354,31 @@ function McpTab() {
                 <IconButton icon={Trash2} label={`Remove ${s.name}`} size="compact" onClick={() => setRemoving(s)} />
               </div>
               <code className="font-mono text-small text-fg-secondary wrap-anywhere">{s.transport === 'stdio' ? [s.command, ...s.args].join(' ') : s.url}</code>
+              {s.auth === 'oauth' ? (
+                <p className="text-small text-fg-secondary">
+                  {s.oauth?.signedIn ? (
+                    <>
+                      Signed in <RelativeTime iso={s.oauth.signedInAt} />
+                      {upcomingRenewal(s.oauth.expiresAt) ? (
+                        <>
+                          {' '}· access renews <RelativeTime iso={s.oauth.expiresAt} />
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    'Not signed in: its tools stay off until you sign in.'
+                  )}
+                </p>
+              ) : null}
+              {signIn?.id === s.id && !s.oauth?.signedIn ? (
+                <p className="text-small text-fg-secondary">
+                  Finish in the tab that opened, or{' '}
+                  <a href={signIn.url} target="_blank" rel="noopener noreferrer" className="rounded-sm text-fg underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus">
+                    open the sign-in page
+                  </a>
+                  . This page updates when you are back.
+                </p>
+              ) : null}
               {s.health?.error ? <p className="text-small text-danger">{s.health.error}</p> : null}
               {s.health?.ok ? <p className="text-small text-fg-secondary">{s.health.tools.length} tool(s): {s.health.tools.slice(0, 12).map((t) => t.name).join(', ')}{s.health.tools.length > 12 ? '…' : ''}</p> : null}
             </li>
@@ -349,9 +422,23 @@ function McpTab() {
               </Field>
             </>
           ) : (
-            <Field label="URL">
-              <Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} className="font-mono" placeholder="https://…/mcp" />
-            </Field>
+            <>
+              <Field label="URL">
+                <Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} className="font-mono" placeholder="https://…/mcp" />
+              </Field>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="text-body text-fg">Sign in with OAuth</span>
+                  <span className="text-small text-fg-secondary">For servers that ask you to sign in (Canva, Figma, Higgsfield). You sign in once in your browser; the tokens are sealed on this machine and never shown.</span>
+                </div>
+                <Switch aria-label="Sign in with OAuth" checked={form.oauth} onCheckedChange={(oauth) => setForm({ ...form, oauth })} />
+              </div>
+              {form.oauth ? (
+                <Field label="Scopes" optional helper="Separated by spaces; leave empty to let the server decide.">
+                  <Input value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value })} className="font-mono" spellCheck={false} />
+                </Field>
+              ) : null}
+            </>
           )}
           <Field label="Permission level" helper="Every tool of this server needs at least this level; tools the server marks destructive need Level 3.">
             <Select value={form.level} onValueChange={(level) => setForm({ ...form, level })} options={[1, 2, 3, 4].map((l) => ({ value: String(l), label: `Level ${l}` }))} />

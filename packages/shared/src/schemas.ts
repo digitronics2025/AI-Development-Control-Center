@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { executionSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
+import { executionSettingsSchema, mediaSettingsSchema, POLICY_MODES, repositoryRuntimeSchema, STAGE_TOOL_PROFILES } from './tools.js';
 import { learningSettingsSchema } from './learning.js';
 import {
   BILLING_MODES,
@@ -86,12 +86,16 @@ export type StageTeamWorker = z.infer<typeof stageTeamWorkerSchema>;
  * Optional Stage Team of an agent stage (docs/plans/STAGE_TEAMS_PLAN.md §3.2).
  * fixed: the configured workers run side by side (read-only stages);
  * adaptive: work units come from the plan's execution manifest, and the stage
- * runs as one agent whenever they cannot run safely in parallel.
+ * runs as one agent whenever they cannot run safely in parallel;
+ * variants: each listed worker does the whole stage its own way, a judge picks
+ * one, and only that one is kept (docs/plans/stage-team-variants.md).
  */
 export const stageTeamSchema = z.object({
-  mode: z.enum(['fixed', 'adaptive']),
+  mode: z.enum(['fixed', 'adaptive', 'variants']),
   maxWorkers: z.number().int().min(2).max(MAX_TEAM_WORKERS).default(3),
   workers: z.array(stageTeamWorkerSchema).max(MAX_TEAM_WORKERS).optional(),
+  /** Variants only: who judges them (else the stage's own agent, model and effort). */
+  judge: z.object({ agentId: agentIdSchema.optional(), model: modelIdSchema.optional(), effort: effortSchema.optional() }).optional(),
 });
 export type StageTeam = z.infer<typeof stageTeamSchema>;
 
@@ -128,6 +132,15 @@ export const stageDefinitionSchema = z.object({
   description: z.string().max(300).optional(),
   /** Run this agent stage as a bounded team of workers (docs/plans/STAGE_TEAMS_PLAN.md); absent = one agent, as always. */
   team: stageTeamSchema.optional(),
+  /**
+   * Agent stages: text appended to the role template for this stage only, so two stages of one role can be told
+   * different things (Frontend Design's Assets and Build) without a new role (docs/systems/design-agent.md).
+   */
+  instructions: z.string().trim().min(1).max(2000).optional(),
+  /** Agent stages: the capability profile its agents' tool list is built from, instead of the one detected from the repository. The stage level still decides what may run. */
+  toolProfile: z.enum(STAGE_TOOL_PROFILES).optional(),
+  /** Agent stages: skills this stage should run when they are installed, as if the task named them with `/name`. */
+  skills: z.array(z.string().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)).max(10).optional(),
 });
 export type StageDefinition = z.infer<typeof stageDefinitionSchema>;
 export type StageDefinitionInput = z.input<typeof stageDefinitionSchema>;
@@ -546,6 +559,8 @@ export const settingsSchema = z.object({
   execution: executionSettingsSchema.default(executionSettingsSchema.parse({})),
   /** The learning loop (docs/systems/learning.md). */
   learning: learningSettingsSchema.default(learningSettingsSchema.parse({})),
+  /** Paid image and video generation (docs/systems/design-agent.md). */
+  media: mediaSettingsSchema.default(mediaSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

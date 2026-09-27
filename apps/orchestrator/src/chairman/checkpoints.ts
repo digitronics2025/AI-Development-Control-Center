@@ -10,7 +10,7 @@ import type { RepositoryService } from '../services/repositories.js';
 import { newId, now, type Store, type TaskRecord } from '../store/store.js';
 import { agentWorkdir, taskRepositories, type TaskRepository } from '../engine/task-repositories.js';
 import { taskWorkdir } from '../engine/workdir.js';
-import type { TaskCheckpointPart } from '@acc/shared';
+import { isWriteRole, type TaskCheckpointPart } from '@acc/shared';
 import type { CheckpointRecord, ChairmanStore } from './store.js';
 
 export type CheckpointReason = 'before-stage' | 'recovery-pivot' | 'user' | 'before-rollback';
@@ -194,7 +194,7 @@ export class CheckpointService {
    * restoring it undoes "the last change".
    */
   lastChangeTarget(task: TaskRecord): CheckpointRecord | null {
-    const lastWrite = [...this.store.listStages(task.id)].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status !== 'PAUSED');
+    const lastWrite = [...this.store.listStages(task.id)].reverse().find((s) => isWriteRole(s.role) && s.status !== 'PAUSED');
     const auto = this.chairman.listCheckpoints(task.id).filter((c) => c.reason === 'before-stage');
     if (!lastWrite) return auto.at(-1) ?? null;
     return [...auto].reverse().find((c) => c.createdAt <= lastWrite.createdAt) ?? null;

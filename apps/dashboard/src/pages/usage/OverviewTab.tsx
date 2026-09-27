@@ -17,6 +17,7 @@ import {
 } from '@acc/ui';
 import { formatRatio, formatTokens, formatUsd, type UsageOverview } from '@acc/shared';
 import { useUsageOverview } from '../../api/usage';
+import { MediaPanel } from './MediaPanel';
 import { providerLabel, CapacityList } from './ProvidersTab';
 import { bucketLabel, costWithGaps, unpricedNote, type UsageState } from './common';
 
@@ -174,6 +175,7 @@ export function OverviewTab({ state }: { state: UsageState }) {
             <p className="text-body text-fg-secondary">No task runs in this range.</p>
           )}
         </Panel>
+        <MediaPanel />
         <Panel title="Waste & anomalies" description="Fixed rules; each says what triggered it">
           {data.anomalies.length ? (
             <ul className="flex flex-col divide-y divide-border-subtle">

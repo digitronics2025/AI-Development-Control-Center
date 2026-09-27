@@ -23,6 +23,8 @@ async function main(): Promise<void> {
   setSelfReferences({ dataDir: config.dataDir, port });
   // Agent stages reach the tool layer's MCP bridge through this address.
   services.tooling.setListenUrl(url);
+  // MCP OAuth sign-ins come back to this port (docs/systems/mcp.md#oauth).
+  services.mcp.setListenPort(port);
   // Tool health is cached for hours; detect only what is stale, in the background.
   void services.tools.refreshStale();
   void services.credentials.primeRedactor().catch((error: unknown) => app.log.warn(`Credential key unavailable: ${(error as Error).message}`));

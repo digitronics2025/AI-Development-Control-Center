@@ -7,7 +7,7 @@ sources:
   - apps/orchestrator/src/engine/tooling.ts
   - scripts/windows/privileged-helper.ps1
   - apps/orchestrator/src/tools/privileged.ts
-verified_at: 351db1e
+verified_at: 57af61a
 ---
 
 # Execution policy (Safe · Autopilot · Full Autopilot+)
@@ -36,8 +36,12 @@ In order: dangerous / Level 5 / production → **approval** (typed), or
 **deny** for an agent (it cannot wait; it reports an operator decision) →
 above the stage's own level → **deny** (an Analyze stage never writes) →
 above the mode's ceiling → **approval** (operator/engine) or **deny** (agent)
-→ outside the stage's profile → **escalate**: allowed and recorded →
-otherwise **allow**.
+→ outside the stage's profile (its `toolProfile`, else the one the
+repository's tooling suggests; [tool-system.md](tool-system.md#profiles-profilests))
+→ **escalate**: allowed and recorded → otherwise **allow**. An allowed or
+escalated call whose operation states a cost (the paid `media.*` tools) must
+then pass the spend gate in `ToolService.invoke`, which fails closed
+([design-agent.md](design-agent.md)).
 
 A read-only session (Ask, [ask.md](ask.md)) is decided before all of that:
 off its allow-list, not declared a read (`writes !== false`), or dangerous →
@@ -67,6 +71,6 @@ needs a person at the UAC prompt).
 
 ## Team workers
 
-`execution.teamWorkerLimit` (1–4, default 3; Tools → Policy → Team workers at once) caps Stage Team workers running at once across every task. A worker's permission level is always its stage's ([stage-teams.md](stage-teams.md)).
+`execution.teamWorkerLimit` (1–4, default 3; Tools → Policy → Team workers at once) caps Stage Team workers running at once across every task. A worker's permission level is always its stage's; a variants judge runs read-only at Level 1 ([stage-teams.md](stage-teams.md)).
 
 Last verified: 2026-09-26

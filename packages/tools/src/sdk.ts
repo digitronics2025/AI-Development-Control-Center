@@ -32,6 +32,7 @@ export const TOOL_CATEGORIES = [
   'verification',
   'environment',
   'mcp',
+  'media',
   'system',
 ] as const;
 export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
@@ -113,12 +114,16 @@ export interface CheckpointHost {
 
 export interface ArtifactSink {
   /** Save a file produced by an operation (screenshot, log, report) with the task. */
-  write(input: { name: string; type: 'screenshot' | 'browser-report' | 'tool-output' | 'environment'; content: string | Buffer; mime?: string }): Promise<{ id: string; name: string }>;
+  write(input: { name: string; type: 'screenshot' | 'browser-report' | 'tool-output' | 'environment' | 'image' | 'video'; content: string | Buffer; mime?: string }): Promise<{ id: string; name: string }>;
 }
 
 export interface CredentialHost {
-  /** Plaintext of a named credential, for injection into one child process. Never returned to a model. */
-  value(name: string): Promise<string | null>;
+  /**
+   * Plaintext of a named credential, for injection into one child process. Never returned to a model.
+   * With `kind`, only a credential of that kind is returned (the media tools read only `media` keys,
+   * so an agent cannot have another secret sent to a vendor by naming it).
+   */
+  value(name: string, opts?: { kind?: 'media' }): Promise<string | null>;
   /** Environment for credential kinds (e.g. `cloudflare` → CLOUDFLARE_API_TOKEN). */
   envFor(kinds: readonly string[]): Promise<Record<string, string>>;
   /**
@@ -176,6 +181,8 @@ export interface OperationContext {
   privileged?: PrivilegedHost;
   /** Paths holding the user's own uncommitted work; tools must not overwrite or discard them. */
   protectedPaths: readonly string[];
+  /** The operator's per-model media prices (Settings → Media), for cost estimates a paid call reports. */
+  prices?: Readonly<Record<string, number>>;
 }
 
 export const TOOL_ERROR_CODES = [
@@ -218,6 +225,15 @@ export interface OperationResult<O = unknown> {
   error?: { code: ToolErrorCode; message: string };
 }
 
+export interface CostEstimate {
+  usd: number;
+  model: string;
+  /** What is counted: `image`, `video-second`, `edit`… */
+  unit: string;
+  units: number;
+  basis: string;
+}
+
 export interface ToolOperation<I = any, O = any> {
   /** Capability id, `<area>.<verb>`; stable, shown to agents. */
   id: string;
@@ -225,6 +241,11 @@ export interface ToolOperation<I = any, O = any> {
   /** What it does and when to use it — agents read this. */
   description: string;
   input: z.ZodType<I>;
+  /**
+   * The JSON Schema agents are shown, when it cannot be derived from `input`: an outside
+   * MCP server's own schema (the call is still validated by `input`).
+   */
+  inputJsonSchema?: Record<string, unknown>;
   /** Permission level for the common case; `classify` may raise (or lower) it per call. */
   level: PermissionLevel;
   classify?(input: I, ctx: ClassifyContext): Partial<ToolRisk>;
@@ -234,6 +255,13 @@ export interface ToolOperation<I = any, O = any> {
   readOnly?: boolean;
   /** Runs until stopped (dev servers): the call returns once it is up. */
   longRunning?: boolean;
+  /**
+   * Paid calls only (image and video generation): what this call is expected to
+   * cost, given the operator's per-model prices. ToolService's spend gate
+   * reserves it before the call and refuses the call when paid generation is off
+   * or the estimate does not fit a media budget (docs/systems/design-agent.md).
+   */
+  estimateCost?(input: I, prices: Readonly<Record<string, number>>): CostEstimate;
   run(input: I, ctx: OperationContext): Promise<OperationResult<O>>;
 }
 

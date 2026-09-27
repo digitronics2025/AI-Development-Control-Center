@@ -7,7 +7,7 @@ sources:
   - packages/agent-sdk/src/usage.ts
   - apps/dashboard/src/pages/usage/**
   - apps/dashboard/src/api/usage.ts
-verified_at: 5ad2a6b
+verified_at: 57af61a
 ---
 
 # Usage, cost and capacity
@@ -185,7 +185,12 @@ have no separate limits endpoint. They are never fetched, scraped or estimated.
 Implemented in [budgets.ts](../../apps/orchestrator/src/usage/budgets.ts).
 
 - **Scopes:** `GLOBAL`, `PROVIDER`, `PROJECT`, `MODEL` (its own line share),
-  `AGENT`, `TASK` (period `total` only).
+  `AGENT`, `TASK` (period `total` only), `MEDIA` (no scope id: paid image and
+  video generation, counted from the reserved, charged and unknown estimates
+  in `media_usage_events` by `MediaLedger`,
+  [media.ts](../../apps/orchestrator/src/usage/media.ts); a `STOP_NEW_RUNS`
+  media budget refuses a paid call whose estimate does not fit, and never
+  stops an agent run; [design-agent.md](design-agent.md#spend-gate)).
 - **Periods:** local day, Monday week or month.
 - **States:** `ok`, `warning`, `critical`, `exceeded`, from the thresholds.
 - **Amount:** at least one nano-dollar (`amountUsd >= 1e-9`); a smaller one would
@@ -213,7 +218,7 @@ measured value.
 
 ## API (`/api/usage`, bearer token)
 
-`GET overview|trend|breakdown/:dimension|tasks|tasks/:id|tasks/:id/live|providers|events|events/:id|anomalies|health|export|budgets|pricing`,
+`GET overview|trend|breakdown/:dimension|tasks|tasks/:id|tasks/:id/live|providers|events|events/:id|anomalies|health|export|budgets|pricing|media`,
 `POST reconcile|capacity/refresh|budgets|pricing|recalculate`,
 `PATCH|DELETE budgets/:id`.
 
@@ -222,8 +227,14 @@ measured value.
 - **Export** writes the CSV or JSON of the filtered attempts, tasks or models.
   Its field list is safe, and spreadsheet formulas are neutralised with a
   leading `'`.
+- **Media** (`?taskId&days`, 1-400 days, default 30): the paid-generation
+  switch, the per-task budget, the counted estimates in the window and the
+  latest 200 spend-gate rows ([design-agent.md](design-agent.md#spend-gate)).
 - **Realtime:** every recorded or re-costed attempt publishes `{type:'usage', event}`.
-  The dashboard refetches its usage queries at most once a second.
+  The dashboard refetches its usage queries at most once a second, also after
+  a `media.*` tool execution (the media ledger publishes nothing of its own),
+  and at once on a settings change (the media view reads the switch and the
+  task budget from settings).
 
 ## Dashboard
 
@@ -236,6 +247,13 @@ measured value.
 - Providers (capacity rows with confidence)
 - Budgets
 - Attempts
+
+Overview includes **Paid media generation**
+([MediaPanel.tsx](../../apps/dashboard/src/pages/usage/MediaPanel.tsx)): the
+last 30 days' counted estimates, the switch, the per-task budget and the
+latest eight calls with their state (Running, Charged, Outcome unknown, Not
+charged), also refetched every minute. A media budget in Budgets takes no
+scope id, and its stop refuses a paid call rather than an agent run.
 
 `/usage/tasks/:id` is the cost ledger: cost flow, anomalies, budgets and an
 attempt drawer. Task Detail's inspector has a live **Usage** panel. Shared
@@ -277,7 +295,7 @@ only a fixer stage run that made two attempts now counts as one fix cycle.
   `attempts`; a run's rows without a unit, such as the single agent after a Fix
   decomposition fell back, are grouped as `lead`. `workUnits` carry no unit
   kind, so the task ledger counts team members by key: everything except
-  `decompose`, `integration` and `lead`, the same workers the Stage Timeline's
+  `decompose`, `integration`, `lead` and a variants stage's `judge`, the same workers the Stage Timeline's
   "Team of N" counts. It shows "team of N", adding "M attempts by one member"
   when a member re-ran; a run with no worker (the fallback) reads as one agent.
 - Repeated context still counts every large send, team members included: each

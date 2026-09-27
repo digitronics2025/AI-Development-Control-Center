@@ -1,7 +1,9 @@
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
 import { redact } from '@acc/security';
+import { resolveInside } from '@acc/tools';
 import {
   nonBlockingFailure,
   COMMAND_KIND_LABEL,
@@ -18,7 +20,7 @@ import {
 import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
 import type { RepositoryRecord, Store, TaskRecord } from '../store/store.js';
-import { agentWorkdir, taskRepositories, type TaskRepository } from './task-repositories.js';
+import { agentWorkdir, inFolder, taskRepositories, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
@@ -41,7 +43,7 @@ const CHECK_COST_SAMPLES = 5;
 /** Recent tasks of a repository searched for those runs. */
 const CHECK_COST_TASKS = 40;
 /** Roles that run checks or plan them, and so get `{{check_costs}}` even from a template that leaves it out. */
-const CHECK_COST_ROLES: ReadonlySet<string> = new Set(['implementer', 'fixer', 'planner']);
+const CHECK_COST_ROLES: ReadonlySet<string> = new Set(['implementer', 'fixer', 'planner', 'designer', 'art-director']);
 
 /**
  * Prepended to every role prompt, including user-edited ones. Agents that load
@@ -62,20 +64,98 @@ function clip(text: string, max = MAX_SECTION_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}\n\n[truncated ${text.length - max} characters]` : text;
 }
 
-/** The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff. */
-function coverageOf(packed: ReturnType<typeof packDiff>, files: PackFile[], hint: (file: PackFile | undefined, omitted: OmittedFile) => string): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
+/** Image and video files: a diff can only say "Binary files differ" about them. */
+const MEDIA_FILE = /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|mp4|webm|mov)$/i;
+
+/** A generated asset as its manifest names it (docs/systems/design-agent.md): what a reviewer is told instead of a diff. */
+export interface ManifestEntry {
+  manifest: string;
+  bytes: number | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  usedIn: string | null;
+  sha256: string | null;
+}
+
+/**
+ * The files an asset manifest names, by repository path: an array of entries,
+ * or `{ assets | files: [...] }`, each with a `path` relative to the
+ * repository root or to the manifest's folder.
+ */
+export function readManifestEntries(manifestRel: string, json: string): Map<string, ManifestEntry> {
+  const out = new Map<string, ManifestEntry>();
+  let data: unknown;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return out;
+  }
+  const list = Array.isArray(data) ? data : data && typeof data === 'object' ? ((data as Record<string, unknown>).assets ?? (data as Record<string, unknown>).files) : null;
+  if (!Array.isArray(list)) return out;
+  const dir = path.posix.dirname(manifestRel.split(path.sep).join('/'));
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  for (const raw of list.slice(0, 500)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const e = raw as Record<string, unknown>;
+    if (typeof e.path !== 'string' || !e.path || e.path.includes('\0')) continue;
+    const entry: ManifestEntry = {
+      manifest: manifestRel,
+      bytes: num(e.bytes ?? e.size),
+      width: num(e.width ?? (e.dimensions as Record<string, unknown> | undefined)?.width),
+      height: num(e.height ?? (e.dimensions as Record<string, unknown> | undefined)?.height),
+      duration: num(e.duration),
+      usedIn: typeof (e.usedIn ?? e.used ?? e.where) === 'string' ? String(e.usedIn ?? e.used ?? e.where).slice(0, 120) : null,
+      sha256: typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(e.sha256) ? e.sha256.toLowerCase() : null,
+    };
+    const clean = e.path.replace(/\\/g, '/').replace(/^\.\//, '');
+    for (const candidate of [path.posix.normalize(clean), path.posix.normalize(path.posix.join(dir, clean))]) if (!candidate.startsWith('..')) out.set(candidate, entry);
+  }
+  return out;
+}
+
+/**
+ * The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff.
+ * `untouched`: pre-existing user work the task never touched — context, not part of the change under review, so never required.
+ */
+function coverageOf(
+  packed: ReturnType<typeof packDiff>,
+  files: PackFile[],
+  hint: (file: PackFile | undefined, omitted: OmittedFile) => string,
+  named: Map<string, ManifestEntry> = new Map(),
+  untouched: ReadonlySet<string> = new Set(),
+): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const total = new Set([...files.map((f) => f.path), ...packed.shown, ...packed.omitted.map((o) => o.path)]).size;
-  if (!packed.omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
-  const lines = [
-    `Diff shows ${total - packed.omitted.length} of ${total} changed files in full.`,
-    '',
-    'Not shown — read each from disk before your verdict and name it under `## Files reviewed`:',
-    ...packed.omitted.map((o) => `- ${o.path} (${diffLineStats(o)}, ${o.reason}) → read: ${hint(byPath.get(o.path), o)}`),
-  ];
+  // An added or changed image or video is "shown" only as "Binary files … differ": nobody saw it. It counts as not shown.
+  const escape = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const unseen: OmittedFile[] = packed.shown
+    .filter((p) => MEDIA_FILE.test(p) && !packed.omitted.some((o) => o.path === p) && new RegExp(`^Binary files .* b/${escape(p)} differ$`, 'm').test(packed.text))
+    .map((p) => ({ path: p, additions: byPath.get(p)?.additions ?? null, deletions: byPath.get(p)?.deletions ?? null, reason: 'binary' as const }));
+  const omitted = [...packed.omitted, ...unseen].filter((o) => !untouched.has(o.path));
+  if (!omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
+  // Generated media an asset manifest names (the manifest itself is text, in the diff) needs no line under Files reviewed.
+  const media = omitted.filter((o) => named.has(o.path));
+  const read = omitted.filter((o) => !named.has(o.path));
+  const lines = [`Diff shows ${total - omitted.length} of ${total} changed files in full.`];
+  if (read.length) {
+    lines.push(
+      '',
+      'Not shown — read each from disk before your verdict and name it under `## Files reviewed`:',
+      ...read.map((o) => `- ${o.path} (${diffLineStats(o)}, ${o.reason}) → ${MEDIA_FILE.test(o.path) ? `view: media.image.view (media.video.frames for video), or open it with your file-reading tool; no asset manifest names it` : `read: ${hint(byPath.get(o.path), o)}`}`),
+    );
+  }
+  if (media.length) {
+    lines.push('', 'Generated media named by an asset manifest — open the ones that matter; they need no line under `## Files reviewed`:');
+    for (const o of media) {
+      const e = named.get(o.path)!;
+      const facts = [e.width && e.height ? `${e.width}×${e.height}` : null, e.duration ? `${e.duration} s` : null, e.bytes ? `${Math.max(1, Math.round(e.bytes / 1024))} KB` : null, e.usedIn ? `used in ${e.usedIn}` : null].filter(Boolean).join(', ');
+      lines.push(`- ${o.path} (${facts || 'binary'}; ${e.manifest}) → view: media.image.view (media.video.frames for video)`);
+    }
+  }
   // Written after packing, so this note is never clipped away with the diff.
-  const trailer = `\n[${packed.omitted.length} changed file${packed.omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
-  return { diff: packed.text + trailer, coverage: lines.join('\n'), required: packed.omitted.map((o) => o.path) };
+  const trailer = `\n[${omitted.length} changed file${omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
+  return { diff: packed.text + trailer, coverage: lines.join('\n'), required: read.map((o) => o.path) };
 }
 
 /** The middle of a set of durations (the mean of the two middle ones for an even count). */
@@ -261,6 +341,8 @@ export class ContextBuilder {
     const files: Array<PackFile & { origin: string }> = [];
     const raws: string[] = [];
     const bases = new Map<string, { folder: string | null; base: string | null }>();
+    // Media files a changed asset manifest names, when their bytes are the ones it describes (by SHA-256 when it gives one).
+    const named = new Map<string, ManifestEntry>();
     let failed = false;
     for (const src of sources) {
       const prefix = (p: string) => (src.folder ? `${src.folder}/${p}` : p);
@@ -269,6 +351,20 @@ export class ContextBuilder {
         for (const f of changed) {
           files.push({ path: prefix(f.path), additions: f.additions, deletions: f.deletions, status: f.status, origin: f.origin });
           bases.set(prefix(f.path), { folder: src.folder, base: src.snapshot.head });
+        }
+        for (const f of changed.filter((c) => c.status !== 'deleted' && path.posix.basename(c.path) === 'manifest.json')) {
+          const manifest = this.confined(src.workdir, f.path);
+          const json = manifest ? await readFile(manifest, 'utf8').catch(() => '') : '';
+          for (const [rel, entry] of readManifestEntries(f.path, json.length <= 1024 * 1024 ? json : '')) {
+            if (!MEDIA_FILE.test(rel) || !changed.some((c) => c.path === rel && c.status !== 'deleted')) continue;
+            if (entry.sha256) {
+              const abs = this.confined(src.workdir, rel);
+              const size = abs ? ((await stat(abs).catch(() => null))?.size ?? Infinity) : Infinity;
+              const actual = abs && size <= 64 * 1024 * 1024 ? createHash('sha256').update(await readFile(abs)).digest('hex') : null;
+              if (actual !== entry.sha256) continue;
+            }
+            named.set(prefix(rel), { ...entry, manifest: prefix(entry.manifest) });
+          }
         }
         const { diff: raw, truncated } = await diffSince(src.workdir, src.snapshot, { maxBytes: MAX_DIFF_CHARS * 4, prefix: src.folder });
         const complete = withoutPartialTail(redact(raw), truncated);
@@ -288,8 +384,7 @@ export class ContextBuilder {
       const packed = packDiff(raws.join(''), files, MAX_DIFF_CHARS);
       // Pre-existing user work the task never touched is context, not part of the change under review.
       const untouched = new Set(files.filter((f) => f.origin === 'preexisting').map((f) => f.path));
-      packed.omitted = packed.omitted.filter((o) => !untouched.has(o.path));
-      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false)), changedFiles, all };
+      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false), named, untouched), changedFiles, all };
     } catch {
       // Packing itself failed: fall back to the bounded raw diff and require every file (§5).
       return { diff: clip(raws.join(''), MAX_DIFF_CHARS), changedFiles, coverage: UNKNOWN_COVERAGE, required: all, all };
@@ -451,6 +546,66 @@ export class ContextBuilder {
       .join('\n');
   }
 
+  /** Screenshots and images kept with the task, newest first, by path: an agent opens them with its file-reading tool. */
+  private screenshots(task: TaskRecord): string {
+    const recs = this.store
+      .listArtifacts(task.id)
+      .filter((a) => a.type === 'screenshot' || a.type === 'image' || a.type === 'video')
+      .slice(-30)
+      .reverse();
+    return recs.map((a) => `- ${a.name} (${a.type}${a.stageKey ? `, stage ${a.stageKey}` : ''}, ${Math.max(1, Math.round(a.size / 1024))} KB): ${this.artifacts.absolutePath(a)}`).join('\n');
+  }
+
+  /** A path inside `workdir` after following links, else null. */
+  private confined(workdir: string, rel: string): string | null {
+    try {
+      return resolveInside([workdir], workdir, rel);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The repository's design standard and design memory (docs/systems/design-agent.md):
+   * named by path and size so the agent reads them in full, with a short
+   * `design/brief.md` inline. Nothing here is required; a repository without
+   * any gets "(none)". `folder` labels the paths of one repository of a
+   * multi-repository task.
+   */
+  private async designContext(workdir: string, folder: string | null = null): Promise<string> {
+    const lines: string[] = [];
+    // Inside the repository after following links: a `design` link to a folder elsewhere reads as absent.
+    const confined = (rel: string) => this.confined(workdir, rel);
+    const size = async (rel: string) => {
+      const abs = confined(rel);
+      return abs ? ((await stat(abs).catch(() => null))?.size ?? null) : null;
+    };
+    const known: Array<[string, string]> = [
+      ['design.md', "the repository's design standard: read it in full before designing"],
+      ['DESIGN.md', "the repository's design standard: read it in full before designing"],
+      ['docs/design.md', "the repository's design standard: read it in full before designing"],
+      ['tailwind.config.ts', 'the Tailwind theme (colours, type, spacing)'],
+      ['tailwind.config.js', 'the Tailwind theme (colours, type, spacing)'],
+    ];
+    for (const [rel, what] of known) {
+      const s = await size(rel);
+      if (s !== null) lines.push(`- ${inFolder(folder, rel)} (${Math.max(1, Math.round(s / 1024))} KB): ${what}`);
+    }
+    const designDir = confined('design');
+    const files = designDir ? await readdir(designDir, { withFileTypes: true }).catch(() => []) : [];
+    const entries = files.filter((f) => f.isFile() && confined(`design/${f.name}`)).map((f) => f.name).sort().slice(0, 30);
+    for (const name of entries) {
+      const s = await size(`design/${name}`);
+      lines.push(`- ${inFolder(folder, `design/${name}`)}${s !== null ? ` (${Math.max(1, Math.round(s / 1024))} KB)` : ''}: design memory`);
+    }
+    const briefPath = entries.includes('brief.md') ? confined('design/brief.md') : null;
+    if (briefPath) {
+      const brief = await readFile(briefPath, 'utf8').catch(() => '');
+      if (brief.trim()) lines.push('', `### ${inFolder(folder, 'design/brief.md')}`, '', redact(brief.length > 8000 ? `${brief.slice(0, 8000)}\n\n[truncated]` : brief).trim());
+    }
+    return lines.join('\n');
+  }
+
   private async attachments(task: TaskRecord): Promise<string> {
     const parts: string[] = [];
     for (const att of task.attachments) {
@@ -533,6 +688,11 @@ export class ContextBuilder {
       changed_files: changedFiles,
       directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
+      screenshots: this.screenshots(task),
+      // A multi-repository task's workspace holds only folders: each repository's own standard and memory, by folder.
+      design_context: workspace
+        ? (await Promise.all(units.map((u) => this.designContext(u.workdir, u.folder)))).filter(Boolean).join('\n')
+        : await this.designContext(workdir),
       previous_attempt: this.previousAttempt(task, def, stage),
       verification_commands: workspace
         ? workspace.commands
@@ -562,10 +722,12 @@ export class ContextBuilder {
     const tools = await this.toolSections(task, def, repo).catch(() => '');
     // A user-edited template without {{diff_coverage}} still tells the agent what the diff leaves out.
     const coverage = collected.required.length && !/\{\{\s*diff_coverage\s*\}\}/.test(template.body) ? `\n\n## Diff coverage\n\n${collected.coverage}\n` : '';
+    // What the workflow tells this stage beyond its role template (docs/systems/design-agent.md).
+    const instructions = def.instructions ? `\n\n## Stage instructions (from the workflow)\n\n${def.instructions}\n` : '';
     // Likewise a user-edited template of a role that runs or plans checks still learns which are too slow to run in full.
     const costs = CHECK_COST_ROLES.has(def.role) && vars.check_costs && !/\{\{\s*check_costs\s*\}\}/.test(template.body) ? `\n\n## What each check costs here\n\n${vars.check_costs}\n` : '';
     return {
-      prompt: header + renderTemplate(template.body, vars) + coverage + costs + supervisor + lessons + tools,
+      prompt: header + renderTemplate(template.body, vars) + instructions + coverage + costs + supervisor + lessons + tools,
       templateVersion: template.version,
       coverage: { required: collected.required, all: collected.all },
     };

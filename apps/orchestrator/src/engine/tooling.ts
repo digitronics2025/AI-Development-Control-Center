@@ -4,7 +4,7 @@ import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/
 import path from 'node:path';
 import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, status, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
-import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, SKILL_TOKEN, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
+import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, SKILL_TOKEN, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun, roleClass } from '@acc/shared';
 import {
   assessVerification,
   classifyFailure,
@@ -17,6 +17,7 @@ import {
   planRepair,
   policyCeiling,
   profileForRepository,
+  type ProfileId,
   projectType,
   type FailureClassification,
   type RepairPlan,
@@ -75,6 +76,10 @@ function mentionsSkillToken(text: string): boolean {
   for (const match of text.matchAll(SKILL_TOKEN)) if (text[(match.index ?? 0) + match[0].length] !== '/') return true;
   return false;
 }
+
+/** How to look at UI work with the Control Center's tools (docs/systems/design-agent.md). */
+export const VISUAL_LOOP_LINE =
+  'For UI work, look at the result, not the code alone: browser.open with viewport and colorScheme (then browser.snapshot and browser.act for states), browser.visual_matrix for every width in light and dark as contact sheets, browser.accessibility for WCAG failures with the failing elements, browser.render_html to draw a style tile you wrote (scripts off, nothing fetched), design.contrast_matrix for the WCAG contrast of the colour roles in both themes, design.lint_tokens for colours and palette classes written as literals instead of the design standard values, browser.audit for load time, layout shift and image weight, browser.visual_diff against a saved picture when the plan keeps baselines, and media.image.view / media.video.frames for image and video files; media.asset.optimize, media.svg.optimize and media.video.encode prepare files for the web.';
 
 /** How the operator's own skills and outside tools behave inside a Control Center run (docs/systems/agents.md). */
 export const SKILLS_PROMPT_SECTION = [
@@ -160,7 +165,7 @@ export class EngineTooling {
    * workspace of a multi-repository task); `stage.cwd` starts a call in a
    * folder inside that root, e.g. one repository of the workspace.
    */
-  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string }, sessionId: string | null = null): ToolScope {
+  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string; profile?: ProfileId }, sessionId: string | null = null): ToolScope {
     const root = agentWorkdir(task, repo);
     const units = taskRepositories(this.d.store, task);
     const multi = units.length > 1;
@@ -175,7 +180,8 @@ export class EngineTooling {
       autoApproveUpToLevel: task.autoApproveUpToLevel ?? DEFAULT_AUTO_APPROVE_LEVEL,
       mode: this.policyMode(task, repo),
       // Across repositories the task may need any of their tools; permission still comes from level and policy.
-      profile: profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
+      // A stage's own toolProfile wins; otherwise the profile the repository's tooling suggests.
+      profile: stage.profile ?? profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
       escalated: new Set(),
       protectedPaths: task.git.isolated ? [] : task.git.preexistingChanges,
       ...(multi ? { repositories: units.map((u) => ({ id: u.repo.id, root: u.workdir })) } : {}),
@@ -264,7 +270,7 @@ export class EngineTooling {
   openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, opts: { root?: string; level?: PermissionLevel } = {}): AgentToolBridge | null {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return null;
     const level = opts.level !== undefined ? (Math.min(opts.level, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
-    const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}) });
+    const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}), ...(def.toolProfile ? { profile: def.toolProfile } : {}) });
     const { sessionId: _s, escalated: _e, repositories: _r, ...rest } = scope;
     const base = opts.root ? { ...rest, roots: [opts.root], protectedPaths: [] } : { ...rest, ...(scope.repositories ? { repositories: scope.repositories } : {}) };
     const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000);
@@ -303,12 +309,13 @@ export class EngineTooling {
   /** "## Control Center tools" section appended to agent prompts. */
   toolsPromptSection(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): string {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return '';
-    const profile = profileForRepository(repo.tooling, def.permissionLevel);
+    const profile = def.toolProfile ?? profileForRepository(repo.tooling, def.permissionLevel);
     return [
       '## Control Center tools',
       '',
       `This run has the Control Center's tools as an MCP server named "acc" (profile: ${profile}, stage Level ${def.permissionLevel}, policy ${this.policyMode(task, repo)}).`,
       'Prefer them to raw commands for: checking the app in a real browser (browser.check_page, verify.web), HTTP checks (http.request), who holds a port (network.port_owner), background dev servers (process.start — stopped for you at the end), databases, Cloudflare, Android and GitHub.',
+      VISUAL_LOOP_LINE,
       'Use acc_find_capability to discover more and acc_call_capability to call one that is not listed. A refusal explains why; do not work around it — report it as an operator decision.',
       // Claude Code has no shell at Level 1 (docs/systems/agents.md): Git reads go through these.
       ...(def.permissionLevel <= 1 ? ['Level 1 may give you no shell. Read Git with git__status, git__diff (from, to, paths — e.g. "git diff <base> -- <path>" is from=<base>, paths=[<path>]), git__log and git__show.'] : []),
@@ -372,7 +379,7 @@ export class EngineTooling {
     const requested = await this.requestedSkillsSection(task, def, repo);
     if (requested) parts.push(requested);
     if (def.permissionLevel <= 1 && this.installs.has(task.id)) parts.push(INSTALLING_PROMPT_SECTION);
-    if (['investigator', 'planner', 'implementer'].includes(def.role)) {
+    if (['investigate', 'plan', 'write'].includes(roleClass(def.role) ?? '') && def.role !== 'fixer') {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);
     }
@@ -393,23 +400,24 @@ export class EngineTooling {
       .filter((d) => d.state === 'active' && d.kind !== 'routing' && (d.scope === 'CURRENT_TASK' || d.appliedStageKey === def.key))
       .map((d) => d.text);
     const text = [task.description, ...directives].join('\n');
-    // Listing the catalog is a cold CLI call: only a text that names a `/skill` pays for it, never one with file paths only.
-    if (!this.d.skills || !mentionsSkillToken(text)) return '';
+    // Listing the catalog is a cold CLI call: only a text that names a `/skill` (or a stage that lists skills) pays for it, never one with file paths only.
+    if (!this.d.skills || (!mentionsSkillToken(text) && !def.skills?.length)) return '';
     const catalog = await this.d.skills.list(repo.path).catch(() => null);
     if (!catalog) return '';
     const byName = new Map(catalog.skills.map((s) => [s.name, s]));
-    const names = requestedSkills(text, new Set(byName.keys()));
+    // Named by the operator (`/name`) or by the workflow for this stage (`skills`); only installed skills count.
+    const names = [...new Set([...requestedSkills(text, new Set(byName.keys())), ...(def.skills ?? []).filter((n) => byName.has(n))])];
     if (!names.length) return '';
     return [
       '## Requested skills',
       '',
-      'The operator asked for these skills by name (`/name` in the task or a directive):',
+      def.skills?.length ? 'The operator (`/name` in the task or a directive) or this stage of the workflow asked for these skills:' : 'The operator asked for these skills by name (`/name` in the task or a directive):',
       ...names.map((name) => {
         const description = byName.get(name)?.description;
         return `- \`${name}\`${description ? ` — ${description}` : ''}`;
       }),
       '',
-      `You are the ${def.role} in stage "${def.name}". Run a requested skill with your skill mechanism (the Skill tool in Claude Code) in the stage whose job it matches: skills that change code in implementation or fix stages; review, audit and check skills in review or verification stages; investigation and planning skills in those stages. When no stage clearly fits, the implementation stage runs it.`,
+      `You are the ${def.role} in stage "${def.name}". Run a requested skill with your skill mechanism (the Skill tool in Claude Code) in the stage whose job it matches: skills that change code in implementation, design or fix stages; design, UI and media skills in design stages; review, audit and check skills in review or verification stages; investigation and planning skills in those stages. When no stage clearly fits, the implementation (or design build) stage runs it.`,
       "Run each at most once in this stage and name in your report the skills you ran. A skill this stage's limits refuse is an operator decision: report it, do not work around it.",
     ].join('\n');
   }
@@ -749,7 +757,7 @@ export class EngineTooling {
     const passedKinds = new Set<CommandKind>(testRuns.filter((r) => r.status === 'passed' && (r.stageId === lastTests?.id || r.kind === 'e2e')).map((r) => r.kind));
     const observed = new Set<'browser' | 'http' | 'device'>();
     const ok = (prefix: string) => this.d.toolStore.listExecutions({ taskId: task.id, limit: 1000 }).some((e) => e.capability.startsWith(prefix) && e.status === 'succeeded');
-    if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow')) observed.add('browser');
+    if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow') || ok('browser.visual_matrix') || ok('browser.accessibility')) observed.add('browser');
     if (ok('http.') || ok('verify.web')) observed.add('http');
     if (ok('android.launch')) observed.add('device');
     const units = taskRepositories(this.d.store, task);

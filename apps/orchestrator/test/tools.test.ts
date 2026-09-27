@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { git } from '@acc/git';
+import { redact } from '@acc/security';
+import { startOAuthMcpServer } from '../../../packages/mcp/test/fixtures/oauth-server.js';
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
@@ -132,6 +135,57 @@ describe('credential broker', () => {
   });
   afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
+  it('keeps a media key out of every environment and refuses billing variables as a credential variable', async () => {
+    const value = ['fal', 'media', 'key', '0123456789abcdef'].join('-');
+    const media = await t.api('POST', '/api/credentials', { name: 'fal', kind: 'media', value });
+    expect(media.status).toBe(201);
+    expect(media.body).toMatchObject({ kind: 'media', envVar: null });
+    // Read by name for one call by the media tools only (kind media); never an environment variable of any child.
+    expect(await t.services.credentials.value('fal', repoId)).toBeNull();
+    expect(Object.values(await t.services.credentials.envFor(['media', 'http', 'other'], repoId))).not.toContain(value);
+    // An MCP server's variable mapping reads without a kind, so it cannot carry a paid key past the spend gate either,
+    // and naming one is refused rather than dropped in silence.
+    expect(await t.services.credentials.envForMapping({ FAL_KEY: 'fal' }, repoId)).toEqual({});
+    const mapped = await t.api('POST', '/api/mcp', { name: 'Paid server', transport: 'stdio', command: process.execPath, envCredentials: { FAL_KEY: 'fal' }, enabled: false });
+    expect(mapped.status).toBe(400);
+    expect(mapped.body.error.message).toContain('FAL_KEY (fal): a media credential is read only by the media tools');
+    // Nor can http.request, from the operator or from an agent session: the key is never sent.
+    seen = 'untouched';
+    const operator = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'http.request', input: { method: 'POST', url, json: {}, auth: { credential: 'fal', scheme: 'header', header: 'authorization' } } });
+    expect(operator.body.result.error.code).toBe('AUTH_REQUIRED');
+    for (const profile of ['analysis', 'frontend-design'] as const) {
+      const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 1, autoApproveUpToLevel: 3, mode: 'autopilot', profile, protectedPaths: [] }, 'agent');
+      const agent = await t.api('POST', '/api/tool-session/call', { capability: 'http.request', input: { url, auth: { credential: 'fal', scheme: 'Bearer' } } }, sessionHeaders(session.token));
+      expect(agent.body.ok, profile).toBe(false);
+      expect(agent.body.text, profile).toMatch(/FAILED \(AUTH_REQUIRED\)/);
+      t.services.tools.closeSession(session.id);
+    }
+    expect(seen).toBe('untouched');
+    expect((await t.api('POST', '/api/credentials', { name: 'fal-env', kind: 'media', envVar: 'FAL_KEY', value })).body).toMatchObject({ error: { code: 'INVALID' } });
+    // A billing variable would stand in for the agent CLIs' own billing selection.
+    for (const envVar of ['OPENAI_API_KEY', 'gemini_api_key', 'ANTHROPIC_API_KEY']) {
+      const res = await t.api('POST', '/api/credentials', { name: `k-${envVar.toLowerCase()}`, kind: 'other', envVar, value });
+      expect(res.status, envVar).toBe(400);
+    }
+    const other = await t.api('POST', '/api/credentials', { name: 'plain', kind: 'other', envVar: 'MY_SERVICE_KEY', value: `${value}-2` });
+    expect(other.status).toBe(201);
+    expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { envVar: 'OPENAI_API_KEY' })).status).toBe(400);
+    expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { description: 'unrelated edit' })).status).toBe(200);
+    // A refused update (a new value with a kind that cannot keep its variable) changes nothing, the redactor included.
+    const kept = ['quokka', 'marble', 'lantern', 'orbit'].join('');
+    const own = await t.api('POST', '/api/credentials', { name: 'plain-kept', kind: 'other', envVar: 'MY_OTHER_KEY', value: kept });
+    expect(redact(`leaked ${kept}`)).not.toContain(kept);
+    expect((await t.api('PATCH', `/api/credentials/${own.body.id}`, { kind: 'media', value: ['walrus', 'pepper', 'meadow'].join('') })).status).toBe(400);
+    // Checked before anything reads the value again (a read registers it anew).
+    expect(redact(`leaked ${kept}`)).not.toContain(kept);
+    expect(await t.services.credentials.value('plain-kept', repoId)).toBe(kept);
+    expect((await t.api('DELETE', `/api/credentials/${own.body.id}`)).status).toBeLessThan(300);
+    // The media tools ask for kind media: another secret named by an agent is never handed to a vendor.
+    expect(await t.services.credentials.value('fal', repoId, { kind: 'media' })).toBe(value);
+    expect(await t.services.credentials.value('plain', repoId, { kind: 'media' })).toBeNull();
+    for (const id of [media.body.id, other.body.id]) expect((await t.api('DELETE', `/api/credentials/${id}`)).status).toBeLessThan(300);
+  });
+
   it('stores values sealed, never returns them, injects them into one call and redacts echoes', async () => {
     const value = ['brokered', 'secret', 'value', '0042'].join('-');
     const created = await t.api('POST', '/api/credentials', { name: 'test-api', kind: 'http', value, description: 'fixture' });
@@ -204,7 +258,7 @@ describe('engine integration', () => {
     const server = `require('http').createServer((q, s) => { s.setHeader('content-type', 'text/html'); s.end(require('fs').readFileSync(__dirname + '/page.html')); }).listen(${port}, '127.0.0.1');\n`;
     const dir = await makeRepo({ files: { 'server.cjs': server, 'page.html': '<!doctype html><meta name="viewport" content="width=device-width"><title>x</title><script>console.error("broken build")</script><h1>App</h1>' } });
     const id = await addRepo(t, dir);
-    await t.api('PATCH', `/api/repositories/${id}`, { runtime: { devCommand: 'node server.cjs', devUrl: `http://127.0.0.1:${port}`, verifyPaths: ['/'], verifyMode: 'browser', readyTimeoutSec: 30 } });
+    await t.api('PATCH', `/api/repositories/${id}`, { runtime: { devCommand: 'node server.cjs', devUrl: `http://127.0.0.1:${port}`, verifyPaths: ['/'], verifyMode: 'browser', readyTimeoutSec: 30, verifyViewports: ['phone', 'wide'], verifyColorSchemes: ['light', 'dark'] } });
     t.services.workflows.save('verify-loop', {
       name: 'Verify loop',
       maxFixCycles: 1,
@@ -222,6 +276,10 @@ describe('engine integration', () => {
     const stages = t.services.store.listStages(taskId).filter((s) => s.kind === 'verify');
     expect(stages.every((s) => s.status === 'FAILED')).toBe(true);
     expect(stages[0]!.errorMessage).toMatch(/console error: broken build/);
+    // The repository's widths and themes reach the check (docs/systems/design-agent.md).
+    const verifyCall = t.services.toolStore.listExecutions({ taskId, capability: 'verify.web' })[0]!;
+    expect(verifyCall.inputSummary).toContain('"viewports":["phone","wide"]');
+    expect(verifyCall.inputSummary).toContain('"colorSchemes":["light","dark"]');
     const artifacts = t.services.store.listArtifacts(taskId).map((a) => a.type);
     expect(artifacts).toContain('browser-report');
     expect(artifacts).toContain('screenshot');
@@ -363,6 +421,173 @@ describe('MCP servers', () => {
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
     expect((await t.api('GET', '/api/tools/capabilities')).body.map((c: { id: string }) => c.id)).not.toContain('mcp.echo_fixture.echo');
   }, 60_000);
+
+  it('tells agents how to look at UI work and counts the visual matrix and accessibility scans as browser evidence', async () => {
+    // A web app (vite): its coverage needs a browser check.
+    const webRepoId = await addRepo(t, await makeRepo({ noPackageJson: true, files: { 'package.json': JSON.stringify({ name: 'web', private: true, scripts: { test: 'node -e 0' }, devDependencies: { vite: '^7.0.0' } }) } }));
+    const taskId = await createTask(t, webRepoId, 'Look [sim:slow]');
+    const task = t.services.store.getTask(taskId)!;
+    const repo = t.services.store.getRepository(webRepoId)!;
+    // The section needs the bridge; stand in for a built one.
+    Object.assign((t.services.tooling as unknown as { d: { bridgePath: string | null } }).d, { bridgePath: path.join(ROOT, 'apps', 'orchestrator', 'dist', 'acc-mcp.js') });
+    t.services.tooling.setListenUrl('http://127.0.0.1:1');
+    const section = t.services.tooling.toolsPromptSection(task, { key: 'build', name: 'Build', role: 'designer', kind: 'agent', permissionLevel: 2, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, toolProfile: 'frontend-design' }, repo);
+    expect(section).toContain('profile: frontend-design');
+    expect(section).toContain('browser.visual_matrix for every width in light and dark');
+    const before = t.services.tooling.verificationCoverage(task, repo, [], []);
+    expect(before.missing.some((m) => m.startsWith('Browser check'))).toBe(true);
+    const now = new Date().toISOString();
+    for (const capability of ['browser.visual_matrix', 'browser.accessibility']) {
+      t.services.toolStore.insertExecution({ id: `x-${capability}`, taskId, stageId: null, sessionId: null, capability, providerId: 'playwright', origin: 'agent', routeReason: null, inputSummary: '{}', attempt: 1, recoveryOf: null, artifacts: [], filesChanged: [], networkTargets: [], evidence: [], startedAt: now, finishedAt: now, durationMs: 1, status: 'succeeded', decision: 'allow', permissionLevel: 1, risk: 'normal', effects: [], summary: 'ok', errorCode: null });
+    }
+    const after = t.services.tooling.verificationCoverage(task, repo, [], []);
+    expect(after.missing.some((m) => m.startsWith('Browser check'))).toBe(false);
+    expect(after.satisfied).toContain('Browser check (console, network, phone width)');
+    await t.api('POST', `/api/tasks/${taskId}/cancel`);
+  });
+
+  it('lists the design tools first in a frontend-design session', async () => {
+    const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'frontend-design', protectedPaths: [] }, 'agent');
+    const listed = (await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).body.tools.map((x: { capability: string }) => x.capability);
+    expect(listed[0]).toMatch(/^media\./);
+    expect(listed).toEqual(expect.arrayContaining(['media.image.view', 'media.asset.optimize', 'media.image.generate', 'browser.visual_matrix', 'verify.web']));
+  });
+
+  it("passes an outside tool's pictures to the model, keeps them with the task, and publishes its input schema", async () => {
+    const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const created = await t.api('POST', '/api/mcp', { name: 'Pictures', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 1 });
+    expect(created.status).toBe(201);
+    expect(created.body.health.tools.find((x: { name: string }) => x.name === 'echo').inputSchema).toMatchObject({ properties: { text: { type: 'string' } } });
+    // The server's readOnlyHint makes its echo a read; a tool without the hint stays a write.
+    const ops = t.services.tools.registry.offering('mcp.pictures.echo');
+    expect(ops[0]!.operation.readOnly).toBe(true);
+    expect(t.services.tools.registry.offering('mcp.pictures.picture')[0]!.operation.readOnly).toBeUndefined();
+    // An agent reaches an outside tool by escalation; once enabled it is listed with the server's own schema.
+    const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 2, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'analysis', protectedPaths: [] }, 'agent');
+    expect((await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.echo', input: { text: 'hi' } }, sessionHeaders(session.token))).body.ok).toBe(true);
+    const listed = (await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).body.tools.find((x: { capability: string }) => x.capability === 'mcp.pictures.echo');
+    expect(listed.inputSchema).toMatchObject({ type: 'object', properties: { text: { type: 'string' } }, required: ['text'] });
+    const found = await t.api('POST', '/api/tool-session/find', { query: 'echo text back' }, sessionHeaders(session.token));
+    expect(JSON.stringify(found.body)).toContain('Input: text (string, required)');
+    const pic = await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.picture', input: {} }, sessionHeaders(session.token));
+    expect(pic.body.ok).toBe(true);
+    expect(pic.body.images).toHaveLength(1);
+    expect(pic.body.images[0]).toMatchObject({ mime: 'image/png', name: 'pictures-picture-1.png' });
+    expect(pic.body.summary).toContain('1 picture');
+    // In a task the picture is also kept as an image artifact.
+    const taskId = await createTask(t, repoId, 'Pictures [sim:slow]');
+    const inTask = t.services.tools.openSession({ taskId, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 2, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'analysis', protectedPaths: [] }, 'agent');
+    expect((await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.picture', input: {} }, sessionHeaders(inTask.token))).body.ok).toBe(true);
+    expect(t.services.store.listArtifacts(taskId).filter((a) => a.type === 'image').map((a) => [a.name, a.mime])).toEqual([['pictures-picture-1.png', 'image/png']]);
+    await t.api('POST', `/api/tasks/${taskId}/cancel`);
+    expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
+
+  it("keeps the paid media tools out of Frontend Design's Build stage; Assets reaches the spend gate", async () => {
+    const session = (stageLevel: 2 | 3) =>
+      t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'frontend-design', protectedPaths: [] }, 'agent');
+    const generate = (token: string) => t.api('POST', '/api/tool-session/call', { capability: 'media.image.generate', input: { prompt: 'hero', path: 'public/generated', name: 'hero' } }, sessionHeaders(token));
+    const build = await generate(session(2).token);
+    expect(build.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(build.body.summary).toMatch(/needs Level 3, and this stage is Level 2/);
+    // At Level 3 the policy lets it through to the spend gate, which refuses while paid generation is off.
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: false } })).status).toBe(200);
+    const assets = await generate(session(3).token);
+    expect(assets.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(assets.body.summary).toMatch(/Paid generation is off/);
+  });
+
+  it('keeps a Level 3 generation server out of a Level 2 stage', async () => {
+    // A billed server registered at Level 3 (docs/systems/mcp.md). The spend gate cannot see its calls, which is why
+    // Frontend Design lists none and generates through media.* only (docs/systems/design-agent.md).
+    const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const created = await t.api('POST', '/api/mcp', { name: 'fal', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 3 });
+    expect(created.status).toBe(201);
+    const session = (stageLevel: 2 | 3) =>
+      t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'web-development', protectedPaths: [] }, 'agent');
+    const call = (token: string) => t.api('POST', '/api/tool-session/call', { capability: 'mcp.fal.echo', input: { text: 'hero image' } }, sessionHeaders(token));
+    const build = await call(session(2).token);
+    expect(build.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(build.body.summary).toMatch(/needs Level 3, and this stage is Level 2/);
+    // A Level 3 stage with auto-approval up to 3 still reaches it by escalation, outside the stage's profile.
+    const assets = await call(session(3).token);
+    expect(assets.body.ok).toBe(true);
+    expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
+});
+
+describe('MCP OAuth sign-in (a stand-in authorization server)', () => {
+  it('signs in through the browser, seals the tokens, calls a tool with them, and never shows them', async () => {
+    const remote = await startOAuthMcpServer();
+    const callback = (url: string) => t.app.inject({ method: 'GET', url, headers: { host: '127.0.0.1:4317' } });
+    try {
+      // OAuth is for HTTP servers only.
+      expect((await t.api('POST', '/api/mcp', { name: 'Local oauth', transport: 'stdio', command: process.execPath, auth: 'oauth' })).status).toBe(400);
+      const created = await t.api('POST', '/api/mcp', { name: 'Remote design', transport: 'http', url: remote.url, auth: 'oauth', permissionLevel: 1 });
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({ auth: 'oauth', oauth: { signedIn: false }, health: { ok: false } });
+      expect(created.body.health.error).toMatch(/Not signed in to Remote design/);
+      const id = created.body.id as string;
+
+      // Started on this machine only; the address carries PKCE, the state and our loopback callback.
+      expect((await t.api('POST', `/api/mcp/${id}/oauth/start`, {}, { 'x-acc-remote-request': '1' })).status).toBe(403);
+      const start = await t.api('POST', `/api/mcp/${id}/oauth/start`, {});
+      expect(start.status).toBe(200);
+      expect(start.body.authorized).toBe(false);
+      const auth = new URL(start.body.authorizationUrl);
+      expect(auth.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:4317/oauth/mcp/callback');
+      expect(auth.searchParams.get('code_challenge_method')).toBe('S256');
+
+      // Starting again replaces the first sign-in: its link (whose verifier is gone) is refused with "start again".
+      const first = new URL(await remote.approve(start.body.authorizationUrl));
+      const restart = await t.api('POST', `/api/mcp/${id}/oauth/start`, {});
+      expect(restart.body.authorized).toBe(false);
+      expect((await callback(first.pathname + first.search)).body).toContain('expired or was already used');
+
+      // The operator approves; the browser comes back without the API token. A forged state is refused first.
+      const back = new URL(await remote.approve(restart.body.authorizationUrl));
+      const forged = await callback(`/oauth/mcp/callback?state=forged&code=${back.searchParams.get('code')}`);
+      expect(forged.statusCode).toBe(400);
+      expect(forged.body).toContain('expired or was already used');
+      // Token-free, but still loopback-only: another Host is refused before the route runs.
+      expect((await t.app.inject({ method: 'GET', url: back.pathname + back.search, headers: { host: 'evil.example' } })).statusCode).toBe(421);
+      const done = await callback(back.pathname + back.search);
+      expect(done.statusCode, done.body).toBe(200);
+      expect(done.body).toContain('Signed in to Remote design');
+      expect(done.body).not.toContain(back.searchParams.get('code')!);
+      // Single use: the same answer again is refused.
+      expect((await callback(back.pathname + back.search)).statusCode).toBe(400);
+      // A refusal at the authorization server is reported, not an error page.
+      expect((await callback('/oauth/mcp/callback?error=access_denied&state=x')).body).toContain('access_denied');
+
+      const listed = await t.api('GET', '/api/mcp');
+      const view = listed.body.find((m: { id: string }) => m.id === id);
+      expect(view).toMatchObject({ oauth: { signedIn: true }, health: { ok: true, serverName: 'oauth-fixture' } });
+      expect(view.oauth.expiresAt).toBeTruthy();
+      const call = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'mcp.remote_design.whoami', input: {} });
+      expect(call.body.result).toMatchObject({ ok: true, stdout: 'signed in as the operator' });
+
+      // The tokens appear nowhere: not in responses, not in plain text in the database.
+      const everything = JSON.stringify([created.body, start.body, done.body, listed.body, call.body]);
+      t.services.db.pragma('wal_checkpoint(FULL)');
+      const db = readFileSync(path.join(t.dataDir, 'acc.db'));
+      expect(remote.issued.length).toBeGreaterThanOrEqual(2);
+      for (const secret of remote.issued) {
+        expect(everything).not.toContain(secret);
+        expect(db.includes(Buffer.from(secret))).toBe(false);
+        expect(redact(`seen ${secret}`)).not.toContain(secret);
+      }
+
+      // Signing out forgets the sign-in; the tools stop until the operator signs in again.
+      const out = await t.api('POST', `/api/mcp/${id}/oauth/sign-out`, {});
+      expect(out.body).toMatchObject({ oauth: { signedIn: false }, health: { ok: false } });
+      expect(t.services.toolStore.mcpOAuth(id)).toBeNull();
+      expect((await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'mcp.remote_design.whoami', input: {} })).body.result?.ok ?? false).toBe(false);
+      expect((await t.api('DELETE', `/api/mcp/${id}`)).status).toBe(200);
+    } finally {
+      await remote.close();
+    }
+  }, 60_000);
 });
 
 describe.skipIf(process.platform !== 'win32')('privileged helper validation (real PowerShell, never elevated here)', () => {
@@ -385,4 +610,116 @@ describe.skipIf(process.platform !== 'win32')('privileged helper validation (rea
     expect(r.exitCode).toBe(1);
     expect(readFileSync(`${file}.result.json`, 'utf8')).toMatch(/Bad signature/);
   }, 120_000);
+});
+
+describe('media spend gate', () => {
+  const paidProvider = (behaviour: { fail?: 'INVALID_INPUT' | 'UNAVAILABLE'; throwEstimate?: boolean } = {}) => ({
+    id: 'test-paid',
+    name: 'Paid stand-in',
+    description: 'A paid capability for the spend gate tests',
+    category: 'media' as const,
+    builtin: true,
+    detect: async () => ({ installed: true, version: null, path: null, auth: { required: false, state: 'not_required' as const, message: null }, message: null }),
+    operations: [
+      {
+        id: 'media.test.paid',
+        title: 'Paid stand-in',
+        description: 'Costs two dollars',
+        input: z.object({ model: z.string().default('fal-ai/test/model') }),
+        level: 2 as const,
+        estimateCost: (input: { model: string }, prices: Readonly<Record<string, number>>) => {
+          if (behaviour.throwEstimate) throw new Error('no price');
+          const each = prices[input.model] ?? 2;
+          return { usd: each, model: input.model, unit: 'image', units: 1, basis: `1 × $${each}` };
+        },
+        run: async () =>
+          behaviour.fail ? { ok: false, summary: behaviour.fail, error: { code: behaviour.fail, message: behaviour.fail } } : { ok: true, summary: 'generated', output: { jobId: 'fal:job-1' } },
+      },
+    ],
+  });
+  const call = () => t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'media.test.paid', input: {} });
+  /** A real task (tool executions reference it); its simulated run is left alone. */
+  const realTask = async () => {
+    const id = await createTask(t, repoId, 'Media spend [sim:slow]');
+    return id as string;
+  };
+  const taskCall = (taskId: string) => {
+    const session = t.services.tools.openSession({ taskId, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'web-development', protectedPaths: [] }, 'agent');
+    return t.api('POST', '/api/tool-session/call', { capability: 'media.test.paid', input: {} }, sessionHeaders(session.token));
+  };
+
+  it('refuses paid calls until paid generation is on, then reserves and settles each within the task budget', async () => {
+    t.services.tools.registerProvider(paidProvider() as never);
+    const off = await call();
+    expect(off.body.result.error.code).toBe('DENIED');
+    expect(off.body.result.summary).toMatch(/Paid generation is off/);
+    expect((await t.api('GET', '/api/usage/media')).body).toMatchObject({ allowPaidGeneration: false, spentNanos: 0, events: [] });
+
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 3 } })).status).toBe(200);
+    // An operator call outside a task: reserved, then charged with the vendor's job id.
+    const ok = await call();
+    expect(ok.body.result.ok, ok.body.result.summary).toBe(true);
+    const media = (await t.api('GET', '/api/usage/media')).body;
+    expect(media).toMatchObject({ allowPaidGeneration: true, taskBudgetNanos: 3_000_000_000, spentNanos: 2_000_000_000 });
+    expect(media.events[0]).toMatchObject({ capability: 'media.test.paid', provider: 'test-paid', status: 'charged', jobId: 'fal:job-1', estimatedNanos: 2_000_000_000, taskId: null, origin: 'operator' });
+
+    // In a task: $2 fits a $3 budget once; the second call is refused before it runs.
+    const TASK_MEDIA = await realTask();
+    expect((await taskCall(TASK_MEDIA)).body).toMatchObject({ ok: true });
+    const over = await taskCall(TASK_MEDIA);
+    expect(over.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(over.body.summary).toMatch(/over its \$3\.00 budget/);
+    expect(t.services.usage.media.spentNanos({ taskId: TASK_MEDIA })).toBe(2_000_000_000);
+    // The operator's own price for a model is what is reserved.
+    expect((await t.api('PATCH', '/api/settings', { media: { prices: { 'fal-ai/test/model': 0.5 } } })).status).toBe(200);
+    expect((await taskCall(TASK_MEDIA)).body).toMatchObject({ ok: true });
+    expect(t.services.usage.media.spentNanos({ taskId: TASK_MEDIA })).toBe(2_500_000_000);
+    await t.api('POST', `/api/tasks/${TASK_MEDIA}/cancel`);
+    t.services.tools.unregisterProvider('test-paid');
+  });
+
+  it('releases a call the vendor refused before billing, keeps an unknown outcome counted, and fails closed without an estimate', async () => {
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 100, prices: {} } })).status).toBe(200);
+    t.services.tools.registerProvider(paidProvider({ fail: 'INVALID_INPUT' }) as never);
+    const task = await realTask();
+    await taskCall(task);
+    expect(t.services.usage.media.list({ taskId: task })[0]).toMatchObject({ status: 'released' });
+    expect(t.services.usage.media.spentNanos({ taskId: task })).toBe(0);
+    t.services.tools.unregisterProvider('test-paid');
+    t.services.tools.registerProvider(paidProvider({ fail: 'UNAVAILABLE' }) as never);
+    await taskCall(task);
+    expect(t.services.usage.media.list({ taskId: task })[0]).toMatchObject({ status: 'unknown' });
+    expect(t.services.usage.media.spentNanos({ taskId: task })).toBe(2_000_000_000);
+    t.services.tools.unregisterProvider('test-paid');
+    t.services.tools.registerProvider(paidProvider({ throwEstimate: true }) as never);
+    const noEstimate = await taskCall(task);
+    expect(noEstimate.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(noEstimate.body.summary).toMatch(/could not be estimated/);
+    t.services.tools.unregisterProvider('test-paid');
+    await t.api('POST', `/api/tasks/${task}/cancel`);
+  });
+
+  it('honours a media budget that stops runs, and shows its spend in the budget list', async () => {
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 100, prices: {} } })).status).toBe(200);
+    t.services.tools.registerProvider(paidProvider() as never);
+    // Earlier tests in this app already spent today: the budget leaves room for exactly two more $2 calls.
+    const before = t.services.usage.media.spentNanos({ from: new Date(new Date().setHours(0, 0, 0, 0)).toISOString() });
+    const amountUsd = before / 1e9 + 5;
+    const budget = await t.api('POST', '/api/usage/budgets', { scopeType: 'MEDIA', scopeId: null, period: 'day', amountUsd, policy: 'STOP_NEW_RUNS' });
+    expect(budget.status).toBeLessThan(300);
+    // A media budget needs no scope id, and takes none.
+    expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'MEDIA', scopeId: 'fal', period: 'week', amountUsd: 5 })).status).toBe(400);
+    expect((await call()).body.result.ok).toBe(true);
+    expect((await call()).body.result.ok).toBe(true);
+    const refused = (await call()).body.result;
+    expect(refused.ok).toBe(false);
+    expect(refused.summary).toMatch(/paid media daily budget/);
+    const statuses = (await t.api('GET', '/api/usage/budgets')).body;
+    const media = statuses.find((b: { scopeType: string }) => b.scopeType === 'MEDIA');
+    expect(media).toMatchObject({ scopeLabel: 'Paid media generation', unknownCostEvents: 0, spentNanos: before + 4_000_000_000 });
+    // A warn-only media budget never refuses.
+    expect((await t.api('PATCH', `/api/usage/budgets/${budget.body.id}`, { policy: 'WARN_ONLY' })).status).toBe(200);
+    expect((await call()).body.result.ok).toBe(true);
+    t.services.tools.unregisterProvider('test-paid');
+  });
 });

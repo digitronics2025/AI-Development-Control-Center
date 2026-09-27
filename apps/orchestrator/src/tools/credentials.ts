@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { captureScript, resolveShell } from '@acc/executor';
-import { newCredentialKey, openSecret, redact, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues } from '@acc/security';
+import { API_BILLING_ENV_VARS, newCredentialKey, openSecret, redact, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues } from '@acc/security';
 import {
   CREDENTIAL_KINDS,
   CREDENTIAL_KIND_ENV,
@@ -97,9 +97,26 @@ const RESERVED_ENV_VARS = new Set(
     'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'USERPROFILE', 'USERNAME', 'APPDATA',
     'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'TEMP', 'TMP', 'TMPDIR', 'PWD', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'PSMODULEPATH', 'LANG',
     'CLOUDFLARE_ACCOUNT_ID', ...Object.values(CREDENTIAL_KIND_ENV).filter((v): v is string => Boolean(v)),
+    // Billing variables select metered API billing for the agent CLIs; the guard strips them everywhere.
+    ...API_BILLING_ENV_VARS,
   ].map((v) => v.toUpperCase()),
 );
 const reservedEnvVar = (name: string | null) => name !== null && RESERVED_ENV_VARS.has(name.toUpperCase());
+
+/**
+ * The variable a credential saved by hand may take (docs/systems/design-agent.md).
+ * A media key is read by name by the media tools only, so it takes none. A
+ * billing variable (OPENAI_API_KEY, GEMINI_API_KEY …) is refused: the broker
+ * strips a credential's variable from every process, so it would stand in for
+ * the agent CLIs' own billing selection.
+ */
+function checkEnvVar(kind: CredentialKind, envVar: string | null): void {
+  if (!envVar) return;
+  if (kind === 'media') throw new CredentialError('A media credential is read by name by the media tools; it takes no environment variable', 'INVALID');
+  if (API_BILLING_ENV_VARS.some((v) => v.toUpperCase() === envVar.toUpperCase())) {
+    throw new CredentialError(`${envVar} selects metered API billing for the agent CLIs, so a credential cannot use it. Store the key under its own name (for example as a media credential).`, 'INVALID');
+  }
+}
 /** Provider kinds are injected as provider tokens; a random value is never one, so generation keeps to the others. */
 const GENERATABLE_KINDS: ReadonlySet<CredentialKind> = new Set(['other', 'http']);
 const NAME_IN_USE = 'This name is already in use. Choose another name.';
@@ -291,6 +308,7 @@ export class CredentialBroker {
   async create(raw: z.input<typeof credentialInputSchema>): Promise<CredentialView> {
     const input = credentialInputSchema.parse(raw);
     if (this.store.credential(input.name)) throw new CredentialError(`A credential named "${input.name}" already exists`, 'DUPLICATE');
+    checkEnvVar(input.kind, input.envVar ?? null);
     const id = newId();
     const sealed = sealSecret(await this.loadKey(), input.value, id);
     const ts = now();
@@ -311,12 +329,15 @@ export class CredentialBroker {
     if (input.value !== undefined && link?.authority === 'myvault' && link.state !== 'detached') {
       throw new CredentialError('This credential is managed by MyVault: change the value there and sync, or detach it first', 'MANAGED');
     }
+    // Refuse a bad kind/variable before anything changes: the redactor must never forget a value that stays stored.
+    if (input.kind !== undefined || input.envVar !== undefined) checkEnvVar(input.kind ?? current.kind, input.envVar === undefined ? current.envVar : input.envVar);
     let sealed = { ciphertext: current.ciphertext, iv: current.iv, tag: current.tag };
     let fingerprint = current.fingerprint;
+    let previous: string | null = null;
     if (input.value !== undefined) {
       const key = await this.loadKey();
       try {
-        unregisterSecretValues([openSecret(key, current, current.id)]);
+        previous = openSecret(key, current, current.id);
       } catch {
         /* previous value unreadable: nothing to forget */
       }
@@ -339,6 +360,8 @@ export class CredentialBroker {
       // A new value for a generated secret is owed to MyVault again.
       if (input.value !== undefined && link?.authority === 'control-center' && link.state !== 'detached') this.store.upsertVaultLink({ ...link, state: 'pending_push', lastError: null, updatedAt: now() });
     });
+    // Only once the new value is stored is the old one no longer a secret to mask.
+    if (previous !== null && previous !== input.value) unregisterSecretValues([previous]);
     this.syncManagedEnv();
     if (input.value !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'replace', direction: 'local', status: 'ok' });
     if (input.repositoryIds !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'scope', direction: 'local', status: 'ok', target: rec.repositoryIds === null ? 'all repositories' : `${rec.repositoryIds.length} repositories` });
@@ -632,9 +655,14 @@ export class CredentialBroker {
    * it. `includeUnsynced` is for the orchestrator's own checks only; no tool
    * path passes it.
    */
-  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy' } = {}): Promise<string | null> {
+  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy'; kind?: CredentialKind } = {}): Promise<string | null> {
     const r = this.store.credential(name);
     if (!r || !this.inScope(r, repositoryId)) return null;
+    // A caller that names a kind (the media tools: `media`) never receives a credential of another kind.
+    if (opts.kind && r.kind !== opts.kind) return null;
+    // A media key opens only for a caller that asks for kind media (the media tools, behind the spend gate): a
+    // kind-less read (http.request, a secret put, an MCP server's variables) could spend it with no reservation.
+    if (r.kind === 'media' && opts.kind !== 'media') return null;
     // A credential kept for the orchestrator's own use (an http token) is read only by it, or deployed by a production secret put.
     const reserved = r.kind === 'http' && this.reservedForOrchestrator().has(r.name.toLowerCase());
     if (reserved && !opts.reserved) return null;
@@ -689,6 +717,11 @@ export class CredentialBroker {
       env[variable] = await this.open(r);
     }
     return { env, missing };
+  }
+
+  /** The kind of a stored credential, or null when none has that name. */
+  kindOf(name: string): CredentialKind | null {
+    return this.store.credential(name)?.kind ?? null;
   }
 
   /** Environment for an MCP server: VAR → credential name. */

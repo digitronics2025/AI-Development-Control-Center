@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { guardBrowserContext } from '../net-guard.js';
 import { resolveInside } from '../paths.js';
 import { failure, operation, type OperationContext, type OperationResult, type ResultImage, type ToolOperation } from '../sdk.js';
-import { captureScreenshot, httpUrl, isLoopback, launch, sessionFile, sessionName, VIEWPORTS } from './browser.js';
+import { captureScreenshot, contextOptions, displayFields, httpUrl, isLoopback, launch, sessionFile, sessionName, viewportField, VIEWPORTS } from './browser.js';
 
 /**
  * Pages an agent keeps open and drives step by step — the way an operator
@@ -233,7 +233,7 @@ async function look(ctx: OperationContext, p: OpenPage, opts: LookOptions): Prom
 }
 
 const pageId = z.string().min(1).max(40).regex(/^pg-[\w-]+$/, 'A page id from browser.open, e.g. "pg-1a2b3c"');
-const viewport = z.enum(['desktop', 'phone', 'tablet']);
+const viewport = viewportField;
 const ref = z.string().regex(/^(?:f\d+)?e\d+$/, 'A ref from the snapshot, e.g. "e12"');
 
 const ACTIONS = ['click', 'double_click', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'scroll', 'goto', 'back', 'forward', 'reload', 'wait', 'set_viewport', 'dialogs'] as const;
@@ -358,7 +358,7 @@ export function browserPageOperations(): ToolOperation[] {
       id: 'browser.open',
       title: 'Open a page to work on',
       description:
-        'Open a URL in a browser page that stays open between calls, and see it: an accessibility snapshot with element refs (act on them with browser.act) plus a screenshot. Use it to check a change the way a person would: open, look, click, look again. `session` loads a signed-in state saved earlier; `visible` shows the window on the operator’s screen.',
+        'Open a URL in a browser page that stays open between calls, and see it: an accessibility snapshot with element refs (act on them with browser.act) plus a screenshot. Use it to check a change the way a person would: open, look, click, look again. `session` loads a signed-in state saved earlier; `visible` shows the window on the operator’s screen; `colorScheme`, `reducedMotion` and `deviceScaleFactor` show it as a dark-mode, reduced-motion or high-density screen would.',
       input: z.object({
         url: httpUrl,
         viewport: viewport.default('desktop'),
@@ -366,6 +366,7 @@ export function browserPageOperations(): ToolOperation[] {
         visible: z.boolean().default(false),
         screenshot: z.boolean().default(true),
         timeoutSec: z.number().int().min(5).max(120).default(30),
+        ...displayFields,
       }),
       level: 1,
       classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
@@ -373,7 +374,6 @@ export function browserPageOperations(): ToolOperation[] {
         const owner = ownerOf(ctx);
         if (openBrowserPages(owner).length >= MAX_PAGES_PER_OWNER) return failure('UNAVAILABLE', `Already ${MAX_PAGES_PER_OWNER} pages open (${openBrowserPages(owner).map((o) => o.id).join(', ')}); close one with browser.close`);
         if (pages.size >= MAX_PAGES) return failure('UNAVAILABLE', `The Control Center already has ${MAX_PAGES} browser pages open; try again when one closes`);
-        const vp = VIEWPORTS[input.viewport];
         const stateFile = input.session ? sessionFile(ctx, input.session) : null;
         if (stateFile && !existsSync(stateFile)) return failure('INVALID_INPUT', `No saved session "${input.session}"; sign in on a page, then browser.close with saveSession`);
         let visible = input.visible;
@@ -387,9 +387,7 @@ export function browserPageOperations(): ToolOperation[] {
           browser = await browserFor(false);
         }
         const context = await browser.newContext({
-          viewport: { width: vp.width, height: vp.height },
-          isMobile: vp.isMobile,
-          hasTouch: vp.isMobile,
+          ...contextOptions(input.viewport, input),
           acceptDownloads: false,
           ...(stateFile ? { storageState: stateFile } : {}),
         });

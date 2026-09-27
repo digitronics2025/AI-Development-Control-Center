@@ -25,10 +25,14 @@ const TYPE_LABEL: Record<Artifact['type'], string> = {
   'browser-report': 'Browser verification',
   'operator-evidence': 'From your browser (this computer only)',
   'tool-output': 'Tool output',
+  image: 'Image',
+  video: 'Video',
 };
 
 function ArtifactPreview({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {
-  const content = useArtifactContent(artifact?.id ?? null);
+  // Pictures and video are files, not text: say so instead of fetching and showing their bytes.
+  const media = /^(image|video)\//.test(artifact?.mime ?? '');
+  const content = useArtifactContent(artifact && !media ? artifact.id : null);
   const { api } = useRuntime();
   const { toast } = useFeedback();
   const markdown = artifact?.mime === 'text/markdown';
@@ -47,7 +51,9 @@ function ArtifactPreview({ artifact, onClose }: { artifact: Artifact | null; onC
         ) : null
       }
     >
-      {content.isLoading ? (
+      {media ? (
+        <p className="text-fg-secondary">{artifact?.mime.startsWith('video/') ? 'This is a video file.' : 'This is an image file.'} Download it to view it.</p>
+      ) : content.isLoading ? (
         <Skeleton className="h-64" />
       ) : content.data ? (
         <>

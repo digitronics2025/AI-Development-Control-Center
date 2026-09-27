@@ -12,6 +12,7 @@ import {
 } from '@acc/shared';
 import type { Db } from '../db/database.js';
 import type { Store } from '../store/store.js';
+import type { MediaLedger } from './media.js';
 import type { UsageQueries } from './queries.js';
 
 type Row = Record<string, any>;
@@ -91,6 +92,8 @@ export class BudgetService {
     private readonly db: Db,
     private readonly store: Store,
     private readonly queries: UsageQueries,
+    /** Paid media spend (migration 20): what a MEDIA budget counts. */
+    private readonly media?: MediaLedger,
   ) {}
 
   list(): Budget[] {
@@ -156,6 +159,8 @@ export class BudgetService {
         return { agentId: budget.scopeId! };
       case 'TASK':
         return { taskId: budget.scopeId! };
+      case 'MEDIA':
+        return {};
     }
   }
 
@@ -176,6 +181,8 @@ export class BudgetService {
         const task = this.store.getTask(id);
         return task ? `${id} · ${task.title}` : `Task ${id}`;
       }
+      case 'MEDIA':
+        return 'Paid media generation';
     }
   }
 
@@ -184,7 +191,11 @@ export class BudgetService {
     const filter: Partial<UsageFilter> = { ...this.scopeFilter(budget), ...(window ? { from: window.start.toISOString(), to: window.end.toISOString() } : {}) };
     let spent: number;
     let unknown: number;
-    if (budget.scopeType === 'MODEL') {
+    if (budget.scopeType === 'MEDIA') {
+      // Estimates the spend gate reserved (docs/systems/design-agent.md); never agent runs.
+      spent = this.media?.spentNanos(window ? { from: window.start.toISOString(), to: window.end.toISOString() } : {}) ?? 0;
+      unknown = 0;
+    } else if (budget.scopeType === 'MODEL') {
       // Only the model's own share of attempts that used several models.
       const row = this.queries.breakdown(filter, 'model').find((r) => r.key === budget.scopeId);
       spent = row?.totals.costNanos ?? 0;
@@ -232,7 +243,21 @@ export class BudgetService {
         return budget.scopeId === run.agentId;
       case 'TASK':
         return budget.scopeId === run.taskId;
+      case 'MEDIA':
+        // A media budget limits paid generation (the spend gate), never an agent run.
+        return false;
     }
+  }
+
+  /** Enabled media budgets whose policy stops paid calls, with what their current window has counted. */
+  stoppingMediaBudgets(now = new Date()): Array<{ label: string; amountNanos: number; spentNanos: number }> {
+    return this.list()
+      .filter((b) => b.enabled && b.scopeType === 'MEDIA' && b.policy === 'STOP_NEW_RUNS')
+      .map((b) => {
+        const s = this.status(b, now);
+        const period = b.period === 'total' ? '' : ` ${b.period}ly`.replace('dayly', 'daily');
+        return { label: `paid media${period} budget`, amountNanos: b.amountNanos, spentNanos: s.spentNanos };
+      });
   }
 
   /**

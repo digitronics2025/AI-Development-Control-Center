@@ -421,6 +421,14 @@ describe('Proof of live', () => {
   it('a provider it cannot read leaves the release Sent — not confirmed, and Check again only reads', async () => {
     const { remote, repositoryId } = await setup({ method: 'push', remote: 'origin', branch: 'main', liveUrl: 'https://live.test/', proof: { cloudflarePages: { project: 'shop' } }, manualPaths: [], timeoutSec: 60 });
     const id = await completedUnreleased(repositoryId);
+    // A slow disk while the release writes its report: once the state reads final, Check again must be accepted at
+    // once (the state was saved before the report and the release still counted as running: a 409 under load).
+    const artifacts = t!.services.artifacts;
+    const write = artifacts.write.bind(artifacts);
+    artifacts.write = (async (...args: Parameters<typeof write>) => {
+      if (args[1].name === 'release.md') await new Promise((resolve) => setTimeout(resolve, 400));
+      return write(...args);
+    }) as typeof write;
     const req = await t!.api('POST', `/api/tasks/${id}/release`, {});
     await t!.api('POST', `/api/approvals/${req.body.approval.id}/approve`, { confirmation: id });
     const r = await waitRelease(id, ['failed', 'live', 'refused', 'published_unconfirmed']);

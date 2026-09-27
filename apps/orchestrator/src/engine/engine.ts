@@ -26,6 +26,7 @@ import {
   type TaskBlocker,
   type TaskDetail,
   type TaskStatus,
+  isPlanRole,
 } from '@acc/shared';
 import type { z } from 'zod';
 import type { Bus } from '../bus.js';
@@ -1308,7 +1309,7 @@ export class TaskEngine {
       case 'skipped': {
         control.autoRetries.delete(def.key);
         if (this.supervises(task)) this.supervisor!.afterSuccess(taskId, def, stage);
-        if (def.role === 'planner' && task.mode === 'discuss' && outcome.kind === 'success') {
+        if (isPlanRole(def.role) && task.mode === 'discuss' && outcome.kind === 'success') {
           const state = this.approvals.state(task.id, 'plan_review', { stageId: outcome.stageId });
           if (state !== 'approved') {
             this.publisher.updateTask(task.id, { currentStageKey: def.next });
@@ -1520,7 +1521,7 @@ export class TaskEngine {
     const release = this.task(task.id).git.release ?? null;
     const deployed = release?.state === 'live' ? 'production' : stages.some((s) => s.kind === 'command' && s.status === 'SUCCESS' && s.role === 'deployer') ? 'staging' : 'none';
     const operatorItems = latestOperatorItems(
-      await this.d.artifacts.latestText(task.id, 'review'),
+      await this.d.artifacts.latestTextPerStage(task.id, 'review'),
       await this.d.artifacts.latestText(task.id, 'verification'),
     );
     // Nothing the task started outlives it; an isolated task's work lands on its branch.

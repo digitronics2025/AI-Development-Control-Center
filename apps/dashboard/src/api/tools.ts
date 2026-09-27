@@ -100,6 +100,12 @@ export function useMcpMutations() {
     check: useMutation({ mutationFn: (id: string) => api.post<McpServerView>(`/api/mcp/${id}/check`), onSuccess: refresh }),
     toggle: useMutation({ mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => api.patch<McpServerView>(`/api/mcp/${id}`, { enabled }), onSuccess: refresh }),
     remove: useMutation({ mutationFn: (id: string) => api.del(`/api/mcp/${id}`), onSuccess: refresh }),
+    /** OAuth servers: the authorization address to open, or `authorized` when the saved sign-in still works. */
+    signIn: useMutation({
+      mutationFn: (id: string) => api.post<{ authorized: true; server: McpServerView } | { authorized: false; authorizationUrl: string }>(`/api/mcp/${id}/oauth/start`),
+      onSuccess: refresh,
+    }),
+    signOut: useMutation({ mutationFn: (id: string) => api.post<McpServerView>(`/api/mcp/${id}/oauth/sign-out`), onSuccess: refresh }),
   };
 }
 

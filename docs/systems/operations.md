@@ -4,7 +4,7 @@ sources:
   - scripts/windows/**
   - scripts/demo.mjs
   - scripts/verify-agents.ts
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Operations and Windows packaging
@@ -49,7 +49,7 @@ never runs elevated.
 ## Other scripts
 
 - `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); sets `ACC_REPOSITORY_AUTOMATION=0` so it never scans or fetches your real repositories; writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
-- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills] [--permissions] [--mcp [--codex-mcp-repo <repo>]]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; `--permissions` runs 3 real runs (a control, Level 1, Level 2; 8 checks) proving a repository whose settings allow `Bash(*)` and carry hooks cannot widen Level 1 or 2 (Level 1 runs none of its hooks); run both after every Claude Code update ([agents.md](agents.md#skills)). `--mcp` runs 2 real Codex runs (3 with `--codex-mcp-repo`) proving only the Control Center's MCP server starts; run it after every Codex update ([agents.md](agents.md#mcp-servers-in-a-codex-run)).
+- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills] [--images] [--permissions] [--mcp [--codex-mcp-repo <repo>]]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; `--permissions` runs 3 real runs (a control, Level 1, Level 2; 8 checks) proving a repository whose settings allow `Bash(*)` and carry hooks cannot widen Level 1 or 2 (Level 1 runs none of its hooks); run both after every Claude Code update ([agents.md](agents.md#skills)). `--images` asks each CLI for the colour of a solid red 64×64 PNG built in memory: Claude Code reading it from disk, Codex given it with `-i`, and Claude Code shown it as an MCP image block from `packages/mcp/test/fixtures/red-picture-server.mjs`; run it after a CLI update ([design-agent.md](design-agent.md)). `--mcp` runs 2 real Codex runs (3 with `--codex-mcp-repo`) proving only the Control Center's MCP server starts; run it after every Codex update ([agents.md](agents.md#mcp-servers-in-a-codex-run)).
 
 ## Phone alerts
 

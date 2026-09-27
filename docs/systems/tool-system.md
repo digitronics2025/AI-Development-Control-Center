@@ -7,7 +7,7 @@ sources:
   - apps/orchestrator/src/tools/environment.ts
   - apps/orchestrator/src/tools/processes.ts
   - apps/orchestrator/src/http/tool-routes.ts
-verified_at: 351db1e
+verified_at: 6dc1a91
 ---
 
 # Tool system
@@ -23,7 +23,10 @@ provides one, decides whether the call may run, runs it and records it.
   tools, `checkAuth()`.
 - An **operation** is a capability id (`git.status`, `network.port_owner`)
   with a Zod input schema (also its JSON schema for MCP), a base permission
-  level, a per-input `classify()` and `run()`.
+  level, a per-input `classify()` and `run()`. A paid operation also declares
+  `estimateCost()` (see the spend gate below); an outside MCP tool carries
+  `inputJsonSchema`, its server's own schema, which agents are shown (the call
+  is still validated by the Zod schema).
 - Several providers may offer one capability: `shell.run` (PowerShell, CMD,
   Git Bash, WSL), `network.port_owner` (Windows via PowerShell, netstat;
   elsewhere `ss`/`netstat`, then `lsof` where those show no pids, as on macOS),
@@ -36,9 +39,11 @@ filesystem, git, github, runtime (Node/pnpm/npm/Python/uv/Java), browser
 psql, mysql), docker, android (adb, Gradle), hosted (processes, terminals,
 checkpoints, privileged helper, VS Code), verify, credential-broker
 (`credential.generate`), installer (`software.catalog`, `software.install` —
-a reviewed program list only, [learning.md](learning.md#programs)). The orchestrator adds
+a reviewed program list only, [learning.md](learning.md#programs)), media
+(fetch, view, SVG, fal generation, FFmpeg) and design (contrast, token lint)
+([design-agent.md](design-agent.md#media-tools)). The orchestrator adds
 `environment` and one `mcp:<id>` provider per healthy MCP server
-([mcp.md](mcp.md)). About 136 built-in capabilities in total.
+([mcp.md](mcp.md)). About 178 built-in capabilities in total.
 
 ## Registry, router, health
 
@@ -69,10 +74,15 @@ the level: a recursive delete is Level 5, a read-only shell script Level 1) →
 4. policy ([autopilot.md](autopilot.md)): allow, **escalate** (outside the
 stage's profile but within its level — recorded in `capability_escalations`
 and as a `CAPABILITY_ESCALATED` event), needs approval, or deny →
+4b. spend gate, for an operation with `estimateCost` (paid media): paid
+generation on and the estimate within the task's and every stopping media
+budget, reserved in one transaction and settled after the run, else `DENIED`
+([design-agent.md](design-agent.md#spend-gate)) →
 5. checkpoint before high-impact work in a task (level ≥ 3, or database
 writes) → 6. inject brokered credentials ([credential-broker.md](credential-broker.md);
 a credential kept for the orchestrator — the phone-alert token — is read only
-by a Level 5 `cloudflare.secret_put` / `github.secret_put`, never another tool)
+by a Level 5 `cloudflare.secret_put` / `github.secret_put`, never another tool;
+a `media` key only by a media tool that asks for kind `media`)
 → 7. run with timeout and cancellation → 8. redact → 9. record a
 `tool_executions` row, publish `toolExecution`, and add a `TOOL_CALL` event
 for notable calls (level ≥ 3, long-running, failures, verification evidence).
@@ -115,9 +125,13 @@ ambient login. Normal scopes are unaffected.
 ## Profiles ([profiles.ts](../../packages/tools/src/profiles.ts))
 
 `analysis` (every Level 1 stage), `general`, `web-development`,
-`cloudflare-worker`, `android-development`, `python`, `operator`. Chosen from
-repository tooling; MCP capabilities are never in a profile except
-`operator`.
+`frontend-design` (media, browser, design and verify tools first; no outside
+generation server, since only `media.*` calls pass the spend gate), `cloudflare-worker`, `android-development`,
+`python`, `operator`. Chosen from repository tooling unless the stage names a
+`toolProfile` (any but `operator`). MCP capabilities never match a wildcard entry: only the
+`operator` profile, or an explicit `mcp.<server>.*` pattern in a profile,
+includes them (`profileIncludes`); an agent otherwise reaches one by
+escalation (`acc_call_capability`) within its stage's level.
 
 ## Environment discovery
 
@@ -147,7 +161,9 @@ is within 15 s of when we started it; otherwise they are marked gone.
 `type` and `metadata`; `tasks.policy_mode`, `repositories.policy_mode` and
 `repositories.runtime`. Migration 4 belongs to the usage ledger developed in
 parallel; the two apply in either order. Migration 7 adds the MyVault link,
-trusted-origin and credential-event tables ([credential-broker.md](credential-broker.md)).
+trusted-origin and credential-event tables ([credential-broker.md](credential-broker.md));
+migration 20 `media_usage_events`, the spend gate's ledger; migration 21
+`mcp_oauth` and `mcp_servers.auth`/`oauth_scope` ([mcp.md](mcp.md#oauth)).
 
 Secrets an agent needs but must not see go through `credential.generate`
 (sealed in the orchestrator, returns metadata only) and are used by reference,

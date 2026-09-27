@@ -41,15 +41,26 @@ const COUNTED: Record<FailureSource, string> = {
   gate: 'Unmet checks',
 };
 
-function comparable(run: ChairmanStrategyRun, o: Observation): boolean {
+function comparable(run: ChairmanStrategyRun, o: Observation, roleOf?: (stageKey: string) => string | undefined): boolean {
   if (o.source !== run.failureSource) return false;
   // An agent failure is about one stage; any other stage's run says nothing about it.
-  return run.failureSource !== 'worker' || o.stageKey === run.failureStageKey;
+  if (run.failureSource === 'worker') return o.stageKey === run.failureStageKey;
+  // A verdict is judged by the same judge role: a visual critique passing says nothing about a failed code review
+  // (both are review verdicts), while a re-review after a fix does speak for the review before it.
+  if ((run.failureSource === 'review' || run.failureSource === 'verify') && roleOf && run.failureStageKey) {
+    const failed = roleOf(run.failureStageKey);
+    const seen = roleOf(o.stageKey);
+    if (failed && seen && failed !== seen) return false;
+  }
+  return true;
 }
 
-/** The verdict from the first comparable observation, or null while there is none yet. */
-export function evaluateStrategy(run: ChairmanStrategyRun, observations: Observation[]): OutcomeVerdict | null {
-  const o = observations.find((x) => comparable(run, x));
+/**
+ * The verdict from the first comparable observation, or null while there is none yet. `roleOf` names the role of
+ * a stage key, so a verdict is compared only with the same judge role's.
+ */
+export function evaluateStrategy(run: ChairmanStrategyRun, observations: Observation[], roleOf?: (stageKey: string) => string | undefined): OutcomeVerdict | null {
+  const o = observations.find((x) => comparable(run, x, roleOf));
   if (!o) return null;
   if (o.kind === 'passed') return { status: 'SUCCEEDED', summary: PASSED[run.failureSource as FailureSource] ?? 'The failure no longer occurs.', healthAfter: 'PROGRESSING' };
   const label = COUNTED[run.failureSource as FailureSource] ?? 'Failures';
@@ -80,8 +91,9 @@ export class OutcomeEvaluator {
     if (!open.length) return;
     const stages = this.store.listStages(taskId);
     const failures = new Map(this.chairman.listFailures(taskId).filter((f) => f.stageId).map((f) => [f.stageId!, f]));
+    const roles = new Map(stages.map((s) => [s.stageKey, s.role]));
     for (const run of open) {
-      const verdict = evaluateStrategy(run, observationsSince(run.startedAt, stages, failures));
+      const verdict = evaluateStrategy(run, observationsSince(run.startedAt, stages, failures), (key) => roles.get(key));
       if (verdict) this.finish(run.decisionId, verdict.status, verdict.summary, verdict.healthAfter);
     }
   }

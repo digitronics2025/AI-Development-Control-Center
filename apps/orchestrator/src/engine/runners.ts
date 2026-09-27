@@ -22,6 +22,7 @@ import {
   type StageInstance,
   type TestRun,
   type RepositoryCommand,
+  isJudgeRole,
 } from '@acc/shared';
 import type { RepairPlan, RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
@@ -169,6 +170,11 @@ export const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: str
   planner: { type: 'plan', name: 'plan.md', prompt: 'plan-prompt.md' },
   implementer: { type: 'implementation-report', name: 'implementation-report.md', prompt: 'implementation-prompt.md' },
   fixer: { type: 'fix-report', name: 'fix-report.md', prompt: 'fix-prompt.md' },
+  // A designer builds like an implementer: its report is what reviewers, verifiers and fixers read as {{implementation_report}}.
+  designer: { type: 'implementation-report', name: 'design-report.md', prompt: 'design-prompt.md' },
+  // The art direction is the plan later stages read as {{plan}}; a visual critique is a review.
+  'art-director': { type: 'plan', name: 'art-direction.md', prompt: 'art-direction-prompt.md' },
+  'visual-critic': { type: 'review', name: 'visual-review.md', prompt: 'visual-review-prompt.md' },
   reviewer: { type: 'review', name: 'review.md', prompt: 'review-prompt.md' },
   verifier: { type: 'verification', name: 'verification.md', prompt: 'verification-prompt.md' },
 };
@@ -448,7 +454,7 @@ export class StageRunners {
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
     await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
 
-    if (def.role !== 'reviewer' && def.role !== 'verifier') {
+    if (!isJudgeRole(def.role)) {
       // Reviewers and verifiers list operator items without stopping (NEEDS OPERATOR); a work stage that cannot proceed stops the task.
       const questions = extractOperatorBlockers(output);
       if (questions.length) {
@@ -495,7 +501,7 @@ export class StageRunners {
           return this.failStage(stage, 'REVIEW_INCOMPLETE', `${def.name} gave PASS twice without reviewing ${still.length} changed file${still.length === 1 ? '' : 's'} the diff did not show: ${still.slice(0, 20).join(', ')}${still.length > 20 ? ', …' : ''}`);
         }
       }
-    } else if (def.role === 'reviewer' || def.role === 'verifier') {
+    } else if (isJudgeRole(def.role)) {
       // Advisory verdict: recorded for the report, but it does not route the
       // workflow (a review-only workflow completes and says changes were requested).
       verdict = parseVerdict(output);
@@ -545,6 +551,18 @@ export class StageRunners {
    * the usage ledger see it), as its own execution with its own log and tool
    * session. Never changes the stage row: the caller decides what the result means.
    */
+  /**
+   * Reference images the operator attached, handed to an agent that takes pictures on its command line
+   * (Codex `-i`) as well as being listed by path in {{attachments}}. The orchestrator passes them, so the
+   * agent never has to copy anything out of the data folder (docs/systems/design-agent.md).
+   */
+  private async imageAttachments(task: TaskRecord, adapter: { getCapabilities(): Promise<{ images: boolean }> }): Promise<{ images?: string[] }> {
+    const pictures = task.attachments.filter((a) => /\.(png|jpe?g|webp|gif)$/i.test(a.name) && a.size <= 10 * 1024 * 1024).slice(0, 5);
+    if (!pictures.length) return {};
+    const capable = await adapter.getCapabilities().then((c) => c.images).catch(() => false);
+    return capable ? { images: pictures.map((a) => a.path) } : {};
+  }
+
   async launchAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, opts: AgentLaunch): Promise<AgentRun> {
     const { store, publisher, agents } = this.d;
     const { agentId } = opts;
@@ -597,6 +615,7 @@ export class StageRunners {
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
         pluginDirs: await this.d.context.pluginDirs(task).catch(() => []),
+        ...(await this.imageAttachments(task, adapter)),
       }, {
         origin: 'stage',
         projectId: task.repositoryId,
@@ -1423,7 +1442,15 @@ export class StageRunners {
     if (control.stopReason) controller.abort();
     const outcome = await this.d.tooling.tools.invoke({
       capability: 'verify.web',
-      input: { startCommand: runtime.devCommand ?? undefined, url: runtime.devUrl, paths: runtime.verifyPaths, readyTimeoutSec: runtime.readyTimeoutSec, mode: runtime.verifyMode },
+      input: {
+        startCommand: runtime.devCommand ?? undefined,
+        url: runtime.devUrl,
+        paths: runtime.verifyPaths,
+        readyTimeoutSec: runtime.readyTimeoutSec,
+        mode: runtime.verifyMode,
+        viewports: runtime.verifyViewports,
+        ...(runtime.verifyColorSchemes.length ? { colorSchemes: runtime.verifyColorSchemes } : {}),
+      },
       origin: 'engine',
       scope: this.d.tooling.scope(task, repo, { level: def.permissionLevel, stageId: stage.id, cwd: unit.workdir }),
       preApproved: true,

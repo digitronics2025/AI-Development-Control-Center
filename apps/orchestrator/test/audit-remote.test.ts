@@ -40,3 +40,27 @@ describe('F-50: switches that widen what runs are turned on locally only', () =>
     expect(guardRemoteCommand('agent.update', { id: 'claude' }, { loadUserConfig: false }, ctx()).ok).toBe(true);
   });
 });
+
+describe('paid media generation is loosened locally only (docs/systems/design-agent.md)', () => {
+  it('refuses turning it on, raising the task budget or lowering a price from the cloud; allows tightening', () => {
+    expect(guardRemoteCommand('settings.update', {}, { media: { allowPaidGeneration: true } }, ctx()).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { media: { taskBudgetUsd: 50 } }, ctx()).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { media: { taskBudgetUsd: 1 } }, ctx()).ok).toBe(true);
+    const priced = ctx({ settings: { ...settings, media: { ...settings.media, allowPaidGeneration: true, prices: { 'fal-ai/flux/dev': 0.1 } } } });
+    expect(guardRemoteCommand('settings.update', {}, { media: { prices: { 'fal-ai/flux/dev': 0.01 } } }, priced).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { media: { prices: {} } }, priced).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { media: { prices: { 'fal-ai/flux/dev': 0.2 } } }, priced).ok).toBe(true);
+    expect(guardRemoteCommand('settings.update', {}, { media: { allowPaidGeneration: false } }, priced).ok).toBe(true);
+  });
+
+  it('refuses loosening or removing a media budget from the cloud; other budgets are unchanged', () => {
+    const media = { scopeType: 'MEDIA' as const, amountNanos: 5_000_000_000, policy: 'STOP_NEW_RUNS' as const, enabled: true };
+    const withBudget = ctx({ budget: (id) => (id === 'm1' ? media : id === 'g1' ? { ...media, scopeType: 'GLOBAL' as const } : null) });
+    expect(guardRemoteCommand('usage.budgetRemove', { id: 'm1' }, {}, withBudget).ok).toBe(false);
+    expect(guardRemoteCommand('usage.budgetUpdate', { id: 'm1' }, { amountUsd: 50 }, withBudget).ok).toBe(false);
+    expect(guardRemoteCommand('usage.budgetUpdate', { id: 'm1' }, { policy: 'WARN_ONLY' }, withBudget).ok).toBe(false);
+    expect(guardRemoteCommand('usage.budgetUpdate', { id: 'm1' }, { enabled: false }, withBudget).ok).toBe(false);
+    expect(guardRemoteCommand('usage.budgetUpdate', { id: 'm1' }, { amountUsd: 2 }, withBudget).ok).toBe(true);
+    expect(guardRemoteCommand('usage.budgetRemove', { id: 'g1' }, {}, withBudget).ok).toBe(true);
+  });
+});

@@ -34,7 +34,11 @@ const STAGE_WORDS: Array<{ re: RegExp; role?: Role; kind?: StageKind }> = [
   { re: /\b(investigat\w*|root[- ]cause)\b/, role: 'investigator' },
   { re: /\b(plan|planning|planner)\b/, role: 'planner' },
   { re: /\b(implement\w*)\b/, role: 'implementer' },
+  { re: /\b(art[- ]direct\w*)\b/, role: 'art-director' },
+  { re: /\b(visual[- ]critic\w*|critique)\b/, role: 'visual-critic' },
   { re: /\b(review|reviewer|reviewing)\b/, role: 'reviewer' },
+  // After review: "design review" names the reviewer, "design" alone the designer.
+  { re: /\b(design|designer|designing|redesign\w*)\b/, role: 'designer' },
   { re: /\b(fix|fixer|fixing)\b/, role: 'fixer' },
   { re: /\b(verify|verification|verifier|verifying)\b/, role: 'verifier' },
   { re: /\b(test|tests|testing)\b/, kind: 'tests' },

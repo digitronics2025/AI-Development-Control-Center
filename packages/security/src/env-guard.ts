@@ -98,6 +98,26 @@ export const AMBIENT_CREDENTIAL_ENV_VARS: readonly string[] = [
   'MYSQL_PWD',
   'MONGODB_URI',
   'REDIS_URL',
+  // Image, video and voice generation (docs/systems/design-agent.md): each call is billed, so a
+  // key reaches only the media tools, by name from the broker, never an agent or a repository command.
+  'FAL_KEY',
+  'FAL_KEY_ID',
+  'FAL_KEY_SECRET',
+  'REPLICATE_API_TOKEN',
+  'STABILITY_API_KEY',
+  'BFL_API_KEY',
+  'IDEOGRAM_API_KEY',
+  'RECRAFT_API_TOKEN',
+  'RECRAFT_API_KEY',
+  'LEONARDO_API_KEY',
+  'RUNWAYML_API_SECRET',
+  'LUMAAI_API_KEY',
+  'KLING_ACCESS_KEY',
+  'KLING_SECRET_KEY',
+  'MINIMAX_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'HIGGSFIELD_API_KEY',
+  'HIGGSFIELD_API_SECRET',
 ];
 
 /**

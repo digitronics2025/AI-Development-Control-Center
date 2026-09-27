@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { redact } from '@acc/security';
+import { guardedFetch, McpSignInRequired, UnauthorizedError, type McpOAuthProvider } from './oauth.js';
 
 /**
  * MCP gateway (V2 plan §29): the Control Center as a client of other MCP
@@ -23,6 +24,8 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   cwd?: string | null;
   timeoutMs?: number;
+  /** `http` servers that sign in with OAuth: the provider over the sealed sign-in (oauth.ts). */
+  oauth?: McpOAuthProvider;
 }
 
 export interface McpToolInfo {
@@ -48,7 +51,13 @@ export interface McpCallResult {
   text: string;
   structured: unknown;
   isError: boolean;
+  /** PNG and JPEG pictures the tool returned (3 MB each at most, three at most), for the model to look at. */
+  images: Array<{ mime: 'image/png' | 'image/jpeg'; data: Buffer }>;
 }
+
+/** Largest picture passed on from an outside server (the same ceiling as the Control Center's own screenshots). */
+export const MAX_MCP_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_MCP_IMAGES = 3;
 
 interface Pooled {
   client: Client;
@@ -59,7 +68,17 @@ interface Pooled {
 const IDLE_MS = 5 * 60_000;
 
 function fingerprint(config: McpServerConfig): string {
-  return JSON.stringify([config.transport, config.command, config.args, config.url, Object.keys(config.env ?? {}).sort(), Object.keys(config.headers ?? {}).sort()]);
+  return JSON.stringify([config.transport, config.command, config.args, config.url, Object.keys(config.env ?? {}).sort(), Object.keys(config.headers ?? {}).sort(), Boolean(config.oauth)]);
+}
+
+/** An OAuth server that refuses the saved sign-in (and could not refresh it) needs the operator, not a retry. */
+async function signedIn<T>(config: McpServerConfig, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (config.oauth && error instanceof UnauthorizedError) throw new McpSignInRequired(config.name);
+    throw error;
+  }
 }
 
 export class McpGateway {
@@ -88,8 +107,11 @@ export class McpGateway {
       return { client, lastUsed: Date.now(), key: fingerprint(config), close: () => client.close() };
     }
     if (!config.url) throw new Error('An HTTP MCP server needs a URL');
-    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers ?? {} } });
-    await client.connect(transport, { timeout });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), {
+      requestInit: { headers: config.headers ?? {} },
+      ...(config.oauth ? { authProvider: config.oauth, fetch: guardedFetch } : {}),
+    });
+    await signedIn(config, () => client.connect(transport, { timeout }));
     return { client, lastUsed: Date.now(), key: fingerprint(config), close: () => client.close() };
   }
 
@@ -121,7 +143,7 @@ export class McpGateway {
     const tools: McpToolInfo[] = [];
     let cursor: string | undefined;
     do {
-      const page = await c.client.listTools(cursor ? { cursor } : {}, { timeout: config.timeoutMs ?? 30_000 });
+      const page = await signedIn(config, () => c.client.listTools(cursor ? { cursor } : {}, { timeout: config.timeoutMs ?? 30_000 }));
       for (const t of page.tools) {
         tools.push({
           name: t.name,
@@ -152,11 +174,21 @@ export class McpGateway {
 
   async callTool(config: McpServerConfig, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
     const c = await this.connection(config);
-    const result = await c.client.callTool({ name, arguments: args }, undefined, { timeout: config.timeoutMs ?? 120_000, signal });
+    const result = await signedIn(config, () => c.client.callTool({ name, arguments: args }, undefined, { timeout: config.timeoutMs ?? 120_000, signal }));
     c.lastUsed = Date.now();
-    const content = (result.content as Array<{ type: string; text?: string }> | undefined) ?? [];
-    const text = redact(content.map((part) => (part.type === 'text' ? (part.text ?? '') : `[${part.type}]`)).join('\n'));
-    return { ok: !result.isError, text, structured: result.structuredContent ?? null, isError: Boolean(result.isError) };
+    const content = (result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }> | undefined) ?? [];
+    const text = redact(content.map((part) => (part.type === 'text' ? (part.text ?? '') : `[${part.type}${part.mimeType ? ` ${part.mimeType}` : ''}]`)).join('\n'));
+    // Pictures reach the model as pictures: PNG or JPEG only, proven by their bytes, within the size ceiling.
+    const images: McpCallResult['images'] = [];
+    for (const part of content) {
+      if (part.type !== 'image' || typeof part.data !== 'string' || images.length >= MAX_MCP_IMAGES) continue;
+      if (part.data.length > Math.ceil((MAX_MCP_IMAGE_BYTES * 4) / 3) + 4) continue;
+      const data = Buffer.from(part.data, 'base64');
+      const png = data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const jpeg = data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+      if ((png || jpeg) && data.length <= MAX_MCP_IMAGE_BYTES) images.push({ mime: png ? 'image/png' : 'image/jpeg', data });
+    }
+    return { ok: !result.isError, text, structured: result.structuredContent ?? null, isError: Boolean(result.isError), images };
   }
 
   async disconnect(id: string): Promise<void> {

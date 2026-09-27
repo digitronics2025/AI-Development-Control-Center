@@ -35,7 +35,7 @@ function rel(ctx: OperationContext, absolute: string): string {
 }
 
 /** The user's own uncommitted work (dirty at the task baseline) is never overwritten or deleted by a tool. */
-function protectedCheck(ctx: OperationContext, absolute: string): OperationResult | null {
+export function protectedCheck(ctx: OperationContext, absolute: string): OperationResult | null {
   const r = rel(ctx, absolute);
   const hit = ctx.protectedPaths.find((p) => p === r || r.startsWith(`${p.replace(/\/$/, '')}/`) || p.startsWith(`${r}/`));
   return hit ? failure('PROTECTED_PATH', `${hit} holds your own uncommitted work from before the task; tools do not change it`) : null;

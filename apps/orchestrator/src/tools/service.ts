@@ -32,6 +32,7 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now } from '../store/store.js';
 import type { VaultDepositService } from './vault-deposit.js';
+import type { MediaSpendGate } from '../usage/media.js';
 import type { CredentialBroker } from './credentials.js';
 import type { ProcessManager } from './processes.js';
 import type { ToolStore } from './store.js';
@@ -154,6 +155,15 @@ function clipInput(input: unknown): string {
   return text.length > 800 ? `${text.slice(0, 799)}…` : text;
 }
 
+/** `name (type, required), …` from a JSON Schema's properties, 600 characters at most. */
+export function inputSummary(schema: Record<string, unknown>): string {
+  const props = (schema.properties ?? {}) as Record<string, { type?: unknown; description?: unknown }>;
+  const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+  const parts = Object.entries(props).map(([name, p]) => `${name} (${typeof p?.type === 'string' ? p.type : 'any'}${required.has(name) ? ', required' : ''})`);
+  const text = parts.length ? parts.join(', ') : 'an object';
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
+}
+
 export function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
   try {
     const out = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }) as Record<string, unknown>;
@@ -181,6 +191,8 @@ export interface ToolServiceDeps {
   credentials: CredentialBroker;
   /** MyVault's delivery box: lets a newly generated secret be saved for MyVault while it is locked. */
   deposits?: VaultDepositService;
+  /** The spend gate for paid calls (docs/systems/design-agent.md); without it a paid call never runs. */
+  spend?: MediaSpendGate;
   dataDir: string;
   baseEnv: NodeJS.ProcessEnv;
 }
@@ -482,6 +494,24 @@ export class ToolService {
       this.escalate(scope, req.capability, 'enabled', decision.reason, risk.level);
     }
 
+    // 4b. Spend gate: a paid call (image or video generation) runs only with paid generation on and an
+    // estimate that fits the task's media budget and every media budget that stops runs. Fails closed.
+    let reservation: string | null = null;
+    if (operation.estimateCost) {
+      let reserved: { ok: true; id: string } | { ok: false; reason: string };
+      try {
+        const estimate = operation.estimateCost(input, this.d.spend?.prices() ?? {});
+        reserved = this.d.spend ? this.d.spend.reserve({ taskId: scope.taskId, stageId: scope.stageId, executionId: base.id, capability: req.capability, provider: provider.id, origin: req.origin, estimate }) : { ok: false, reason: 'No spend gate is configured, so paid calls do not run.' };
+      } catch (error) {
+        reserved = { ok: false, reason: `The cost of this call could not be estimated (${redact((error as Error).message).slice(0, 200)}), so it is not run.` };
+      }
+      if (!reserved.ok) {
+        this.escalate(scope, req.capability, 'denied', reserved.reason, risk.level);
+        return refuse('denied', 'DENIED', reserved.reason, 'deny', risk);
+      }
+      reservation = reserved.id;
+    }
+
     // 5. Checkpoint before high-impact work in a task.
     if (scope.taskId && (risk.level >= 3 || (risk.effects.includes('database') && risk.level >= 2))) {
       await this.checkpointsFor(scope.taskId)
@@ -528,6 +558,7 @@ export class ToolService {
       req.signal?.removeEventListener('abort', onAbort);
     }
     result = { ...result, summary: redact(result.summary), stdout: result.stdout ? redact(result.stdout) : undefined, stderr: result.stderr ? redact(result.stderr) : undefined };
+    if (reservation) this.d.spend?.settle(reservation, result);
     if (scope.readOnly?.maskPersonal) result = maskResult(result);
 
     // 7. Record, remember provider failures for routing, and surface notable calls.
@@ -597,9 +628,10 @@ export class ToolService {
       terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel) : undefined,
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
+      prices: this.d.spend?.prices(),
       credentials: {
         // Only a production secret deploy, which always waits for the operator's typed approval, may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
-        value: (name) => this.d.credentials.value(name, scope.repositoryId, run.deploysReserved ? { reserved: 'deploy' } : {}),
+        value: (name, opts) => this.d.credentials.value(name, scope.repositoryId, { ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}), ...(opts?.kind ? { kind: opts.kind } : {}) }),
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {
@@ -689,7 +721,7 @@ export class ToolService {
       const unchecked = !route.ok && route.code === 'NOT_INSTALLED' && offering.some((r) => !this.health.get(r.provider.id));
       if (!route.ok && !unchecked) continue;
       const operation = route.ok ? route.route.operation : offering[0]!.operation;
-      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: jsonSchemaOf(operation.input), level: cap.level });
+      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: operation.inputJsonSchema ?? jsonSchemaOf(operation.input), level: cap.level });
       if (out.length >= MAX_LISTED) break;
     }
     return out;
@@ -709,7 +741,10 @@ export class ToolService {
             ? 'available — call it with acc_call_capability'
             : `unavailable (${route.ok ? '' : route.reason})`
           : !route.ok ? `unavailable (${route.reason})` : c.level > scope.stageLevel ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}` : c.level > ceiling ? 'needs approval' : 'available — call it with acc_call_capability';
-        return `- ${c.id} (Level ${c.level}): ${c.title}. ${c.description} → ${status}`;
+        // An outside server's tools take untyped input here: name their parameters so a call can be written.
+        const schema = route.ok ? route.route.operation.inputJsonSchema : undefined;
+        const params = schema ? ` Input: ${inputSummary(schema)}.` : '';
+        return `- ${c.id} (Level ${c.level}): ${c.title}. ${c.description}${params} → ${status}`;
       })
       .join('\n');
   }

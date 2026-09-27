@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import { nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { isWriteRole, judgeKind, nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -87,10 +87,11 @@ export function extractOperatorBlockers(output: string | null | undefined): stri
  * The operator decisions to report. The verifier reads the review before it
  * writes, so when a verification exists its list is the current one; taking
  * both listed the same concern twice in different words. Without a
- * verification the review's list stands.
+ * verification the reviews' lists stand: the latest review of each review
+ * stage (a visual critique and a code review judge different things).
  */
-export function latestOperatorItems(review: string | null | undefined, verification: string | null | undefined): string[] {
-  return verification ? extractOperatorItems(verification) : extractOperatorItems(review);
+export function latestOperatorItems(reviews: string | ReadonlyArray<string | null | undefined> | null | undefined, verification: string | null | undefined): string[] {
+  return verification ? extractOperatorItems(verification) : extractOperatorItems(...(typeof reviews === 'string' || reviews === null || reviews === undefined ? [reviews] : reviews));
 }
 
 export interface ReportResult {
@@ -117,7 +118,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   // The test run that counts is the last one that finished — a cancelled or interrupted
   // instance proves nothing — and it must come after the last change (audit F-06, as gate.ts).
   const lastTestStage = [...stages].reverse().find((s) => s.kind === 'tests' && (s.status === 'SUCCESS' || s.status === 'FAILED' || s.status === 'SKIPPED'));
-  const lastWrite = [...stages].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
+  const lastWrite = [...stages].reverse().find((s) => isWriteRole(s.role) && s.status === 'SUCCESS');
   // A run of affected tests replaced by the whole suite in the same stage is neither a pass nor a failure (AFFECTED_TESTS_PLAN §3.4).
   const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id && !supersededRun(r)) : [];
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
@@ -151,8 +152,8 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (mixed.length) limitations.push(`${mixed.length} file(s) mix your pre-existing uncommitted work with task changes: ${mixed.map((f) => f.path).join(', ')}.`);
 
   const verdictStages = stages.filter((s) => s.verdict !== null);
-  const lastReview = [...verdictStages].reverse().find((s) => s.role === 'reviewer');
-  const lastVerify = [...verdictStages].reverse().find((s) => s.role === 'verifier');
+  const lastReview = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'review');
+  const lastVerify = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'verify');
   if (lastReview?.verdict === 'FAIL') limitations.push('The last review did not pass.');
   if (lastVerify?.verdict === 'FAIL') limitations.push('The last verification did not pass.');
   for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);
@@ -181,7 +182,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '## Changed',
     '',
     ...(stages
-      .filter((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS' && s.summary)
+      .filter((s) => isWriteRole(s.role) && s.status === 'SUCCESS' && s.summary)
       .map((s) => `- ${s.name}: ${s.summary}`) as string[]),
     '',
     '## Files changed',
@@ -212,7 +213,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     ...(lastVerify ? [`- Verification: ${lastVerify.verdict === 'PASS' ? 'passed' : 'failed'}`] : []),
     ...(task.supervised
       ? [
-          `- Fix attempts: ${stages.filter((s) => s.role === 'fixer').length} across ${task.recoveryCycle + 1} strateg${task.recoveryCycle ? 'ies' : 'y'}`,
+          `- Fix attempts: ${stages.filter((s) => s.role === 'fixer' || (s.role === 'designer' && s.cycle > 0)).length} across ${task.recoveryCycle + 1} strateg${task.recoveryCycle ? 'ies' : 'y'}`,
           `- Chairman recovery cycles: ${task.recoveryCycle}`,
         ]
       : [`- Fix cycles used: ${task.fixCycles} of ${task.maxFixCycles}`]),

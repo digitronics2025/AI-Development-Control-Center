@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { git } from '@acc/git';
 import { buildFinalReport } from '../src/engine/report.js';
-import { addRepo, createTask, createTestApp, makeRepo, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, waitForStatus, IN_PLACE, TOKEN, type TestApp } from './helpers.js';
 
 /** The completion artifacts are read by people and tools after the task: each must say what it seems to say. */
 
@@ -100,5 +100,99 @@ describe('final report Tests section', () => {
     expect(text).toMatch(/^- ✓ lint \(2\.0s\)$/m);
     expect(text).toContain('- ✓ unit tests (2.0s) — Tests 429 passed | 1 skipped (430)');
     expect(text).toContain('- ✕ build (2.0s) — error TS2322');
+  });
+});
+
+describe('designer report', () => {
+  let t: TestApp;
+  beforeEach(async () => {
+    SimulatedAgentAdapter.reset();
+    t = await createTestApp();
+  });
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it('is saved as an implementation report and reaches the reviewer as {{implementation_report}}', async () => {
+    t.services.workflows.save('design-flow', {
+      name: 'Design flow',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Design review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo(), IN_PLACE), 'Restyle the landing page', { workflowId: 'design-flow' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const artifacts = t.services.store.listArtifacts(id);
+    const report = artifacts.find((a) => a.name === 'design-report.md');
+    expect(report?.type).toBe('implementation-report');
+    expect(artifacts.some((a) => a.name === 'design-prompt.md')).toBe(true);
+    const designOutput = await t.services.artifacts.latestText(id, 'implementation-report');
+    expect(designOutput).toBeTruthy();
+    const reviewPrompt = artifacts.find((a) => a.name === 'review-prompt.md');
+    const { content } = await t.services.artifacts.read(reviewPrompt!, 200_000);
+    expect(content).toContain(designOutput!.trim().split('\n')[0]!);
+  });
+});
+
+describe('final report Changed section', () => {
+  it('lists what a designer stage changed, like an implementer', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 8, 27, 12, m)).toISOString();
+    const task = {
+      id: 'TASK-0100', title: 'x', description: 'Restyle the landing page', mode: 'autopilot', supervised: false, fixCycles: 0, maxFixCycles: 3, recoveryCycle: 0,
+      git: { baselineBranch: 'main', baselineCommit: null, taskBranch: null, isolated: false, commits: [] }, workflow: { name: 'Frontend Design', stages: [{ key: 'build', kind: 'agent' }] },
+    } as never;
+    const stages = [
+      { id: 'b', role: 'designer', kind: 'agent', status: 'SUCCESS', createdAt: at(1), name: 'Build', summary: 'New hero, tokens and both themes', verdict: null, errorMessage: null },
+    ] as never[];
+    const md = buildFinalReport({ task, repo: { name: 'r', path: '/r' } as never, stages, testRuns: [], files: [], testsSkipped: false, deployed: 'none' }).markdown;
+    expect(md.slice(md.indexOf('## Changed'), md.indexOf('## Files changed'))).toContain('- Build: New hero, tokens and both themes');
+  });
+
+  it('counts a design workflow\'s rebuilds in a fix cycle as fix attempts under the Chairman', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 8, 27, 12, m)).toISOString();
+    const task = {
+      id: 'TASK-0101', title: 'x', description: 'Restyle the landing page', mode: 'autopilot', supervised: true, fixCycles: 2, maxFixCycles: 3, recoveryCycle: 0,
+      git: { baselineBranch: 'main', baselineCommit: null, taskBranch: null, isolated: false, commits: [] }, workflow: { name: 'Frontend Design', stages: [{ key: 'build', kind: 'agent' }] },
+    } as never;
+    const build = (id: string, cycle: number, m: number) => ({ id, role: 'designer', kind: 'agent', status: 'SUCCESS', cycle, createdAt: at(m), name: 'Build', summary: null, verdict: null, errorMessage: null });
+    const critique = (id: string, verdict: string, m: number) => ({ id, role: 'visual-critic', kind: 'agent', status: 'SUCCESS', cycle: 0, createdAt: at(m), name: 'Visual critique', summary: null, verdict, errorMessage: null });
+    const stages = [build('b1', 0, 1), critique('c1', 'FAIL', 2), build('b2', 1, 3), critique('c2', 'FAIL', 4), build('b3', 2, 5), critique('c3', 'PASS', 6)] as never[];
+    const md = buildFinalReport({ task, repo: { name: 'r', path: '/r' } as never, stages, testRuns: [], files: [], testsSkipped: false, deployed: 'none' }).markdown;
+    expect(md).toContain('- Fix attempts: 2 across 1 strategy');
+  });
+});
+
+describe('media artifacts', () => {
+  let t: TestApp;
+  beforeEach(async () => {
+    SimulatedAgentAdapter.reset();
+    t = await createTestApp();
+  });
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it('keep generated images and video with their media type, served only as downloads (SVG never inline)', async () => {
+    const id = await createTask(t, await addRepo(t, await makeRepo(), IN_PLACE), 'Keep the hero image');
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+    const cases = [
+      { name: 'hero.webp', type: 'image' as const, mime: 'image/webp' },
+      { name: 'hero.avif', type: 'image' as const, mime: 'image/avif' },
+      { name: 'icon.svg', type: 'image' as const, mime: 'image/svg+xml' },
+      { name: 'loop.webm', type: 'video' as const, mime: 'video/webm' },
+      { name: 'loop.mp4', type: 'video' as const, mime: 'video/mp4' },
+    ];
+    for (const c of cases) {
+      const artifact = await t.services.artifacts.write(id, { name: c.name, type: c.type, content: png });
+      expect(artifact).toMatchObject({ type: c.type, mime: c.mime, size: png.length });
+      const res = await t.app.inject({ method: 'GET', url: `/api/artifacts/${artifact.id}/download`, headers: { host: '127.0.0.1:4317', authorization: `Bearer ${TOKEN}` } });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe(c.mime);
+      expect(res.headers['content-disposition']).toMatch(/^attachment; /);
+      expect(res.rawPayload.equals(png)).toBe(true);
+    }
   });
 });

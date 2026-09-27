@@ -7,7 +7,7 @@ sources:
   - packages/executor/**
   - apps/orchestrator/src/services/skills.ts
   - packages/shared/src/skills.ts
-verified_at: 892299f
+verified_at: 57af61a
 ---
 
 # Agent adapters

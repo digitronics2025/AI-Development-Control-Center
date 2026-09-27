@@ -9,7 +9,7 @@ sources:
   - apps/orchestrator/src/engine/report.ts
   - apps/orchestrator/src/chairman/signatures.ts
   - apps/dashboard/src/pages/SettingsPage.tsx
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Role prompts

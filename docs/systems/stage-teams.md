@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/engine/work-units.ts
   - packages/git/src/team.ts
   - packages/shared/src/stage-teams.ts
-verified_at: cabbcec
+verified_at: 57af61a
 ---
 
 # Stage Teams

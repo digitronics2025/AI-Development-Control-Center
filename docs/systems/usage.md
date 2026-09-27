@@ -7,7 +7,7 @@ sources:
   - packages/agent-sdk/src/usage.ts
   - apps/dashboard/src/pages/usage/**
   - apps/dashboard/src/api/usage.ts
-verified_at: 5ad2a6b
+verified_at: 57af61a
 ---
 
 # Usage, cost and capacity

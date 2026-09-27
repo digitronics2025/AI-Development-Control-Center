@@ -5,7 +5,7 @@ sources:
   - packages/tools/src/packs/cloudflare-api.ts
   - apps/dashboard/src/pages/ReleasePanel.tsx
   - apps/dashboard/src/pages/task/ReleaseCard.tsx
-verified_at: 2eaba2f
+verified_at: 57af61a
 ---
 
 # Releases
@@ -116,7 +116,9 @@ leave it refused. The Release button (a completed task, worktree gone) still
 refuses a moved branch.
 
 `POST /api/tasks/:id/release/check` (**Check again**) re-runs step 5 only, in
-the background, for a release whose commit was sent. `POST
+the background, for a release whose commit was sent. A release's final state
+is saved after its report is written, so once it reads final, Check again is
+accepted at once (it answers "being checked now" only while a run is going). `POST
 /api/repositories/:id/release/check` (**Check setup**) checks the saved setting
 or a `release` in the body: remote, `ls-remote` of the branch, the live URL, the
 Pages project, the version URL. None of these send anything.

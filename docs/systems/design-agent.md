@@ -11,7 +11,7 @@ sources:
   - apps/orchestrator/src/engine/runners.ts
   - packages/security/src/env-guard.ts
   - packages/tools/src/packs/media*.ts
-verified_at: c5503d3
+verified_at: 57af61a
 ---
 
 # Design agent (designer role, Frontend Design workflow)

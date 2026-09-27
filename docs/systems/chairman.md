@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/engine/supervision.ts
   - packages/shared/src/chairman.ts
   - apps/dashboard/src/pages/task/ChairmanDrawer.tsx
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Chairman supervisor

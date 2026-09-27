@@ -7,7 +7,7 @@ sources:
   - apps/dashboard/src/pages/NodesPage.tsx
   - apps/dashboard/e2e-cloud/**
   - .github/workflows/**
-verified_at: c66a1fc
+verified_at: 57af61a
 ---
 
 # Cloud control plane
@@ -220,7 +220,9 @@ D1/R2/DO) with a test Access key set and the real orchestrator as the node —
 `auth`, `nodes`, `commands`, `objects`, `features`, `load`, `uploads`
 ([test/](../../apps/cloud-control/test/)). Without a dashboard build (`pnpm check`
 on a fresh checkout) the harness serves a placeholder page through `--assets`
-instead of failing; the assets these tests touch are only the Worker's gate. `pnpm e2e:cloud`: the cloud
+instead of failing; the assets these tests touch are only the Worker's gate. The
+local dev proxy resets a reused socket now and then, so the harness talks to it
+without keep-alive (`httpJson`, and `httpBytes` for hash-checked downloads). `pnpm e2e:cloud`: the cloud
 dashboard in a browser against that Worker and a paired simulated-agent node,
 both themes, five viewports, axe
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)).

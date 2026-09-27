@@ -7,7 +7,7 @@ sources:
   - apps/orchestrator/src/engine/context.ts
   - apps/orchestrator/src/tools/service.ts
   - apps/orchestrator/src/chairman/checkpoints.ts
-verified_at: f6bc77e
+verified_at: 57af61a
 ---
 
 # Tasks across repositories

@@ -2,7 +2,7 @@
 system: git
 sources:
   - packages/git/**
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Git integration

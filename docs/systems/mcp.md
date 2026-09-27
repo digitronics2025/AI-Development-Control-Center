@@ -5,7 +5,7 @@ sources:
   - apps/orchestrator/src/tools/mcp.ts
   - packages/agent-claude/src/index.ts
   - packages/agent-codex/src/index.ts
-verified_at: 351db1e
+verified_at: 57af61a
 ---
 
 # MCP

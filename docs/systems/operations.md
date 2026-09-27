@@ -4,7 +4,7 @@ sources:
   - scripts/windows/**
   - scripts/demo.mjs
   - scripts/verify-agents.ts
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Operations and Windows packaging

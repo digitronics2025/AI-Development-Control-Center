@@ -7,7 +7,7 @@ sources:
   - packages/tools/src/packs/installer.ts
   - apps/dashboard/src/pages/learning/**
   - apps/dashboard/src/api/learning.ts
-verified_at: 25d74b5
+verified_at: 57af61a
 ---
 
 # Learning loop

@@ -4,7 +4,7 @@ sources:
   - apps/orchestrator/src/chairman/checkpoints.ts
   - packages/git/src/worktrees.ts
   - apps/orchestrator/src/engine/tooling.ts
-verified_at: b9ce60f
+verified_at: 57af61a
 ---
 
 # Checkpoints and worktrees

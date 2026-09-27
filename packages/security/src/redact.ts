@@ -40,15 +40,31 @@ const RULES: Rule[] = [
   { name: 'stripe', pattern: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, replace: REDACTED, blocking: true },
   { name: 'npm', pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replace: REDACTED, blocking: true },
   { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replace: REDACTED },
-  // Authorization headers.
-  { name: 'bearer', pattern: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, replace: `$1 ${REDACTED}` },
+  // Authorization headers. The value must look like a credential: it has a digit, a capital or one of
+  // `_.~+/=`, and does not start with `--`. So "token --color-accent" (a CSS custom property) and
+  // "Basic typography-scale" (plain words) stay readable (docs/systems/design-agent.md). The
+  // keyword is matched in its usual spellings, not case-insensitively, so the value test stays case-sensitive.
+  {
+    name: 'bearer',
+    pattern: /\b(Bearer|bearer|BEARER|Basic|basic|BASIC|Token|token|TOKEN)\s+(?!--)(?=[A-Za-z0-9._~+/=-]*[0-9A-Z_.~+/=])[A-Za-z0-9._~+/=-]{12,}/g,
+    replace: `$1 ${REDACTED}`,
+  },
+  // Signed URLs (S3, GCS, Azure SAS, CloudFront): only the signature and session parameters are masked, so the
+  // host, path and expiry stay readable in logs and reports.
+  {
+    name: 'signed-url',
+    pattern: /([?&](?:sig|signature|x-amz-signature|x-goog-signature|x-amz-security-token|x-amz-credential|x-goog-credential)=)[^&#\s"'<>]+/gi,
+    replace: `$1${REDACTED}`,
+  },
   // URLs with embedded credentials: https://user:pass@host
   { name: 'url-credentials', pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@/]+@/gi, replace: `$1${REDACTED}@`, blocking: true },
-  // key=value / key: value / "key": "value" where the key names a secret.
+  // key=value / key: value / "key": "value" where the key names a secret. The value stops at `&` (the next
+  // URL parameter is not part of it), and design values are not secrets: a colour (#3355ff, rgb(), oklch()),
+  // a CSS variable (var(--x)) or a length (16px, 1.25rem) after a name such as `accentToken`.
   {
     name: 'assignment',
     pattern: new RegExp(
-      `(${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)(?!\\[REDACTED\\])([^\\s"',;}{]{6,})`,
+      `(${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)(?!\\[REDACTED\\])(?!#[0-9A-Fa-f]{3,8}\\b)(?!var\\(--)(?!(?:rgba?|hsla?|oklch|oklab|color-mix)\\()(?!\\d+(?:\\.\\d+)?(?:px|rem|em|%|ms|s|vh|vw|deg)\\b)([^\\s"',;}{&]{6,})`,
       'gi',
     ),
     replace: `$1${REDACTED}`,

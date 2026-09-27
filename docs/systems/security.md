@@ -44,8 +44,19 @@ Applied to log lines (stateful across multi-line private keys), command
 strings, directives, artifacts, event messages and error text before storage
 or broadcast. Covers provider key formats, GitHub/GitLab/Slack/AWS/Google/
 Stripe/npm tokens, JWTs, bearer/basic headers, URL credentials, cookies,
-`secret-name=value` pairs, and the literal values of sensitive environment
-variables present on the machine.
+`secret-name=value` pairs, the signature and session parameters of signed URLs
+(`sig`, `signature`, `X-Amz-Signature`, `X-Goog-Signature`,
+`X-Amz-Security-Token`, `X-Amz-Credential`, `X-Goog-Credential`: only their
+values, so host, path and expiry stay readable), and the literal values of
+sensitive environment variables present on the machine.
+
+Narrowed on purpose ([design-agent.md](design-agent.md)), with regression
+tests showing real credentials still masked: a `Bearer`/`Basic`/`Token` value
+must look like a credential (a digit, a capital or one of `_.~+/=`, and not
+starting with `--`), so "token --color-accent" and "Basic typography-scale"
+stay readable; a `key=value` secret stops at `&` (the next URL parameter is not
+part of it) and skips design values after names such as `accentToken`
+(`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`).
 
 `detectSecrets` reports which **blocking** rules match (provider keys, cloud
 and registry tokens, credentials in URLs, private keys — not JWTs or the broad

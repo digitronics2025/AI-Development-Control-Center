@@ -39,6 +39,29 @@ describe('Redactor', () => {
     expect(r.redact('Authorization: Bearer abcdefghijklmnop.qrstuv')).toContain(`Bearer ${REDACTED}`);
   });
 
+  it('masks only the signature of a signed URL, and stops a key=value secret at the next URL parameter', () => {
+    const sig = fake('a1b2c3d4', 'e5f6a7b8', 'c9d0e1f2', 'a3b4c5d6');
+    const s3 = `https://bucket.s3.amazonaws.com/generated/hero.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260927T120000Z&X-Amz-Expires=3600&X-Amz-Signature=${sig}`;
+    expect(r.redact(s3)).toBe(`https://bucket.s3.amazonaws.com/generated/hero.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260927T120000Z&X-Amz-Expires=3600&X-Amz-Signature=${REDACTED}`);
+    const sas = `https://acct.blob.core.windows.net/media/loop.mp4?sv=2024-01-01&se=2026-09-28&sig=${fake('abcDEF', '123%2B', 'xyz%3D')}&sp=r`;
+    expect(r.redact(sas)).toBe(`https://acct.blob.core.windows.net/media/loop.mp4?sv=2024-01-01&se=2026-09-28&sig=${REDACTED}&sp=r`);
+    // A public CDN URL without a signature stays as it is.
+    expect(r.redact('https://v3.fal.media/files/penguin/abc123_hero.png')).toBe('https://v3.fal.media/files/penguin/abc123_hero.png');
+    const tokenParam = fake('abc123', 'def456');
+    expect(r.redact(`https://api.example.com/x?token=${tokenParam}&size=large`)).toBe(`https://api.example.com/x?token=${REDACTED}&size=large`);
+  });
+
+  it('leaves design wording readable while real credentials are still masked', () => {
+    for (const text of ['Use token --color-accent-strong for links', 'Basic typography-scale: 16/20/25', 'accentToken: "#3355ff"', 'surfaceToken = var(--surface-2)', 'spacingToken: 1.25rem', 'the token for-the-hero-section']) {
+      expect(r.redact(text), text).toBe(text);
+    }
+    expect(r.redact(`Authorization: Bearer ${fake('abcdefgh', 'ijklmnop')}XYZ`)).toBe(`Authorization: Bearer ${REDACTED}`);
+    expect(r.redact(`token ${fake('1234567890', 'abcdef')}`)).toBe(`token ${REDACTED}`);
+    expect(r.redact(`Basic ${fake('dXNlcjpw', 'YXNzd29y', 'ZA==')}`)).toBe(`Basic ${REDACTED}`);
+    expect(r.redact(`apiKey: "${fake('abcdef', '123456')}"`)).toBe(`apiKey: "${REDACTED}"`);
+    expect(r.redact(`authToken=${fake('ghij', 'kl78', '90')}`)).toBe(`authToken=${REDACTED}`);
+  });
+
   it('redacts URL credentials but keeps the host', () => {
     expect(r.redact('https://user:s3cretpass@github.com/x.git')).toBe(`https://${REDACTED}@github.com/x.git`);
   });

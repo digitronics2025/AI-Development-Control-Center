@@ -40,6 +40,10 @@ import { taskWorkdir } from './workdir.js';
 const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
 
 /** How the operator's own skills and outside tools behave inside a Control Center run (docs/systems/agents.md). */
+/** How to look at UI work with the Control Center's tools (docs/systems/design-agent.md). */
+export const VISUAL_LOOP_LINE =
+  'For UI work, look at the result, not the code alone: browser.open with viewport and colorScheme (then browser.snapshot and browser.act for states), browser.visual_matrix for every width in light and dark as contact sheets, browser.accessibility for WCAG failures with the failing elements, and media.image.view / media.video.frames for image and video files; media.asset.optimize, media.svg.optimize and media.video.encode prepare files for the web.';
+
 export const SKILLS_PROMPT_SECTION = [
   '## Skills',
   '',
@@ -266,6 +270,7 @@ export class EngineTooling {
       '',
       `This run has the Control Center's tools as an MCP server named "acc" (profile: ${profile}, stage Level ${def.permissionLevel}, policy ${this.policyMode(task, repo)}).`,
       'Prefer them to raw commands for: checking the app in a real browser (browser.check_page, verify.web), HTTP checks (http.request), who holds a port (network.port_owner), background dev servers (process.start — stopped for you at the end), databases, Cloudflare, Android and GitHub.',
+      VISUAL_LOOP_LINE,
       'Use acc_find_capability to discover more and acc_call_capability to call one that is not listed. A refusal explains why; do not work around it — report it as an operator decision.',
       ...(taskRepositories(this.d.store, task).length > 1
         ? ['This task works in several repositories: a tool call runs in one of them. Pass `cwd` (or `directory`) naming the repository folder; the call can then touch only that repository and use only its credentials. At the workspace root, Git tools do not work and only credentials shared by every repository are available.']
@@ -546,7 +551,7 @@ export class EngineTooling {
     const passedKinds = new Set<CommandKind>(testRuns.filter((r) => r.status === 'passed' && (r.stageId === lastTests?.id || r.kind === 'e2e')).map((r) => r.kind));
     const observed = new Set<'browser' | 'http' | 'device'>();
     const ok = (prefix: string) => this.d.toolStore.listExecutions({ taskId: task.id, limit: 1000 }).some((e) => e.capability.startsWith(prefix) && e.status === 'succeeded');
-    if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow')) observed.add('browser');
+    if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow') || ok('browser.visual_matrix') || ok('browser.accessibility')) observed.add('browser');
     if (ok('http.') || ok('verify.web')) observed.add('http');
     if (ok('android.launch')) observed.add('device');
     const units = taskRepositories(this.d.store, task);

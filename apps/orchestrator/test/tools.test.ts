@@ -393,6 +393,30 @@ describe('MCP servers', () => {
     expect((await t.api('GET', '/api/tools/capabilities')).body.map((c: { id: string }) => c.id)).not.toContain('mcp.echo_fixture.echo');
   }, 60_000);
 
+  it('tells agents how to look at UI work and counts the visual matrix and accessibility scans as browser evidence', async () => {
+    // A web app (vite): its coverage needs a browser check.
+    const webRepoId = await addRepo(t, await makeRepo({ noPackageJson: true, files: { 'package.json': JSON.stringify({ name: 'web', private: true, scripts: { test: 'node -e 0' }, devDependencies: { vite: '^7.0.0' } }) } }));
+    const taskId = await createTask(t, webRepoId, 'Look [sim:slow]');
+    const task = t.services.store.getTask(taskId)!;
+    const repo = t.services.store.getRepository(webRepoId)!;
+    // The section needs the bridge; stand in for a built one.
+    Object.assign((t.services.tooling as unknown as { d: { bridgePath: string | null } }).d, { bridgePath: path.join(ROOT, 'apps', 'orchestrator', 'dist', 'acc-mcp.js') });
+    t.services.tooling.setListenUrl('http://127.0.0.1:1');
+    const section = t.services.tooling.toolsPromptSection(task, { key: 'build', name: 'Build', role: 'designer', kind: 'agent', permissionLevel: 2, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, toolProfile: 'frontend-design' }, repo);
+    expect(section).toContain('profile: frontend-design');
+    expect(section).toContain('browser.visual_matrix for every width in light and dark');
+    const before = t.services.tooling.verificationCoverage(task, repo, [], []);
+    expect(before.missing.some((m) => m.startsWith('Browser check'))).toBe(true);
+    const now = new Date().toISOString();
+    for (const capability of ['browser.visual_matrix', 'browser.accessibility']) {
+      t.services.toolStore.insertExecution({ id: `x-${capability}`, taskId, stageId: null, sessionId: null, capability, providerId: 'playwright', origin: 'agent', routeReason: null, inputSummary: '{}', attempt: 1, recoveryOf: null, artifacts: [], filesChanged: [], networkTargets: [], evidence: [], startedAt: now, finishedAt: now, durationMs: 1, status: 'succeeded', decision: 'allow', permissionLevel: 1, risk: 'normal', effects: [], summary: 'ok', errorCode: null });
+    }
+    const after = t.services.tooling.verificationCoverage(task, repo, [], []);
+    expect(after.missing.some((m) => m.startsWith('Browser check'))).toBe(false);
+    expect(after.satisfied).toContain('Browser check (console, network, phone width)');
+    await t.api('POST', `/api/tasks/${taskId}/cancel`);
+  });
+
   it('lists the design tools first in a frontend-design session', async () => {
     const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'frontend-design', protectedPaths: [] }, 'agent');
     const listed = (await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).body.tools.map((x: { capability: string }) => x.capability);

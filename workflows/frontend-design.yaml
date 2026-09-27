@@ -3,11 +3,15 @@
 # critique loop, checks across themes and widths, and a two-lens design review.
 #
 # Spending is confined to one stage: Assets is the only Level 3 agent stage, so
-# a Level 3 generation server registered in the MCP gateway (for example fal)
-# runs only there, and it asks for approval on every attempt. Build and every
-# fix loop run at Level 2 and cannot call it, so a failing check never pays for
+# the paid media tools (media.image.generate and the rest, Level 3) and a Level 3
+# generation server registered in the MCP gateway (for example fal) run only
+# there, it asks for approval on every attempt, and the spend gate still needs
+# Settings → Media → Allow paid generation and a budget. Build and every fix
+# loop run at Level 2 and cannot call them, so a failing check never pays for
 # new images. Run it in Discuss First mode: the plan (the art direction, the
 # asset list and the media budget) is approved before anything is generated.
+# For the App check in both themes, set the repository's App runtime → Themes
+# to "Light and dark" (and Widths to "All five").
 id: frontend-design
 name: Frontend Design
 description: Art direction, generated media, build, visual QA and design review
@@ -21,6 +25,14 @@ stages:
     timeoutSec: 2700
     retry: { maxAttempts: 2 }
     next: direction
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Propose one art direction (your focus). Give it a name, the feeling in three
+      words, colour roles for light and dark with hex values, a type pairing with a
+      scale, spacing and radius, imagery and motion style, two or three real sites
+      whose qualities it borrows (open them with the browser tools), how it handles
+      FR/AR right-to-left when the product needs it, and the risks. No code.
     team:
       mode: fixed
       maxWorkers: 3
@@ -45,6 +57,14 @@ stages:
     permissionLevel: 1
     retry: { maxAttempts: 2 }
     description: Pick or merge a direction; name the asset list and the media budget
+    toolProfile: frontend-design
+    instructions: >-
+      Choose or merge one direction from the investigation. The plan must state:
+      the direction and why; the design values (colour roles for both themes, type
+      scale, spacing, radius, motion durations); the asset list (each with its
+      purpose, size, format, where it is used and a prompt idea, or "no generated
+      media"); the media budget in US dollars ("0" when nothing is generated); and
+      the pages and components to build with their states.
     next: assets
   - key: assets
     name: Assets
@@ -59,6 +79,13 @@ stages:
     # A retry would bill again.
     retry: { maxAttempts: 1 }
     description: Generate, download and optimise the approved media (paid)
+    toolProfile: frontend-design
+    instructions: >-
+      Media only. Follow the approved asset list and budget exactly; with no
+      budget or "no generated media", write the asset brief and stop. Prefer the
+      media.* tools; check each estimate, explore cheaply, keep only the finals,
+      optimise them (media.asset.optimize, media.svg.optimize, media.video.encode,
+      media.video.poster) and write manifest.json. Change no components or pages.
     next: build
   - key: build
     name: Build
@@ -70,6 +97,14 @@ stages:
     permissionLevel: 2
     timeoutSec: 5400
     retry: { maxAttempts: 2 }
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Build mode. Implement the approved design values, components and pages and
+      place the assets from the manifest with their optimised sources. Look at the
+      result with browser.visual_matrix and browser.accessibility (both themes)
+      before you report, and fix what they show. Paid generation is not available
+      here; a missing asset is an operator decision.
     next: checks
   - key: checks
     name: Checks and visual matrix
@@ -98,6 +133,14 @@ stages:
     retry: { maxAttempts: 2 }
     next: complete
     onFail: build
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Review the running result as well as the diff: open the screenshots listed
+      above, and when the app is running use browser.visual_matrix and
+      browser.accessibility. Judge against the approved plan's design values and
+      the repository's design standard; a regression in one theme or at one width
+      is blocking.
     team:
       mode: fixed
       maxWorkers: 2

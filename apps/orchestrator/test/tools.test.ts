@@ -454,6 +454,20 @@ describe('MCP servers', () => {
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
   }, 60_000);
 
+  it("keeps the paid media tools out of Frontend Design's Build stage; Assets reaches the spend gate", async () => {
+    const session = (stageLevel: 2 | 3) =>
+      t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'frontend-design', protectedPaths: [] }, 'agent');
+    const generate = (token: string) => t.api('POST', '/api/tool-session/call', { capability: 'media.image.generate', input: { prompt: 'hero', path: 'public/generated', name: 'hero' } }, sessionHeaders(token));
+    const build = await generate(session(2).token);
+    expect(build.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(build.body.summary).toMatch(/needs Level 3, and this stage is Level 2/);
+    // At Level 3 the policy lets it through to the spend gate, which refuses while paid generation is off.
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: false } })).status).toBe(200);
+    const assets = await generate(session(3).token);
+    expect(assets.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(assets.body.summary).toMatch(/Paid generation is off/);
+  });
+
   it('keeps a Level 3 generation server out of a Level 2 stage: in Frontend Design only Assets can spend', async () => {
     // Registered as the design runbook registers fal: paid tools at Level 3 (docs/systems/design-agent.md).
     const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');

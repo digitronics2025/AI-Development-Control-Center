@@ -46,6 +46,13 @@ model. The design agent is:
    **App check** (verify). Failures return to Build.
 6. **Design review** (reviewer, fixed team: correctness primary, craft).
 
+Every agent stage sets `toolProfile: frontend-design` (media, browser and
+verify tools listed first), stage `instructions` (what each direction must
+contain, what the art-direction plan must state including the media budget,
+Assets = media only, Build = no paid generation and look before reporting,
+review the running result in both themes), and `skills: [tenten-web-design]`
+where it helps (ignored when that skill is not installed).
+
 Every `onFail` goes to Build, and Build is Level 2, so a fix loop never pays
 for media. When a workflow has no fixer, the completion gate's remedy
 (protected paths) and the Chairman's repair stage go to the first write
@@ -173,8 +180,10 @@ the task budget raised, a price estimate changed, or a media budget loosened
 2. **Media tools on the machine.** ffmpeg on PATH (optimising video, poster
    frames).
 3. **The target repository.**
-   - Repositories → Runtime: the dev command, URL and paths to verify, so the
-     App check and the designer's browser checks can start the app.
+   - Repositories → App runtime: the dev command, URL and paths to verify, so
+     the App check and the designer's browser checks can start the app; set
+     Widths to "All five" and Themes to "Light and dark" for a design
+     repository.
    - A Playwright matrix (both themes × phone to wide-desktop widths, axe, no
      horizontal overflow, no console errors) registered as an `e2e` command.
      The designer may add `@playwright/test` and `@axe-core/playwright` when

@@ -132,6 +132,10 @@ describe('REST API', () => {
     expect(agentStages.filter((s: { permissionLevel: number }) => s.permissionLevel >= 3).map((s: { key: string }) => s.key)).toEqual(['assets']);
     expect(design.stages.find((s: { key: string }) => s.key === 'assets')).toMatchObject({ role: 'designer', requiresApproval: true, retry: { maxAttempts: 1 } });
     for (const s of design.stages.filter((x: { onFail?: string }) => x.onFail)) expect(s.onFail).toBe('build');
+    // Every agent stage lists the design tools first; Assets and Build are told their mode.
+    for (const s of agentStages) expect(s.toolProfile, s.key).toBe('frontend-design');
+    expect(design.stages.find((s: { key: string }) => s.key === 'assets').instructions).toMatch(/^Media only\./);
+    expect(design.stages.find((s: { key: string }) => s.key === 'build').instructions).toMatch(/Paid generation is not available here/);
     expect((await t.api('PUT', '/api/workflows/normal-development', list.body[0])).status).toBe(409);
     const copy = await t.api('POST', '/api/workflows/quick-change/duplicate', {});
     expect(copy.status).toBe(201);

@@ -249,6 +249,10 @@ describe('ask vs act', () => {
       ],
     };
     expect(classifyMessage('Use Claude for the designer, with max effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'build', agentId: 'claude', effort: 'max' } });
+    // A stage named by neither key nor name: "design review" is the review, not the designer.
+    const unnamed: IntentContext = { ...ctx, stages: [{ key: 'make', name: 'Make', role: 'designer', kind: 'agent' }, { key: 'check', name: 'Check', role: 'reviewer', kind: 'agent' }] };
+    expect(classifyMessage('Use Codex for the design review.', unnamed).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'check', agentId: 'codex' } });
+    expect(classifyMessage('Use Codex for the design.', unnamed).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'make', agentId: 'codex' } });
   });
 
   it('routes art direction and visual critique words to their stages', () => {

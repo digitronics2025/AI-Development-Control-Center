@@ -414,6 +414,8 @@ async function contrastMatrix(
 
 /** A line longer than this is minified or generated (a bundle, a data URI), not written by hand: it is reported as skipped, not read. */
 const MAX_LINE = 4096;
+/** Files one lint reads at most; past it the result says so. */
+const MAX_FILES = 5000;
 
 /**
  * Up to 160 characters of a finding's line around it, cut from the line redacted whole: a window redacted
@@ -438,13 +440,19 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
   // What was not read, so a clean result is never mistaken for a scan of generated files.
   const skipped: Array<{ path: string; reason: string; lines?: number[] }> = [];
   let skippedCount = 0;
+  let stopped = false;
   const skip = (rel: string, reason: string, lines?: number[]) => {
     skippedCount++;
     if (skipped.length < 100) skipped.push(lines ? { path: rel, reason, lines } : { path: rel, reason });
   };
   const exts = /\.(?:css|scss|sass|less|tsx|jsx|ts|js|mjs|vue|svelte|html|astro)$/i;
   const visit = async (abs: string, depth: number): Promise<void> => {
-    if (depth > 12 || files >= 5000) return;
+    // The walk's own limits are reported too: a clean result never hides a folder that was not read.
+    if (depth > 12) return skip(relativeTo(ctx.cwd, abs), 'nested deeper than 12 folders');
+    if (files >= MAX_FILES) {
+      stopped = true;
+      return;
+    }
     const entries = await readdir(abs, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
       // Never follows a link: a link could leave the repository.
@@ -457,6 +465,10 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
       if (!e.isFile() || !exts.test(e.name) || /\.d\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(e.name)) continue;
       const rel = relativeTo(ctx.cwd, child);
       if (TOKEN_FILE.test(rel)) continue;
+      if (files >= MAX_FILES) {
+        stopped = true;
+        return;
+      }
       if (/\.min\.(?:css|[jt]s)$/i.test(e.name)) {
         skip(rel, 'minified');
         continue;
@@ -504,13 +516,13 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
   if (!scanned.length) return failure('INVALID_INPUT', `None of ${input.paths.join(', ')} is a folder in the repository`);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const parts = (Object.entries(counts) as Array<[LintFinding['kind'], number]>).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`);
-  const notRead = skippedCount ? ` (${skippedCount} skipped as minified or too long: see skipped)` : '';
+  const notRead = `${skippedCount ? ` (${skippedCount} skipped as minified, too long or too deep: see skipped)` : ''}${stopped ? ` (stopped after ${MAX_FILES} files: name narrower paths)` : ''}`;
   return {
     ok: true,
     summary: total
       ? `${total} hard-coded design value${total === 1 ? '' : 's'} in ${new Set(findings.map((f) => f.path)).size}${truncated ? '+' : ''} file(s) under ${scanned.join(', ')} (${parts.join(', ')}): use the design standard's semantic values instead${notRead}`
       : `No hard-coded colours, palette classes or font sizes in ${files} file(s) under ${scanned.join(', ')}${notRead}`,
-    output: { scanned, files, counts, findings, truncated, skipped },
+    output: { scanned, files, counts, findings, truncated, skipped, stoppedAtFiles: stopped },
     evidence: [`token lint of ${scanned.join(', ')}: ${files} files, ${total} finding(s)${skippedCount ? `, ${skippedCount} skipped` : ''}`],
   };
 }

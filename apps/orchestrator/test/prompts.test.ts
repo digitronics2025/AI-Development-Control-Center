@@ -158,6 +158,28 @@ describe('rendered stage prompts', () => {
     expect(review).toMatch(/- landing-phone-dark\.png \(screenshot, stage build, 1 KB\): .+landing-phone-dark\.png/);
   }, 90_000);
 
+  it('give a multi-repository designer each repository\'s design memory, by folder', async () => {
+    const web = await makeRepo({ files: { 'design.md': '# Design standard\n\nSemantic tokens only.\n' } });
+    mkdirSync(path.join(web, 'design'), { recursive: true });
+    writeFileSync(path.join(web, 'design', 'brief.md'), 'Audience: shoppers in Casablanca.\n');
+    for (const args of [['add', '.'], ['commit', '-m', 'design memory']]) expect((await git(web, args)).code).toBe(0);
+    const api = await makeRepo();
+    t.services.workflows.save('design-across', {
+      name: 'Design across',
+      maxFixCycles: 0,
+      stages: [{ key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'complete' }],
+    });
+    const apiId = await addRepo(t, api);
+    const webId = await addRepo(t, web);
+    const id = await createTask(t, apiId, 'Restyle both', { workflowId: 'design-across', linkedRepositoryIds: [webId] });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const folder = t.services.store.listLinkedRepositories(id)[0]!.folder;
+    const design = promptOf(id, 'build');
+    // The workspace root holds only folders: the web repository's standard and brief are named inside its folder.
+    expect(design).toMatch(new RegExp(`- ${folder}/design\\.md \\(1 KB\\): the repository's design standard`));
+    expect(design).toContain(`### ${folder}/design/brief.md\n\nAudience: shoppers in Casablanca.`);
+  }, 90_000);
+
   it('never read design memory through a link that leaves the repository', async () => {
     const outside = mkdtempSync(path.join(os.tmpdir(), 'acc-outside-'));
     writeFileSync(path.join(outside, 'brief.md'), 'Private notes from another folder.\n');

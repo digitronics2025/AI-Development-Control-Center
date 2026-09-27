@@ -77,8 +77,10 @@ function Row({ title, description, children }: { title: string; description?: Re
   );
 }
 
-/** A bounded whole-number field; invalid input keeps the last valid value. */
-/** `cents`: an amount of money, whole cents allowed (0.50), instead of a whole number. */
+/**
+ * A bounded whole-number field; invalid input keeps the last valid value. `cents`: an amount of money, whole cents
+ * allowed (0.50), instead of a whole number.
+ */
 function LimitField({ label, helper, value, min, max, cents = false, onChange }: { label: string; helper: string; value: number; min: number; max: number; cents?: boolean; onChange: (value: number) => void }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);

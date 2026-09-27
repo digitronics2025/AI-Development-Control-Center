@@ -181,7 +181,8 @@ often agents ran a full suite themselves ([workflow-engine.md](workflow-engine.m
 - Repository detail edits the repository's policy, Git mode *Isolated
   worktree* and the **App runtime** used by the App check; with the browser
   check it also sets **Widths** (desktop and phone, or all five) and
-  **Themes** (light, or light and dark) —
+  **Themes** (light, or light and dark); another list saved through the API
+  shows as **Custom** and is kept until one of the two is chosen —
   [workflow-engine.md](workflow-engine.md#profiles).
 
 ## Installable app (PWA)

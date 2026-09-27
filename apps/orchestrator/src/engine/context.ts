@@ -20,7 +20,7 @@ import {
 import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
 import type { RepositoryRecord, Store, TaskRecord } from '../store/store.js';
-import { agentWorkdir, taskRepositories, type TaskRepository } from './task-repositories.js';
+import { agentWorkdir, inFolder, taskRepositories, type TaskRepository } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
@@ -556,12 +556,6 @@ export class ContextBuilder {
     return recs.map((a) => `- ${a.name} (${a.type}${a.stageKey ? `, stage ${a.stageKey}` : ''}, ${Math.max(1, Math.round(a.size / 1024))} KB): ${this.artifacts.absolutePath(a)}`).join('\n');
   }
 
-  /**
-   * The repository's design standard and design memory (docs/systems/design-agent.md):
-   * named by path and size so the agent reads them in full, with a short
-   * `design/brief.md` inline. Nothing here is required; a repository without
-   * any gets "(none)".
-   */
   /** A path inside `workdir` after following links, else null. */
   private confined(workdir: string, rel: string): string | null {
     try {
@@ -571,16 +565,17 @@ export class ContextBuilder {
     }
   }
 
-  private async designContext(workdir: string): Promise<string> {
+  /**
+   * The repository's design standard and design memory (docs/systems/design-agent.md):
+   * named by path and size so the agent reads them in full, with a short
+   * `design/brief.md` inline. Nothing here is required; a repository without
+   * any gets "(none)". `folder` labels the paths of one repository of a
+   * multi-repository task.
+   */
+  private async designContext(workdir: string, folder: string | null = null): Promise<string> {
     const lines: string[] = [];
     // Inside the repository after following links: a `design` link to a folder elsewhere reads as absent.
-    const confined = (rel: string) => {
-      try {
-        return resolveInside([workdir], workdir, rel);
-      } catch {
-        return null;
-      }
-    };
+    const confined = (rel: string) => this.confined(workdir, rel);
     const size = async (rel: string) => {
       const abs = confined(rel);
       return abs ? ((await stat(abs).catch(() => null))?.size ?? null) : null;
@@ -594,19 +589,19 @@ export class ContextBuilder {
     ];
     for (const [rel, what] of known) {
       const s = await size(rel);
-      if (s !== null) lines.push(`- ${rel} (${Math.max(1, Math.round(s / 1024))} KB): ${what}`);
+      if (s !== null) lines.push(`- ${inFolder(folder, rel)} (${Math.max(1, Math.round(s / 1024))} KB): ${what}`);
     }
     const designDir = confined('design');
     const files = designDir ? await readdir(designDir, { withFileTypes: true }).catch(() => []) : [];
     const entries = files.filter((f) => f.isFile() && confined(`design/${f.name}`)).map((f) => f.name).sort().slice(0, 30);
     for (const name of entries) {
       const s = await size(`design/${name}`);
-      lines.push(`- design/${name}${s !== null ? ` (${Math.max(1, Math.round(s / 1024))} KB)` : ''}: design memory`);
+      lines.push(`- ${inFolder(folder, `design/${name}`)}${s !== null ? ` (${Math.max(1, Math.round(s / 1024))} KB)` : ''}: design memory`);
     }
     const briefPath = entries.includes('brief.md') ? confined('design/brief.md') : null;
     if (briefPath) {
       const brief = await readFile(briefPath, 'utf8').catch(() => '');
-      if (brief.trim()) lines.push('', '### design/brief.md', '', redact(brief.length > 8000 ? `${brief.slice(0, 8000)}\n\n[truncated]` : brief).trim());
+      if (brief.trim()) lines.push('', `### ${inFolder(folder, 'design/brief.md')}`, '', redact(brief.length > 8000 ? `${brief.slice(0, 8000)}\n\n[truncated]` : brief).trim());
     }
     return lines.join('\n');
   }
@@ -694,7 +689,10 @@ export class ContextBuilder {
       directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
       screenshots: this.screenshots(task),
-      design_context: await this.designContext(workspace ? agentWorkdir(task, repo) : workdir),
+      // A multi-repository task's workspace holds only folders: each repository's own standard and memory, by folder.
+      design_context: workspace
+        ? (await Promise.all(units.map((u) => this.designContext(u.workdir, u.folder)))).filter(Boolean).join('\n')
+        : await this.designContext(workdir),
       previous_attempt: this.previousAttempt(task, def, stage),
       verification_commands: workspace
         ? workspace.commands

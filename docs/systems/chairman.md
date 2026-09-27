@@ -283,7 +283,7 @@ running write stage, which re-runs under it; new contract version); "Run E2E
 before finishing" → requirement directive; "Use Claude for review" → deferred
 routing (a stage is named by its key, its name or a role word: "design", "art
 direction" and "critique" name the designer, art director and visual critic
-stages), keeping an effort said with it ("… with high effort", "at max effort";
+stages, while "design review" is the review), keeping an effort said with it ("… with high effort", "at max effort";
 the reply names it). Unclear sentences become an instruction directive unless the model
 reads them differently — and a model may only add non-destructive actions, with
 directive text pinned to the user's own words — and its kind and rule derived

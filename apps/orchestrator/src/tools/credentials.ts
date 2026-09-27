@@ -719,6 +719,11 @@ export class CredentialBroker {
     return { env, missing };
   }
 
+  /** The kind of a stored credential, or null when none has that name. */
+  kindOf(name: string): CredentialKind | null {
+    return this.store.credential(name)?.kind ?? null;
+  }
+
   /** Environment for an MCP server: VAR → credential name. */
   async envForMapping(mapping: Record<string, string>, repositoryId: string | null): Promise<Record<string, string>> {
     const env: Record<string, string> = {};

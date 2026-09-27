@@ -295,7 +295,7 @@ describe('design.lint_tokens', () => {
       { path: 'src/lib/bootstrap.min.css', reason: 'minified' },
       { path: 'src/vendor.css', reason: 'line(s) over 4096 characters', lines: [1] },
     ]);
-    expect(r.summary).toMatch(/2 skipped as minified or too long/);
+    expect(r.summary).toMatch(/2 skipped as minified, too long or too deep/);
     // A finding on a long line shows the text around it, from the line redacted whole: the key never appears.
     expect(out.findings).toHaveLength(1);
     expect(out.findings[0]).toMatchObject({ path: 'src/long.tsx', value: '#3355ff' });
@@ -305,5 +305,14 @@ describe('design.lint_tokens', () => {
     const text = (short.output as { findings: Array<{ text: string }> }).findings[0]!.text;
     expect(text).toContain('[REDACTED]');
     expect(text).not.toContain(key.slice(8));
+  });
+
+  it('reports a folder nested too deep to read instead of passing it by in silence', async () => {
+    const deep = `src/${Array.from({ length: 13 }, (_, i) => `d${i + 1}`).join('/')}`;
+    const r = await call('design.lint_tokens', { paths: ['src'] }, repo({ [`${deep}/button.css`]: '.b { color: #ff0000; }\n', 'src/ok.css': '.a { color: var(--accent); }\n' }));
+    const out = r.output as { skipped: Array<{ path: string; reason: string }>; stoppedAtFiles: boolean };
+    expect(out.skipped).toEqual([{ path: deep, reason: 'nested deeper than 12 folders' }]);
+    expect(out.stoppedAtFiles).toBe(false);
+    expect(r.summary).toMatch(/^No hard-coded colours.+\(1 skipped as minified, too long or too deep: see skipped\)$/);
   });
 });

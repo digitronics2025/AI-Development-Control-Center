@@ -284,11 +284,14 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
   });
 }
 
-/** The port the operator reached this orchestrator on (the Host header, already proven to be loopback). */
-function requestPort(request: FastifyRequest): number {
-  const host = request.headers.host ?? '';
-  const port = Number(/:(\d{1,5})$/.exec(host)?.[1] ?? 80);
-  return Number.isInteger(port) && port > 0 && port < 65536 ? port : 80;
+/**
+ * The port the operator reached this orchestrator on (the Host header, already proven to be loopback), or null
+ * without one: the orchestrator's own listen port is used then.
+ */
+function requestPort(request: FastifyRequest): number | null {
+  const match = /:(\d{1,5})$/.exec(request.headers.host ?? '');
+  const port = match ? Number(match[1]) : NaN;
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
 }
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

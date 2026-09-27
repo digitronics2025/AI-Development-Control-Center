@@ -77,7 +77,7 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       if (n.media.allowPaidGeneration && !settings.media.allowPaidGeneration) return deny('Paid media generation can only be turned on on this machine.');
       if (n.media.taskBudgetUsd > settings.media.taskBudgetUsd) return deny('Raising the media budget per task can only be done on this machine.');
       const cheaper = Object.entries(settings.media.prices).some(([model, price]) => n.media.prices[model] === undefined || n.media.prices[model]! < price);
-      if (cheaper || Object.keys(n.media.prices).some((m) => settings.media.prices[m] === undefined)) return deny('Media price estimates can only be changed on this machine.');
+      if (cheaper || Object.keys(n.media.prices).some((m) => settings.media.prices[m] === undefined)) return deny('Lowering, removing or adding a media price estimate can only be done on this machine.');
       return allow;
     }
     case 'usage.budgetUpdate':

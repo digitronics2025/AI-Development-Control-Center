@@ -69,7 +69,8 @@ keeps `mcp_servers` and turns each enabled, healthy server into a provider
 permission level (tools the server marks destructive need at least Level 3).
 Environment variables (stdio) or headers (HTTP) are filled from named
 credentials by the broker (never a `media` key: a read that names no kind gets
-none, [credential-broker.md](credential-broker.md#flow)); `allowedTools`
+none, [credential-broker.md](credential-broker.md#flow), so a mapping that names
+one is refused when the server is saved); `allowedTools`
 narrows what is exposed.
 
 **What passes through.** Text content is joined (and redacted); other content
@@ -112,10 +113,12 @@ that accept no static key.
   address.
 - **Sign-in** (`POST /api/mcp/:id/oauth/start`): a random single-use state
   (ten minutes, at most 20 pending, in memory) and the authorization address,
-  which the dashboard opens in a new tab and also shows as a link. The
+  which the dashboard opens in a new tab and also shows as a link. One
+  sign-in per server at a time: starting again forgets the earlier state
+  (its code verifier is replaced), so its link answers "start again". The
   callback address is `http://127.0.0.1:<port>/oauth/mcp/callback`, the port
-  the operator reached the orchestrator on. A client registered for another
-  port is registered again. Start and sign-out are refused with 403
+  the operator reached the orchestrator on (its listen port when the Host
+  names none). A client registered for another port is registered again. Start and sign-out are refused with 403
   `REMOTE_FORBIDDEN` when relayed from the cloud, and the cloud dashboard
   disables both buttons.
 - **The callback** (`GET /oauth/mcp/callback`) is outside `/api`, so it needs

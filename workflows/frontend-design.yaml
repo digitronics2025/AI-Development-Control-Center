@@ -131,7 +131,7 @@ stages:
     onFail: build
   - key: critique
     name: Visual critique
-    # Judge class, counted as the review: both themes, every width, against the direction.
+    # Judge class, a verdict of its own: both themes, every width, against the direction. The completion gate needs it and the code review to pass, each on its own.
     role: visual-critic
     effort: high
     permissionLevel: 1

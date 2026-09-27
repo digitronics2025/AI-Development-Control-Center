@@ -26,6 +26,8 @@ import type {
  * Scenario markers in the task description steer it:
  *   [sim:review-fail-once]   reviewer returns FAIL once, then PASS
  *   [sim:review-fail-always] reviewer always returns FAIL
+ *   [sim:critic-fail-once]   visual critic returns FAIL once, then PASS
+ *   [sim:critic-fail-always] visual critic always returns FAIL
  *   [sim:usage-limit]        implementer hits a usage limit on its first run
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
@@ -55,6 +57,8 @@ import type {
  *   [sim:assets-bad-hash]    ...with a manifest whose SHA-256 for hero-2.png is wrong
  *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
  *   [sim:judge-none]         ...or names none
+ *
+ * Role `art-director` answers like the planner (a plan) and `visual-critic` like the reviewer (a verdict).
  *
  * A Stage Team worker (its prompt names `- Unit: … (key: k)` and `- Paths you own: p/`)
  * writes p/sim-k.md instead of sim-output.md; role `decomposer` answers with a manifest.

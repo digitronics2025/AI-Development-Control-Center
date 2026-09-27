@@ -9,9 +9,10 @@ describe('teamSummary', () => {
   it('says judging while the judge compares finished variants, not done', () => {
     const variants = [unit('worker', 'SUCCESS'), unit('worker', 'SUCCESS'), unit('worker', 'SUCCESS')];
     expect(teamSummary([...variants, unit('judge', 'RUNNING')])).toBe('Team of 3 · judging');
-    // Write mode integrates the winner after judging.
-    expect(teamSummary([...variants, unit('judge', 'SUCCESS'), unit('integration', 'RUNNING')])).toBe('Team of 3 · integrating');
+    // The kept variant's files are written with no unit of their own (no lead pass): the team is done once judged.
     expect(teamSummary([...variants, unit('judge', 'SUCCESS')])).toBe('Team of 3 · done');
+    // A fixed or adaptive write team's lead pass still reads as integrating.
+    expect(teamSummary([unit('worker', 'SUCCESS'), unit('worker', 'SUCCESS'), unit('integration', 'RUNNING')])).toBe('Team of 2 · integrating');
   });
 
   it('counts only workers and reports running, waiting and failed ones first', () => {

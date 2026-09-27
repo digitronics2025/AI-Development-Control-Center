@@ -143,8 +143,12 @@ describe('credential broker', () => {
     // Read by name for one call by the media tools only (kind media); never an environment variable of any child.
     expect(await t.services.credentials.value('fal', repoId)).toBeNull();
     expect(Object.values(await t.services.credentials.envFor(['media', 'http', 'other'], repoId))).not.toContain(value);
-    // An MCP server's variable mapping reads without a kind, so it cannot carry a paid key past the spend gate either.
+    // An MCP server's variable mapping reads without a kind, so it cannot carry a paid key past the spend gate either,
+    // and naming one is refused rather than dropped in silence.
     expect(await t.services.credentials.envForMapping({ FAL_KEY: 'fal' }, repoId)).toEqual({});
+    const mapped = await t.api('POST', '/api/mcp', { name: 'Paid server', transport: 'stdio', command: process.execPath, envCredentials: { FAL_KEY: 'fal' }, enabled: false });
+    expect(mapped.status).toBe(400);
+    expect(mapped.body.error.message).toContain('FAL_KEY (fal): a media credential is read only by the media tools');
     // Nor can http.request, from the operator or from an agent session: the key is never sent.
     seen = 'untouched';
     const operator = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'http.request', input: { method: 'POST', url, json: {}, auth: { credential: 'fal', scheme: 'header', header: 'authorization' } } });
@@ -534,8 +538,14 @@ describe('MCP OAuth sign-in (a stand-in authorization server)', () => {
       expect(auth.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:4317/oauth/mcp/callback');
       expect(auth.searchParams.get('code_challenge_method')).toBe('S256');
 
+      // Starting again replaces the first sign-in: its link (whose verifier is gone) is refused with "start again".
+      const first = new URL(await remote.approve(start.body.authorizationUrl));
+      const restart = await t.api('POST', `/api/mcp/${id}/oauth/start`, {});
+      expect(restart.body.authorized).toBe(false);
+      expect((await callback(first.pathname + first.search)).body).toContain('expired or was already used');
+
       // The operator approves; the browser comes back without the API token. A forged state is refused first.
-      const back = new URL(await remote.approve(start.body.authorizationUrl));
+      const back = new URL(await remote.approve(restart.body.authorizationUrl));
       const forged = await callback(`/oauth/mcp/callback?state=forged&code=${back.searchParams.get('code')}`);
       expect(forged.statusCode).toBe(400);
       expect(forged.body).toContain('expired or was already used');

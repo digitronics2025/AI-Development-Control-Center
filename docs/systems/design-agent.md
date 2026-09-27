@@ -106,7 +106,7 @@ handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
 | `media.image.generate`, `.edit`, `.upscale`, `.remove_background`, `.vectorize`, `media.video.generate` | 3 (paid) | fal queue API; results saved as `<folder>/<name>-N.<ext>` |
 | `browser.visual_diff`, `browser.audit` | 1 (a baseline write 2) | A page against its saved picture (red = what moved), and LCP, CLS, weight and image habits ([browser-and-web.md](browser-and-web.md#design-checks-browserts)) |
 | `design.contrast_matrix` | 1, read-only | WCAG 2 contrast of colour roles per theme: a stylesheet's custom properties (light `:root`; dark `prefers-color-scheme: dark`, `.dark`, `[data-theme=dark]`; `var()` followed) or given colours. A role is read by its head: `on-X` is a foreground, otherwise the last role word decides (`card-foreground` foreground, `card-border` UI boundary, `link-hover-bg` background). Foregrounds (`fg`, `text`, `foreground`…) and UI boundaries (`border`, `ring`, `focus`, 3:1) are paired with background roles (`bg`, `surface`, `canvas`…), or named pairs are checked; a foreground named for a background (`card-foreground` → `card`, `on-surface` → `surface`, `md-sys-color-on-primary` → `md-sys-color-primary`) is checked on that one only, listed first. Hex, `rgb()`, `hsl()` (in the modern syntax saturation and lightness may drop `%`; out of range is refused), `oklch()`; translucent layers painted first; AA and AAA decided on the exact ratio, the ratio shown cut (not rounded) to two decimals ([design.ts](../../packages/tools/src/packs/design.ts)) |
-| `design.lint_tokens` | 1, read-only | Colours written as literals (hex, `rgb()`/`hsl()`/`oklch()`…), Tailwind default-palette classes and pixel font sizes in stylesheets, outside token/theme/variables files, `tailwind.config` and custom-property definitions (all their lines); a hex on a continuation line of a multi-line value (a wrapped `box-shadow`) counts; anchors and id selectors are not colours; never follows links; `allow` for deliberate literals. Minified files, files over 512 KB and lines over 4096 characters are not read and are listed in `output.skipped` |
+| `design.lint_tokens` | 1, read-only | Colours written as literals (hex, `rgb()`/`hsl()`/`oklch()`…), Tailwind default-palette classes and pixel font sizes in stylesheets, outside token/theme/variables files, `tailwind.config` and custom-property definitions (all their lines); a hex on a continuation line of a multi-line value (a wrapped `box-shadow`) counts; anchors and id selectors are not colours; never follows links; `allow` for deliberate literals. Minified files, files over 512 KB, lines over 4096 characters and folders nested deeper than 12 are not read and are listed in `output.skipped`; past 5000 files it stops and says so (`output.stoppedAtFiles`) |
 
 **Files.** Every path is confined to the task's roots and never touches the
 user's own uncommitted work (`protectedCheck`). A file's type comes from its
@@ -234,7 +234,8 @@ Media: ≤N images, ≤M loops ≤8 s, hard budget $X, no text inside images.
 `{{design_context}}` ([context.ts](../../apps/orchestrator/src/engine/context.ts)
 `designContext`) lists the repository's design standard (`design.md`,
 `DESIGN.md`, `docs/design.md`, a Tailwind config) and every file in
-`design/` by path and size, and inlines `design/brief.md` (8 KB, redacted).
+`design/` by path and size, and inlines `design/brief.md` (8 KB, redacted);
+in a multi-repository task, each repository's by folder.
 The designer keeps that memory: when the repository has a `design/` folder,
 or it proposed the standard in this task, it writes the approved direction,
 its design values and lasting decisions to `design/brief.md`, so the next

@@ -127,13 +127,13 @@ export class McpService {
 
   /**
    * Start signing in to an OAuth server: the address the operator opens, or `authorized` when the saved
-   * sign-in still works. `port` is the one the operator reached this orchestrator on.
+   * sign-in still works. `port` is the one the operator reached this orchestrator on (null: the one it listens on).
    */
-  async startSignIn(id: string, port: number): Promise<{ authorized: true; server: McpServerView } | { authorized: false; authorizationUrl: string }> {
+  async startSignIn(id: string, port: number | null): Promise<{ authorized: true; server: McpServerView } | { authorized: false; authorizationUrl: string }> {
     const s = this.store.mcpServer(id);
     if (!s) throw new McpError('MCP server not found', 'NOT_FOUND');
     if (s.auth !== 'oauth' || s.transport !== 'http' || !s.url) throw new McpError(`${s.name} does not sign in with OAuth`, 'INVALID');
-    const redirectUrl = McpService.redirectUrl(port);
+    const redirectUrl = McpService.redirectUrl(port ?? this.port);
     const store = this.oauthStore(id);
     // A client registered for another callback address (another port) is registered again.
     const saved = await store.load();
@@ -147,7 +147,9 @@ export class McpService {
       throw new McpError(`Could not start signing in to ${s.name}: ${redact((error as Error).message).slice(0, 300)}`, 'INVALID');
     }
     if (result.authorized) return { authorized: true, server: await this.check(id) };
-    for (const [key, p] of this.pending) if (p.expiresAt < Date.now()) this.pending.delete(key);
+    // One sign-in per server at a time: this one's code verifier replaced any earlier one, whose link could only fail
+    // at the exchange, so it is forgotten and says to start again.
+    for (const [key, p] of this.pending) if (p.expiresAt < Date.now() || p.serverId === id) this.pending.delete(key);
     while (this.pending.size >= MAX_PENDING_SIGN_INS) this.pending.delete(this.pending.keys().next().value!);
     this.pending.set(state, { serverId: id, redirectUrl, expiresAt: Date.now() + SIGN_IN_TTL_MS });
     return { authorized: false, authorizationUrl: result.authorizationUrl };
@@ -188,8 +190,15 @@ export class McpService {
     return view;
   }
 
+  /** A media (generation) key opens only for the media tools, behind the spend gate: a server variable would get nothing. */
+  private refuseMediaCredentials(envCredentials: Record<string, string>): void {
+    const media = Object.entries(envCredentials).filter(([, name]) => this.credentials.kindOf(name) === 'media');
+    if (media.length) throw new McpError(`${media.map(([v, name]) => `${v} (${name})`).join(', ')}: a media credential is read only by the media tools, behind the spend gate, so an MCP server cannot use it`, 'INVALID');
+  }
+
   async create(raw: McpServerInput): Promise<McpServerView> {
     const input = mcpServerInputSchema.parse(raw);
+    this.refuseMediaCredentials(input.envCredentials);
     if (this.store.listMcpServers().some((s) => s.name.toLowerCase() === input.name.toLowerCase())) throw new McpError(`An MCP server named "${input.name}" exists`, 'DUPLICATE');
     const ts = now();
     const rec: McpServerRecord = { id: newId(), name: input.name, transport: input.transport, command: input.command ?? null, args: input.args, url: input.url ?? null, envCredentials: input.envCredentials, enabled: input.enabled, permissionLevel: input.permissionLevel as PermissionLevel, allowedTools: input.allowedTools, timeoutMs: input.timeoutMs, auth: input.auth, oauthScope: input.oauthScope || null, health: null, createdAt: ts, updatedAt: ts };
@@ -201,6 +210,7 @@ export class McpService {
   async update(id: string, raw: Partial<McpServerInput>): Promise<McpServerView> {
     const { oauth: _status, ...current } = this.get(id);
     const input = mcpServerInputSchema.parse({ ...current, ...raw });
+    if (raw.envCredentials) this.refuseMediaCredentials(input.envCredentials);
     const rec: McpServerRecord = { ...current, ...input, command: input.command ?? null, url: input.url ?? null, permissionLevel: input.permissionLevel as PermissionLevel, oauthScope: input.oauthScope || null, updatedAt: now() };
     this.store.upsertMcpServer(rec);
     // A sign-in belongs to one server address: another URL, or no OAuth any more, forgets it.

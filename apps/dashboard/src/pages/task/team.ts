@@ -21,7 +21,7 @@ export function teamSummary(units: readonly StageWorkUnit[]): string | null {
   if (queued) return `Team of ${total} · ${total - queued} done, ${queued} waiting`;
   const failed = workers.filter((u) => u.status === 'FAILED').length;
   if (failed) return `Team of ${total} · ${failed} failed`;
-  // Variants: every worker has finished while the judge compares them; the winner is integrated afterwards.
+  // Variants: every worker has finished while the judge compares them (the kept one's files are written without a unit).
   if (units.some((u) => u.kind === 'judge' && u.status === 'RUNNING')) return `Team of ${total} · judging`;
   const integrating = units.some((u) => u.kind === 'integration' && u.status === 'RUNNING');
   return integrating ? `Team of ${total} · integrating` : `Team of ${total} · done`;

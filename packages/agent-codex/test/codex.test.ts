@@ -92,6 +92,20 @@ describe('CodexAdapter', () => {
     expect(args).not.toContain('-m');
   });
 
+  it("never loads execpolicy rules, whose allow decisions would run a command outside the stage's sandbox", async () => {
+    const argsOf = async (overrides: Partial<AgentExecutionInput>) => {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-codex-'));
+      const argsFile = path.join(cwd, 'args.json');
+      await (await new CodexAdapter().execute(input({ cwd, ...overrides, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+      return (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+    };
+    for (const overrides of [{ permissionLevel: 1 }, { permissionLevel: 2, loadUserConfig: true }, { permissionLevel: 4, loadUserConfig: false }] as const) {
+      const args = await argsOf(overrides);
+      expect(args).toContain('--ignore-rules');
+      expect(args.indexOf('--ignore-rules')).toBeLessThan(args.indexOf('-'));
+    }
+  });
+
   it('classifies "out of credits" as USAGE_LIMIT', async () => {
     const result = await (await new CodexAdapter().execute(input({ env: { FAKE_CODEX_SCENARIO: 'usage' } }))).done;
     expect(result).toMatchObject({ status: 'failed', errorClass: 'USAGE_LIMIT' });

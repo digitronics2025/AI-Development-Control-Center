@@ -108,6 +108,48 @@ describe('ClaudeCodeAdapter', () => {
     expect(user).not.toContain('--plugin-dir');
   });
 
+  // A repository's .claude/settings.json allowing `Bash(*)` adds to --allowedTools; only a deny rule or a missing tool beats it.
+  it("keeps every level's limits in deny rules or missing tools, so a settings file's allow rule cannot widen them", async () => {
+    const bashDenials = (level: 1 | 2 | 3 | 4 | 5) => claudeToolPolicy(level).denied.filter((rule) => rule.startsWith('Bash('));
+
+    // Level 1: no shell at all, and Bash denied outright should a future CLI ever add it back.
+    const l1 = claudeToolPolicy(1);
+    expect(l1.mode).toBe('dontAsk');
+    expect(l1.tools).not.toContain('Bash');
+    expect(l1.tools).not.toContain('PowerShell');
+    expect(l1.denied).toContain('Bash');
+    expect(l1.allowed.some((rule) => rule === 'Bash' || rule.startsWith('Bash('))).toBe(false);
+    expect(l1.tools.filter((tool) => ['Edit', 'Write', 'NotebookEdit'].includes(tool))).toEqual([]);
+
+    // Level 2 and up: Bash is allowed by the policy itself, so a settings allow rule adds nothing; each limit is a deny rule.
+    for (const level of [2, 3, 4, 5] as const) {
+      expect(claudeToolPolicy(level).tools).toContain('Bash');
+      expect(claudeToolPolicy(level).allowed).toContain('Bash');
+      expect(bashDenials(level)).toEqual(expect.arrayContaining(['Bash(git push --force:*)', 'Bash(git reset --hard:*)', 'Bash(rm -rf:*)']));
+    }
+    expect(bashDenials(2)).toEqual(expect.arrayContaining(['Bash(git commit:*)', 'Bash(git push:*)', 'Bash(gh pr create:*)', 'Bash(wrangler deploy:*)']));
+    expect(bashDenials(3)).not.toContain('Bash(git commit:*)');
+    expect(bashDenials(3)).not.toContain('Bash(git push:*)');
+    expect(bashDenials(3)).toContain('Bash(wrangler deploy:*)');
+    expect(bashDenials(4)).not.toContain('Bash(wrangler deploy:*)');
+
+    // What the CLI is actually given.
+    const argsOf = async (permissionLevel: 1 | 2) => {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
+      const argsFile = path.join(cwd, 'args.json');
+      await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+      const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+      return (flag: string) => (args[args.indexOf(flag) + 1] ?? '').split(',');
+    };
+    const one = await argsOf(1);
+    expect(one('--tools')).toEqual(['Read', 'Grep', 'Glob', 'Skill', 'ToolSearch', 'TodoWrite']);
+    expect(one('--disallowedTools')).toContain('Bash');
+    expect(one('--allowedTools').filter((rule) => rule.startsWith('Bash'))).toEqual([]);
+    const two = await argsOf(2);
+    expect(two('--tools')).toContain('Bash');
+    expect(two('--disallowedTools')).toEqual(expect.arrayContaining(['Bash(git commit:*)', 'Bash(git push:*)']));
+  });
+
   it('names every skill used or refused, never its arguments', async () => {
     const lines: string[] = [];
     const result = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_SCENARIO: 'skill' }, onLine: (_s, t) => lines.push(t) }))).done;
@@ -263,9 +305,11 @@ describe('claudeToolPolicy', () => {
     expect(l1.mode).toBe('dontAsk');
     expect(l1.allowed).not.toContain('Edit');
     expect(l1.denied).toContain('Edit');
-    for (const level of [1, 2, 3, 4, 5] as const) {
+    // Level 1 has no shell: every command is denied, those below included.
+    expect(l1.denied).toContain('Bash');
+    for (const level of [2, 3, 4, 5] as const) {
       const denied = claudeToolPolicy(level).denied;
-      // Audit F-12: the commands that discard work most directly are denied at every level.
+      // Audit F-12: the commands that discard work most directly are denied at every level with a shell.
       for (const cmd of ['git push --force', 'git restore', 'git checkout --', 'git stash drop', 'git branch -D', 'git worktree remove', 'Remove-Item', 'rd /s']) {
         expect(denied, `${cmd} at L${level}`).toContain(`Bash(${cmd}:*)`);
       }
@@ -278,7 +322,8 @@ describe('claudeToolPolicy', () => {
     for (const level of [1, 2, 3, 4, 5] as const) {
       const policy = claudeToolPolicy(level);
       expect(policy.allowed).toContain('Skill');
-      expect(policy.tools).toEqual(expect.arrayContaining(['Skill', 'ToolSearch', 'Read', 'Bash']));
+      expect(policy.tools).toEqual(expect.arrayContaining(['Skill', 'ToolSearch', 'Read']));
+      expect(policy.tools.includes('Bash')).toBe(level >= 2);
       // A skill's allowed-tools can pre-approve any tool that exists, so these must not exist.
       for (const tool of ['WebFetch', 'WebSearch', 'Agent', 'Task', 'PowerShell']) expect(policy.tools).not.toContain(tool);
     }

@@ -6,6 +6,8 @@
  *   pnpm verify:agents --run --only claude --claude-model haiku --codex-model gpt-5.6-sol
  *   pnpm verify:agents --only claude --claude-model haiku --skills
  *                                       also proves skills run inside a stage's limits
+ *   pnpm verify:agents --only claude --claude-model haiku --permissions
+ *                                       also proves a repository's allow rules cannot widen a stage
  *
  * The run happens in a new empty temporary folder, with API credentials
  * stripped (Subscription Only), and asks the agent to reply with one word.
@@ -13,7 +15,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter } from '@acc/agent-sdk';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
@@ -90,6 +92,7 @@ for (const { adapter, model } of adapters) {
 }
 
 if (flag('skills')) await verifySkills();
+if (flag('permissions')) await verifyPermissions();
 
 console.log(failures ? `\n${failures} check(s) did not pass.` : '\nAll checks passed.');
 
@@ -253,5 +256,102 @@ async function verifySkillCatalog(adapter: AgentAdapter) {
   const freeOk = free?.turns === 0 && free?.cost === 0;
   console.log(`${freeOk ? 'pass' : 'FAIL'}  the /skills lookup uses no model turn${freeOk ? '' : ` — ${JSON.stringify(free)}`}`);
   if (!freeOk) failures++;
+}
+
+/**
+ * Real-CLI proof that a repository's permission allow rules cannot widen a
+ * stage (docs/systems/agents.md). The probe repository allows `Bash(*)` the way
+ * TASK-0009's did. Claude Code honours a committed .claude/settings.json allow
+ * rule only in a folder the operator has trusted, which a temporary folder never
+ * is, so the same rule also sits in an untracked .claude/settings.local.json —
+ * the operator's own file, honoured anywhere. A control run without the Control
+ * Center's policy proves the rule is live; without it the checks prove nothing.
+ */
+async function verifyPermissions() {
+  const adapter = adapters.find((a) => a.adapter.id === 'claude');
+  if (!adapter) return;
+  console.log("\n== Claude Code: a repository's allow rules cannot widen a stage ==");
+  const executable = (await adapter.adapter.detect(options)).executablePath;
+  if (!executable) return;
+  const root = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-permissions-'));
+  const cwd = path.join(root, 'repo');
+  const remote = path.join(root, 'remote.git');
+  const git = (dir: string, ...gitArgs: string[]) => execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8', env: sanitizeEnv(process.env, 'subscription').env }).trim();
+  const expect = (label: string, ok: boolean, detail: string) => {
+    console.log(`${ok ? 'pass' : 'FAIL'}  ${label}${ok ? '' : ` — ${redact.redact(detail).slice(0, 400)}`}`);
+    if (!ok) failures++;
+  };
+  const settings = JSON.stringify({ permissions: { allow: ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)', 'Glob(*)', 'Grep(*)', 'mcp__probe-db__*'] } }, null, 2);
+  const write = (name: string) => `node -e "require('fs').writeFileSync('${name}','x')"`;
+  try {
+    mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    mkdirSync(path.join(root, 'no-hooks'));
+    git(root, 'init', '--quiet', '--bare', remote);
+    git(cwd, 'init', '--quiet');
+    // A commit or push the policy let through must succeed, so a refusal is the policy's: own identity, no global hooks.
+    git(cwd, 'config', 'user.email', 'probe@example.invalid');
+    git(cwd, 'config', 'user.name', 'Control Center probe');
+    git(cwd, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
+    git(cwd, 'remote', 'add', 'origin', remote);
+    writeFileSync(path.join(cwd, '.claude', 'settings.json'), settings);
+    git(cwd, 'add', '.claude/settings.json');
+    git(cwd, 'commit', '--quiet', '-m', 'probe: repository allows Bash(*)');
+    writeFileSync(path.join(cwd, '.claude', 'settings.local.json'), settings);
+    const commits = () => git(cwd, 'rev-list', '--count', 'HEAD');
+    const pushed = () => git(cwd, 'ls-remote', '--heads', 'origin') !== '';
+    const written = (name: string) => existsSync(path.join(cwd, name));
+
+    // Control: Bash with no allow rule of the Control Center's; only the repository's rule can let this run.
+    const control = await new Promise<string>((resolve) => {
+      const controlArgs = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--permission-prompts', 'none', '--permission-mode', 'dontAsk', '--tools', 'Bash', '--setting-sources', 'project,local', '--strict-mcp-config'];
+      if (adapter.model !== 'default') controlArgs.push('--model', adapter.model);
+      const child = spawn(executable, controlArgs, { cwd, env: sanitizeEnv(process.env, 'subscription').env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      let text = '';
+      const timer = setTimeout(() => child.kill(), 240_000);
+      child.stdout.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+      child.stderr.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+      child.on('exit', () => {
+        clearTimeout(timer);
+        resolve(text);
+      });
+      child.stdin.end(`Run this exact Bash command once: ${write('control-marker.txt')}\nThen reply DONE.`);
+    });
+    const live = written('control-marker.txt');
+    expect("control: the probe repository's Bash(*) is in force without the Control Center's policy", live, control.split('\n').slice(-3).join(' | '));
+    if (!live) return;
+
+    const run = async (level: 1 | 2, steps: string[]) => {
+      const lines: string[] = [];
+      const before = commits();
+      const handle = await adapter.adapter.execute({
+        ...options,
+        executionId: randomUUID(),
+        cwd,
+        prompt: ['This is a permissions test. Attempt every step, one Bash tool call each, even if an earlier one fails.', ...steps.map((s, i) => `${i + 1}. Run the Bash command: ${s}`), `${steps.length + 1}. Reply with which steps succeeded.`].join('\n'),
+        model: adapter.model,
+        effort: 'low',
+        permissionLevel: level,
+        timeoutMs: 240_000,
+        onLine: (_stream, text) => lines.push(text),
+      });
+      await handle.done;
+      // What the agent tried and what was refused; the CLI's own warnings are noise here.
+      const detail = lines.filter((l) => /^(\[tool\]|permission denied:|tool error:)/.test(l)).join(' | ') || lines.join(' | ');
+      return { lines, detail, committed: commits() !== before };
+    };
+
+    const l1 = await run(1, [write('l1-marker.txt'), 'git commit --allow-empty -m acc-probe-l1']);
+    expect('Level 1 cannot write a file through Bash', !written('l1-marker.txt'), l1.detail);
+    expect('Level 1 cannot git commit', !l1.committed, l1.detail);
+
+    const l2 = await run(2, [write('l2-marker.txt'), 'git commit --allow-empty -m acc-probe-l2', 'git push origin HEAD']);
+    // The refusal line proves the command was attempted and stopped by the policy, not skipped by the model.
+    const refused = (command: string) => l2.lines.some((l) => l.startsWith(`permission denied: Bash ${command}`));
+    expect('Level 2 still runs other commands', written('l2-marker.txt'), l2.detail);
+    expect('Level 2 cannot git commit', !l2.committed && refused('git commit'), l2.detail);
+    expect('Level 2 cannot git push', !pushed() && refused('git push'), l2.detail);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 process.exit(failures ? 1 : 0);

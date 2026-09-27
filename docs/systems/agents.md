@@ -37,8 +37,20 @@ removed when the run ends.
 
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
-- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
+- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
+- `--ignore-rules` on every run: Codex's execpolicy `.rules` files (the operator's
+  `~/.codex/rules`, the repository's `.codex/rules/`) are never loaded. An `allow`
+  match for every segment of a command skips approval **and runs it outside the
+  sandbox** (`exec_policy.rs`: `Skip { bypass_sandbox }`), so a repository could
+  lift a read-only stage. Measured on 0.156.1 (2026-09-27): a repository rule —
+  confirmed matching with `codex execpolicy check` — did not escape the sandbox in
+  any run (Codex wraps commands in `powershell.exe -Command` and matches the parsed
+  script), so the bypass is closed from the source, not reproduced. With user
+  config off no Windows sandbox mode is set and a writing command is refused
+  ("blocked by policy"); with it on (`[windows] sandbox = "unelevated"`) the
+  command runs and the write is denied. A CLI older than the flag fails with
+  "unexpected argument" → `MODEL_UNAVAILABLE` (update the CLI).
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).
 - Output: JSONL events (`agent_message`, `command_execution`, `file_change`, `turn.failed`).
@@ -46,8 +58,23 @@ removed when the run ends.
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
 - Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] --strict-mcp-config [--mcp-config <acc>]`
-- Permission mapping (`claudeToolPolicy`): L1 `dontAsk` + read-only tools; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Always denied, at every level (prefix rules on Claude's native Bash — a heuristic, not the Control Center's classifier): force and mirror push, `git reset --hard`, `git clean`, `git restore`, `git checkout --`/`.`/`-f`, `git switch --discard-changes`, `git stash drop|clear`, `git branch -D`, `git worktree remove`, `git filter-branch`, `rm -rf`/`rm -r`, `rmdir /s`, `rd /s`, `del /s`, `Remove-Item`, `npx rimraf`. `Skill` is allowed at every level.
-- Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Bash, Skill, ToolSearch, TodoWrite`; L2+ adds `Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
+- Permission mapping (`claudeToolPolicy`): L1 `dontAsk`, read-only tools and **no shell**; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Always denied, at every level with a shell (prefix rules on Claude's native Bash — a heuristic, not the Control Center's classifier): force and mirror push, `git reset --hard`, `git clean`, `git restore`, `git checkout --`/`.`/`-f`, `git switch --discard-changes`, `git stash drop|clear`, `git branch -D`, `git worktree remove`, `git filter-branch`, `rm -rf`/`rm -r`, `rmdir /s`, `rd /s`, `del /s`, `Remove-Item`, `npx rimraf`. `Skill` is allowed at every level.
+- Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Skill, ToolSearch, TodoWrite` (and `Bash` denied outright); L2+ adds `Bash, Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
+- **A repository's settings cannot widen a stage.** Settings files the run loads —
+  the repository's `.claude/settings.json` and `settings.local.json`, the
+  operator's own with user config on — add their `permissions.allow` rules to
+  `--allowedTools`; only a deny rule or a missing tool beats one. So every limit is
+  one of those: from L2 the limits are deny rules and Bash and edits are already
+  allowed (a `Bash(*)` rule adds nothing), and L1's "read-only commands only",
+  which no deny rule can express, is no shell at all — Git is read through the
+  Control Center's `git__status/diff/log/show` ([mcp.md](mcp.md)), and the prompt's
+  tools section says so at L1. With tools off for agents an L1 run has only
+  `Read`/`Grep`/`Glob`. Before this (TASK-0009, 2026-09-27) a repository allowing
+  `Bash(*)` let an L1 investigator run `npm test` for 23 minutes. Claude Code
+  honours a committed `.claude/settings.json` allow rule only in a folder the
+  operator trusted (an untracked `settings.local.json` anywhere); excluding the
+  `project` setting source, or `--restricted`, would also drop the repository's
+  skills and was rejected for that.
 - `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.
 - Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
@@ -64,7 +91,7 @@ limits, measured with real runs on Claude Code 2.1.280:
 |---|---|
 | Plain skill, any level | runs |
 | Skill declaring `allowed-tools`, any level | runs (before `Skill` was allowed it was refused: "no approval surface") |
-| Skill granting `Bash`/`Write` at L1 | refused (`dontAsk`; `Write` does not exist) |
+| Skill granting `Bash`/`Write` at L1 | refused (neither tool exists at L1) |
 | Skill granting a command the stage denies | refused (deny wins) |
 | Skill granting `WebFetch` or a personal MCP tool | the tool does not exist in the run |
 
@@ -85,7 +112,10 @@ Every prompt carries a short "Skills" section
 
 **Tripwire:** these guarantees rest on the CLI's permission semantics. After
 every Claude Code update run `pnpm verify:agents --only claude --claude-model
-haiku --skills` (5 real probes plus the skill-list checks below; exits 1 on any mismatch). A CLI too old for
+haiku --skills --permissions` (5 skill probes, the skill-list checks below, and 6
+probes in a repository whose settings allow `Bash(*)`: a control proving the rule
+is live, then L1 cannot write a file or commit, L2 still runs commands but cannot
+commit or push; exits 1 on any mismatch). A CLI too old for
 `--tools` fails the run with "unknown option", classified `MODEL_UNAVAILABLE`
 (update the CLI).
 
@@ -129,7 +159,7 @@ lookup still uses no model turn.
 
 Codex loads `~/.codex/skills` and `~/.agents/skills` itself;
 `--ignore-user-config` skips only `config.toml`. Its sandbox, not a tool
-list, bounds it. Not yet observed in a run (the ChatGPT workspace is out of
+list, bounds it (execpolicy rules are ignored, see Codex above). Not yet observed in a run (the ChatGPT workspace is out of
 credits).
 
 ## Stage Team workers
@@ -205,4 +235,4 @@ REFUSED with the summary.
   closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
   **Load my CLI customisations** per agent for leaner runs.
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

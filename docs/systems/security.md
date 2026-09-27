@@ -147,6 +147,17 @@ needs an approval with a typed confirmation (the task ID).
 auto-approve: up to 3 (global, per repository, per task). Stages above it wait
 for approval.
 
+**A repository or the operator's CLI settings cannot widen a stage**
+([agents.md](agents.md)). Claude Code adds the `permissions.allow` rules of every
+settings file a run loads (a repository's `.claude/settings.json` allowing
+`Bash(*)`, for one) to the Control Center's, and only a deny rule or a missing
+tool beats an allow rule; so each level's limits are deny rules, and Level 1,
+whose "read-only commands only" no deny rule can express, has no shell — it
+reads Git through the Control Center's own tools. Codex runs with
+`--ignore-rules`, because an execpolicy `allow` rule runs a command outside the
+sandbox. `pnpm verify:agents --permissions` proves the Claude side with real
+runs in a repository that allows `Bash(*)`.
+
 ## Cloud control plane
 
 Two trust boundaries ([cloud-control.md](cloud-control.md)): people reach the
@@ -174,4 +185,4 @@ Revocation from the cloud or the admin CLI stops the node for good.
   skips it; nothing else does.
 - Redaction is conservative: values such as `API_KEY=absent` are masked too.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-27

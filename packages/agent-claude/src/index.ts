@@ -86,9 +86,6 @@ const BUILTIN_MODELS: Array<{ id: string; label: string; description: string }> 
 ];
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'LS'];
-const READ_ONLY_BASH = ['git status', 'git diff', 'git log', 'git show', 'git branch', 'git rev-parse', 'ls'].map(
-  (cmd) => `Bash(${cmd}:*)`,
-);
 const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 /** Never allowed from an agent: the orchestrator does these itself, behind approvals. */
 // Prefix rules on Claude Code's native Bash, not the Control Center's classifier: they catch the
@@ -131,15 +128,26 @@ const DEPLOY = ['wrangler deploy', 'wrangler publish', 'npm publish', 'pnpm publ
  * this set (WebFetch, Agent, PowerShell…) must not exist at all. `ToolSearch`
  * reaches the Control Center's deferred MCP tools.
  */
-const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Skill', 'ToolSearch', 'TodoWrite'];
+const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Skill', 'ToolSearch', 'TodoWrite'];
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
-/** Map a stage permission level to Claude Code's permission mode and tool policy. */
+/**
+ * Map a stage permission level to Claude Code's permission mode and tool policy.
+ *
+ * Settings files the run loads (the repository's `.claude/settings.json` and
+ * `settings.local.json`, the operator's own with user config on) add their
+ * `permissions.allow` rules to ours: a repository allowing `Bash(*)` allows
+ * every command. Only a deny rule or a missing tool beats an allow rule. From
+ * Level 2 every limit is a deny rule and Bash and edits are already allowed, so
+ * such a rule widens nothing. Level 1's limit — read-only commands only — cannot
+ * be written as deny rules, so Level 1 has no shell at all: it reads Git through
+ * the Control Center's own `git.*` tools, which ToolService judges.
+ */
 export function claudeToolPolicy(level: PermissionLevel): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
   if (level <= 1) {
-    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill', ...READ_ONLY_BASH], denied: [...WRITE_TOOLS, ...ALWAYS_DENIED] };
+    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill'], denied: ['Bash', ...WRITE_TOOLS] };
   }
-  const tools = [...BASE_TOOLS, ...EDIT_TOOLS];
+  const tools = [...BASE_TOOLS, 'Bash', ...EDIT_TOOLS];
   const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash', 'Skill'];
   if (level === 2) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
   if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY] };

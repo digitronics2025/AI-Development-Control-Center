@@ -169,6 +169,9 @@ export class CodexAdapter extends CliAgentAdapter {
     const args = ['exec', '--json', '--color', 'never', '--skip-git-repo-check', '-C', input.cwd];
     // Level 1 stages analyse only; everything else may edit inside the workspace.
     args.push('--sandbox', input.permissionLevel <= 1 ? 'read-only' : 'workspace-write');
+    // An execpolicy `allow` rule (the operator's ~/.codex/rules or the repository's .codex/rules)
+    // skips approval and runs the command outside the sandbox, so the sandbox would not bound the stage.
+    args.push('--ignore-rules');
     if (input.model !== 'default') args.push('-m', input.model);
     if (input.effort !== 'default') args.push('-c', `model_reasoning_effort="${input.effort}"`);
     // Subscription Only: refuse any login method other than the ChatGPT session.

@@ -265,6 +265,8 @@ export class EngineTooling {
       `This run has the Control Center's tools as an MCP server named "acc" (profile: ${profile}, stage Level ${def.permissionLevel}, policy ${this.policyMode(task, repo)}).`,
       'Prefer them to raw commands for: checking the app in a real browser (browser.check_page, verify.web), HTTP checks (http.request), who holds a port (network.port_owner), background dev servers (process.start — stopped for you at the end), databases, Cloudflare, Android and GitHub.',
       'Use acc_find_capability to discover more and acc_call_capability to call one that is not listed. A refusal explains why; do not work around it — report it as an operator decision.',
+      // Claude Code has no shell at Level 1 (docs/systems/agents.md): Git reads go through these.
+      ...(def.permissionLevel <= 1 ? ['Level 1 may give you no shell. Read Git with git__status, git__diff (from, to, paths — e.g. "git diff <base> -- <path>" is from=<base>, paths=[<path>]), git__log and git__show.'] : []),
       ...(taskRepositories(this.d.store, task).length > 1
         ? ['This task works in several repositories: a tool call runs in one of them. Pass `cwd` (or `directory`) naming the repository folder; the call can then touch only that repository and use only its credentials. At the workspace root, Git tools do not work and only credentials shared by every repository are available.']
         : []),

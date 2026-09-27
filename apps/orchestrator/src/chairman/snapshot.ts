@@ -11,6 +11,7 @@ import {
   type EventType,
   type TaskBlocker,
   type TaskLimits,
+  judgeKind,
 } from '@acc/shared';
 import type { AgentRegistry } from '../services/agents.js';
 import type { Store, TaskRecord } from '../store/store.js';
@@ -40,8 +41,9 @@ export interface ChairmanTaskSnapshot {
   activeDirectives: Array<{ id: string; text: string; kind: string; scope: string; status: string }>;
   recentEvents: Array<{ type: EventType; message: string; at: string }>;
   unresolvedFailures: Array<{ stageKey: string; source: string; message: string; failureCount: number | null; at: string }>;
-  latestReview: { verdict: string | null; summary: string | null; at: string } | null;
-  latestVerify: { verdict: string | null; summary: string | null; at: string } | null;
+  /** The latest verdict of any review-kind judge (a code review or a visual critique: `stage` names which). */
+  latestReview: { verdict: string | null; summary: string | null; at: string; stage?: string } | null;
+  latestVerify: { verdict: string | null; summary: string | null; at: string; stage?: string } | null;
   latestTests: Array<{ name: string; kind: string; status: string; summary: string | null }>;
   checkpoints: Array<{ id: string; seq: number; label: string; stageKey: string | null; at: string }>;
   usage: { agentRuns: number; workMinutes: number };
@@ -88,9 +90,9 @@ export class SnapshotService {
     const def = this.views.stageDef(task, task.currentStageKey);
     const instance = task.currentStageId ? stages.find((s) => s.id === task.currentStageId) ?? null : null;
     const running = this.store.listExecutions(task.id).filter((e) => e.status === 'running' && e.kind === 'agent').at(-1) ?? null;
-    const lastVerdict = (role: 'reviewer' | 'verifier') => {
-      const s = [...stages].reverse().find((x) => x.role === role && x.verdict !== null);
-      return s ? { verdict: s.verdict, summary: s.summary, at: s.finishedAt ?? s.createdAt } : null;
+    const lastVerdict = (kind: 'review' | 'verify') => {
+      const s = [...stages].reverse().find((x) => judgeKind(x.role) === kind && x.verdict !== null);
+      return s ? { verdict: s.verdict, summary: s.summary, at: s.finishedAt ?? s.createdAt, stage: s.name } : null;
     };
     const lastTests = [...stages].reverse().find((s) => s.kind === 'tests' && ['SUCCESS', 'FAILED'].includes(s.status));
     const usage = this.chairman.usage(task.id);
@@ -127,8 +129,8 @@ export class SnapshotService {
       activeDirectives: activeDirectives(this.store.listDirectives(task.id)).map((d) => ({ id: d.id, text: d.text, kind: d.kind, scope: d.scope, status: d.status })),
       recentEvents: events.map((e) => ({ type: e.type, message: e.message, at: e.at })),
       unresolvedFailures: failures.slice(-5).map((f) => ({ stageKey: f.stageKey, source: f.source, message: f.message, failureCount: f.failureCount, at: f.createdAt })),
-      latestReview: lastVerdict('reviewer'),
-      latestVerify: lastVerdict('verifier'),
+      latestReview: lastVerdict('review'),
+      latestVerify: lastVerdict('verify'),
       latestTests: lastTests ? this.store.listTestRuns(task.id, lastTests.id).map((r) => ({ name: r.name, kind: r.kind, status: r.status, summary: r.summary })) : [],
       checkpoints: this.chairman.listCheckpoints(task.id).slice(-5).map((c) => ({ id: c.id, seq: c.seq, label: c.label, stageKey: c.stageKey, at: c.createdAt })),
       usage: { agentRuns: usage.agentRuns, workMinutes: Math.round(usage.workMs / 60_000) },
@@ -181,7 +183,7 @@ export class SnapshotService {
     const f = s.unresolvedFailures.at(-1);
     if (f && !finished) lines.push(`Latest failure (${f.stageKey}): ${f.message}`);
     if (s.latestVerify) lines.push(`Last verification: ${s.latestVerify.verdict === 'PASS' ? 'passed' : 'rejected'}${s.latestVerify.summary ? ` — ${sentence(s.latestVerify.summary)}` : ''}.`);
-    else if (s.latestReview) lines.push(`Last review: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
+    else if (s.latestReview) lines.push(`Last review${s.latestReview.stage ? ` (${s.latestReview.stage})` : ''}: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
     if (s.strategySummary && !finished) lines.push(`Current strategy: ${s.strategySummary}`);
     if (s.lastStrategy) {
       const l = s.lastStrategy;

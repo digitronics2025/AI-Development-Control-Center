@@ -8,7 +8,7 @@ sources:
   - packages/shared/src/schemas.ts
   - apps/dashboard/src/pages/RepositoriesPage.tsx
   - apps/dashboard/src/pages/SettingsPage.tsx
-verified_at: dd8704f
+verified_at: 57af61a
 ---
 
 # Repository automation

@@ -187,6 +187,8 @@ export class CacheSync {
       case 'settings':
         qc.setQueryData(keys.settings, message.settings);
         void qc.invalidateQueries({ queryKey: keys.askSources });
+        // The paid media view reads its switch and per-task budget from settings on the server.
+        void qc.invalidateQueries({ queryKey: keys.usageRoot });
         return;
       case 'repository': {
         const repo: Repository = message.repository;
@@ -249,6 +251,8 @@ export class CacheSync {
       case 'toolExecution': {
         const e = message.execution;
         if (e.taskId) qc.setQueryData<TaskExecutionView>(keys.taskExecution(e.taskId), (old) => (old ? { ...old, executions: [e, ...old.executions.filter((x) => x.id !== e.id)] } : old));
+        // A media call may have reserved or settled paid spend (the media ledger publishes nothing of its own).
+        if (e.capability.startsWith('media.')) this.refreshUsage();
         return;
       }
       case 'taskProcess': {

@@ -30,6 +30,7 @@ import { AnomalyDetector } from './anomalies.js';
 import { BudgetService, periodWindow } from './budgets.js';
 import { CapacityStore } from './capacity.js';
 import { UsageLedger } from './ledger.js';
+import { MediaLedger } from './media.js';
 import { PricingRegistry } from './pricing.js';
 import { UsageQueries, type BreakdownDimension } from './queries.js';
 import { UsageRecorder } from './recorder.js';
@@ -73,6 +74,8 @@ export class UsageService {
   readonly capacity: CapacityStore;
   readonly queries: UsageQueries;
   readonly budgets: BudgetService;
+  /** Paid media generation estimates (docs/systems/design-agent.md). */
+  readonly media: MediaLedger;
   readonly anomalies: AnomalyDetector;
   readonly recorder: UsageRecorder;
   private adapters: () => AdapterInfo[] = () => [];
@@ -85,7 +88,8 @@ export class UsageService {
     this.ledger = new UsageLedger(d.db, this.pricing);
     this.capacity = new CapacityStore(d.db);
     this.queries = new UsageQueries(d.db, d.store);
-    this.budgets = new BudgetService(d.db, d.store, this.queries);
+    this.media = new MediaLedger(d.db);
+    this.budgets = new BudgetService(d.db, d.store, this.queries, this.media);
     this.anomalies = new AnomalyDetector(d.db, this.pricing);
     this.recorder = new UsageRecorder({ ledger: this.ledger, capacity: this.capacity, budgets: this.budgets, bus: d.bus, spoolFile: path.join(d.dataDir, 'usage-spool.jsonl') });
   }

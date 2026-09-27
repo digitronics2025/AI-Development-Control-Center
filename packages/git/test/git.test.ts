@@ -114,6 +114,25 @@ describe('git helpers', () => {
   });
 });
 
+describe('working tree snapshots with a stat cache copied from the index', () => {
+  it('see a same-size change made in the second the index was written, a second later (core.checkstat=minimal)', async () => {
+    // Git trusts an entry's cached stat unless the file is as new as the index file itself; with checkstat=minimal it
+    // compares only whole seconds and the size. A copy of the index taken later must not look newer than the index.
+    await sh(['config', 'core.checkstat', 'minimal']);
+    const second = () => Math.floor(Date.now() / 1000);
+    const start = second();
+    while (second() === start) await new Promise((resolve) => setTimeout(resolve, 5));
+    writeFileSync(path.join(repo, 'a.txt'), 'one\n'); // same content, new stat: refresh writes the index now
+    await sh(['update-index', '--refresh']);
+    writeFileSync(path.join(repo, 'a.txt'), 'two\n'); // same size, same second
+    const written = second();
+    while (second() === written) await new Promise((resolve) => setTimeout(resolve, 5));
+    const two = (await sh(['hash-object', 'a.txt'])).trim();
+    const cp = await createCheckpoint(repo, 'refs/acc/checkpoints/TASK-0001/9', 'racy');
+    expect((await sh(['rev-parse', `${cp.tree}:a.txt`])).trim()).toBe(two);
+  });
+});
+
 describe('checkpoints', () => {
   it('records the working tree without touching the index, HEAD or files', async () => {
     writeFileSync(path.join(repo, 'a.txt'), 'staged\n');

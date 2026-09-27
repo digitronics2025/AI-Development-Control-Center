@@ -39,6 +39,81 @@ describe('Redactor', () => {
     expect(r.redact('Authorization: Bearer abcdefghijklmnop.qrstuv')).toContain(`Bearer ${REDACTED}`);
   });
 
+  it('masks only the signature of a signed URL, and stops a key=value secret at the next URL parameter', () => {
+    const sig = fake('a1b2c3d4', 'e5f6a7b8', 'c9d0e1f2', 'a3b4c5d6');
+    const s3 = `https://bucket.s3.amazonaws.com/generated/hero.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260927T120000Z&X-Amz-Expires=3600&X-Amz-Signature=${sig}`;
+    expect(r.redact(s3)).toBe(`https://bucket.s3.amazonaws.com/generated/hero.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260927T120000Z&X-Amz-Expires=3600&X-Amz-Signature=${REDACTED}`);
+    const sas = `https://acct.blob.core.windows.net/media/loop.mp4?sv=2024-01-01&se=2026-09-28&sig=${fake('abcDEF', '123%2B', 'xyz%3D')}&sp=r`;
+    expect(r.redact(sas)).toBe(`https://acct.blob.core.windows.net/media/loop.mp4?sv=2024-01-01&se=2026-09-28&sig=${REDACTED}&sp=r`);
+    // A public CDN URL without a signature stays as it is.
+    expect(r.redact('https://v3.fal.media/files/penguin/abc123_hero.png')).toBe('https://v3.fal.media/files/penguin/abc123_hero.png');
+    const tokenParam = fake('abc123', 'def456');
+    expect(r.redact(`https://api.example.com/x?token=${tokenParam}&size=large`)).toBe(`https://api.example.com/x?token=${REDACTED}&size=large`);
+  });
+
+  it('leaves design wording readable while real credentials are still masked', () => {
+    for (const text of ['Use token --color-accent-strong for links', 'Basic typography-scale: 16/20/25', 'accentToken: "#3355ff"', 'surfaceToken = var(--surface-2)', 'spacingToken: 1.25rem', 'the token for-the-hero-section']) {
+      expect(r.redact(text), text).toBe(text);
+    }
+    expect(r.redact(`Authorization: Bearer ${fake('abcdefgh', 'ijklmnop')}XYZ`)).toBe(`Authorization: Bearer ${REDACTED}`);
+    expect(r.redact(`token ${fake('1234567890', 'abcdef')}`)).toBe(`token ${REDACTED}`);
+    expect(r.redact(`Basic ${fake('dXNlcjpw', 'YXNzd29y', 'ZA==')}`)).toBe(`Basic ${REDACTED}`);
+    expect(r.redact(`apiKey: "${fake('abcdef', '123456')}"`)).toBe(`apiKey: "${REDACTED}"`);
+    expect(r.redact(`authToken=${fake('ghij', 'kl78', '90')}`)).toBe(`authToken=${REDACTED}`);
+    // Real credentials need no digit, capital or punctuation, and the scheme is matched in any case.
+    expect(r.redact(`Authorization: Bearer ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`Authorization: Bearer ${REDACTED}`);
+    expect(r.redact(`authorization: bEaReR ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`authorization: bEaReR ${REDACTED}`);
+    expect(r.redact(`Authorization: Key ${fake('abcd', 'efgh', 'ijkl')}`)).toBe(`Authorization: Key ${REDACTED}`);
+    expect(r.redact(`BeArEr ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`BeArEr ${REDACTED}`);
+    expect(r.redact(`TOKEN ${fake('qwertyui', 'opasdfgh')}`)).toBe(`TOKEN ${REDACTED}`);
+    // Code that builds the header is not a credential.
+    expect(r.redact('headers: { Authorization: `Bearer ${token}` }')).toBe('headers: { Authorization: `Bearer ${token}` }');
+  });
+
+  it('masks the whole of a key=value secret that contains "&"; only a URL query secret stops at the next parameter', () => {
+    for (const secret of [fake('P&ss', 'w0rd123'), fake('ab&', 'cdefgh'), fake('abcdefg', '&hijklmn')]) {
+      expect(r.redact(`DB_PASSWORD=${secret}`), secret).toBe(`DB_PASSWORD=${REDACTED}`);
+    }
+    expect(r.redact(`DB_PASSWORD="${fake('Tr0ub4', '&dor3xyz')}"`)).toBe(`DB_PASSWORD="${REDACTED}"`);
+    const param = fake('q1w2e3', 'r4t5y6');
+    expect(r.redact(`https://api.example.com/x?size=large&api_key=${param}&page=2#top`)).toBe(`https://api.example.com/x?size=large&api_key=${REDACTED}&page=2#top`);
+    expect(r.redact(`curl -d "grant_type=client_credentials&client_secret=${param}&scope=read"`)).toBe(`curl -d "grant_type=client_credentials&client_secret=${REDACTED}&scope=read"`);
+  });
+
+  it('keeps a design value readable only when the design token is the whole value', () => {
+    for (const text of [
+      'accentToken: #3355ff;',
+      'accentToken: "rgb(51 85 255)"',
+      'accentToken: color-mix(in oklch, var(--accent) 40%, white)',
+      'surfaceToken: var(--surface-2, #ffffff)',
+      'motionToken: 250ms',
+      'spacingToken: "0.875rem"',
+      'Use token --color-accent-strong: #3355ff',
+    ]) {
+      expect(r.redact(text), text).toBe(text);
+    }
+    for (const [prefix, secret] of [
+      ['password=', fake('#Face', '-2024Secret')],
+      ['password: ', fake('#Bad', '!Pass99')],
+      ['password=', fake('#abc123', '!zzzz')],
+      ['DB_PASSWORD=', fake('2024%', 'SummerPass')],
+      ['curl -d client_secret=', fake('9%2B', 'aB3dE5fG7hJ9kL')],
+      ['api_key=', fake('1s-', '9f8e7d6c5b4a3210')],
+      ['surfaceToken = ', fake('var(--x)', 'Secr3tValue')],
+      ['accentToken: ', fake('rgb(', 'Secr3t)Value')],
+    ]) {
+      expect(r.redact(`${prefix}${secret}`), secret).toBe(`${prefix}${REDACTED}`);
+    }
+    // A Bearer value that only starts like a CSS custom property is still a credential.
+    expect(r.redact(`Bearer ${fake('--Zm9vYmFy', '.YmF6cXV4')}`)).toBe(`Bearer ${REDACTED}`);
+  });
+
+  it('masks both halves of a fal-style "Key id:secret" Authorization value', () => {
+    const key = fake('0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d', ':', 'deadbeef', 'cafebabe', '0123456789abcdef');
+    expect(r.redact(`Authorization: Key ${key}`)).toBe(`Authorization: Key ${REDACTED}`);
+    expect(r.redact(`curl -H "Authorization: Key ${key}" https://queue.fal.run/x`)).toBe(`curl -H "Authorization: Key ${REDACTED}" https://queue.fal.run/x`);
+  });
+
   it('redacts URL credentials but keeps the host', () => {
     expect(r.redact('https://user:s3cretpass@github.com/x.git')).toBe(`https://${REDACTED}@github.com/x.git`);
   });
@@ -111,6 +186,17 @@ describe('sanitizeEnv', () => {
     }
     expect(credentialFreeEnv({ ...ambient, OPENAI_API_KEY: 'x' }).OPENAI_API_KEY).toBeUndefined();
     expect(detectAmbientCredentials(ambient)).toEqual(['CLOUDFLARE_API_TOKEN', 'GH_TOKEN', 'DATABASE_URL']);
+  });
+
+  it('strips media generation keys in every billing mode: generation is billed per call', () => {
+    const media = { PATH: '/bin', FAL_KEY: fake('fal-', ALNUM), replicate_api_token: fake('r8_', ALNUM), RUNWAYML_API_SECRET: fake('key_', ALNUM), ELEVENLABS_API_KEY: fake('el', ALNUM), HIGGSFIELD_API_KEY: fake('hf', ALNUM) };
+    for (const mode of ['subscription', 'api'] as const) {
+      const { env, removed } = sanitizeEnv(media, mode);
+      expect(Object.keys(env)).toEqual(['PATH']);
+      expect(removed).toEqual(expect.arrayContaining(['FAL_KEY', 'REPLICATE_API_TOKEN', 'RUNWAYML_API_SECRET', 'ELEVENLABS_API_KEY', 'HIGGSFIELD_API_KEY']));
+    }
+    expect(credentialFreeEnv(media)).toEqual({ PATH: '/bin' });
+    expect(detectAmbientCredentials(media)).toEqual(expect.arrayContaining(['FAL_KEY', 'REPLICATE_API_TOKEN']));
   });
 
   it('reports present API credentials by name only', () => {

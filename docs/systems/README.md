@@ -6,6 +6,7 @@
 | Workflow engine | [workflow-engine.md](workflow-engine.md) | `apps/orchestrator/src/engine`, `packages/shared/src/workflow.ts`, `workflows/` |
 | Stage Teams (several workers for one stage, isolated writers, parallel-safe checks) | [stage-teams.md](stage-teams.md) | `apps/orchestrator/src/engine/stage-team.ts`, `packages/git/src/team.ts`, `packages/shared/src/stage-teams.ts` |
 | Role prompts (templates, placeholders, marker lines, prompt artifacts) | [prompts.md](prompts.md) | `prompts/`, `packages/shared/src/prompts.ts`, `apps/orchestrator/src/engine/context.ts` |
+| Design agent (designer role, Frontend Design workflow, media generation, visual QA) | [design-agent.md](design-agent.md) | `prompts/designer.md`, `workflows/frontend-design.yaml`, `packages/shared/src/constants.ts` |
 | Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
 | Ask (read-only questions outside tasks) | [ask.md](ask.md) | `apps/orchestrator/src/ask`, `packages/shared/src/ask.ts`, `apps/dashboard/src/components/ask.tsx` |
 | Learning loop (task reviews, findings, improvements the Chairman adopts) | [learning.md](learning.md) | `apps/orchestrator/src/learning`, `packages/shared/src/learning.ts`, `packages/tools/src/packs/installer.ts` |

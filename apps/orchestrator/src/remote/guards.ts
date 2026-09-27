@@ -1,4 +1,4 @@
-import { POLICY_MODES, type PolicyMode, type Repository, type Settings, type WorkflowProfile } from '@acc/shared';
+import { NANOS_PER_USD, POLICY_MODES, type Budget, type PolicyMode, type Repository, type Settings, type WorkflowProfile } from '@acc/shared';
 import { mergeSettings } from '../services/settings.js';
 
 /**
@@ -17,6 +17,8 @@ export interface GuardContext {
   isMultiRepositoryTask?: (taskId: string) => boolean;
   /** An agent's saved settings, for judging a remote change to them. */
   agent?: (id: string) => { loadUserConfig: boolean } | null;
+  /** A saved budget, for judging a remote change to a media budget. */
+  budget?: (id: string) => Pick<Budget, 'scopeType' | 'amountNanos' | 'policy' | 'enabled'> | null;
 }
 
 export type GuardResult = { ok: true } | { ok: false; message: string };
@@ -71,6 +73,22 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
       ];
       const first = widened.find(([on]) => on);
       if (first) return deny(`${first[1]} can only be turned on on this machine.`);
+      // Money (docs/systems/design-agent.md): paid generation, a larger task budget or a lower price estimate is chosen here only.
+      if (n.media.allowPaidGeneration && !settings.media.allowPaidGeneration) return deny('Paid media generation can only be turned on on this machine.');
+      if (n.media.taskBudgetUsd > settings.media.taskBudgetUsd) return deny('Raising the media budget per task can only be done on this machine.');
+      const cheaper = Object.entries(settings.media.prices).some(([model, price]) => n.media.prices[model] === undefined || n.media.prices[model]! < price);
+      if (cheaper || Object.keys(n.media.prices).some((m) => settings.media.prices[m] === undefined)) return deny('Lowering, removing or adding a media price estimate can only be done on this machine.');
+      return allow;
+    }
+    case 'usage.budgetUpdate':
+    case 'usage.budgetRemove': {
+      // A media budget that stops paid calls is loosened here only: raised, switched to warn only, disabled or removed.
+      const budget = ctx.budget?.(params.id ?? '');
+      if (!budget || budget.scopeType !== 'MEDIA') return allow;
+      if (op === 'usage.budgetRemove') return deny('A media budget can only be removed on this machine.');
+      const raised = typeof b.amountUsd === 'number' && Math.round(b.amountUsd * NANOS_PER_USD) > budget.amountNanos;
+      const loosened = (b.policy === 'WARN_ONLY' && budget.policy === 'STOP_NEW_RUNS') || (b.enabled === false && budget.enabled);
+      if (raised || loosened) return deny('A media budget can only be raised, set to warn only or disabled on this machine.');
       return allow;
     }
     case 'repository.update': {

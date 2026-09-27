@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, readFile, rm } from 'node:fs/promises';
+import { copyFile, readFile, rm, stat, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { runProcess } from '@acc/executor';
@@ -384,10 +384,17 @@ async function withPrivateIndex<T>(cwd: string, fn: (env: NodeJS.ProcessEnv) => 
   const tmp = join(os.tmpdir(), `acc-index-${randomUUID()}`);
   try {
     if (seedFromRealIndex) {
-      // Copying the real index keeps its stat cache, so only changed files are re-hashed.
+      // Copying the real index keeps its stat cache, so only changed files are re-hashed. Git trusts a cached stat
+      // unless the file is as new as the index file (racy git), and with core.checkstat=minimal it compares only whole
+      // seconds and the size: a copy made a second later would look newer and hide a same-size change made in the
+      // index's own second. So the copy is dated a second before the index — more files re-hashed, never fewer.
       const rel = (await gitOk(cwd, ['rev-parse', '--git-path', 'index'])).trim();
       const real = isAbsolute(rel) ? rel : join(cwd, rel);
-      if (existsSync(real)) await copyFile(real, tmp);
+      if (existsSync(real)) {
+        await copyFile(real, tmp);
+        const indexed = (await stat(real)).mtimeMs / 1000;
+        await utimes(tmp, indexed, Math.floor(indexed) - 1);
+      }
     }
     return await fn({ GIT_INDEX_FILE: tmp });
   } finally {

@@ -5,7 +5,7 @@ sources:
   - packages/shared/src/workflow.ts
   - workflows/**
   - prompts/**
-verified_at: 0d4eaf8
+verified_at: 57af61a
 ---
 
 # Workflow engine
@@ -23,7 +23,11 @@ Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
 (agent|tests|command|git|verify|release), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
-verdict, commandKinds, optional, requires`. `requires` names stages whose latest
+verdict, commandKinds, optional, requires`, and for agent stages `instructions`
+(appended to the role prompt), `toolProfile` (the capability profile the
+stage's tool list is built from, never `operator`; the level still decides
+what runs) and `skills` (installed skills the stage should run); the three are
+refused on other kinds. `requires` names stages whose latest
 run must have ended SUCCESS; otherwise the stage is SKIPPED before any approval
 is asked (`Skipped: Staging deploy did not run` — Full Autopilot's Smoke
 requires Staging). Validation
@@ -32,15 +36,36 @@ resolvable transitions and `requires` keys, every stage reachable, reaches `comp
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
 `maxFixCycles`. Each task stores a snapshot of its profile.
 
+A stage's `team` may be fixed, adaptive or `variants` (competing attempts, a
+read-only judge keeps one; [stage-teams.md](stage-teams.md#variants)).
+
+Frontend Design ([design-agent.md](design-agent.md)) runs a designer role
+twice: Assets at Level 3 with approval on every attempt and one attempt (the
+only stage the paid Level 3 `media.*` tools can run in, still behind the spend
+gate) and Build at Level 2, which every
+`onFail` returns to, so a fix loop never pays for media. Its Design brief is
+a fixed team of three directions, its Art direction an `art-director` stage
+and its Visual critique a `visual-critic` stage before the Code review.
+
+The engine reads roles by class (`ROLE_CLASS` in
+[constants.ts](../../packages/shared/src/constants.ts)): investigate, plan
+(planner, art director), write (implementer, fixer, designer), judge
+(reviewer, visual critic, verifier), test, deploy, report. A judge's verdict
+kind is `verify` for the verifier and `review` for the others.
+
 A `tests` stage runs the repository's enabled commands of its `commandKinds`,
-by default `lint, typecheck, test, build`. Full Autopilot adds `e2e`, so an
+by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design add `e2e`, so an
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
 
-A `verify` stage (Full Autopilot's **App check**, after Test) starts the app
+A `verify` stage (the **App check** after the tests stage in Full Autopilot and
+Frontend Design) starts the app
 from the repository runtime (Repositories → a repository → App runtime),
-waits until it answers, opens each configured path in Chromium at desktop and
-phone widths (or checks HTTP status for APIs/Workers), fails on console
+waits until it answers, opens each configured path in Chromium at the
+runtime's widths (`verifyViewports`, desktop and phone by default; up to all
+five: phone, tablet, narrow-desktop 1024, desktop 1280, wide 1440) and colour
+schemes (`verifyColorSchemes`: empty = light only, or light and dark, each a
+separate pass) (or checks HTTP status for APIs/Workers), fails on console
 errors, page errors, failed same-origin requests or horizontal scrolling,
 saves screenshots and `browser-verification.md`, stops the app, and on
 failure goes to `onFail` like a test failure. It is skipped when no runtime
@@ -68,7 +93,9 @@ close ([browser-and-web.md](browser-and-web.md)), whenever the loop exits in a
 state other than running or queued; completion and cancellation also close
 terminals, remove the worktree and add "Verification coverage" (the checks
 the project type calls for, plus any browser, HTTP or device evidence the
-orchestrator observed) and
+orchestrator observed; a succeeded `verify.web`, `browser.check_page`,
+`browser.run_flow`, `browser.visual_matrix` or `browser.accessibility` is
+browser evidence) and
 "Execution" sections to the report.
 
 Assignment precedence: global role default → workflow stage pin → repository
@@ -85,7 +112,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 
 | Outcome | Result |
 |---|---|
-| success / skipped | go to `next`; in Discuss First mode a successful planner stage creates a `plan_review` approval first |
+| success / skipped | go to `next`; in Discuss First mode a successful plan-class stage (planner, art director) creates a `plan_review` approval first |
 | verdict FAIL / tests failed / commit rejected by a hook (git stage with `onFail`) | go to `onFail` and count a fix cycle; at `maxFixCycles` → `WAITING_FOR_USER` (fix_limit). Resume grants one more cycle |
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
@@ -94,7 +121,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | a release stage finds its target branch moved (`goto`) | the task is updated from it in its worktree and continues at the tests stage; the release asks again ([release.md](release.md)) |
 | a `stage_permission` approval for a `release` stage is denied | stage SKIPPED "Release declined", event `RELEASE_DECLINED`, go to `next` (every other denied approval fails the task) |
 | `REVIEW_INCOMPLETE` (a verdict stage passed twice without naming files the diff did not show) | an error like any other: retried, then (supervised) the Chairman retries or changes agent; never a code fix |
-| a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
+| a work stage (any role outside the judge class) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
 
 **Supervised tasks** (Autopilot with the Chairman on) differ: a test or
 verdict failure asks the Chairman, which keeps the local fix loop while it
@@ -141,24 +168,28 @@ baseline), `release` stages are release; parked runs from `TASK_WAITING`,
 test or e2e command in full (evidence only). Computed on demand, no table;
 an error gives "Not enough data" and never stops the report. The report lists any `browser-recheck-*.md` re-checks under
 Verification coverage as operator-observed evidence, never as a pass
-([connected-apps.md](connected-apps.md)). A reviewer/verifier stage with `verdict: false` still records an
+([connected-apps.md](connected-apps.md)). A judge-class stage with `verdict: false` still records an
 advisory verdict (it does not route); a FAIL makes the report
 `NEEDS_USER_ACTION` (used by the built-in Staged Review workflow). The final
 status is `READY` only when the last *finished* test stage (a cancelled or
 interrupted instance does not count) passed with at least one passing command
-and came after the last successful implementer/fixer stage, the last
-review/verification passed, and no file mixes pre-existing user work with task
+and came after the last successful write-class stage (implementer, fixer,
+designer), the latest review verdict (reviewer or visual critic) and the
+latest verification did not fail, and no file mixes pre-existing user work with task
 changes; otherwise `NEEDS_USER_ACTION` with the reason (`No test stage ran.`,
-`Tests have not run since the last change.` …) — the same rule the supervised
-completion gate applies ([report.ts](../../apps/orchestrator/src/engine/report.ts),
-[gate.ts](../../apps/orchestrator/src/chairman/gate.ts)). Lines starting `NEEDS OPERATOR:` in the
-latest verification (or, when none ran, the latest review) — things only the operator can settle, which
+`Tests have not run since the last change.` …) — the rule the supervised
+completion gate applies too, where each judge role with a verdict stage must
+have passed since the last change, so a visual critique's PASS never stands
+for the code review ([report.ts](../../apps/orchestrator/src/engine/report.ts),
+[gate.ts](../../apps/orchestrator/src/chairman/gate.ts),
+[chairman.md](chairman.md#completion-gate)). Lines starting `NEEDS OPERATOR:` in the
+latest verification (or, when none ran, the latest review of each review stage) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
 **Decisions** ([report.ts](../../apps/orchestrator/src/engine/report.ts)
 `extractOperatorBlockers`, [runners.ts](../../apps/orchestrator/src/engine/runners.ts)).
-The investigator, planner, implementer and fixer prompts tell the agent to
+The investigator, planner, art director, implementer, fixer and designer prompts tell the agent to
 change nothing and end with `BLOCKED ON OPERATOR: <decision, options,
 recommendation>` when the goal cannot be met correctly without the operator —
 contradictory requirements or tests, a forbidden action, missing access. The
@@ -175,8 +206,8 @@ without asking for approval (`skipsForLackOfCommands`).
 
 An agent stage with a `team` runs as a **Stage Team** — several workers, write
 workers in their own checkouts, one outcome — or falls back to one agent
-([stage-teams.md](stage-teams.md)); the built-in Architecture and Full Autopilot
-workflows use teams. A tests stage runs consecutive commands the
+([stage-teams.md](stage-teams.md)); the built-in Architecture, Full Autopilot
+and Frontend Design workflows use teams. A tests stage runs consecutive commands the
 repository marked `parallelSafe` together, stopping the batch at the first
 real failure; a check whose failure a repair would fix is repaired and run
 again alone once the rest of its batch is done
@@ -196,7 +227,13 @@ Smoke after a skipped Staging, the unit suite run three times):
   boundary). Every changed file not shown in full is listed in
   `{{diff_coverage}}` with its `+a −d`, the reason and how to read it; a task
   across repositories packs every repository into one budget, and a staged
-  review packs its staged diff. The changed-files list carries `+a −d`. A PASS
+  review packs its staged diff. The changed-files list carries `+a −d`. An
+  added or changed image or video, which the diff shows only as "Binary files
+  … differ", counts as not shown: one a changed `manifest.json` names (its
+  SHA-256 checked when the entry gives one) is listed as generated media that
+  need not be named; any other must be viewed and named
+  ([design-agent.md](design-agent.md#design-memory-and-learning)).
+  Pre-existing user work the task never touched is never listed. A PASS
   from a `verdict` stage must name every listed file (full path, or a
   basename no other changed file shares, `unreviewedFiles`): otherwise the
   runner asks the same agent once more inside the same stage (a second
@@ -446,6 +483,8 @@ a composed `1 failed | 2 passed (3)`
 The final report's Tests line counts commands, not tests
 (`1 command passed · 0 failed · 0 not run`), and each passing or failing
 row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
-([report.ts](../../apps/orchestrator/src/engine/report.ts)).
+([report.ts](../../apps/orchestrator/src/engine/report.ts)). A supervised
+task's `Fix attempts` counts fixer runs and designer runs started in a fix
+cycle (a design workflow's rebuilds), as the learning `fix_loops` signal does.
 
 Last verified: 2026-09-27

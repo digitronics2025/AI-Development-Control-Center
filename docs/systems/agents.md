@@ -7,7 +7,7 @@ sources:
   - packages/executor/**
   - apps/orchestrator/src/services/skills.ts
   - packages/shared/src/skills.ts
-verified_at: 0d4eaf8
+verified_at: 57af61a
 ---
 
 # Agent adapters
@@ -40,6 +40,12 @@ removed when the run ends.
 
 - Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --disable apps --disable plugins --disable skill_mcp_dependency_install [-c mcp_servers.<name>={enabled=false,…}]… --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
+- Images: `launchAgent` passes the task's image attachments (PNG, JPEG, WebP,
+  GIF; five at most, 10 MB each) as `images` to any adapter whose
+  capabilities say `images: true` — Codex, as `-i <path>` — so reference
+  pictures reach the model without the agent copying anything out of the data
+  folder. Claude Code (`images: false`) reads them by path from
+  `{{attachments}}` ([design-agent.md](design-agent.md)).
 - `--ignore-rules` on every run: Codex's execpolicy `.rules` files (the operator's
   `~/.codex/rules`, the repository's `.codex/rules/`) are never loaded. An `allow`
   match for every segment of a command skips approval **and runs it outside the
@@ -214,11 +220,20 @@ The New Task description and the Directive box accept `/name` (the slash picker,
 [dashboard.md](dashboard.md)). `requestedSkills()`
 ([skills.ts](../../packages/shared/src/skills.ts)) keeps only `/name` tokens
 that are real skill names in the description and in the directives a stage
-receives — `/api/tasks`, URLs and `and/or` never count — and
-every stage prompt then gets "## Requested skills" (name, description, and the
-rule: run it in the stage whose job it matches; the implementation stage when
-none clearly does; at most once per stage; a refusal is an operator decision).
+receives — `/api/tasks`, URLs and `and/or` never count — and adds the
+installed ones a workflow stage lists in `skills` (a name not installed is
+dropped). The stage prompt then gets "## Requested skills" (name, description,
+and the rule: run it in the stage whose job it matches, design, UI and media
+skills in design stages; the implementation (or design build) stage when none
+clearly does; at most once per stage; a refusal is an operator decision).
 The description and directives stay the record; there is no separate task field.
+
+`pnpm verify:agents --images` asks each CLI for the colour of a solid red
+square three ways: Claude Code reading a PNG from disk, Codex given it with
+`-i`, and Claude Code shown it as an MCP image block (the fixture
+`packages/mcp/test/fixtures/red-picture-server.mjs` stands in for the `acc`
+bridge). Run it after a CLI update; the design agent relies on all three
+([design-agent.md](design-agent.md)).
 
 `pnpm verify:agents --skills` also compares the picker's list with the CLI's
 (791 = 791 on 2026-09-24, 750 with a description; the rest are built-ins with no file) and checks that the `/skills`
@@ -276,7 +291,21 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:big-diff]` (the implementer also writes three 60 KB files),
 `[sim:source-only]` (implementer and fixer change `sim-output.ts` instead of `sim-output.md`),
 `[sim:review-miss-coverage]` / `[sim:review-miss-coverage-once]` (reviewer and verifier
-leave out the files the diff did not show; by default they name them under `## Files reviewed`).
+leave out the files the diff did not show; by default they name the ones to read, never media to view, under `## Files reviewed`).
+Role `designer` changes files like the implementer (the same markers apply) and
+reports with `## Summary` and `## Design decisions` ([design-agent.md](design-agent.md));
+`[sim:assets]` makes it also write two PNGs in `public/generated/` and a
+`manifest.json` naming both with their SHA-256, `[sim:assets-unnamed]` adds a
+PNG the manifest does not name, `[sim:assets-bad-hash]` gives `hero-2.png` a
+wrong SHA-256. Role `art-director` answers with a direction and a $0 media
+budget; role `visual-critic` passes unless `[sim:critic-fail-once]` /
+`[sim:critic-fail-always]`, and names unshown files like the reviewer. Stage
+Teams: `[sim:team]` (units alpha and beta), `[sim:team-chain]`, `[sim:team-three]`, `[sim:team-overlap]`, `[sim:team-out-of-scope]`,
+`[sim:fail-unit-once:<key>]` ([stage-teams.md](stage-teams.md)); a variant
+(`- Your approach:`) writes `sim-output.md` and `variant-<key>.md`, and role
+`judge` answers `WINNER:` with the first variant, the last with
+`[sim:judge-last]`, none with `[sim:judge-none]`. The simulated `codex`
+declares `images: true` like the real one and logs the pictures it receives.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 Role `ask` answers "Simulated answer to: <question>" and names the repository
 and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`
@@ -305,6 +334,6 @@ REFUSED with the summary.
 
 ## Skills lookup trigger
 
-The skills catalog is listed for a stage only when the task or an active directive names a `/skill` token (`SKILL_TOKEN`, the rule `requestedSkills` uses); a file path or URL no longer triggers a cold listing.
+The skills catalog is listed for a stage only when the task or an active directive names a `/skill` token (`SKILL_TOKEN`, the rule `requestedSkills` uses) or the stage lists `skills`; a file path or URL no longer triggers a cold listing.
 
 Last verified: 2026-09-27

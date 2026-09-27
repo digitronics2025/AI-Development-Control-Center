@@ -40,7 +40,7 @@ const COLUMNS: Column<ToolExecution>[] = [
   { key: 'level', header: 'Level', cell: (e) => <PermissionBadge level={e.permissionLevel} />, hideStacked: true },
 ];
 
-const UNIT_KIND_LABEL: Record<StageWorkUnit['kind'], string | null> = { worker: null, integration: 'Integration', decomposer: 'Split the fix' };
+const UNIT_KIND_LABEL: Record<StageWorkUnit['kind'], string | null> = { worker: null, integration: 'Integration', decomposer: 'Split the fix', judge: 'Judge' };
 
 /**
  * The Stage Team of the running (or most recent) team stage

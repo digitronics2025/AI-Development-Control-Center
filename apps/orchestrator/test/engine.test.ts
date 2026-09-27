@@ -104,6 +104,158 @@ describe('normal development workflow', () => {
   });
 });
 
+describe('designer stage', () => {
+  it('writes files like an implementer and reports with a Summary the timeline reads', async () => {
+    t.services.workflows.save('design-sim', {
+      name: 'Design sim',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'test' },
+        { key: 'test', name: 'Test', role: 'tester', kind: 'tests', permissionLevel: 2, next: 'complete' },
+      ],
+    });
+    const repoPath = await makeRepo({ scripts: { test: 'node -e "console.log(\'1 passed\')"' } });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the output file', { workflowId: 'design-sim' });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('COMPLETED');
+    const build = t.services.store.latestStage(id, 'build');
+    expect(build?.status).toBe('SUCCESS');
+    expect(build?.summary).toContain('Simulated designer run');
+    expect(readFileSync(path.join(repoPath, 'sim-output.md'), 'utf8')).toContain('designer change at');
+    const report = await t.services.artifacts.latestText(id, 'implementation-report');
+    expect(report).toMatch(/^## Summary/m);
+  });
+
+  it('treats the art director as a planner and the visual critic as a reviewer', async () => {
+    t.services.workflows.save('design-roles', {
+      name: 'Design roles',
+      maxFixCycles: 2,
+      stages: [
+        { key: 'direction', name: 'Art direction', role: 'art-director', permissionLevel: 1, next: 'build' },
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'critique' },
+        { key: 'critique', name: 'Visual critique', role: 'visual-critic', permissionLevel: 1, verdict: true, next: 'complete', onFail: 'build' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Restyle the output file [sim:critic-fail-once]', { workflowId: 'design-roles', mode: 'discuss', supervised: false });
+    // Discuss First stops after the plan-class stage for plan review.
+    const waiting = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+    expect(waiting.blocker?.kind).toBe('approval');
+    expect(t.services.store.listStages(id).map((s) => s.stageKey)).toEqual(['direction']);
+    expect(await t.services.artifacts.latestText(id, 'plan')).toContain('## Media budget');
+    const [approval] = (await t.api('GET', '/api/approvals')).body.filter((a: { taskId: string }) => a.taskId === id);
+    expect(approval).toMatchObject({ kind: 'plan_review' });
+    await t.api('POST', `/api/approvals/${approval.id}/approve`, {});
+    // The critic's FAIL is a review verdict: it loops back to the build, then passes.
+    expect((await waitForStatus(t, id, ['COMPLETED', 'FAILED'])).status).toBe('COMPLETED');
+    const stages = t.services.store.listStages(id);
+    expect(stages.map((s) => s.stageKey)).toEqual(['direction', 'build', 'critique', 'build', 'critique']);
+    expect(stages.filter((s) => s.stageKey === 'critique').map((s) => s.verdict)).toEqual(['FAIL', 'PASS']);
+    expect(await t.services.artifacts.latestText(id, 'review')).toContain('VERDICT: PASS');
+  });
+});
+
+describe('generated media in review coverage', () => {
+  const design = () =>
+    t.services.workflows.save('asset-review', {
+      name: 'Asset review',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+  const reviewPrompt = (id: string) => {
+    const rec = t.services.store.listArtifacts(id).filter((a) => a.name === 'review-prompt.md').at(-1)!;
+    return readFileSync(path.isAbsolute(rec.path) ? rec.path : path.join(t.dataDir, rec.path), 'utf8');
+  };
+
+  it('names the media an asset manifest describes, and a PASS need not list them', async () => {
+    design();
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Make hero images [sim:assets] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const prompt = reviewPrompt(id);
+    expect(prompt).toContain('Generated media named by an asset manifest');
+    expect(prompt).toMatch(/^- public\/generated\/hero-1\.png \(16×9, 1 KB, used in the hero; public\/generated\/manifest\.json\) → view: media\.image\.view/m);
+    expect(prompt).not.toMatch(/^- public\/generated\/hero-1\.png \([^)]*\) → read: /m);
+    // One review execution: the PASS was not asked again.
+    const review = t.services.store.latestStage(id, 'review')!;
+    expect(t.services.store.listExecutions(id).filter((e) => e.stageId === review.id)).toHaveLength(1);
+  });
+
+  it('still requires a picture the manifest does not name, or whose bytes it does not describe', async () => {
+    design();
+    const repoId = await addRepo(t, await makeRepo());
+    const unnamed = await createTask(t, repoId, 'Make hero images [sim:assets] [sim:assets-unnamed] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const failed = await waitForStatus(t, unnamed, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(failed.status).toBe('FAILED');
+    expect(failed.blocker).toMatchObject({ errorClass: 'REVIEW_INCOMPLETE' });
+    expect(failed.blocker!.message).toContain('public/generated/extra.png');
+    expect(failed.blocker!.message).not.toContain('hero-1.png');
+    expect(reviewPrompt(unnamed)).toMatch(/^- public\/generated\/extra\.png \([^)]*\) → view: media\.image\.view .*no asset manifest names it$/m);
+
+    const other = await addRepo(t, await makeRepo());
+    const badHash = await createTask(t, other, 'Make hero images [sim:assets] [sim:assets-bad-hash] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const refused = await waitForStatus(t, badHash, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(refused.status).toBe('FAILED');
+    expect(refused.blocker!.message).toContain('public/generated/hero-2.png');
+    expect(refused.blocker!.message).not.toContain('hero-1.png');
+  }, 90_000);
+
+  it('never requires a picture that was already in your folder and the task did not touch', async () => {
+    t.services.workflows.save('plain-review', {
+      name: 'Plain review',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'implement', name: 'Implement', role: 'implementer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const repoPath = await makeRepo();
+    // Your own untracked mockup, there before the task started: context, not part of the change under review.
+    writeFileSync(path.join(repoPath, 'mockup.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+    const id = await createTask(t, await addRepo(t, repoPath), 'Add a greeting [sim:review-miss-coverage]', { workflowId: 'plain-review', supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const prompt = reviewPrompt(id);
+    expect(prompt).toMatch(/^- mockup\.png \(untracked, [^)]*pre-existing user work\)$/m);
+    expect(prompt).not.toMatch(/^- mockup\.png \([^)]*\) → /m);
+    // One review execution: a PASS that names no file was not asked again.
+    const review = t.services.store.latestStage(id, 'review')!;
+    expect(t.services.store.listExecutions(id).filter((e) => e.stageId === review.id)).toHaveLength(1);
+  });
+});
+
+describe('image attachments', () => {
+  it('go on the command line to an agent that takes pictures, and only to it', async () => {
+    t.services.workflows.save('image-refs', {
+      name: 'Image refs',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', agentId: 'codex', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', agentId: 'claude', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64').toString('base64');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Match the reference', {
+      workflowId: 'image-refs',
+      attachments: [
+        { name: 'reference.png', contentBase64: png },
+        { name: 'notes.txt', contentBase64: Buffer.from('Use the reference colours').toString('base64') },
+      ],
+    });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const logsOf = (stageKey: string) => {
+      const stage = t.services.store.latestStage(id, stageKey)!;
+      const exec = t.services.store.listExecutions(id).filter((e) => e.stageId === stage.id).at(-1)!;
+      return t.services.store.tailLogLines(exec.id, 200).map((l) => l.text).join('\n');
+    };
+    // Codex (-i) receives the picture, never the text file; Claude Code reads attachments by path instead.
+    expect(logsOf('build')).toContain('[designer] images: reference.png');
+    expect(logsOf('review')).not.toContain('images:');
+  });
+});
+
 describe('discuss first', () => {
   it('stops after planning for plan review, then continues on approval', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Refactor the thing', { mode: 'discuss' });

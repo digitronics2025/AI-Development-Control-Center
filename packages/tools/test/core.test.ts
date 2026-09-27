@@ -109,6 +109,15 @@ describe('profiles', () => {
     expect(profileIncludes('web-development', 'android.install_apk')).toBe(false);
     expect(profileIncludes('analysis', 'fs.write')).toBe(true); // level, not profile, stops writes in Analyze stages
     expect(profileIncludes('general', 'mcp.github.create_issue')).toBe(false);
+    // Looking is Level 1, so the read-only Analysis profile lists accessibility, the visual matrix and media viewing (docs/systems/design-agent.md).
+    for (const cap of ['browser.accessibility', 'browser.visual_matrix', 'media.image.view', 'media.video.frames']) expect(profileIncludes('analysis', cap), cap).toBe(true);
+    expect(profileIncludes('analysis', 'media.image.generate')).toBe(false);
+    // The frontend-design profile puts the design tools first; it lists no outside generation server, whose calls the spend gate cannot see.
+    expect(profileIncludes('frontend-design', 'media.image.generate')).toBe(true);
+    expect(profileIncludes('frontend-design', 'mcp.fal.run_model')).toBe(false);
+    expect(profileIncludes('frontend-design', 'mcp.fal_jobs.check_job')).toBe(false);
+    expect(profileIncludes('frontend-design', 'mcp.github.create_issue')).toBe(false);
+    expect(profileRank('frontend-design', 'media.asset.optimize')).toBeLessThan(profileRank('frontend-design', 'fs.read'));
     expect(profileIncludes('operator', 'mcp.github.create_issue')).toBe(true);
   });
 

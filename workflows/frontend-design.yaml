@@ -1,0 +1,164 @@
+# Frontend design (docs/systems/design-agent.md): three competing art
+# directions, one approved art direction, generated media, a build that looks at
+# its own result, checks across themes and widths, a visual critique and a code
+# review.
+#
+# Spending is confined to one stage: Assets is the only Level 3 agent stage, so
+# the paid media tools (media.image.generate and the rest, Level 3) run only
+# there, it asks for approval on every attempt, and the spend gate still needs
+# Settings → Media → Allow paid generation and a budget. Generation goes through
+# those tools only: an outside generation server in the MCP gateway is not
+# budget-gated, so the design profile does not list one and the designer is
+# told never to call one. Build and every fix
+# loop run at Level 2 and cannot call them, so a failing check never pays for
+# new images. Run it in Discuss First mode: the plan (the art direction, the
+# asset list and the media budget) is approved before anything is generated.
+# For the App check in both themes, set the repository's App runtime → Themes
+# to "Light and dark" (and Widths to "All five").
+id: frontend-design
+name: Frontend Design
+description: Art direction, generated media, build, visual QA and design review
+maxFixCycles: 4
+stages:
+  - key: brief
+    name: Design brief
+    role: investigator
+    effort: high
+    permissionLevel: 1
+    timeoutSec: 2700
+    retry: { maxAttempts: 2 }
+    next: direction
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Propose one art direction (your focus). Give it a name, the feeling in three
+      words, colour roles for light and dark with hex values, a type pairing with a
+      scale, spacing and radius, imagery and motion style, two or three real sites
+      whose qualities it borrows (open them with the browser tools), how it handles
+      FR/AR right-to-left when the product needs it, and the risks. Draw it as a
+      style tile (one self-contained HTML page: colour roles, type scale,
+      buttons in every state, spacing, an image mood) with browser.render_html
+      in light and dark, name the tile pictures, and look at them before you
+      report. No code in the repository.
+    team:
+      mode: fixed
+      maxWorkers: 3
+      workers:
+        - key: bold
+          focus: "Bold direction: type, colour, imagery, motion"
+          agentId: claude
+          model: opus
+        - key: calm
+          focus: "Calm product-led direction: tokens, space, a11y"
+          agentId: claude
+          model: fable
+        - key: contrarian
+          focus: Contrarian direction, UX flows, states and RTL
+          agentId: claude
+          model: sonnet
+  - key: direction
+    name: Art direction
+    # Plan class: Discuss First stops here for plan review, and later stages read it as the plan.
+    role: art-director
+    model: opus
+    effort: high
+    permissionLevel: 1
+    retry: { maxAttempts: 2 }
+    description: Pick or merge a direction; name the asset list and the media budget
+    toolProfile: frontend-design
+    instructions: >-
+      Choose or merge one direction from the investigation, with concrete design
+      values for both themes, the asset list (or "no generated media") and the
+      media budget in US dollars ("0" when nothing is generated).
+    next: assets
+  - key: assets
+    name: Assets
+    role: designer
+    agentId: claude
+    effort: xhigh
+    # The only stage where a Level 3 generation tool can run.
+    permissionLevel: 3
+    # Asks again on every attempt: each run can spend.
+    requiresApproval: true
+    timeoutSec: 5400
+    # A retry would bill again.
+    retry: { maxAttempts: 1 }
+    description: Generate, download and optimise the approved media (paid)
+    toolProfile: frontend-design
+    instructions: >-
+      Media only. Follow the approved asset list and budget exactly; with no
+      budget or "no generated media", write the asset brief and stop. Prefer the
+      media.* tools; check each estimate, explore cheaply, keep only the finals,
+      optimise them (media.asset.optimize, media.svg.optimize, media.video.encode,
+      media.video.poster) and write manifest.json. Change no components or pages.
+    next: build
+  - key: build
+    name: Build
+    role: designer
+    agentId: claude
+    model: opus
+    effort: max
+    # Cannot generate: fix loops never spend.
+    permissionLevel: 2
+    timeoutSec: 5400
+    retry: { maxAttempts: 2 }
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Build mode. Implement the approved design values, components and pages and
+      place the assets from the manifest with their optimised sources. Look at the
+      result with browser.visual_matrix and browser.accessibility (both themes)
+      before you report, and fix what they show. Paid generation is not available
+      here; a missing asset is an operator decision.
+    next: checks
+  - key: checks
+    name: Checks and visual matrix
+    role: tester
+    kind: tests
+    # Register the repository's Playwright theme × viewport matrix as an e2e command.
+    commandKinds: [lint, typecheck, test, build, e2e]
+    permissionLevel: 2
+    next: app-check
+    onFail: build
+  - key: app-check
+    name: App check
+    role: tester
+    kind: verify
+    # Starts the app (Repositories → Runtime) and opens it in Chromium.
+    permissionLevel: 2
+    timeoutSec: 900
+    next: critique
+    onFail: build
+  - key: critique
+    name: Visual critique
+    # Judge class, a verdict of its own: both themes, every width, against the direction. The completion gate needs it and the code review to pass, each on its own.
+    role: visual-critic
+    effort: high
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: review
+    onFail: build
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Open the screenshots listed above, and when the app is running use
+      browser.visual_matrix and browser.accessibility in both schemes. A
+      regression in one theme or at one width is blocking.
+  - key: review
+    name: Code review
+    role: reviewer
+    effort: high
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
+    next: complete
+    onFail: build
+    toolProfile: frontend-design
+    instructions: >-
+      Review the diff for correctness and the repository's rules: semantic
+      design values instead of literals, every component state, accessible
+      markup, responsive images with dimensions, no vendor URLs at runtime and
+      tests that cover both themes and the phone to wide widths. The visual
+      critique before you judged the look; a blocking issue it missed is still
+      blocking.

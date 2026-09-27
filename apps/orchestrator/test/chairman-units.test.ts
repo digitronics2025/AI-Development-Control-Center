@@ -10,8 +10,9 @@ import type { Store, TaskRecord } from '../src/store/store.js';
 import { migrate, openDatabase } from '../src/db/database.js';
 import { completionGate } from '../src/chairman/gate.js';
 import { classifyMessage, type IntentContext } from '../src/chairman/intent.js';
-import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
+import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, repairStage, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
 import { classifyProgress } from '../src/chairman/progress.js';
+import { SnapshotService } from '../src/chairman/snapshot.js';
 import { chatPrompt, extractJson, fenceEvidence, parseRecoveryChoice, recoveryPrompt } from '../src/chairman/reasoner.js';
 import { deriveRule, globToRegExp, matchesAny } from '../src/chairman/rules.js';
 import { causeMarker, failingTestIds, normalizeMessage, pointsAtPlan, signatureOf, testFailureCount } from '../src/chairman/signatures.js';
@@ -141,6 +142,12 @@ describe('recovery policy', () => {
     expect(recoveryCandidates(ctx({ trigger: 'plan_mismatch', failingStageKey: 'verify' })).map((c) => c.kind)).toEqual(['replan', 'rca']);
   });
 
+  it('re-plans in an art direction stage when the workflow has no planner', () => {
+    const design: WorkflowProfile = { ...WORKFLOW, stages: WORKFLOW.stages.map((s) => (s.key === 'plan' ? { ...s, key: 'direction', name: 'Art direction', role: 'art-director' as const } : s)) };
+    const replan = recoveryCandidates(ctx({ trigger: 'plan_mismatch', failingStageKey: 'verify', workflow: design })).find((c) => c.kind === 'replan');
+    expect(replan?.id).toBe('replan:direction');
+  });
+
   it('hands a blocked or crashing stage to another agent, not one that already failed', () => {
     const blocked = recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'implement' }));
     expect(blocked.map((c) => c.id)).toEqual(['change_agent:implement:codex']);
@@ -231,6 +238,34 @@ describe('ask vs act', () => {
     expect(c('Use Claude for review, with high effort.').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'review', agentId: 'claude', effort: 'high' } });
     expect(c('switch the fix to codex at max effort').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'fix', agentId: 'codex', effort: 'max' } });
     expect(c('Use Claude for review').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'review', agentId: 'claude' } });
+  });
+
+  it('routes design words to the designer stage', () => {
+    const design: IntentContext = {
+      ...ctx,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', kind: 'agent' },
+        { key: 'review', name: 'Design review', role: 'reviewer', kind: 'agent' },
+      ],
+    };
+    expect(classifyMessage('Use Claude for the designer, with max effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'build', agentId: 'claude', effort: 'max' } });
+    // A stage named by neither key nor name: "design review" is the review, not the designer.
+    const unnamed: IntentContext = { ...ctx, stages: [{ key: 'make', name: 'Make', role: 'designer', kind: 'agent' }, { key: 'check', name: 'Check', role: 'reviewer', kind: 'agent' }] };
+    expect(classifyMessage('Use Codex for the design review.', unnamed).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'check', agentId: 'codex' } });
+    expect(classifyMessage('Use Codex for the design.', unnamed).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'make', agentId: 'codex' } });
+  });
+
+  it('routes art direction and visual critique words to their stages', () => {
+    const design: IntentContext = {
+      ...ctx,
+      stages: [
+        { key: 'look', name: 'Look', role: 'art-director', kind: 'agent' },
+        { key: 'build', name: 'Build', role: 'designer', kind: 'agent' },
+        { key: 'judge', name: 'Judge', role: 'visual-critic', kind: 'agent' },
+      ],
+    };
+    expect(classifyMessage('Use Claude for the art direction.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'look', agentId: 'claude' } });
+    expect(classifyMessage('Switch the visual critic to codex with high effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'judge', agentId: 'codex', effort: 'high' } });
   });
 
   it('maps clear commands to typed actions', () => {
@@ -362,6 +397,117 @@ describe('completion gate', () => {
     const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
     const violated = completionGate({ ...base, stages: [impl, tests, review, verify], activeDirectives: [protect] });
     expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'fix' } }] });
+  });
+
+  it('counts designer edits as changes and never sends a remedy to the paid assets stage', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'frontend-design',
+      stages: [
+        def('assets', 'designer', 3, { next: 'build', requiresApproval: true }),
+        def('build', 'designer', 2, { next: 'checks' }),
+        def('checks', 'tester', 2, { kind: 'tests', next: 'review', onFail: 'build' }),
+        def('review', 'reviewer', 1, { verdict: true, onFail: 'build' }),
+      ],
+    };
+    const assets = stage({ stageKey: 'assets', role: 'designer', permissionLevel: 3 });
+    const tests = stage({ stageKey: 'checks', role: 'tester', kind: 'tests' });
+    const review = stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' });
+    const runs: TestRun[] = [{ id: 'r', taskId: 'T', stageId: tests.id, executionId: null, name: 'unit', kind: 'test', command: 'x', status: 'passed', exitCode: 0, durationMs: 1, summary: null, startedAt: null, finishedAt: null }];
+    const base = { workflow: design, testRuns: runs, activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set(['test' as const]) };
+    expect(completionGate({ ...base, stages: [assets, tests, review] }).pass).toBe(true);
+    // A designer build after the tests and review is a change they have not seen: not READY.
+    const lateBuild = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    expect(completionGate({ ...base, stages: [assets, tests, review, lateBuild] }).failures.map((f) => f.code)).toEqual(['tests', 'review']);
+    // With no fixer, the remedy goes to the Level 2 build stage, never the Level 3 assets stage that can spend.
+    const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
+    const violated = completionGate({ ...base, stages: [assets, tests, review], activeDirectives: [protect] });
+    expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'build' } }] });
+    // A Level 3 fixer, or only write stages that could spend: the failure stands with no remedy.
+    const spending: WorkflowProfile = { ...design, stages: [def('assets', 'designer', 3, { next: 'fix' }), def('fix', 'fixer', 3, { next: 'checks' }), def('checks', 'tester', 2, { kind: 'tests', next: 'review' }), def('review', 'reviewer', 1, { verdict: true })] };
+    const none = completionGate({ ...base, workflow: spending, stages: [assets, tests, review], activeDirectives: [protect] });
+    expect(none.failures[0]).toMatchObject({ code: 'protected_paths', remedy: null });
+  });
+
+  it('counts a visual critic verdict as a review', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'critique',
+      stages: [def('build', 'designer', 2, { next: 'critique' }), def('critique', 'visual-critic', 1, { verdict: true, onFail: 'build' })],
+    };
+    const build = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    const base = { workflow: design, testRuns: [], activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set<never>() };
+    expect(completionGate({ ...base, stages: [build, stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' })] }).pass).toBe(true);
+    const failed = completionGate({ ...base, stages: [build, stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' })] });
+    expect(failed.failures).toEqual([expect.objectContaining({ code: 'review', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'critique' } }] })]);
+    // A critique that ran before the last build has not seen it.
+    const early = completionGate({ ...base, stages: [stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' }), stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 })] });
+    expect(early.failures.map((f) => f.code)).toEqual(['review']);
+  });
+
+  it('requires each judge role with a verdict to have passed, and never blocks on an advisory judge', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    // Frontend Design's shape: a visual critique and then a code review, both with a verdict.
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'critique-and-review',
+      stages: [
+        def('build', 'designer', 2, { next: 'critique' }),
+        def('critique', 'visual-critic', 1, { name: 'Visual critique', verdict: true, next: 'review', onFail: 'build' }),
+        def('review', 'reviewer', 1, { name: 'Code review', verdict: true, onFail: 'build' }),
+      ],
+    };
+    const base = { workflow: design, testRuns: [], activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set<never>() };
+    const build = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    const critique = stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' });
+    const review = stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' });
+    expect(completionGate({ ...base, stages: [build, critique, review] }).pass).toBe(true);
+    // The critique passing is not the code review passing: a failed or missing review blocks, with the remedy at the review.
+    const toReview = [expect.objectContaining({ code: 'review', message: 'Code review has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'review' } }] })];
+    const reviewFailed = stage({ stageKey: 'review', role: 'reviewer', status: 'FAILED', verdict: null });
+    expect(completionGate({ ...base, stages: [build, critique, reviewFailed] }).failures).toEqual(toReview);
+    expect(completionGate({ ...base, stages: [build, critique] }).failures).toEqual(toReview);
+    // Nor does a code review pass stand for a critique that failed.
+    const critiqueFailed = stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' });
+    expect(completionGate({ ...base, stages: [build, critiqueFailed, stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' })] }).failures).toEqual([
+      expect.objectContaining({ code: 'review', message: 'Visual critique has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'critique' } }] }),
+    ]);
+    // An advisory critic (no verdict) that recorded a FAIL after the verdict review passed blocks nothing.
+    const advisory: WorkflowProfile = { ...design, stages: [def('build', 'designer', 2, { next: 'review' }), def('review', 'reviewer', 1, { name: 'Code review', verdict: true, next: 'critique' }), def('critique', 'visual-critic', 1)] };
+    n = 0;
+    const later = [stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 }), stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' }), stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' })];
+    expect(completionGate({ ...base, workflow: advisory, stages: later }).pass).toBe(true);
+    // A re-review reached only after a fix stands for the review before it (as on main): its PASS clears the earlier FAIL.
+    const rereview: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'review-fix-rereview',
+      stages: [
+        def('implement', 'implementer', 2, { next: 'review' }),
+        def('review', 'reviewer', 1, { name: 'Review', verdict: true, onFail: 'fix' }),
+        def('fix', 'fixer', 2, { next: 'rereview' }),
+        def('rereview', 'reviewer', 1, { name: 'Re-review', verdict: true, onFail: 'fix' }),
+      ],
+    };
+    n = 0;
+    const fixed = [
+      stage({ stageKey: 'implement', role: 'implementer', permissionLevel: 2 }),
+      stage({ stageKey: 'review', role: 'reviewer', verdict: 'FAIL' }),
+      stage({ stageKey: 'fix', role: 'fixer', permissionLevel: 2 }),
+      stage({ stageKey: 'rereview', role: 'reviewer', verdict: 'PASS' }),
+    ];
+    expect(completionGate({ ...base, workflow: rereview, stages: fixed }).pass).toBe(true);
+    const refailed = [...fixed.slice(0, 3), stage({ stageKey: 'rereview', role: 'reviewer', verdict: 'FAIL' })];
+    expect(completionGate({ ...base, workflow: rereview, stages: refailed }).failures).toEqual([
+      expect.objectContaining({ code: 'review', message: 'Re-review has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'rereview' } }] }),
+    ]);
   });
 });
 
@@ -654,6 +800,13 @@ describe('strategy outcomes', () => {
     expect(evaluateStrategy(worker, [{ kind: 'passed', source: 'worker', stageKey: 'plan' }])).toBeNull();
     expect(evaluateStrategy(worker, [{ kind: 'passed', source: 'worker', stageKey: 'implement' }])).toMatchObject({ status: 'SUCCEEDED' });
     expect(evaluateStrategy(worker, [failed('h1', null, 'worker', 'implement')])).toMatchObject({ status: 'FAILED' });
+    // A verdict is judged by the same judge role: a visual critique passing is not the failed code review passing,
+    // while a re-review after a fix speaks for the review before it.
+    const roles: Record<string, string> = { critique: 'visual-critic', review: 'reviewer', rereview: 'reviewer' };
+    const review = { ...run, failureSource: 'review', failureStageKey: 'review', failureCount: null };
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'critique' }], (k) => roles[k])).toBeNull();
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'critique' }, { kind: 'passed', source: 'review', stageKey: 'review' }], (k) => roles[k])).toMatchObject({ status: 'SUCCEEDED' });
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'rereview' }], (k) => roles[k])).toMatchObject({ status: 'SUCCEEDED' });
   });
 
   it('reads observations from stage results recorded after the strategy started', () => {
@@ -739,6 +892,12 @@ describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
     { id: 'change_agent:fix:codex', kind: 'change_agent', level: 5, label: 'Hand Fix to Codex', description: 'A different agent.', actions: [], fingerprint: 'f2', targetStageKey: 'fix', targetAgentId: 'codex' },
   ];
 
+  it('says which judge gave the latest review verdict (a visual critique is not the code review)', () => {
+    const service = new SnapshotService(null as never, null as never, null as never, { has: () => false } as never);
+    const text = service.describe({ ...snapshot(), latestReview: { verdict: 'PASS', summary: 'Both themes hold', at: 'now', stage: 'Visual critique' } });
+    expect(text).toContain('Last review (Visual critique): passed — Both themes hold.');
+  });
+
   it('tells the recovery model how to read the state, that candidates are ordered, and what each field is for', () => {
     const prompt = recoveryPrompt(snapshot(), 'the same failure keeps repeating', candidates(), fenceEvidence('current failure (OBSERVED)', '2 failed'), { category: 'CODE_OR_TEST', summary: 'Code or test: 2 failed' });
     expect(prompt).toMatch(/^Mode: recovery$/m);
@@ -779,5 +938,25 @@ describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
     expect(instruction).not.toContain('- REPLAN:');
     expect(instruction).toContain('AGENTS: codex (Codex)');
     expect(instruction).toContain('return the one or two actions that carry it out');
+  });
+});
+
+describe('repair stage', () => {
+  it('falls back to a designer stage that can only edit, never the paid assets stage', () => {
+    const def = (key: string, role: WorkflowProfile['stages'][number]['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'frontend-design',
+      stages: [def('assets', 'designer', 3, { next: 'build' }), def('build', 'designer', 2, { next: 'check' }), def('check', 'tester', 2, { kind: 'verify', next: 'complete' })],
+    };
+    expect(repairStage(design, 'check')?.key).toBe('build');
+    // Existing workflows are unchanged: the fixer first.
+    expect(repairStage(WORKFLOW, 'verify')?.key).toBe('fix');
+    // Only stages that could spend (a Level 3 fixer and designer): no implicit repair target at all.
+    const spending: WorkflowProfile = { ...design, stages: [def('assets', 'designer', 3, { next: 'fix' }), def('fix', 'fixer', 3, { next: 'check' }), def('check', 'tester', 2, { kind: 'verify', next: 'complete' })] };
+    expect(repairStage(spending, 'check')).toBeNull();
+    // The workflow's own onFail is its explicit choice and still wins.
+    expect(repairStage({ ...spending, stages: spending.stages.map((st) => (st.key === 'check' ? { ...st, onFail: 'fix' } : st)) }, 'check')?.key).toBe('fix');
   });
 });

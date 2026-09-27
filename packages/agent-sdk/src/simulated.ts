@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -25,6 +26,8 @@ import type {
  * Scenario markers in the task description steer it:
  *   [sim:review-fail-once]   reviewer returns FAIL once, then PASS
  *   [sim:review-fail-always] reviewer always returns FAIL
+ *   [sim:critic-fail-once]   visual critic returns FAIL once, then PASS
+ *   [sim:critic-fail-always] visual critic always returns FAIL
  *   [sim:usage-limit]        implementer hits a usage limit on its first run
  *   [sim:fail:<role>]        that role always crashes
  *   [sim:slow]               every run takes several seconds
@@ -49,9 +52,18 @@ import type {
  *   [sim:team-overlap]       ...both claiming shared/
  *   [sim:team-out-of-scope]  the beta worker also changes sim-output.md, outside the paths it owns
  *   [sim:fail-unit-once:<key>] the Stage Team worker of that unit crashes on its first run
+ *   [sim:assets]             the designer also writes two PNGs in public/generated/ and a manifest.json naming both (with SHA-256)
+ *   [sim:assets-unnamed]     ...plus an extra PNG the manifest does not name
+ *   [sim:assets-bad-hash]    ...with a manifest whose SHA-256 for hero-2.png is wrong
+ *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
+ *   [sim:judge-none]         ...or names none
+ *
+ * Role `art-director` answers like the planner (a plan) and `visual-critic` like the reviewer (a verdict).
  *
  * A Stage Team worker (its prompt names `- Unit: … (key: k)` and `- Paths you own: p/`)
  * writes p/sim-k.md instead of sim-output.md; role `decomposer` answers with a manifest.
+ * A variant (`- Your approach:`) writes sim-output.md with its key on the line and
+ * variant-k.md; role `judge` answers `WINNER: <key>`.
  *
  * Usage: every finished or crashed run reports deterministic token counts
  * derived from the prompt and output sizes. The simulated `claude` also
@@ -156,7 +168,8 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       repositoryRead: true,
       repositoryWrite: true,
       commandExecution: false,
-      images: false,
+      // Like the real CLIs: Codex takes pictures on its command line (`-i`), Claude Code does not.
+      images: this.id === 'codex',
       interactive: false,
       nonInteractive: true,
       modelSelection: true,
@@ -190,7 +203,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
   }
 
   async execute(input: AgentExecutionInput): Promise<AgentExecutionHandle> {
-    const role = /^Role: (\w+)/m.exec(input.prompt)?.[1]?.toLowerCase() ?? 'agent';
+    const role = /^Role: ([\w-]+)/m.exec(input.prompt)?.[1]?.toLowerCase() ?? 'agent';
     const taskId = /^Task: (TASK-\d+)/m.exec(input.prompt)?.[1] ?? 'TASK';
     const has = (marker: string) => input.prompt.includes(`[sim:${marker}]`);
     const slow = has('slow');
@@ -269,10 +282,14 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         };
       }
 
+      if (input.images?.length) emit(`[${role}] images: ${input.images.map((i) => path.basename(i)).join(', ')}`);
       let output: string;
       switch (role) {
         case 'investigator':
           output = `## Findings\n\nThe repository at ${path.basename(input.cwd)} was inspected.\n\n## Relevant files\n\n- README.md\n\n## Risks\n\nNone found.`;
+          break;
+        case 'art-director':
+          output = `## Summary\n\nSimulated art direction: calm, precise, warm.\n\n## Direction\n\nCalm product-led direction.\n\n## Design values\n\n- Accent #0a7a5a on light, #3fd0a0 on dark\n\n## Asset list\n\nNo generated media.\n\n## Media budget\n\n$0`;
           break;
         case 'planner': {
           output = `## Goal\n\nComplete the requested change.\n\n## Implementation Plan\n\n1. Update sim-output.md\n\n## Success Criteria\n\n- sim-output.md contains the change\n- tests pass`;
@@ -289,7 +306,8 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           break;
         }
         case 'implementer':
-        case 'fixer': {
+        case 'fixer':
+        case 'designer': {
           if (has('needs-decision') && !/ANSWER:/.test(input.prompt)) {
             output =
               '## Summary\n\nBlocked. No code was changed: the two tests expect opposite results for the same input.\n\n' +
@@ -306,10 +324,27 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           const owned = /^- Paths you own: (.+)$/m.exec(input.prompt)?.[1]?.split(', ')[0];
           const unitFile = unitKey && owned ? (owned.endsWith('/') ? `${owned}sim-${unitKey}.md` : owned) : null;
           if (unitFile) await mkdir(path.dirname(path.join(input.cwd, unitFile)), { recursive: true });
-          const files = unitFile ? [unitFile, ...(has('team-out-of-scope') && unitKey === 'beta' ? [out] : [])] : folders.length ? folders.map((folder) => `${folder}/${out}`) : [out];
+          // A competing variant changes the shared file its own way, plus a file only it writes.
+          const variant = unitKey && /^- Your approach: /m.test(input.prompt) ? unitKey : null;
+          const files = unitFile ? [unitFile, ...(has('team-out-of-scope') && unitKey === 'beta' ? [out] : [])] : folders.length ? folders.map((folder) => `${folder}/${out}`) : variant ? [out, `variant-${variant}.md`] : [out];
           for (const rel of files) {
-            await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change${variant ? ` by variant ${variant}` : ''} at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
+          }
+          if (has('assets') && role === 'designer') {
+            const dir = path.join(input.cwd, 'public', 'generated');
+            await mkdir(dir, { recursive: true });
+            const png = (seed: number) => Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000100000000908020000', 'hex'), Buffer.from([seed, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82, 0x00, 0xff, 0x10])]);
+            const assets = [
+              { name: 'hero-1.png', data: png(1), usedIn: 'the hero' },
+              { name: 'hero-2.png', data: png(2), usedIn: 'the feature cards' },
+            ];
+            const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+            for (const a of assets) await writeFile(path.join(dir, a.name), a.data);
+            if (has('assets-unnamed')) await writeFile(path.join(dir, 'extra.png'), png(3));
+            const entries = assets.map((a) => ({ path: `public/generated/${a.name}`, sha256: has('assets-bad-hash') && a.name === 'hero-2.png' ? '0'.repeat(64) : sha(a.data), bytes: a.data.length, width: 16, height: 9, model: 'fal-ai/flux/dev', usedIn: a.usedIn }));
+            await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify({ assets: entries }, null, 2)}\n`);
+            files.push(...assets.map((a) => `public/generated/${a.name}`), 'public/generated/manifest.json', ...(has('assets-unnamed') ? ['public/generated/extra.png'] : []));
           }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {
@@ -319,7 +354,21 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             }
           }
           base.filesChanged = files;
-          output = `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          output =
+            role === 'designer'
+              ? `## Summary\n\nSimulated designer run: restyled sim-output.md.\n\n## Design decisions\n\n- Kept the existing tokens.\n\n## Changes\n\n- Updated sim-output.md\n\n## Visual verification\n\nNot run (simulated).`
+              : `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          break;
+        }
+        case 'judge': {
+          const keys = [...input.prompt.matchAll(/^### Variant `([a-z0-9-]+)`/gm)].map((m) => m[1]!);
+          const pick = has('judge-last') ? keys.at(-1) : keys[0];
+          output = has('judge-none') || !pick ? '## Summary\n\nCompared the variants; none is clearly better.' : `## Summary\n\nKept ${pick}: complete and verified.\n\nWINNER: ${pick}`;
+          break;
+        }
+        case 'visual-critic': {
+          const fail = has('critic-fail-always') || (has('critic-fail-once') && this.once(`${taskId}:critic`));
+          output = fail ? '## Visual review\n\n- The dark theme hero loses contrast.\n\nVERDICT: FAIL' : '## Visual review\n\nBoth themes hold up at every width.\n\nVERDICT: PASS';
           break;
         }
         case 'reviewer': {
@@ -401,7 +450,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         default:
           output = `Simulated ${role} output.`;
       }
-      if ((role === 'reviewer' || role === 'verifier') && !has('review-miss-coverage') && !(has('review-miss-coverage-once') && this.once(`${taskId}:${role}:coverage`))) {
+      if ((role === 'reviewer' || role === 'verifier' || role === 'visual-critic') && !has('review-miss-coverage') && !(has('review-miss-coverage-once') && this.once(`${taskId}:${role}:coverage`))) {
         // A diligent reviewer names every file the diff did not show (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A).
         const notShown = [...input.prompt.matchAll(/^- (.+?) \([^\n]*\) → read: /gm)].map((m) => m[1]!);
         if (notShown.length) output = output.replace(/\n(VERDICT: \w+)\s*$/, `\n## Files reviewed\n\n${[...new Set(notShown)].map((p) => `- ${p}: read from disk`).join('\n')}\n\n$1`);

@@ -1290,4 +1290,56 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE usage_events ADD COLUMN work_unit_key TEXT;
     `,
   },
+  {
+    // Paid media generation (docs/systems/design-agent.md): the spend gate
+    // reserves each paid call's estimate before it runs and settles it after
+    // (charged, unknown when the outcome is unknown, released when the vendor
+    // refused it before billing). Rows are never deleted; only a reserved row
+    // changes, once. Additive only.
+    version: 20,
+    name: 'media spend',
+    sql: `
+      CREATE TABLE media_usage_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        stage_id TEXT,
+        execution_id TEXT,
+        capability TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        units REAL NOT NULL,
+        estimated_nanos INTEGER NOT NULL,
+        basis TEXT NOT NULL,
+        status TEXT NOT NULL,
+        job_id TEXT,
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        settled_at TEXT
+      );
+      CREATE INDEX idx_media_usage_task ON media_usage_events(task_id, created_at);
+      CREATE INDEX idx_media_usage_created ON media_usage_events(created_at);
+    `,
+  },
+  {
+    // OAuth sign-in for HTTP MCP servers (docs/systems/mcp.md#oauth). The
+    // sign-in (client registration, tokens, a verifier in progress) is one
+    // JSON value sealed with the broker's key and bound to the server id; the
+    // two times are kept beside it so status needs no decryption. Additive only.
+    version: 21,
+    name: 'mcp oauth',
+    sql: `
+      ALTER TABLE mcp_servers ADD COLUMN auth TEXT NOT NULL DEFAULT 'none';
+      ALTER TABLE mcp_servers ADD COLUMN oauth_scope TEXT;
+      CREATE TABLE mcp_oauth (
+        server_id TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+        ciphertext TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        signed_in_at TEXT,
+        expires_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

@@ -1,24 +1,26 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
+import { git } from '@acc/git';
 import { PROMPT_PLACEHOLDERS, placeholdersIn, unknownPlaceholders, type CommandKind, type TestRun } from '@acc/shared';
 import { RUN_CONTEXT, renderTemplate } from '../src/engine/context.js';
 import { SKILLS_PROMPT_SECTION } from '../src/engine/tooling.js';
-import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 const PROMPTS_DIR = path.join(ROOT, 'prompts');
 const templates = Object.fromEntries(readdirSync(PROMPTS_DIR).map((f) => [f.replace(/\.md$/, ''), readFileSync(path.join(PROMPTS_DIR, f), 'utf8')]));
-const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer'];
-const JUDGE_ROLES = ['reviewer', 'verifier'];
+const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer', 'designer', 'art-director'];
+const JUDGE_ROLES = ['reviewer', 'verifier', 'visual-critic'];
 
 /**
  * The template-to-parser contract (docs/systems/prompts.md): what the built-in
  * templates promise the engine, the report and the Chairman can read.
  */
 describe('built-in prompt templates', () => {
-  it('cover the six agent roles and use only placeholders the builder fills', () => {
-    expect(Object.keys(templates).sort()).toEqual(['fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier']);
+  it('cover the nine agent roles and use only placeholders the builder fills', () => {
+    expect(Object.keys(templates).sort()).toEqual(['art-director', 'designer', 'fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier', 'visual-critic']);
     for (const [role, body] of Object.entries(templates)) {
       expect(unknownPlaceholders(body), `${role}.md`).toEqual([]);
       expect(placeholdersIn(body).length, `${role}.md uses placeholders`).toBeGreaterThan(5);
@@ -49,15 +51,28 @@ describe('built-in prompt templates', () => {
   });
 
   it('give each role the loop context it lacked', () => {
-    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner']) {
+    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner', 'designer', 'art-director', 'visual-critic']) {
       expect(templates[role], role).toContain('{{diff}}');
       expect(templates[role], role).toContain('{{test_results}}');
       expect(templates[role], role).toContain('{{review}}');
     }
-    for (const role of ['investigator', 'planner', 'implementer']) expect(templates[role], role).toContain('{{attachments}}');
-    for (const role of ['implementer', 'fixer']) expect(templates[role], role).toContain('{{verification_commands}}');
-    for (const role of ['reviewer', 'verifier', 'fixer']) expect(templates[role], role).toContain('{{implementation_report}}');
-    for (const role of ['reviewer', 'verifier', 'fixer']) expect(templates[role], role).toContain('{{verification_report}}');
+    for (const role of ['investigator', 'planner', 'implementer', 'designer', 'reviewer', 'verifier']) expect(templates[role], role).toContain('{{attachments}}');
+    // Pictures are evidence for visual work: the designer, reviewer and verifier see what the Control Center captured.
+    for (const role of ['designer', 'reviewer', 'verifier', 'visual-critic', 'art-director']) expect(templates[role], role).toContain('{{screenshots}}');
+    for (const role of ['designer', 'art-director', 'visual-critic']) expect(templates[role], role).toContain('{{design_context}}');
+    // The art direction is what the Assets stage spends against: it must state a budget and an asset list.
+    expect(templates['art-director']).toContain('- `## Media budget`');
+    expect(templates['art-director']).toContain('- `## Asset list`');
+    expect(templates['art-director']).toContain('- `## Success Criteria`');
+    for (const role of ['implementer', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_commands}}');
+    for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{implementation_report}}');
+    for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_report}}');
+    // The designer's two modes, and the rules that keep a paid or committing action out of the wrong stage.
+    expect(templates.designer).toContain('**`Stage: assets`**');
+    expect(templates.designer).toContain('You never call a paid generation tool here');
+    expect(templates.designer).toContain('**Never commit, push or deploy**');
+    expect(templates.designer).toContain('- `## Spend`');
+    expect(templates.designer).toContain('- `## Visual verification`');
     expect(templates.investigator).toContain('{{investigation}}');
     expect(templates.verifier).toContain("Repeat the review's `NEEDS OPERATOR:` items");
     expect(templates.planner).toContain('- `## Success Criteria`');
@@ -113,6 +128,75 @@ describe('rendered stage prompts', () => {
     expect(rec, `prompt artifact of ${stageKey} run ${run}`).toBeDefined();
     return readFileSync(path.isAbsolute(rec!.path) ? rec!.path : path.join(t.dataDir, rec!.path), 'utf8');
   };
+
+  it("give the designer the repository's design standard and the reviewer the screenshots kept so far", async () => {
+    const repoPath = await makeRepo({ files: { 'design.md': '# Design standard\n\nSemantic tokens only.\n' } });
+    mkdirSync(path.join(repoPath, 'design'), { recursive: true });
+    writeFileSync(path.join(repoPath, 'design', 'brief.md'), 'Audience: shoppers in Casablanca. Brand words: calm, precise, warm.\n');
+    writeFileSync(path.join(repoPath, 'design', 'tokens.css'), ':root { --color-accent: #0a7; }\n');
+    for (const args of [['add', '.'], ['commit', '-m', 'design memory']]) expect((await git(repoPath, args)).code).toBe(0);
+    t.services.workflows.save('design-context', {
+      name: 'Design context',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Design review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the landing page [sim:slow]', { workflowId: 'design-context' });
+    await waitFor(() => t.services.store.latestStage(id, 'build'), (s) => s?.status === 'RUNNING', 30_000);
+    // A capture made while the designer works (as the browser tools keep them).
+    await t.services.artifacts.write(id, { name: 'landing-phone-dark.png', type: 'screenshot', content: Buffer.from('89504e470d0a1a0a', 'hex'), stageKey: 'build' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const design = promptOf(id, 'build');
+    expect(design).toMatch(/- design\.md \(1 KB\): the repository's design standard: read it in full before designing/);
+    expect(design).toContain('- design/tokens.css (1 KB): design memory');
+    expect(design).toContain('### design/brief.md\n\nAudience: shoppers in Casablanca. Brand words: calm, precise, warm.');
+    // The designer keeps that memory for the next design task.
+    expect(design).toMatch(/Keep the design memory\.\*\* When the repository has a `design\/` folder.+`design\/brief\.md`/);
+    const review = promptOf(id, 'review');
+    expect(review).toMatch(/- landing-phone-dark\.png \(screenshot, stage build, 1 KB\): .+landing-phone-dark\.png/);
+  }, 90_000);
+
+  it('give a multi-repository designer each repository\'s design memory, by folder', async () => {
+    const web = await makeRepo({ files: { 'design.md': '# Design standard\n\nSemantic tokens only.\n' } });
+    mkdirSync(path.join(web, 'design'), { recursive: true });
+    writeFileSync(path.join(web, 'design', 'brief.md'), 'Audience: shoppers in Casablanca.\n');
+    for (const args of [['add', '.'], ['commit', '-m', 'design memory']]) expect((await git(web, args)).code).toBe(0);
+    const api = await makeRepo();
+    t.services.workflows.save('design-across', {
+      name: 'Design across',
+      maxFixCycles: 0,
+      stages: [{ key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'complete' }],
+    });
+    const apiId = await addRepo(t, api);
+    const webId = await addRepo(t, web);
+    const id = await createTask(t, apiId, 'Restyle both', { workflowId: 'design-across', linkedRepositoryIds: [webId] });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const folder = t.services.store.listLinkedRepositories(id)[0]!.folder;
+    const design = promptOf(id, 'build');
+    // The workspace root holds only folders: the web repository's standard and brief are named inside its folder.
+    expect(design).toMatch(new RegExp(`- ${folder}/design\\.md \\(1 KB\\): the repository's design standard`));
+    expect(design).toContain(`### ${folder}/design/brief.md\n\nAudience: shoppers in Casablanca.`);
+  }, 90_000);
+
+  it('never read design memory through a link that leaves the repository', async () => {
+    const outside = mkdtempSync(path.join(os.tmpdir(), 'acc-outside-'));
+    writeFileSync(path.join(outside, 'brief.md'), 'Private notes from another folder.\n');
+    const repoPath = await makeRepo();
+    symlinkSync(outside, path.join(repoPath, 'design'), 'dir');
+    for (const args of [['add', 'design'], ['commit', '-m', 'design link']]) expect((await git(repoPath, args)).code).toBe(0);
+    t.services.workflows.save('design-link', {
+      name: 'Design link',
+      maxFixCycles: 0,
+      stages: [{ key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'complete' }],
+    });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the landing page', { workflowId: 'design-link' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const design = promptOf(id, 'build');
+    expect(design).not.toContain('Private notes from another folder');
+    expect(design).not.toContain('design/brief.md (');
+  }, 90_000);
 
   it('are saved for every agent stage under the role name', async () => {
     const repoPath = await makeRepo();

@@ -15,7 +15,13 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  // Only ever served as a download (attachment): an SVG opened inline can run script.
+  '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
   '.sql': 'text/plain',
   '.html': 'text/plain',
 };
@@ -95,6 +101,22 @@ export class ArtifactService {
     const buffer = await readFile(this.absolutePath(rec));
     const truncated = buffer.length > maxBytes;
     return { content: buffer.subarray(0, maxBytes).toString('utf8'), truncated };
+  }
+
+  /** The latest artifact text of a type from each stage that wrote one, oldest stage first. */
+  async latestTextPerStage(taskId: string, type: ArtifactType, maxBytes = 200_000): Promise<string[]> {
+    const latest = new Map<string, ArtifactRecord>();
+    for (const rec of this.store.listArtifacts(taskId)) if (rec.type === type) latest.set(rec.stageKey ?? '', rec);
+    const texts: string[] = [];
+    for (const rec of latest.values()) {
+      try {
+        const { content, truncated } = await this.read(rec, maxBytes);
+        texts.push(truncated ? `${content}\n\n[truncated]` : content);
+      } catch {
+        // A missing file reads as no text, as in latestText.
+      }
+    }
+    return texts;
   }
 
   /** Latest artifact text of a type, or null. Used by the context builder. */

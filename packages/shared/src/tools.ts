@@ -137,6 +137,8 @@ export interface McpToolView {
   description: string;
   readOnlyHint: boolean | null;
   destructiveHint: boolean | null;
+  /** The tool's own input schema (16 KB at most), published to agents; absent for servers checked before it was kept. */
+  inputSchema?: Record<string, unknown> | null;
 }
 
 export interface McpServerView {
@@ -153,12 +155,19 @@ export interface McpServerView {
   /** When set, only these tools are exposed. */
   allowedTools: string[] | null;
   timeoutMs: number;
+  /** `oauth`: an HTTP server the operator signs in to (docs/systems/mcp.md#oauth); its tokens are sealed and never shown. */
+  auth: 'none' | 'oauth';
+  /** OAuth scopes to ask for, space-separated; null lets the server decide. */
+  oauthScope: string | null;
+  /** Sign-in state of an `oauth` server (never the tokens); null for other servers. */
+  oauth: { signedIn: boolean; signedInAt: string | null; expiresAt: string | null } | null;
   health: { ok: boolean; serverName: string | null; serverVersion: string | null; error: string | null; checkedAt: string; tools: McpToolView[] } | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export const CREDENTIAL_KINDS = ['cloudflare', 'github', 'postgres', 'mysql', 'http', 'npm', 'other'] as const;
+/** `media`: an image or video generation key, read by name by the media tools only; it never takes an environment variable. */
+export const CREDENTIAL_KINDS = ['cloudflare', 'github', 'postgres', 'mysql', 'http', 'npm', 'media', 'other'] as const;
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
 /** Environment variable a credential kind is injected as, unless the credential names its own. */
@@ -169,6 +178,7 @@ export const CREDENTIAL_KIND_ENV: Record<CredentialKind, string | null> = {
   mysql: 'MYSQL_PWD',
   http: null,
   npm: 'NPM_TOKEN',
+  media: null,
   other: null,
 };
 
@@ -304,6 +314,35 @@ export const executionSettingsSchema = z.object({
 });
 export type ExecutionSettings = z.infer<typeof executionSettingsSchema>;
 
+/**
+ * Paid media generation (docs/systems/design-agent.md). Off until the operator
+ * turns it on (PLAN §11: nothing is ever bought on the operator's behalf by
+ * default). Each paid call's estimate must fit what the task has left of its
+ * budget and every media budget that stops runs (Usage & Costs → Budgets).
+ */
+export const mediaSettingsSchema = z.object({
+  allowPaidGeneration: z.boolean().default(false),
+  /** Estimated media spend one task may reserve, in USD. */
+  taskBudgetUsd: z.number().min(0).max(1000).default(5),
+  /** Per-model price overrides in USD per unit (an image, a second of video, one edit), used for estimates. */
+  prices: z
+    .record(z.string().min(3).max(120).regex(/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*){1,5}$/i), z.number().min(0).max(100))
+    .refine((p) => Object.keys(p).length <= 100, 'At most 100 prices')
+    .default({}),
+});
+export type MediaSettings = z.infer<typeof mediaSettingsSchema>;
+
+/**
+ * Capability profiles a workflow stage may choose for its agents (`toolProfile`).
+ * `operator` (everything) is for the operator's own sessions, never a stage.
+ */
+export const STAGE_TOOL_PROFILES = ['analysis', 'general', 'web-development', 'cloudflare-worker', 'android-development', 'python', 'frontend-design'] as const;
+export type StageToolProfile = (typeof STAGE_TOOL_PROFILES)[number];
+
+/** Widths the browser tools open pages at (docs/systems/design-agent.md), narrowest real device first. */
+export const BROWSER_VIEWPORTS = ['desktop', 'phone', 'tablet', 'wide', 'narrow-desktop'] as const;
+export type BrowserViewport = (typeof BROWSER_VIEWPORTS)[number];
+
 export const repositoryRuntimeSchema = z.object({
   /** How to start the app for verification (e.g. `pnpm dev --port 5173 --strictPort`). */
   devCommand: z.string().max(1000).nullable().default(null),
@@ -314,6 +353,10 @@ export const repositoryRuntimeSchema = z.object({
   verifyPaths: z.array(z.string().max(300).regex(/^\//)).max(20).default(['/']),
   /** browser: real Chromium at desktop and phone widths; http: status checks only (APIs, Workers). */
   verifyMode: z.enum(['browser', 'http']).default('browser'),
+  /** Widths the browser check opens each page at. */
+  verifyViewports: z.array(z.enum(BROWSER_VIEWPORTS)).min(1).max(5).default(['desktop', 'phone']),
+  /** Colour schemes each page is checked in; empty = the browser's default (light) only. */
+  verifyColorSchemes: z.array(z.enum(['light', 'dark'])).max(2).default([]),
 });
 export type RepositoryRuntime = z.infer<typeof repositoryRuntimeSchema>;
 
@@ -335,8 +378,11 @@ export const mcpServerInputSchema = z
     permissionLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]).default(2),
     allowedTools: z.array(z.string().min(1).max(200)).max(500).nullable().default(null),
     timeoutMs: z.number().int().min(1000).max(600_000).default(60_000),
+    auth: z.enum(['none', 'oauth']).default('none'),
+    oauthScope: z.string().trim().max(500).regex(/^[\x21\x23-\x5b\x5d-\x7e ]*$/, 'Scope names separated by spaces').nullable().default(null),
   })
-  .refine((v) => (v.transport === 'stdio' ? Boolean(v.command) : Boolean(v.url)), { message: 'A stdio server needs a command; an HTTP server needs a URL' });
+  .refine((v) => (v.transport === 'stdio' ? Boolean(v.command) : Boolean(v.url)), { message: 'A stdio server needs a command; an HTTP server needs a URL' })
+  .refine((v) => v.auth === 'none' || v.transport === 'http', { message: 'Only an HTTP server signs in with OAuth', path: ['auth'] });
 export type McpServerInput = z.input<typeof mcpServerInputSchema>;
 
 export const credentialInputSchema = z.object({

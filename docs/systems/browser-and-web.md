@@ -7,7 +7,7 @@ sources:
   - packages/tools/src/packs/cloudflare.ts
   - packages/mcp/src/bridge.ts
   - apps/orchestrator/src/http/tool-routes.ts
-verified_at: 0d4eaf8
+verified_at: 57af61a
 ---
 
 # Browser pages, web research and past Worker logs
@@ -56,13 +56,59 @@ things the agents could not do.
   'accept'}` says otherwise, and are logged either way.
 - **`visible: true`** shows the window on the operator's desktop; with no
   desktop it falls back to headless and says so.
+- **Display.** `browser.open`, `browser.check_page`, `browser.screenshot`,
+  `browser.run_flow` and `browser.accessibility` take `colorScheme` (`light`,
+  `dark`, `no-preference`), `reducedMotion` (`reduce`, `no-preference`) and
+  `deviceScaleFactor` (1-3), applied to the page's context
+  (`contextOptions` in [browser.ts](../../packages/tools/src/packs/browser.ts)).
+  Viewports: `phone` 390×844, `tablet` 768×1024, `narrow-desktop` 1024×768,
+  `desktop` 1280×800, `wide` 1440×900.
+
+## Design checks ([browser.ts](../../packages/tools/src/packs/browser.ts))
+
+| Capability | Level | Does |
+|---|---|---|
+| `browser.visual_matrix` | 1 | The page at up to five widths in light and dark: one contact sheet per scheme for the model (composed in Chromium from `data:` URLs, scripts off, network refused; JPEG ≤3 MB), every capture kept as an artifact, and status, console errors and horizontal overflow per view |
+| `browser.accessibility` | 1 | axe-core WCAG 2.2 AA at a viewport and colour scheme; each violation with up to ten failing elements (axe's CSS selector, the element's HTML and axe's failure summary, redacted) |
+| `browser.visual_diff` | 1 (2 with `update`) | The page at a width and scheme (motion reduced, animations and caret off, full page) against `<baselineDir>/<name>-<viewport>-<scheme>.png` (default folder `visual-baselines`): pixels whose channels differ by more than 24 counted in a sealed page (scripts only ours, every request refused); `matches` when the exact changed share is within `threshold` percent (0.1; 0 allows no changed pixel; the percent shown is rounded for display only) and the size did not change; a grey picture with each changed pixel red (returned and kept as a screenshot artifact). `update` records or replaces the baseline: `classify` raises that call to Level 2 (it writes the file; protected paths refused). Comparing never writes |
+| `browser.audit` | 1, read-only | The page on this machine, unthrottled: LCP and CLS (PerformanceObserver, buffered), FCP, TTFB, bytes by resource type (`request.sizes()`), and findings: LCP over 2.5 s, CLS over 0.1 (decided on the measured value, shown to four decimals), a page over 2 MB, images over 200 KB, `<img>` without width and height, images wider than twice their shown size × pixel ratio, below-the-fold images without `loading="lazy"`, videos without a poster |
+| `browser.render_html` | 1, read-only | HTML the agent wrote (a style tile, up to 1 MB) drawn at one width in light and dark, as tall as its `<html>` box or its scroll height, whichever is taller (`html, body { height: 100% }` is not cut at one viewport), cut at 4000 px; each picture returned for the model (PNG, else JPEG ≤3 MB) and kept as a `tile-<name>-<scheme>.png` screenshot artifact |
+
+All five, with `media.image.view`, `media.video.frames`,
+`design.contrast_matrix` and `design.lint_tokens`, are in the `LOOK` set of
+the `analysis` and `general` profiles; `web-development`,
+`cloudflare-worker` and `frontend-design` list the browser ones through
+`browser.*` (`frontend-design` also `media.*` and `design.*`)
+([profiles.ts](../../packages/tools/src/profiles.ts),
+[design-agent.md](design-agent.md)).
+
+**`browser.render_html` isolation** (`renderHtml` in
+[browser.ts](../../packages/tools/src/packs/browser.ts)): its own Chromium
+launched with a proxy on a closed port that loopback does not bypass
+(`<-loopback>`) and DNS prefetch off, so a preconnect or anything request
+routing never sees goes nowhere; script off for the whole browser
+(`--blink-settings=scriptEnabled=false`) and sandboxed frames kept in the
+page's process (`--disable-features=IsolateSandboxedIframes`), so a
+`sandbox="allow-scripts"` frame, which ran in a process the per-context
+switch did not always reach, runs no script and sends no WebRTC UDP past the
+proxy (our own scripts, the pixel compare and contact sheets, run in
+another browser, never this one); a context with scripts off, service
+workers blocked and downloads refused; every routed request refused and
+listed (URL redacted, first 50) with a summary naming the hosts, a refused
+navigation (a meta refresh, a frame) answered 204 so the page stays on the
+tile. Only `data:` URLs load. Nothing is written into the repository. **Horizontal
+overflow** compares `scrollWidth` with `documentElement.clientWidth`: under
+mobile emulation `innerWidth` grows to the content's width, so comparing with
+it never caught a page wider than the phone.
 
 ## Pictures the model sees
 
 `OperationResult.images` ([sdk.ts](../../packages/tools/src/sdk.ts)) carries
-PNGs of at most 3 MB for the model: `browser.open`, `browser.snapshot`/`act`
+PNGs (or JPEGs) of at most 3 MB for the model: `browser.open`, `browser.snapshot`/`act`
 with `screenshot`, `browser.screenshot`, `browser.check_page` and the
-screenshot steps of `browser.run_flow` fill it. `POST /api/tool-session/call`
+screenshot steps of `browser.run_flow` fill it, as do `browser.render_html`, `media.image.view`,
+`media.video.frames` ([design-agent.md](design-agent.md)) and the PNG/JPEG
+image blocks an outside MCP server returns ([mcp.md](mcp.md)). `POST /api/tool-session/call`
 returns up to 3 of them base64-encoded; the bridge
 ([bridge.ts](../../packages/mcp/src/bridge.ts)) turns each into an MCP `image`
 content block after the text. They are never stored; the screenshot is also

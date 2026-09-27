@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAssignment, validateWorkflow, workflowPath, type StageDefinitionInput } from '../src/index.js';
+import { isJudgeRole, isPlanRole, isWriteRole, judgeKind, resolveAssignment, ROLE_CLASS, ROLES, roleClass, validateWorkflow, workflowPath, WRITE_ROLES, type StageDefinitionInput } from '../src/index.js';
 
 const stage = (s: Partial<StageDefinitionInput> & { key: string; next: string }): StageDefinitionInput => ({
   name: s.key,
@@ -53,6 +53,85 @@ describe('validateWorkflow', () => {
     const { issues } = validateWorkflow({ id: 'x', name: 'X', stages: [{ key: 'Bad Key', name: 'a', role: 'nope', next: 'complete' }] });
     expect(issues.some((i) => i.stageIndex === 0 && i.field === 'key')).toBe(true);
     expect(issues.some((i) => i.stageIndex === 0 && i.field === 'role')).toBe(true);
+  });
+
+  it('accepts the designer role and counts it as a write role', () => {
+    const design = {
+      id: 'design',
+      name: 'Design',
+      stages: [
+        stage({ key: 'build', role: 'designer', next: 'review', permissionLevel: 2 }),
+        stage({ key: 'review', role: 'reviewer', next: 'complete', verdict: true }),
+      ],
+    };
+    expect(validateWorkflow(design).issues).toEqual([]);
+    expect(WRITE_ROLES).toEqual(['implementer', 'fixer', 'designer']);
+    expect(isWriteRole('designer')).toBe(true);
+    expect(isWriteRole('reviewer')).toBe(false);
+    expect(isWriteRole(undefined)).toBe(false);
+  });
+
+  it('gives every role a class: the art director plans and the visual critic judges like a reviewer', () => {
+    expect(Object.keys(ROLE_CLASS).sort()).toEqual([...ROLES].sort());
+    expect(roleClass('art-director')).toBe('plan');
+    expect(isPlanRole('art-director')).toBe(true);
+    expect(isPlanRole('planner')).toBe(true);
+    expect(isPlanRole('designer')).toBe(false);
+    expect(isJudgeRole('visual-critic')).toBe(true);
+    expect(judgeKind('visual-critic')).toBe('review');
+    expect(judgeKind('reviewer')).toBe('review');
+    expect(judgeKind('verifier')).toBe('verify');
+    expect(judgeKind('designer')).toBeNull();
+    expect(judgeKind(undefined)).toBeNull();
+    expect(roleClass('toString')).toBeNull();
+    const design = {
+      id: 'roles',
+      name: 'Roles',
+      stages: [
+        stage({ key: 'direction', role: 'art-director', next: 'build' }),
+        stage({ key: 'build', role: 'designer', next: 'critique', permissionLevel: 2 }),
+        stage({ key: 'critique', role: 'visual-critic', next: 'complete', onFail: 'build', verdict: true }),
+      ],
+    };
+    expect(validateWorkflow(design).issues).toEqual([]);
+  });
+
+  it('accepts stage instructions, a tool profile and skills on agent stages only, and never the operator profile', () => {
+    const wf = (extra: Partial<StageDefinitionInput>, kind: StageDefinitionInput['kind'] = 'agent') => ({ id: 'x', name: 'X', stages: [stage({ key: 'build', role: 'designer', kind, next: 'complete', permissionLevel: 2, ...extra })] });
+    const ok = validateWorkflow(wf({ instructions: 'Never call a paid generation tool here.', toolProfile: 'frontend-design', skills: ['tenten-web-design', 'plugin:skill'] }));
+    expect(ok.issues).toEqual([]);
+    expect(ok.profile?.stages[0]).toMatchObject({ toolProfile: 'frontend-design', skills: ['tenten-web-design', 'plugin:skill'] });
+    expect(validateWorkflow(wf({ toolProfile: 'operator' as never })).issues).toContainEqual(expect.objectContaining({ field: 'toolProfile' }));
+    expect(validateWorkflow(wf({ skills: ['../../etc'] })).issues.length).toBeGreaterThan(0);
+    expect(validateWorkflow(wf({ instructions: 'x'.repeat(2001) })).issues).toContainEqual(expect.objectContaining({ field: 'instructions' }));
+    expect(validateWorkflow(wf({ toolProfile: 'frontend-design' }, 'tests')).issues).toContainEqual(expect.objectContaining({ field: 'toolProfile', message: 'Only agent stages take instructions, a tool profile or skills' }));
+  });
+
+  it('accepts variants on work stages, with a worker per approach and an optional judge, and names each refusal', () => {
+    const variants = (extra: Partial<StageDefinitionInput> = {}, team: Record<string, unknown> = {}) => ({
+      id: 'v',
+      name: 'V',
+      stages: [
+        stage({
+          key: 'build',
+          role: 'designer',
+          next: 'complete',
+          permissionLevel: 2,
+          team: { mode: 'variants', workers: [{ key: 'bold', focus: 'Bold take' }, { key: 'calm', focus: 'Calm take', agentId: 'codex' }], judge: { agentId: 'claude', effort: 'high' }, ...team } as never,
+          ...extra,
+        }),
+      ],
+    });
+    const ok = validateWorkflow(variants());
+    expect(ok.issues).toEqual([]);
+    expect(ok.profile?.stages[0]?.team).toMatchObject({ mode: 'variants', judge: { agentId: 'claude', effort: 'high' } });
+    expect(validateWorkflow(variants({ permissionLevel: 1 })).issues).toEqual([]);
+    const issue = (wf: unknown) => validateWorkflow(wf).issues.map((i) => i.message);
+    expect(issue(variants({}, { workers: [{ key: 'solo', focus: 'Only one' }] }))).toContain('Variants need 2 to 4 workers, one per approach');
+    expect(issue(variants({ role: 'visual-critic', permissionLevel: 1 }))).toContain('Variants are competing attempts at the work; a review is a fixed team of reviewers');
+    expect(issue(variants({}, { workers: [{ key: 'a', focus: 'A', primary: true }, { key: 'b', focus: 'B' }] }))).toContain('Only a review (verdict) team has a primary reviewer');
+    expect(issue(variants({ permissionLevel: 4 }))).toContain('Staging and production stages never run as a team');
+    expect(issue({ id: 'a', name: 'A', stages: [stage({ key: 'impl', next: 'complete', permissionLevel: 2, team: { mode: 'adaptive', judge: { agentId: 'claude' } } as never })] })).toContain('Only variants have a judge');
   });
 
   it('rejects onFail on a stage without a verdict', () => {

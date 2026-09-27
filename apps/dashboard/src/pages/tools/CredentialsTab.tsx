@@ -521,7 +521,7 @@ export function CredentialsTab() {
                 <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="cloudflare-api" />
               </Field>
               <Field label="Kind">
-                <Select value={form.kind} onValueChange={(v) => setForm({ ...form, kind: v as CredentialKind })} options={CREDENTIAL_KINDS.map((k) => ({ value: k, label: k, description: CREDENTIAL_KIND_ENV[k] ? `Given as ${CREDENTIAL_KIND_ENV[k]}` : 'Used by name (e.g. an HTTP header)' }))} />
+                <Select value={form.kind} onValueChange={(v) => setForm({ ...form, kind: v as CredentialKind })} options={CREDENTIAL_KINDS.map((k) => ({ value: k, label: k, description: CREDENTIAL_KIND_ENV[k] ? `Given as ${CREDENTIAL_KIND_ENV[k]}` : k === 'media' ? 'Image or video generation key, read by name by the media tools' : 'Used by name (e.g. an HTTP header)' }))} />
               </Field>
               <Field label="Environment variable" optional helper={`Default: ${CREDENTIAL_KIND_ENV[form.kind] ?? 'none'}`}>
                 <Input value={form.envVar} onChange={(e) => setForm({ ...form, envVar: e.target.value })} className="font-mono" />

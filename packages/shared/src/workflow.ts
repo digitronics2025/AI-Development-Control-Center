@@ -1,4 +1,4 @@
-import { COMPLETE, type Role } from './constants.js';
+import { COMPLETE, isJudgeRole, type Role } from './constants.js';
 import {
   workflowProfileSchema,
   type PartialAssignment,
@@ -42,10 +42,21 @@ function teamIssues(stage: StageDefinition): Array<{ field: string; message: str
     const primaries = workers.filter((w) => w.primary).length;
     if (stage.verdict && primaries !== 1) out.push({ field: 'team.workers', message: 'A review team needs exactly one primary reviewer, who covers the whole diff' });
     if (!stage.verdict && primaries > 0) out.push({ field: 'team.workers', message: 'Only a review (verdict) team has a primary reviewer' });
+  } else if (team.mode === 'variants') {
+    const workers = team.workers ?? [];
+    if (workers.length < 2) out.push({ field: 'team.workers', message: 'Variants need 2 to 4 workers, one per approach' });
+    const keys = new Set<string>();
+    for (const w of workers) {
+      if (keys.has(w.key)) out.push({ field: 'team.workers', message: `Worker key "${w.key}" is used twice` });
+      keys.add(w.key);
+    }
+    if (workers.some((w) => w.primary)) out.push({ field: 'team.workers', message: 'Only a review (verdict) team has a primary reviewer' });
+    if (stage.verdict || isJudgeRole(stage.role)) out.push({ field: 'team.mode', message: 'Variants are competing attempts at the work; a review is a fixed team of reviewers' });
   } else {
     if (team.workers?.length) out.push({ field: 'team.workers', message: 'An adaptive team takes its work units from the plan, not from a worker list' });
     if (stage.verdict) out.push({ field: 'team.mode', message: 'A review team is a fixed team of reviewers' });
   }
+  if (team.judge && team.mode !== 'variants') out.push({ field: 'team.judge', message: 'Only variants have a judge' });
   return out;
 }
 
@@ -121,6 +132,9 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     }
     if (stage.team) {
       for (const issue of teamIssues(stage)) issues.push({ stageIndex: index, ...issue });
+    }
+    for (const field of ['instructions', 'toolProfile', 'skills'] as const) {
+      if (stage[field] !== undefined && stage.kind !== 'agent') issues.push({ stageIndex: index, field, message: 'Only agent stages take instructions, a tool profile or skills' });
     }
     if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git' && stage.kind !== 'verify') {
       issues.push({

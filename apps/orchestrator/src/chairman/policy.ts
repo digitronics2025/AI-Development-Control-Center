@@ -1,4 +1,4 @@
-import type { ChairmanActionInput, ChairmanDiagnosis, ChairmanDiagnosisConfidence, ChairmanHealth, ChairmanStrategyKind, FailureCategory, StageDefinition, TaskLimits, WorkflowProfile } from '@acc/shared';
+import { type ChairmanActionInput, type ChairmanDiagnosis, type ChairmanDiagnosisConfidence, type ChairmanHealth, type ChairmanStrategyKind, type FailureCategory, type StageDefinition, type TaskLimits, type WorkflowProfile, isPlanRole } from '@acc/shared';
 import { hashOf, type FailureSource } from './signatures.js';
 
 /**
@@ -107,11 +107,17 @@ export interface CandidateContext {
 
 const byRole = (wf: WorkflowProfile, role: StageDefinition['role']) => wf.stages.find((s) => s.role === role && s.kind === 'agent') ?? null;
 
-/** Where repairs happen: the failing stage's onFail target, else the workflow's fixer, else its implementer. */
+/** A stage of this role that can only edit (≤ Level 2), so an implicit repair never re-runs a stage allowed to spend (paid media). */
+const editingByRole = (wf: WorkflowProfile, role: StageDefinition['role']) => wf.stages.find((s) => s.role === role && s.kind === 'agent' && s.permissionLevel <= 2) ?? null;
+
+/**
+ * Where repairs happen: the failing stage's onFail target (the workflow's own choice), else the workflow's fixer,
+ * implementer or designer that can only edit (≤ Level 2); none when every candidate could spend.
+ */
 export function repairStage(wf: WorkflowProfile, failingStageKey: string): StageDefinition | null {
   const failing = wf.stages.find((s) => s.key === failingStageKey);
   const target = failing?.onFail ? wf.stages.find((s) => s.key === failing.onFail) : null;
-  return target ?? byRole(wf, 'fixer') ?? byRole(wf, 'implementer');
+  return target ?? editingByRole(wf, 'fixer') ?? editingByRole(wf, 'implementer') ?? editingByRole(wf, 'designer');
 }
 
 const ORDER: Record<RecoveryTrigger, StrategyKind[]> = {
@@ -156,7 +162,8 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         break;
       }
       case 'replan': {
-        const stage = byRole(wf, 'planner');
+        // The planner, else another plan-class stage (an art director).
+        const stage = byRole(wf, 'planner') ?? wf.stages.find((s) => isPlanRole(s.role) && s.kind === 'agent') ?? null;
         if (!stage) break;
         add('replan', 4, stage.key, '', `Re-plan in ${stage.name}`, 'The current plan does not lead to a passing result; produce a different plan that addresses the failure.', [
           { type: 'REPLAN', params: { guidance: `The Chairman asked for a new plan. The previous plan led to "${failure}". Produce a materially different approach and state how it avoids that failure.` } },

@@ -7,7 +7,7 @@ sources:
   - packages/shared/src/remote-operations.ts
   - apps/dashboard/src/components/remote-access.tsx
   - apps/dashboard/src/api/remote.ts
-verified_at: 0d4eaf8
+verified_at: 57af61a
 ---
 
 # Remote execution node
@@ -118,7 +118,7 @@ stage's permission level, creating a new workflow (duplicate one instead),
 adding a repository-discovery folder or un-ignoring a removed repository,
 turning on terminals, agent tool access, automatic repairs, the Chairman
 adopting improvements on its own, or an agent loading the operator's own CLI
-customisations, attachments, a task across several repositories (`linkedRepositoryIds`), and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering is allowed. Settings are judged as they would be saved
+customisations, attachments, a task across several repositories (`linkedRepositoryIds`), paid media generation — turning it on, a larger budget per task, a price estimate lowered, removed or added, or loosening a media budget (raised, warn only, disabled or removed; [design-agent.md](design-agent.md#spend-gate)) — and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering auto-approve or a budget, or raising a price estimate, is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
 and a repository override set to `null` is judged by the Settings value it falls
 back to.
@@ -220,7 +220,10 @@ redacted and path-scrubbed, and are never stored there.
 `GET/PATCH /api/remote`, `POST /api/remote/pair|unpair|rotate|reconnect`
 ([remote-routes.ts](../../apps/orchestrator/src/http/remote-routes.ts)). Not in
 the catalog, and refused when a request carries `x-acc-remote-request` (set on
-every in-process remote dispatch). Settings → Remote access
+every in-process remote dispatch). MCP OAuth sign-in and sign-out
+(`POST /api/mcp/:id/oauth/start|sign-out`) are not in the catalog either and
+refuse that header with 403 `REMOTE_FORBIDDEN` ([mcp.md](mcp.md#oauth)).
+Settings → Remote access
 ([remote-access.tsx](../../apps/dashboard/src/components/remote-access.tsx))
 pairs, shows the link state, and toggles remote control, remote terminals and
 remote tool calls (the last two need a typed confirmation).

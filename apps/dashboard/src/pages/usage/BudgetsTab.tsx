@@ -36,6 +36,12 @@ import { errorMessage } from '../../api/client';
 import { useAgents, useRepositories } from '../../api/hooks';
 import { useBudgets, useUsageMutations } from '../../api/usage';
 
+/** A media budget limits paid generation, never agent runs (docs/systems/design-agent.md). */
+const MEDIA_POLICY_HELP: Record<BudgetPolicy, string> = {
+  WARN_ONLY: 'Shows warning and exceeded states; paid calls continue.',
+  STOP_NEW_RUNS: 'Hard stop: a paid call whose estimate does not fit what is left is refused before it runs.',
+};
+
 const POLICY_HELP: Record<BudgetPolicy, string> = {
   WARN_ONLY: 'Shows warning and exceeded states; runs continue.',
   STOP_NEW_RUNS: 'Hard stop: once exceeded, new agent runs in scope wait for you. Nothing is ever switched to a cheaper model.',
@@ -87,7 +93,7 @@ function BudgetDialog({ budget, open, onOpenChange }: { budget: BudgetStatus | n
       updateBudget.mutate({ id: budget.id, patch: { amountUsd, warningThreshold, criticalThreshold, policy: form.policy } }, { onSuccess: () => done('Budget saved'), onError: (e) => setError(errorMessage(e)) });
     } else {
       createBudget.mutate(
-        { scopeType: form.scopeType, scopeId: form.scopeType === 'GLOBAL' ? null : form.scopeId.trim() || null, period: form.scopeType === 'TASK' ? 'total' : form.period, amountUsd, warningThreshold, criticalThreshold, policy: form.policy, enabled: true },
+        { scopeType: form.scopeType, scopeId: form.scopeType === 'GLOBAL' || form.scopeType === 'MEDIA' ? null : form.scopeId.trim() || null, period: form.scopeType === 'TASK' ? 'total' : form.period, amountUsd, warningThreshold, criticalThreshold, policy: form.policy, enabled: true },
         { onSuccess: () => done('Budget added'), onError: (e) => setError(errorMessage(e)) },
       );
     }
@@ -136,7 +142,7 @@ function BudgetDialog({ budget, open, onOpenChange }: { budget: BudgetStatus | n
             <Field label="Scope">
               <Select value={form.scopeType} onValueChange={(v) => setForm({ ...form, scopeType: v as BudgetScope, scopeId: '', period: v === 'TASK' ? 'total' : form.period === 'total' ? 'month' : form.period })} options={BUDGET_SCOPES.map((s) => ({ value: s, label: BUDGET_SCOPE_LABEL[s] }))} />
             </Field>
-            {form.scopeType !== 'GLOBAL' ? <Field label={BUDGET_SCOPE_LABEL[form.scopeType]}>{scopeInput()}</Field> : <div />}
+            {form.scopeType !== 'GLOBAL' && form.scopeType !== 'MEDIA' ? <Field label={BUDGET_SCOPE_LABEL[form.scopeType]}>{scopeInput()}</Field> : <div />}
             <Field label="Period">
               <Select
                 value={form.scopeType === 'TASK' ? 'total' : form.period}
@@ -156,7 +162,7 @@ function BudgetDialog({ budget, open, onOpenChange }: { budget: BudgetStatus | n
         <Field label="Critical at (% used)">
           <Input inputMode="numeric" value={form.critical} onChange={(e) => setForm({ ...form, critical: e.target.value })} />
         </Field>
-        <Field label="When exceeded" helper={POLICY_HELP[form.policy]} className="sm:col-span-2">
+        <Field label="When exceeded" helper={form.scopeType === 'MEDIA' ? MEDIA_POLICY_HELP[form.policy] : POLICY_HELP[form.policy]} className="sm:col-span-2">
           <SegmentedControl<BudgetPolicy>
             label="When exceeded"
             value={form.policy}

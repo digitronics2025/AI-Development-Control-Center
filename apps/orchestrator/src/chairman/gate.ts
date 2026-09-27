@@ -1,4 +1,4 @@
-import type { ChairmanActionInput, CommandKind, Directive, StageInstance, TestRun, WorkflowProfile } from '@acc/shared';
+import { isWriteRole, judgeKind, type ChairmanActionInput, type CommandKind, type Directive, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
 import { matchesAny } from './rules.js';
 
 /**
@@ -39,9 +39,12 @@ export function completionGate(input: GateInput): GateResult {
   const failures: GateFailure[] = [];
   const has = (pred: (s: WorkflowProfile['stages'][number]) => boolean) => workflow.stages.find(pred) ?? null;
   const testsDef = has((s) => s.kind === 'tests');
-  const fixDef = has((s) => s.role === 'fixer' && s.kind === 'agent') ?? has((s) => s.role === 'implementer' && s.kind === 'agent');
+  // The remedy target edits code: the fixer, else the first write stage, and only one that can only edit (≤ Level 2),
+  // so a remedy never re-runs a stage allowed to spend (Frontend Design's paid Assets stage, a Level 3 fixer). None: no remedy.
+  const editing = (s: WorkflowProfile['stages'][number]) => isWriteRole(s.role) && s.kind === 'agent' && s.permissionLevel <= 2;
+  const fixDef = has((s) => s.role === 'fixer' && editing(s)) ?? has(editing);
 
-  const lastWrite = lastOf(stages, (s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
+  const lastWrite = lastOf(stages, (s) => isWriteRole(s.role) && s.status === 'SUCCESS');
   const after = (s: StageInstance | null) => !lastWrite || (s !== null && s.createdAt >= lastWrite.createdAt);
 
   let lastTests: StageInstance | null = null;
@@ -55,16 +58,22 @@ export function completionGate(input: GateInput): GateResult {
       });
     }
   }
-  for (const role of ['reviewer', 'verifier'] as const) {
-    const def = has((s) => s.role === role && s.kind === 'agent' && s.verdict);
-    if (!def) continue;
-    const last = lastOf(stages, (s) => s.role === role && s.status === 'SUCCESS');
-    if (!last || last.verdict !== 'PASS' || !after(last)) {
-      failures.push({
-        code: role === 'reviewer' ? 'review' : 'verify',
-        message: `${def.name} has not passed${last && last.verdict === 'PASS' ? ' since the last change' : ''}.`,
-        remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: def.key } }],
-      });
+  // Each judge role with a verdict stage (review: reviewer, visual critic; verify: verifier) must have passed since the last
+  // change, role by role: a critique's PASS is not the code review's. Its latest verdict run decides, whichever of that
+  // role's verdict stages it was (a re-review after a fix stands for the review before it); an advisory run blocks nothing.
+  const verdictDefs = workflow.stages.filter((s) => judgeKind(s.role) && s.kind === 'agent' && s.verdict);
+  const verdictKeys = new Set(verdictDefs.map((s) => s.key));
+  for (const kind of ['review', 'verify'] as const) {
+    for (const role of new Set(verdictDefs.filter((s) => judgeKind(s.role) === kind).map((s) => s.role))) {
+      const last = lastOf(stages, (s) => s.role === role && verdictKeys.has(s.stageKey) && s.status === 'SUCCESS');
+      const def = verdictDefs.find((s) => s.key === last?.stageKey) ?? verdictDefs.find((s) => s.role === role)!;
+      if (!last || last.verdict !== 'PASS' || !after(last)) {
+        failures.push({
+          code: kind,
+          message: `${def.name} has not passed${last && last.verdict === 'PASS' ? ' since the last change' : ''}.`,
+          remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: def.key } }],
+        });
+      }
     }
   }
 

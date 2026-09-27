@@ -22,6 +22,9 @@ export const LEARNING_SIGNAL_KINDS = [
   'completion_limits',
   'slow_stage',
   'task_stuck',
+  'design_critique',
+  'a11y_rule',
+  'media_spend',
 ] as const;
 export type LearningSignalKind = (typeof LEARNING_SIGNAL_KINDS)[number];
 
@@ -73,6 +76,7 @@ export const INSTALLABLE_TOOLS: readonly InstallableTool[] = [
   { id: 'uv', name: 'uv', commands: ['uv', 'uvx'], providerId: 'uv', method: { kind: 'winget', packageId: 'astral-sh.uv' }, purpose: 'Python environments and packages' },
   { id: 'adb', name: 'Android platform tools', commands: ['adb', 'fastboot'], providerId: 'adb', method: { kind: 'winget', packageId: 'Google.PlatformTools' }, purpose: 'Install and inspect Android apps on a device' },
   { id: 'wrangler', name: 'Wrangler', commands: ['wrangler'], providerId: 'wrangler', method: { kind: 'npm', packageName: 'wrangler' }, purpose: 'Cloudflare Workers, Pages and D1' },
+  { id: 'ffmpeg', name: 'FFmpeg', commands: ['ffmpeg', 'ffprobe'], providerId: 'ffmpeg', method: { kind: 'winget', packageId: 'Gyan.FFmpeg' }, purpose: 'Optimise images and video, poster frames and video frames (media tools)' },
 ];
 
 export const INSTALLABLE_TOOL_IDS = INSTALLABLE_TOOLS.map((t) => t.id) as [string, ...string[]];
@@ -257,6 +261,9 @@ export const SIGNAL_KIND_LABEL: Record<LearningSignalKind, string> = {
   completion_limits: 'Finished with unmet checks',
   slow_stage: 'Slow stage',
   task_stuck: 'Task got stuck',
+  design_critique: 'Design judged failing again',
+  a11y_rule: 'Accessibility rule kept failing',
+  media_spend: 'Paid media near its budget',
 };
 
 /** Blockers that mean the work itself got stuck — worth learning from before anyone resumes it. */

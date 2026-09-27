@@ -80,7 +80,7 @@ function toolCall(taskId: string, over: Partial<ToolExecution>): void {
  * after it finished (learning off while it runs, so exactly one review
  * happens — the one this helper queues).
  */
-async function finishedTask(repoId: string, text: string, friction: { fixCycles?: number; missing?: string } = {}): Promise<string> {
+async function finishedTask(repoId: string, text: string, friction: { fixCycles?: number; missing?: string; calls?: Array<Partial<ToolExecution>> } = {}): Promise<string> {
   await patchLearning({ enabled: false });
   // Earlier simulated tasks leave their output uncommitted; a new task would report it as mixed with your work.
   const repoPath = t.services.store.getRepository(repoId)!.path;
@@ -90,6 +90,7 @@ async function finishedTask(repoId: string, text: string, friction: { fixCycles?
   await waitForStatus(t, id, ['COMPLETED']);
   if (friction.fixCycles) t.services.store.updateTask(id, { fixCycles: friction.fixCycles });
   if (friction.missing) toolCall(id, { providerId: friction.missing, summary: `${friction.missing} is not installed` });
+  for (const call of friction.calls ?? []) toolCall(id, call);
   await patchLearning({ enabled: true });
   learning().enqueue(id, true);
   await learning().idle();
@@ -198,6 +199,32 @@ describe('learning loop', () => {
     expect(existsSync(file)).toBe(false);
     expect(await learning().managed.pluginDirs(repoId)).toEqual([]);
     expect((await t.api('POST', `/api/learning/improvements/${imp!.id}/revert`)).status).toBe(409);
+  });
+
+  it('proposes a design-system skill for the repository from design friction, and writes it after a second task', async () => {
+    const repoId = await addRepo(t, await makeRepo());
+    // The same axe rule in both themes, and a paid call the task budget refused.
+    const calls = (): Array<Partial<ToolExecution>> => [
+      ...['light', 'dark'].map((scheme) => ({ capability: 'browser.accessibility', providerId: 'playwright', errorCode: 'FAILED', summary: `2 accessibility violation(s) (${scheme}): color-contrast at p.faint, button-name at button` })),
+      { capability: 'media.image.generate', providerId: 'fal', errorCode: 'DENIED', summary: "This call (estimated $0.40) would take the task's media spend to $5.20, over its $5.00 budget (Settings → Media)." },
+    ];
+    const first = await finishedTask(repoId, '[sim:learning-none] Restyle the header', { calls: calls() });
+    const review = learning().store.review(first)!;
+    expect(review.signals.map((s) => `${s.kind}:${s.key}`).sort()).toEqual(['a11y_rule:button-name', 'a11y_rule:color-contrast', 'media_spend:task_budget']);
+    const [finding] = review.findingIds.map((id) => learning().store.finding(id)!);
+    expect(finding).toMatchObject({ kind: 'missing_skill', scope: 'repository', repositoryId: repoId, status: 'open', taskCount: 1, proposal: { type: 'AUTHOR_SKILL', name: 'design-system' } });
+    expect(finding!.statusReason).toMatch(/acts after 2/);
+    const body = (finding!.proposal as { body: string }).body;
+    expect(body).toContain('color-contrast (2 checks), button-name (2 checks)');
+    expect(body).toMatch(/stop at 80 percent of the budget/);
+    expect(learning().store.listImprovements()).toEqual([]);
+
+    // A second task with the same friction: the Chairman writes the skill into the repository's plugin.
+    await finishedTask(repoId, '[sim:learning-none] Restyle the footer', { calls: calls() });
+    const [imp] = learning().store.listImprovements();
+    expect(imp).toMatchObject({ kind: 'skill_authored', content: 'design-system', status: 'trial', scope: 'repository' });
+    const file = learning().managed.skillFile('repository', repoId, 'design-system');
+    expect(readFileSync(file, 'utf8')).toMatch(/^---\nname: design-system\n[\s\S]*1\. Start from this repository's design standard/);
   });
 
   it('installs a missing catalog program on its own, through the tool door', async () => {

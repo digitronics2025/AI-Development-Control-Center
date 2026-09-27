@@ -32,7 +32,7 @@ export function apiBase(ctx: Pick<OperationContext, 'env'>, real: string, overri
 export async function restRequest(
   ctx: Pick<OperationContext, 'signal'>,
   url: string,
-  init: { method?: 'GET' | 'POST'; headers: Record<string, string>; body?: unknown; maxBytes?: number; timeoutMs?: number },
+  init: { method?: 'GET' | 'POST' | 'PUT'; headers: Record<string, string>; body?: unknown; maxBytes?: number; timeoutMs?: number; /** False for a call that is billed: an unknown outcome is never sent twice. */ retry?: boolean },
 ): Promise<RestResponse> {
   const attempt = async (): Promise<RestResponse> => {
     const res = await fetch(url, {
@@ -53,7 +53,7 @@ export async function restRequest(
     return { ok: res.ok, status: res.status, json, text, truncated, headers: res.headers };
   };
   const first = await attempt();
-  if (first.status !== 429 && first.status < 500) return first;
+  if (init.retry === false || (first.status !== 429 && first.status < 500)) return first;
   const wait = Math.min(5, Number(first.headers.get('retry-after')) || 1) * 1000;
   await new Promise((resolve) => setTimeout(resolve, wait));
   return attempt();

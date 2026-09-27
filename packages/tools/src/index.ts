@@ -47,7 +47,7 @@ export { verifyWeb, webVerifyInput, type WebVerifyInput } from './packs/verify.j
 export { tcpConnect } from './packs/network.js';
 export { globToRegExp, protectedCheck } from './packs/filesystem.js';
 export { dimensions, sanitizeSvg, sniff, type MediaKind } from './packs/media-files.js';
-export { DEFAULT_MEDIA_PRICES, decodeJob, encodeJob, estimate as estimateMediaCost, type CostEstimate, type MediaPriceUnit } from './packs/media-fal.js';
+export { DEFAULT_MEDIA_PRICES, decodeJob, encodeJob, estimate as estimateMediaCost, type MediaPriceUnit } from './packs/media-fal.js';
 export { refreshedPath, locateInstalled } from './packs/installer.js';
 export { resetCloudflareCatalog } from './packs/cloudflare-api.js';
 

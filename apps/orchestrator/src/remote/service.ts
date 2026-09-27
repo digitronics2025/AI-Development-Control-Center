@@ -170,6 +170,13 @@ export class RemoteNodeService {
           const a = d.store.getAgent(id);
           return a ? { loadUserConfig: a.settings.loadUserConfig } : null;
         },
+        budget: (id) => {
+          try {
+            return d.usage.budgets.get(id);
+          } catch {
+            return null;
+          }
+        },
       }),
       taskVersion: (taskId) => d.store.getTask(taskId)?.version ?? null,
       approvalView: (approvalId) => {

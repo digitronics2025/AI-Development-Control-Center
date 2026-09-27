@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { git } from '@acc/git';
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
@@ -426,4 +427,116 @@ describe.skipIf(process.platform !== 'win32')('privileged helper validation (rea
     expect(r.exitCode).toBe(1);
     expect(readFileSync(`${file}.result.json`, 'utf8')).toMatch(/Bad signature/);
   }, 120_000);
+});
+
+describe('media spend gate', () => {
+  const paidProvider = (behaviour: { fail?: 'INVALID_INPUT' | 'UNAVAILABLE'; throwEstimate?: boolean } = {}) => ({
+    id: 'test-paid',
+    name: 'Paid stand-in',
+    description: 'A paid capability for the spend gate tests',
+    category: 'media' as const,
+    builtin: true,
+    detect: async () => ({ installed: true, version: null, path: null, auth: { required: false, state: 'not_required' as const, message: null }, message: null }),
+    operations: [
+      {
+        id: 'media.test.paid',
+        title: 'Paid stand-in',
+        description: 'Costs two dollars',
+        input: z.object({ model: z.string().default('fal-ai/test/model') }),
+        level: 2 as const,
+        estimateCost: (input: { model: string }, prices: Readonly<Record<string, number>>) => {
+          if (behaviour.throwEstimate) throw new Error('no price');
+          const each = prices[input.model] ?? 2;
+          return { usd: each, model: input.model, unit: 'image', units: 1, basis: `1 × $${each}` };
+        },
+        run: async () =>
+          behaviour.fail ? { ok: false, summary: behaviour.fail, error: { code: behaviour.fail, message: behaviour.fail } } : { ok: true, summary: 'generated', output: { jobId: 'fal:job-1' } },
+      },
+    ],
+  });
+  const call = () => t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'media.test.paid', input: {} });
+  /** A real task (tool executions reference it); its simulated run is left alone. */
+  const realTask = async () => {
+    const id = await createTask(t, repoId, 'Media spend [sim:slow]');
+    return id as string;
+  };
+  const taskCall = (taskId: string) => {
+    const session = t.services.tools.openSession({ taskId, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'web-development', protectedPaths: [] }, 'agent');
+    return t.api('POST', '/api/tool-session/call', { capability: 'media.test.paid', input: {} }, sessionHeaders(session.token));
+  };
+
+  it('refuses paid calls until paid generation is on, then reserves and settles each within the task budget', async () => {
+    t.services.tools.registerProvider(paidProvider() as never);
+    const off = await call();
+    expect(off.body.result.error.code).toBe('DENIED');
+    expect(off.body.result.summary).toMatch(/Paid generation is off/);
+    expect((await t.api('GET', '/api/usage/media')).body).toMatchObject({ allowPaidGeneration: false, spentNanos: 0, events: [] });
+
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 3 } })).status).toBe(200);
+    // An operator call outside a task: reserved, then charged with the vendor's job id.
+    const ok = await call();
+    expect(ok.body.result.ok, ok.body.result.summary).toBe(true);
+    const media = (await t.api('GET', '/api/usage/media')).body;
+    expect(media).toMatchObject({ allowPaidGeneration: true, taskBudgetNanos: 3_000_000_000, spentNanos: 2_000_000_000 });
+    expect(media.events[0]).toMatchObject({ capability: 'media.test.paid', provider: 'test-paid', status: 'charged', jobId: 'fal:job-1', estimatedNanos: 2_000_000_000, taskId: null, origin: 'operator' });
+
+    // In a task: $2 fits a $3 budget once; the second call is refused before it runs.
+    const TASK_MEDIA = await realTask();
+    expect((await taskCall(TASK_MEDIA)).body).toMatchObject({ ok: true });
+    const over = await taskCall(TASK_MEDIA);
+    expect(over.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(over.body.summary).toMatch(/over its \$3\.00 budget/);
+    expect(t.services.usage.media.spentNanos({ taskId: TASK_MEDIA })).toBe(2_000_000_000);
+    // The operator's own price for a model is what is reserved.
+    expect((await t.api('PATCH', '/api/settings', { media: { prices: { 'fal-ai/test/model': 0.5 } } })).status).toBe(200);
+    expect((await taskCall(TASK_MEDIA)).body).toMatchObject({ ok: true });
+    expect(t.services.usage.media.spentNanos({ taskId: TASK_MEDIA })).toBe(2_500_000_000);
+    await t.api('POST', `/api/tasks/${TASK_MEDIA}/cancel`);
+    t.services.tools.unregisterProvider('test-paid');
+  });
+
+  it('releases a call the vendor refused before billing, keeps an unknown outcome counted, and fails closed without an estimate', async () => {
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 100, prices: {} } })).status).toBe(200);
+    t.services.tools.registerProvider(paidProvider({ fail: 'INVALID_INPUT' }) as never);
+    const task = await realTask();
+    await taskCall(task);
+    expect(t.services.usage.media.list({ taskId: task })[0]).toMatchObject({ status: 'released' });
+    expect(t.services.usage.media.spentNanos({ taskId: task })).toBe(0);
+    t.services.tools.unregisterProvider('test-paid');
+    t.services.tools.registerProvider(paidProvider({ fail: 'UNAVAILABLE' }) as never);
+    await taskCall(task);
+    expect(t.services.usage.media.list({ taskId: task })[0]).toMatchObject({ status: 'unknown' });
+    expect(t.services.usage.media.spentNanos({ taskId: task })).toBe(2_000_000_000);
+    t.services.tools.unregisterProvider('test-paid');
+    t.services.tools.registerProvider(paidProvider({ throwEstimate: true }) as never);
+    const noEstimate = await taskCall(task);
+    expect(noEstimate.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(noEstimate.body.summary).toMatch(/could not be estimated/);
+    t.services.tools.unregisterProvider('test-paid');
+    await t.api('POST', `/api/tasks/${task}/cancel`);
+  });
+
+  it('honours a media budget that stops runs, and shows its spend in the budget list', async () => {
+    expect((await t.api('PATCH', '/api/settings', { media: { allowPaidGeneration: true, taskBudgetUsd: 100, prices: {} } })).status).toBe(200);
+    t.services.tools.registerProvider(paidProvider() as never);
+    // Earlier tests in this app already spent today: the budget leaves room for exactly two more $2 calls.
+    const before = t.services.usage.media.spentNanos({ from: new Date(new Date().setHours(0, 0, 0, 0)).toISOString() });
+    const amountUsd = before / 1e9 + 5;
+    const budget = await t.api('POST', '/api/usage/budgets', { scopeType: 'MEDIA', scopeId: null, period: 'day', amountUsd, policy: 'STOP_NEW_RUNS' });
+    expect(budget.status).toBeLessThan(300);
+    // A media budget needs no scope id, and takes none.
+    expect((await t.api('POST', '/api/usage/budgets', { scopeType: 'MEDIA', scopeId: 'fal', period: 'week', amountUsd: 5 })).status).toBe(400);
+    expect((await call()).body.result.ok).toBe(true);
+    expect((await call()).body.result.ok).toBe(true);
+    const refused = (await call()).body.result;
+    expect(refused.ok).toBe(false);
+    expect(refused.summary).toMatch(/paid media daily budget/);
+    const statuses = (await t.api('GET', '/api/usage/budgets')).body;
+    const media = statuses.find((b: { scopeType: string }) => b.scopeType === 'MEDIA');
+    expect(media).toMatchObject({ scopeLabel: 'Paid media generation', unknownCostEvents: 0, spentNanos: before + 4_000_000_000 });
+    // A warn-only media budget never refuses.
+    expect((await t.api('PATCH', `/api/usage/budgets/${budget.body.id}`, { policy: 'WARN_ONLY' })).status).toBe(200);
+    expect((await call()).body.result.ok).toBe(true);
+    t.services.tools.unregisterProvider('test-paid');
+  });
 });

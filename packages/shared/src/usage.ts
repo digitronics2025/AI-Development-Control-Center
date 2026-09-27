@@ -42,7 +42,8 @@ export type UsageBilling = (typeof USAGE_BILLING)[number];
 export const PRICING_VERIFICATION = ['verified', 'documented', 'unverified'] as const;
 export type PricingVerification = (typeof PRICING_VERIFICATION)[number];
 
-export const BUDGET_SCOPES = ['GLOBAL', 'PROVIDER', 'PROJECT', 'MODEL', 'AGENT', 'TASK'] as const;
+/** `MEDIA`: paid image and video generation (estimates reserved by the spend gate), never agent runs. */
+export const BUDGET_SCOPES = ['GLOBAL', 'PROVIDER', 'PROJECT', 'MODEL', 'AGENT', 'TASK', 'MEDIA'] as const;
 export type BudgetScope = (typeof BUDGET_SCOPES)[number];
 
 export const BUDGET_PERIODS = ['day', 'week', 'month', 'total'] as const;
@@ -266,7 +267,7 @@ export interface ProviderCapabilityView {
 export interface Budget {
   id: string;
   scopeType: BudgetScope;
-  /** Provider, repository id, model, agent id or task id; null for GLOBAL. */
+  /** Provider, repository id, model, agent id or task id; null for GLOBAL and MEDIA. */
   scopeId: string | null;
   period: BudgetPeriod;
   amountNanos: number;
@@ -304,7 +305,7 @@ const budgetBase = z.object({
 });
 
 export const budgetInputSchema = budgetBase
-  .refine((b) => (b.scopeType === 'GLOBAL') === (b.scopeId === null), { message: 'A global budget has no scope; every other scope needs one', path: ['scopeId'] })
+  .refine((b) => (b.scopeType === 'GLOBAL' || b.scopeType === 'MEDIA') === (b.scopeId === null), { message: 'A global or media budget has no scope; every other scope needs one', path: ['scopeId'] })
   .refine((b) => b.warningThreshold <= b.criticalThreshold, { message: 'The warning threshold must not be above the critical one', path: ['warningThreshold'] });
 export type BudgetInput = z.infer<typeof budgetInputSchema>;
 
@@ -573,7 +574,7 @@ export const CONFIDENCE_LABEL: Record<MetricConfidence, string> = { LIVE: 'Live'
 export const ATTEMPT_REASON_LABEL: Record<AttemptReason, string> = { initial: 'First attempt', retry: 'Retry after an error', rerun: 'Re-run', reroute: 'Rerouted' };
 export const USAGE_ORIGIN_LABEL: Record<UsageOrigin, string> = { stage: 'Workflow stage', chairman: 'Chairman', source_control: 'Source Control', ask: 'Ask' };
 export const USAGE_BILLING_LABEL: Record<UsageBilling, string> = { subscription: 'Subscription', api: 'API billing', simulated: 'Simulated', unknown: 'Unknown billing' };
-export const BUDGET_SCOPE_LABEL: Record<BudgetScope, string> = { GLOBAL: 'All usage', PROVIDER: 'Provider', PROJECT: 'Repository', MODEL: 'Model', AGENT: 'Agent', TASK: 'Task' };
+export const BUDGET_SCOPE_LABEL: Record<BudgetScope, string> = { GLOBAL: 'All usage', PROVIDER: 'Provider', PROJECT: 'Repository', MODEL: 'Model', AGENT: 'Agent', TASK: 'Task', MEDIA: 'Paid media generation' };
 export const BUDGET_PERIOD_LABEL: Record<BudgetPeriod, string> = { day: 'Daily', week: 'Weekly', month: 'Monthly', total: 'Whole task' };
 export const BUDGET_POLICY_LABEL: Record<BudgetPolicy, string> = { WARN_ONLY: 'Warn only', STOP_NEW_RUNS: 'Stop new runs' };
 export const ANOMALY_KIND_LABEL: Record<AnomalyKind, string> = {
@@ -599,4 +600,40 @@ export function formatTokens(count: number | null | undefined): string {
 /** 0.1234 → "12.3%"; null → "—". */
 export function formatRatio(ratio: number | null | undefined): string {
   return ratio === null || ratio === undefined || !Number.isFinite(ratio) ? '—' : `${(ratio * 100).toFixed(1)}%`;
+}
+
+// ---------------------------------------------------------------------------
+// Paid media generation (docs/systems/design-agent.md)
+// ---------------------------------------------------------------------------
+
+/** Settled states: `charged` (the vendor accepted it), `unknown` (it may have), `released` (refused before billing). */
+export type MediaSpendStatus = 'reserved' | 'charged' | 'unknown' | 'released';
+
+/** One paid call the spend gate reserved; the amount is an estimate in nano-dollars. */
+export interface MediaSpendEvent {
+  id: string;
+  taskId: string | null;
+  stageId: string | null;
+  executionId: string | null;
+  capability: string;
+  provider: string;
+  model: string;
+  unit: string;
+  units: number;
+  estimatedNanos: number;
+  basis: string;
+  status: MediaSpendStatus;
+  jobId: string | null;
+  origin: string;
+  createdAt: string;
+  settledAt: string | null;
+}
+
+export interface MediaSpendSummary {
+  allowPaidGeneration: boolean;
+  taskBudgetNanos: number;
+  /** Counted (reserved, charged, unknown) estimates in the window. */
+  spentNanos: number;
+  from: string;
+  events: MediaSpendEvent[];
 }

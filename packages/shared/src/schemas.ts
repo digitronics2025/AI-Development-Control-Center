@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { executionSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
+import { executionSettingsSchema, mediaSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
 import { learningSettingsSchema } from './learning.js';
 import {
   BILLING_MODES,
@@ -525,6 +525,8 @@ export const settingsSchema = z.object({
   execution: executionSettingsSchema.default(executionSettingsSchema.parse({})),
   /** The learning loop (docs/systems/learning.md). */
   learning: learningSettingsSchema.default(learningSettingsSchema.parse({})),
+  /** Paid image and video generation (docs/systems/design-agent.md). */
+  media: mediaSettingsSchema.default(mediaSettingsSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

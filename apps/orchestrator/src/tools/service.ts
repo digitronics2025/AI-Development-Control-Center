@@ -32,6 +32,7 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now } from '../store/store.js';
 import type { VaultDepositService } from './vault-deposit.js';
+import type { MediaSpendGate } from '../usage/media.js';
 import type { CredentialBroker } from './credentials.js';
 import type { ProcessManager } from './processes.js';
 import type { ToolStore } from './store.js';
@@ -181,6 +182,8 @@ export interface ToolServiceDeps {
   credentials: CredentialBroker;
   /** MyVault's delivery box: lets a newly generated secret be saved for MyVault while it is locked. */
   deposits?: VaultDepositService;
+  /** The spend gate for paid calls (docs/systems/design-agent.md); without it a paid call never runs. */
+  spend?: MediaSpendGate;
   dataDir: string;
   baseEnv: NodeJS.ProcessEnv;
 }
@@ -482,6 +485,24 @@ export class ToolService {
       this.escalate(scope, req.capability, 'enabled', decision.reason, risk.level);
     }
 
+    // 4b. Spend gate: a paid call (image or video generation) runs only with paid generation on and an
+    // estimate that fits the task's media budget and every media budget that stops runs. Fails closed.
+    let reservation: string | null = null;
+    if (operation.estimateCost) {
+      let reserved: { ok: true; id: string } | { ok: false; reason: string };
+      try {
+        const estimate = operation.estimateCost(input, this.d.spend?.prices() ?? {});
+        reserved = this.d.spend ? this.d.spend.reserve({ taskId: scope.taskId, stageId: scope.stageId, executionId: base.id, capability: req.capability, provider: provider.id, origin: req.origin, estimate }) : { ok: false, reason: 'No spend gate is configured, so paid calls do not run.' };
+      } catch (error) {
+        reserved = { ok: false, reason: `The cost of this call could not be estimated (${redact((error as Error).message).slice(0, 200)}), so it is not run.` };
+      }
+      if (!reserved.ok) {
+        this.escalate(scope, req.capability, 'denied', reserved.reason, risk.level);
+        return refuse('denied', 'DENIED', reserved.reason, 'deny', risk);
+      }
+      reservation = reserved.id;
+    }
+
     // 5. Checkpoint before high-impact work in a task.
     if (scope.taskId && (risk.level >= 3 || (risk.effects.includes('database') && risk.level >= 2))) {
       await this.checkpointsFor(scope.taskId)
@@ -528,6 +549,7 @@ export class ToolService {
       req.signal?.removeEventListener('abort', onAbort);
     }
     result = { ...result, summary: redact(result.summary), stdout: result.stdout ? redact(result.stdout) : undefined, stderr: result.stderr ? redact(result.stderr) : undefined };
+    if (reservation) this.d.spend?.settle(reservation, result);
     if (scope.readOnly?.maskPersonal) result = maskResult(result);
 
     // 7. Record, remember provider failures for routing, and surface notable calls.
@@ -588,6 +610,7 @@ export class ToolService {
       terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel) : undefined,
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
+      prices: this.d.spend?.prices(),
       credentials: {
         // Only a production secret deploy, which always waits for the operator's typed approval, may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
         value: (name, opts) => this.d.credentials.value(name, scope.repositoryId, { ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}), ...(opts?.kind ? { kind: opts.kind } : {}) }),

@@ -108,13 +108,46 @@ the schema; every path is passed as `file:<absolute path>` with
 protocol. Missing FFmpeg is `NOT_INSTALLED` with the install hint; it is in
 the reviewed installer catalog (`Gyan.FFmpeg`).
 
+## Spend gate
+
+Every operation that declares `estimateCost` (the paid `media.*` tools) passes
+a gate in `ToolService.invoke` after the policy decision and before it runs
+([service.ts](../../apps/orchestrator/src/tools/service.ts),
+[usage/media.ts](../../apps/orchestrator/src/usage/media.ts)). It fails
+closed:
+
+1. **Settings → Media → Allow paid generation** is off by default (PLAN §11):
+   off refuses the call.
+2. The estimate (conservative defaults, or the operator's per-model price in
+   `media.prices`) must fit what the task has left of **Budget per task**
+   (default $5), and every enabled `MEDIA` budget with policy
+   `STOP_NEW_RUNS` for its day, week, month or total (Usage & Costs →
+   Budgets). An estimate that cannot be computed refuses the call.
+3. The check and a `reserved` row in `media_usage_events` (migration 20) are
+   one transaction, so concurrent calls cannot both fit into the last dollar.
+4. After the call the row is settled once: `charged` when the result carries
+   the vendor's job id (or succeeded), `released` when the vendor refused it
+   before billing (invalid input, no key, not installed, outside the
+   repository), and `unknown` otherwise (a timeout or an unanswered
+   submission may have been billed, so it stays counted).
+
+Amounts are estimates; the fal bill is the truth. `GET /api/usage/media`
+(`usage.media` from the cloud) lists them; the Usage page shows them under
+Paid media generation. From the cloud, paid generation cannot be turned on,
+the task budget raised, a price estimate changed, or a media budget loosened
+([remote-node.md](remote-node.md)).
+
 ## Operator setup
 
 1. **Media generation.** Paid generation is optional; without it the Assets
    stage writes an asset brief instead. The built-in `media.*` tools need
    only a Tools → Credentials entry of kind **media** named `fal` holding the
-   fal key (no environment variable). The alternative below uses fal's own
-   MCP server through the gateway.
+   fal key (no environment variable), and **Settings → Media → Allow paid
+   generation** turned on with a budget per task; optionally a Paid media
+   generation budget (Usage & Costs → Budgets, policy "Stop new runs") for a
+   daily, weekly or monthly cap. The alternative below uses fal's own MCP
+   server through the gateway (not covered by the spend gate: its tools
+   declare no estimate).
    - Create a dedicated fal account and key with a prepaid balance; the
      balance is the hard spending cap.
    - Tools → Credentials: add an **unscoped** credential (no repositories:

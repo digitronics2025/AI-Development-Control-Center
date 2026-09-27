@@ -181,6 +181,8 @@ export interface OperationContext {
   privileged?: PrivilegedHost;
   /** Paths holding the user's own uncommitted work; tools must not overwrite or discard them. */
   protectedPaths: readonly string[];
+  /** The operator's per-model media prices (Settings → Media), for cost estimates a paid call reports. */
+  prices?: Readonly<Record<string, number>>;
 }
 
 export const TOOL_ERROR_CODES = [
@@ -223,6 +225,15 @@ export interface OperationResult<O = unknown> {
   error?: { code: ToolErrorCode; message: string };
 }
 
+export interface CostEstimate {
+  usd: number;
+  model: string;
+  /** What is counted: `image`, `video-second`, `edit`… */
+  unit: string;
+  units: number;
+  basis: string;
+}
+
 export interface ToolOperation<I = any, O = any> {
   /** Capability id, `<area>.<verb>`; stable, shown to agents. */
   id: string;
@@ -239,6 +250,13 @@ export interface ToolOperation<I = any, O = any> {
   readOnly?: boolean;
   /** Runs until stopped (dev servers): the call returns once it is up. */
   longRunning?: boolean;
+  /**
+   * Paid calls only (image and video generation): what this call is expected to
+   * cost, given the operator's per-model prices. ToolService's spend gate
+   * reserves it before the call and refuses the call when paid generation is off
+   * or the estimate does not fit a media budget (docs/systems/design-agent.md).
+   */
+  estimateCost?(input: I, prices: Readonly<Record<string, number>>): CostEstimate;
   run(input: I, ctx: OperationContext): Promise<OperationResult<O>>;
 }
 

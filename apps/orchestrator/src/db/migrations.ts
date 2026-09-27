@@ -1290,4 +1290,35 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE usage_events ADD COLUMN work_unit_key TEXT;
     `,
   },
+  {
+    // Paid media generation (docs/systems/design-agent.md): the spend gate
+    // reserves each paid call's estimate before it runs and settles it after
+    // (charged, unknown when the outcome is unknown, released when the vendor
+    // refused it before billing). Rows are never deleted; only a reserved row
+    // changes, once. Additive only.
+    version: 20,
+    name: 'media spend',
+    sql: `
+      CREATE TABLE media_usage_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        stage_id TEXT,
+        execution_id TEXT,
+        capability TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        units REAL NOT NULL,
+        estimated_nanos INTEGER NOT NULL,
+        basis TEXT NOT NULL,
+        status TEXT NOT NULL,
+        job_id TEXT,
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        settled_at TEXT
+      );
+      CREATE INDEX idx_media_usage_task ON media_usage_events(task_id, created_at);
+      CREATE INDEX idx_media_usage_created ON media_usage_events(created_at);
+    `,
+  },
 ];

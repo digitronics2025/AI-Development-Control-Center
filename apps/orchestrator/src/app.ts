@@ -43,6 +43,7 @@ import { ToolStore } from './tools/store.js';
 import { VaultBridgeService } from './tools/vault-bridge.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
+import { MediaSpendGate } from './usage/media.js';
 import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
 import { ConnectedAppService } from './connected-apps/service.js';
 import { ConnectedAppStore } from './connected-apps/store.js';
@@ -154,7 +155,8 @@ export function createServices(
   const vaultBridge = new VaultBridgeService(toolStore, credentials, { deposits: { bus } });
   const processes = new ProcessManager(toolStore, bus, executionEnv);
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });
-  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, dataDir: config.dataDir, baseEnv });
+  const spend = new MediaSpendGate(db, usage.media, { stopping: () => usage.budgets.stoppingMediaBudgets() }, () => settings.get().media);
+  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv });
   const mcp = new McpService(toolStore, bus, tools, credentials);
   const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'));
   const bridge = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', 'acc-mcp.js');

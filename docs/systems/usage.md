@@ -185,7 +185,10 @@ have no separate limits endpoint. They are never fetched, scraped or estimated.
 Implemented in [budgets.ts](../../apps/orchestrator/src/usage/budgets.ts).
 
 - **Scopes:** `GLOBAL`, `PROVIDER`, `PROJECT`, `MODEL` (its own line share),
-  `AGENT`, `TASK` (period `total` only).
+  `AGENT`, `TASK` (period `total` only), `MEDIA` (no scope id: paid image and
+  video generation, counted from `media_usage_events`; a `STOP_NEW_RUNS` media
+  budget refuses a paid call whose estimate does not fit, and never stops an
+  agent run; [design-agent.md](design-agent.md#spend-gate)).
 - **Periods:** local day, Monday week or month.
 - **States:** `ok`, `warning`, `critical`, `exceeded`, from the thresholds.
 - **Amount:** at least one nano-dollar (`amountUsd >= 1e-9`); a smaller one would

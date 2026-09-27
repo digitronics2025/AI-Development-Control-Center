@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { resolveInside } from '../paths.js';
-import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
+import { builtinDetection, failure, operation, type CostEstimate, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
 import { MAX_IMAGE_BYTES, downloadResult, isFailure, isVideo, readMedia, type SavedMedia } from './media-files.js';
 import { mediaPath } from './media.js';
 import { apiBase, restRequest, type RestResponse } from './rest.js';
@@ -43,14 +43,6 @@ export const DEFAULT_MEDIA_PRICES = {
   vectorize: 0.1,
 } as const;
 export type MediaPriceUnit = keyof typeof DEFAULT_MEDIA_PRICES;
-
-export interface CostEstimate {
-  usd: number;
-  model: string;
-  unit: MediaPriceUnit;
-  units: number;
-  basis: string;
-}
 
 /** units × (the operator's price for this model, else the default for the unit). */
 export function estimate(model: string, unit: MediaPriceUnit, units: number, prices: Record<string, number> = {}): CostEstimate {
@@ -266,6 +258,8 @@ async function sourceImage(ctx: OperationContext, requested: string): Promise<st
   return `data:${mime};base64,${media.buf.toString('base64')}`;
 }
 
+const videoModel = (input: { model?: string; image?: string }) => input.model ?? (input.image ? 'fal-ai/kling-video/v2.1/standard/image-to-video' : 'fal-ai/kling-video/v2.1/standard/text-to-video');
+
 const PAID = (what: string) => ({ reasons: [`Paid generation on fal (${what})`], effects: ['network' as const, 'filesystem' as const] });
 
 export function falMediaProvider(): ToolProvider {
@@ -297,6 +291,7 @@ export function falMediaProvider(): ToolProvider {
         }),
         level: 3,
         classify: () => PAID('images'),
+        estimateCost: (input, prices) => estimate(input.model, 'image', input.count, prices),
         run: (input, ctx) =>
           generate(
             ctx,
@@ -309,7 +304,7 @@ export function falMediaProvider(): ToolProvider {
               ...(input.negativePrompt ? { negative_prompt: input.negativePrompt } : {}),
               ...input.arguments,
             },
-            estimate(input.model, 'image', input.count),
+            estimate(input.model, 'image', input.count, ctx.prices),
           ),
       }),
       operation({
@@ -319,10 +314,11 @@ export function falMediaProvider(): ToolProvider {
         input: z.object({ prompt: z.string().min(1).max(4000), image: mediaPath, model: modelField('fal-ai/flux-pro/kontext'), arguments: argumentsField, path: folderField, name: nameField, waitSec: waitField(60), credential: credentialField }),
         level: 3,
         classify: () => PAID('image edit'),
+        estimateCost: (input, prices) => estimate(input.model, 'edit', 1, prices),
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { prompt: input.prompt, image_url: image, ...input.arguments }, estimate(input.model, 'edit', 1));
+          return generate(ctx, input, { prompt: input.prompt, image_url: image, ...input.arguments }, estimate(input.model, 'edit', 1, ctx.prices));
         },
       }),
       operation({
@@ -332,10 +328,11 @@ export function falMediaProvider(): ToolProvider {
         input: z.object({ image: mediaPath, scale: z.union([z.literal(2), z.literal(4)]).default(2), model: modelField('fal-ai/esrgan'), arguments: argumentsField, path: folderField, name: nameField, waitSec: waitField(60), credential: credentialField }),
         level: 3,
         classify: () => PAID('upscale'),
+        estimateCost: (input, prices) => estimate(input.model, 'upscale', 1, prices),
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, scale: input.scale, ...input.arguments }, estimate(input.model, 'upscale', 1));
+          return generate(ctx, input, { image_url: image, scale: input.scale, ...input.arguments }, estimate(input.model, 'upscale', 1, ctx.prices));
         },
       }),
       operation({
@@ -345,10 +342,11 @@ export function falMediaProvider(): ToolProvider {
         input: z.object({ image: mediaPath, model: modelField('fal-ai/bria/background/remove'), arguments: argumentsField, path: folderField, name: nameField, waitSec: waitField(60), credential: credentialField }),
         level: 3,
         classify: () => PAID('background removal'),
+        estimateCost: (input, prices) => estimate(input.model, 'remove-background', 1, prices),
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'remove-background', 1));
+          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'remove-background', 1, ctx.prices));
         },
       }),
       operation({
@@ -358,10 +356,11 @@ export function falMediaProvider(): ToolProvider {
         input: z.object({ image: mediaPath, model: modelField('fal-ai/recraft/vectorize'), arguments: argumentsField, path: folderField, name: nameField, waitSec: waitField(60), credential: credentialField }),
         level: 3,
         classify: () => PAID('vectorise'),
+        estimateCost: (input, prices) => estimate(input.model, 'vectorize', 1, prices),
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'vectorize', 1));
+          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'vectorize', 1, ctx.prices));
         },
       }),
       operation({
@@ -383,12 +382,13 @@ export function falMediaProvider(): ToolProvider {
         }),
         level: 3,
         classify: () => PAID('video'),
+        estimateCost: (input, prices) => estimate(videoModel(input), 'video-second', input.durationSec, prices),
         run: async (input, ctx) => {
-          const model = input.model ?? (input.image ? 'fal-ai/kling-video/v2.1/standard/image-to-video' : 'fal-ai/kling-video/v2.1/standard/text-to-video');
+          const model = videoModel(input);
           const image = input.image ? await sourceImage(ctx, input.image) : null;
           if (image && isFailure(image)) return image;
           const body = { prompt: input.prompt, duration: String(input.durationSec), ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}), ...(image ? { image_url: image } : {}), ...input.arguments };
-          return generate(ctx, { ...input, model }, body, estimate(model, 'video-second', input.durationSec));
+          return generate(ctx, { ...input, model }, body, estimate(model, 'video-second', input.durationSec, ctx.prices));
         },
       }),
       operation({

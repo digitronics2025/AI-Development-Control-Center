@@ -210,6 +210,7 @@ export const REMOTE_OPERATIONS: readonly RemoteOperation[] = [
   r('usage.health', 'GET', '/api/usage/health'),
   r('usage.export', 'GET', '/api/usage/export', { binary: true }),
   r('usage.budgets', 'GET', '/api/usage/budgets'),
+  r('usage.media', 'GET', '/api/usage/media'),
   r('usage.pricing', 'GET', '/api/usage/pricing'),
   c('usage.reconcile', 'POST', '/api/usage/reconcile', { body: emptyBody }),
   c('usage.capacityRefresh', 'POST', '/api/usage/capacity/refresh', { body: emptyBody }),

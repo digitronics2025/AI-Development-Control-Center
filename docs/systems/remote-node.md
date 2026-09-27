@@ -118,7 +118,7 @@ stage's permission level, creating a new workflow (duplicate one instead),
 adding a repository-discovery folder or un-ignoring a removed repository,
 turning on terminals, agent tool access, automatic repairs, the Chairman
 adopting improvements on its own, or an agent loading the operator's own CLI
-customisations, attachments, a task across several repositories (`linkedRepositoryIds`), and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering is allowed. Settings are judged as they would be saved
+customisations, attachments, a task across several repositories (`linkedRepositoryIds`), paid media generation — turning it on, a larger budget per task, a changed price estimate, or loosening a media budget (raised, warn only, disabled or removed; [design-agent.md](design-agent.md#spend-gate)) — and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),
 and a repository override set to `null` is judged by the Settings value it falls
 back to.

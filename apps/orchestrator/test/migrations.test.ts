@@ -298,6 +298,25 @@ describe('affected tests migration (v17 → v18)', () => {
   });
 });
 
+describe('media spend migration (v19 → v20)', () => {
+  it('adds the media spend ledger and leaves every existing row as it was', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-migrate-media-'));
+    const db = openDatabase(path.join(dataDir, 'acc.db'));
+    const previous = MIGRATIONS.filter((m) => m.version <= 19);
+    migrate(db, previous);
+    const ts = '2026-09-27T12:00:00.000Z';
+    db.prepare("INSERT INTO budgets (id, scope_type, scope_id, period, amount_nanos, warning_threshold, critical_threshold, policy, enabled, created_at, updated_at) VALUES ('b1', 'GLOBAL', NULL, 'month', 1000, 0.8, 0.95, 'WARN_ONLY', 1, ?, ?)").run(ts, ts);
+    const budgets = db.prepare('SELECT * FROM budgets').all();
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 20))).toEqual([20]);
+    expect(db.prepare('SELECT * FROM budgets').all()).toEqual(budgets);
+    const columns = (db.prepare('PRAGMA table_info(media_usage_events)').all() as Array<{ name: string }>).map((c) => c.name);
+    expect(columns).toEqual(['id', 'task_id', 'stage_id', 'execution_id', 'capability', 'provider', 'model', 'unit', 'units', 'estimated_nanos', 'basis', 'status', 'job_id', 'origin', 'created_at', 'settled_at']);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM media_usage_events').get()).toEqual({ n: 0 });
+    expect(migrate(db, MIGRATIONS.filter((m) => m.version <= 20))).toEqual([]);
+    db.close();
+  });
+});
+
 /** Audit F-29: a shipped migration that was renamed, renumbered or edited is refused before anything runs. */
 describe('migration identity', () => {
   it('refuses a database whose applied migrations differ from the code, and fingerprints older rows once', () => {

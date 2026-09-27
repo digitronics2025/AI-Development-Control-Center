@@ -3,6 +3,7 @@ import type {
   BudgetInput,
   BudgetStatus,
   BudgetUpdate,
+  MediaSpendSummary,
   PricingInput,
   PricingVersion,
   ProviderSummary,
@@ -122,6 +123,12 @@ export function useUsageAnomalies(params: UsageParams) {
 export function useUsageHealth() {
   const api = useApi();
   return useQuery({ queryKey: keys.usage('health'), queryFn: ({ signal }) => api.get<UsageHealth>('/api/usage/health', signal) });
+}
+
+/** Paid media generation estimates the spend gate reserved (docs/systems/design-agent.md). */
+export function useMediaSpend(days = 30) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.usage(`media-${days}`), queryFn: ({ signal }) => api.get<MediaSpendSummary>(`/api/usage/media?days=${days}`, signal) });
 }
 
 export function useBudgets() {

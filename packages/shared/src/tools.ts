@@ -306,6 +306,24 @@ export const executionSettingsSchema = z.object({
 });
 export type ExecutionSettings = z.infer<typeof executionSettingsSchema>;
 
+/**
+ * Paid media generation (docs/systems/design-agent.md). Off until the operator
+ * turns it on (PLAN §11: nothing is ever bought on the operator's behalf by
+ * default). Each paid call's estimate must fit what the task has left of its
+ * budget and every media budget that stops runs (Usage & Costs → Budgets).
+ */
+export const mediaSettingsSchema = z.object({
+  allowPaidGeneration: z.boolean().default(false),
+  /** Estimated media spend one task may reserve, in USD. */
+  taskBudgetUsd: z.number().min(0).max(1000).default(5),
+  /** Per-model price overrides in USD per unit (an image, a second of video, one edit), used for estimates. */
+  prices: z
+    .record(z.string().min(3).max(120).regex(/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*){1,5}$/i), z.number().min(0).max(100))
+    .refine((p) => Object.keys(p).length <= 100, 'At most 100 prices')
+    .default({}),
+});
+export type MediaSettings = z.infer<typeof mediaSettingsSchema>;
+
 export const repositoryRuntimeSchema = z.object({
   /** How to start the app for verification (e.g. `pnpm dev --port 5173 --strictPort`). */
   devCommand: z.string().max(1000).nullable().default(null),

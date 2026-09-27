@@ -471,7 +471,6 @@ export class ReleaseService {
 
   /** Save the outcome, write the release log, and say it in the timeline. */
   private async finish(taskId: string, record: TaskRelease, stageId: string, log: string[]): Promise<TaskRelease> {
-    this.save(taskId, record);
     const sha = short(record.commit);
     const where = `${record.target.remote}/${record.target.branch}`;
     const data = { commit: record.commit, target: record.target, state: record.state, evidence: record.evidence, reason: record.reason };
@@ -501,6 +500,9 @@ export class ReleaseService {
       '',
     ];
     await this.d.artifacts.write(taskId, { name: 'release.md', type: 'stage-output', content: redact(lines.join('\n')), stageId, stageKey: 'release' }).catch(() => undefined);
+    // Saved last: once the state reads final, the run is over (only its running mark is cleared, with no wait), so
+    // Check again is accepted at once instead of answering "being checked now" while the report is written.
+    this.save(taskId, record);
     return record;
   }
 
@@ -578,9 +580,10 @@ export class ReleaseService {
     const stage = this.syntheticStage(task, 'Check again');
     this.track(this.prove(taskId, proving, config, {})
       .then((done) => this.finish(taskId, done, stage.id, [`# Check again: ${task.id}`, '', `- Commit: ${done.commit}`, `- Target: ${done.target.remote}/${done.target.branch}`, '', `- Only the proof ran; nothing was sent.`, `- ${this.outcomeLine(done)}`]))
+      // Not running once the result is saved: closing the synthetic stage does not hold up another Check again.
+      .finally(() => this.running.delete(taskId))
       .then((done) => this.closeStage(stage.id, done))
-      .catch((error: unknown) => this.crashed(taskId, stage.id, error))
-      .finally(() => this.running.delete(taskId)));
+      .catch((error: unknown) => this.crashed(taskId, stage.id, error)));
     return proving;
   }
 

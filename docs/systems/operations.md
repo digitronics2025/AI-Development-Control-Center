@@ -44,7 +44,7 @@ never runs elevated.
 ## Other scripts
 
 - `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); sets `ACC_REPOSITORY_AUTOMATION=0` so it never scans or fetches your real repositories; writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
-- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; run it after every Claude Code update ([agents.md](agents.md#skills)).
+- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills] [--permissions]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; `--permissions` runs 3 real runs (a control, Level 1, Level 2; 6 checks) proving a repository whose settings allow `Bash(*)` cannot widen Level 1 or 2; run both after every Claude Code update ([agents.md](agents.md#skills)).
 
 ## Phone alerts
 
@@ -90,4 +90,4 @@ Stored credentials are encrypted with a key that only this Windows account can
 unwrap (`credential-key.dpapi`), so a copy restored under another account or
 machine cannot read them — re-enter them there ([credential-broker.md](credential-broker.md)).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

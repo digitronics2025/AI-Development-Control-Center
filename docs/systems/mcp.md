@@ -33,7 +33,9 @@ The token and URL travel only in the agent's environment
 - Codex: `-c mcp_servers.acc.command=…`, `args=…`, and
   `env_vars=["ACC_TOOL_URL","ACC_TOOL_SESSION"]` to forward them.
 
-The prompt gains a "Control Center tools" section. Tool names are the
+The prompt gains a "Control Center tools" section (at Level 1 it also says to read Git
+through `git__status`/`git__diff`/`git__log`/`git__show`: Claude Code has no shell there,
+[agents.md](agents.md)). Tool names are the
 capability id with `.` → `__` (`network__port_owner`); two meta tools,
 `acc_find_capability` and `acc_call_capability`, reach capabilities that are
 not listed (escalation, [autopilot.md](autopilot.md)).
@@ -69,4 +71,4 @@ A real stdio fixture server was registered, health-checked, its tools
 discovered, called through the policy (`mcp.echo_fixture.echo`) and removed;
 the bridge was driven by a real MCP client over an in-memory transport.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-27

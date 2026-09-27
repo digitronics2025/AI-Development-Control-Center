@@ -155,6 +155,15 @@ function clipInput(input: unknown): string {
   return text.length > 800 ? `${text.slice(0, 799)}…` : text;
 }
 
+/** `name (type, required), …` from a JSON Schema's properties, 600 characters at most. */
+export function inputSummary(schema: Record<string, unknown>): string {
+  const props = (schema.properties ?? {}) as Record<string, { type?: unknown; description?: unknown }>;
+  const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+  const parts = Object.entries(props).map(([name, p]) => `${name} (${typeof p?.type === 'string' ? p.type : 'any'}${required.has(name) ? ', required' : ''})`);
+  const text = parts.length ? parts.join(', ') : 'an object';
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
+}
+
 export function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
   try {
     const out = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }) as Record<string, unknown>;
@@ -703,7 +712,7 @@ export class ToolService {
       const unchecked = !route.ok && route.code === 'NOT_INSTALLED' && offering.some((r) => !this.health.get(r.provider.id));
       if (!route.ok && !unchecked) continue;
       const operation = route.ok ? route.route.operation : offering[0]!.operation;
-      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: jsonSchemaOf(operation.input), level: cap.level });
+      out.push({ name: cap.id.replace(/\./g, '__'), capability: cap.id, title: cap.title, description: cap.description, inputSchema: operation.inputJsonSchema ?? jsonSchemaOf(operation.input), level: cap.level });
       if (out.length >= MAX_LISTED) break;
     }
     return out;
@@ -723,7 +732,10 @@ export class ToolService {
             ? 'available — call it with acc_call_capability'
             : `unavailable (${route.ok ? '' : route.reason})`
           : !route.ok ? `unavailable (${route.reason})` : c.level > scope.stageLevel ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}` : c.level > ceiling ? 'needs approval' : 'available — call it with acc_call_capability';
-        return `- ${c.id} (Level ${c.level}): ${c.title}. ${c.description} → ${status}`;
+        // An outside server's tools take untyped input here: name their parameters so a call can be written.
+        const schema = route.ok ? route.route.operation.inputJsonSchema : undefined;
+        const params = schema ? ` Input: ${inputSummary(schema)}.` : '';
+        return `- ${c.id} (Level ${c.level}): ${c.title}. ${c.description}${params} → ${status}`;
       })
       .join('\n');
   }

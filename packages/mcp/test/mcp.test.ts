@@ -22,7 +22,7 @@ describe('McpGateway (real stdio server)', () => {
   it('checks health and discovers tools with their hints', async () => {
     const health = await gateway.check(fixture);
     expect(health).toMatchObject({ ok: true, serverName: 'echo-fixture', serverVersion: '1.2.3', error: null });
-    expect(health.tools.map((t) => t.name)).toEqual(['echo', 'fail', 'env']);
+    expect(health.tools.map((t) => t.name)).toEqual(['echo', 'fail', 'env', 'picture']);
     expect(health.tools[0]!.readOnlyHint).toBe(true);
   });
 
@@ -32,6 +32,17 @@ describe('McpGateway (real stdio server)', () => {
     const env = await gateway.callTool(fixture, 'env', {});
     expect(env.text).toMatch(/^token=/);
     expect(env.text).not.toContain('unset');
+  });
+
+  it('passes on PNG and JPEG pictures a tool returns, and only those', async () => {
+    const r = await gateway.callTool(fixture, 'picture', {});
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('Here is the hero image');
+    expect(r.text).toContain('[image image/png]');
+    expect(r.images).toHaveLength(1);
+    expect(r.images[0]!.mime).toBe('image/png');
+    expect(r.images[0]!.data.subarray(1, 4).toString('latin1')).toBe('PNG');
+    expect((await gateway.callTool(fixture, 'echo', { text: 'x' })).images).toEqual([]);
   });
 
   it('reports a broken server as unhealthy instead of throwing', async () => {

@@ -60,6 +60,18 @@ permission level (tools the server marks destructive need at least Level 3).
 Environment variables (stdio) or headers (HTTP) are filled from named
 credentials by the broker; `allowedTools` narrows what is exposed.
 
+**What passes through.** Text content is joined (and redacted); other content
+is named in the text (`[image image/png]`). PNG and JPEG image blocks (bytes
+checked, 3 MB each, three per call) are also returned as pictures for the
+model (`OperationResult.images`) and, in a task, kept as `image` artifacts.
+Each tool's own input schema (16 KB at most) is stored with the server's
+health and published: agents see it in the tool list once the capability is
+listed, and `acc_find_capability` names its parameters (`Input: text (string,
+required)`); calls are still validated as an untyped object. A tool the
+server marks `readOnlyHint` (and not `destructiveHint`) is a read
+(`readOnly`), so a read-only session can call it when it is on the session's
+allow-list.
+
 A server whose calls are billed (image or video generation) is registered at
 Level 3 so it runs only in a Level 3 agent stage, such as Frontend Design's
 Assets stage; its free tools (search, pricing, job status) can be a second

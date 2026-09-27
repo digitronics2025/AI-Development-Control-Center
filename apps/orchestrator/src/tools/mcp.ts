@@ -17,6 +17,13 @@ export class McpError extends Error {
   }
 }
 
+/** A tool's input schema as stored and published: 16 KB of JSON at most, else none (the call still validates). */
+function keptSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> | null {
+  if (!schema || typeof schema !== 'object') return null;
+  const json = JSON.stringify(schema);
+  return json.length <= 16 * 1024 ? (JSON.parse(json) as Record<string, unknown>) : null;
+}
+
 function slug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'server';
 }
@@ -105,7 +112,7 @@ export class McpService {
     if (!s) throw new McpError('MCP server not found', 'NOT_FOUND');
     const health = await this.gateway.check(await this.config(s));
     const tools = health.tools.filter((t) => !s.allowedTools || s.allowedTools.includes(t.name));
-    this.store.upsertMcpServer({ ...s, health: { ok: health.ok, serverName: health.serverName, serverVersion: health.serverVersion, error: health.error, checkedAt: health.checkedAt, tools: tools.map((t) => ({ name: t.name, description: t.description, readOnlyHint: t.readOnlyHint, destructiveHint: t.destructiveHint })) }, updatedAt: now() });
+    this.store.upsertMcpServer({ ...s, health: { ok: health.ok, serverName: health.serverName, serverVersion: health.serverVersion, error: health.error, checkedAt: health.checkedAt, tools: tools.map((t) => ({ name: t.name, description: t.description, readOnlyHint: t.readOnlyHint, destructiveHint: t.destructiveHint, inputSchema: keptSchema(t.inputSchema) })) }, updatedAt: now() });
     if (health.ok && s.enabled) this.tools.registerProvider(this.provider({ ...s, health: this.get(id).health }), 'mcp');
     else this.tools.unregisterProvider(`mcp:${id}`);
     return this.publish(id);
@@ -125,6 +132,9 @@ export class McpService {
         title: `${s.name}: ${t.name}`,
         description: t.description || `Tool ${t.name} of MCP server ${s.name}`,
         input: z.record(z.string(), z.unknown()),
+        ...(t.inputSchema ? { inputJsonSchema: t.inputSchema } : {}),
+        // The server's own hint: never changes anything (and not also marked destructive).
+        ...(t.readOnlyHint === true && !destructive ? { readOnly: true } : {}),
         level: (destructive ? Math.max(3, s.permissionLevel) : s.permissionLevel) as PermissionLevel,
         classify: () => ({ reasons: [`MCP server ${s.name}${destructive ? ' (the server marks this tool destructive)' : ''}`], risk: destructive ? 'elevated' : 'normal', effects: ['network'] }),
         run: async (input, ctx) => {
@@ -132,7 +142,17 @@ export class McpService {
           if (!current?.enabled) return failure('UNAVAILABLE', `MCP server ${s.name} is disabled`);
           try {
             const r = await this.gateway.callTool(await this.config(current), t.name, input as Record<string, unknown>, ctx.signal);
-            return { ok: r.ok, summary: `${s.name}.${t.name}: ${r.ok ? 'ok' : 'error'}`, stdout: r.text.slice(0, 64_000), output: r.structured ?? undefined, ...(r.ok ? {} : { error: { code: 'FAILED' as const, message: r.text.slice(0, 500) } }) };
+            // Pictures the server returned are shown to the model and kept with the task.
+            const images = r.images.map((img, i) => ({ name: `${slug(s.name)}-${t.name}-${i + 1}.${img.mime === 'image/png' ? 'png' : 'jpg'}`.slice(0, 120), mime: img.mime, data: img.data }));
+            const artifacts = ctx.artifacts ? await Promise.all(images.map((img) => ctx.artifacts!.write({ name: img.name, type: 'image', content: img.data, mime: img.mime }))) : [];
+            return {
+              ok: r.ok,
+              summary: `${s.name}.${t.name}: ${r.ok ? 'ok' : 'error'}${images.length ? ` · ${images.length} picture${images.length === 1 ? '' : 's'}` : ''}`,
+              stdout: r.text.slice(0, 64_000),
+              output: r.structured ?? undefined,
+              ...(images.length ? { images, artifacts } : {}),
+              ...(r.ok ? {} : { error: { code: 'FAILED' as const, message: r.text.slice(0, 500) } }),
+            };
           } catch (error) {
             return failure('FAILED', `${s.name}.${t.name} failed: ${(error as Error).message}`);
           }

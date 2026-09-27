@@ -137,6 +137,8 @@ export interface McpToolView {
   description: string;
   readOnlyHint: boolean | null;
   destructiveHint: boolean | null;
+  /** The tool's own input schema (16 KB at most), published to agents; absent for servers checked before it was kept. */
+  inputSchema?: Record<string, unknown> | null;
 }
 
 export interface McpServerView {

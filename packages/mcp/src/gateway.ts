@@ -48,7 +48,13 @@ export interface McpCallResult {
   text: string;
   structured: unknown;
   isError: boolean;
+  /** PNG and JPEG pictures the tool returned (3 MB each at most, three at most), for the model to look at. */
+  images: Array<{ mime: 'image/png' | 'image/jpeg'; data: Buffer }>;
 }
+
+/** Largest picture passed on from an outside server (the same ceiling as the Control Center's own screenshots). */
+export const MAX_MCP_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_MCP_IMAGES = 3;
 
 interface Pooled {
   client: Client;
@@ -154,9 +160,19 @@ export class McpGateway {
     const c = await this.connection(config);
     const result = await c.client.callTool({ name, arguments: args }, undefined, { timeout: config.timeoutMs ?? 120_000, signal });
     c.lastUsed = Date.now();
-    const content = (result.content as Array<{ type: string; text?: string }> | undefined) ?? [];
-    const text = redact(content.map((part) => (part.type === 'text' ? (part.text ?? '') : `[${part.type}]`)).join('\n'));
-    return { ok: !result.isError, text, structured: result.structuredContent ?? null, isError: Boolean(result.isError) };
+    const content = (result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }> | undefined) ?? [];
+    const text = redact(content.map((part) => (part.type === 'text' ? (part.text ?? '') : `[${part.type}${part.mimeType ? ` ${part.mimeType}` : ''}]`)).join('\n'));
+    // Pictures reach the model as pictures: PNG or JPEG only, proven by their bytes, within the size ceiling.
+    const images: McpCallResult['images'] = [];
+    for (const part of content) {
+      if (part.type !== 'image' || typeof part.data !== 'string' || images.length >= MAX_MCP_IMAGES) continue;
+      if (part.data.length > Math.ceil((MAX_MCP_IMAGE_BYTES * 4) / 3) + 4) continue;
+      const data = Buffer.from(part.data, 'base64');
+      const png = data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const jpeg = data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+      if ((png || jpeg) && data.length <= MAX_MCP_IMAGE_BYTES) images.push({ mime: png ? 'image/png' : 'image/jpeg', data });
+    }
+    return { ok: !result.isError, text, structured: result.structuredContent ?? null, isError: Boolean(result.isError), images };
   }
 
   async disconnect(id: string): Promise<void> {

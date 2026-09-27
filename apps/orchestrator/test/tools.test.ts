@@ -389,6 +389,36 @@ describe('MCP servers', () => {
     expect((await t.api('GET', '/api/tools/capabilities')).body.map((c: { id: string }) => c.id)).not.toContain('mcp.echo_fixture.echo');
   }, 60_000);
 
+  it("passes an outside tool's pictures to the model, keeps them with the task, and publishes its input schema", async () => {
+    const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const created = await t.api('POST', '/api/mcp', { name: 'Pictures', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 1 });
+    expect(created.status).toBe(201);
+    expect(created.body.health.tools.find((x: { name: string }) => x.name === 'echo').inputSchema).toMatchObject({ properties: { text: { type: 'string' } } });
+    // The server's readOnlyHint makes its echo a read; a tool without the hint stays a write.
+    const ops = t.services.tools.registry.offering('mcp.pictures.echo');
+    expect(ops[0]!.operation.readOnly).toBe(true);
+    expect(t.services.tools.registry.offering('mcp.pictures.picture')[0]!.operation.readOnly).toBeUndefined();
+    // An agent reaches an outside tool by escalation; once enabled it is listed with the server's own schema.
+    const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 2, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'analysis', protectedPaths: [] }, 'agent');
+    expect((await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.echo', input: { text: 'hi' } }, sessionHeaders(session.token))).body.ok).toBe(true);
+    const listed = (await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).body.tools.find((x: { capability: string }) => x.capability === 'mcp.pictures.echo');
+    expect(listed.inputSchema).toMatchObject({ type: 'object', properties: { text: { type: 'string' } }, required: ['text'] });
+    const found = await t.api('POST', '/api/tool-session/find', { query: 'echo text back' }, sessionHeaders(session.token));
+    expect(JSON.stringify(found.body)).toContain('Input: text (string, required)');
+    const pic = await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.picture', input: {} }, sessionHeaders(session.token));
+    expect(pic.body.ok).toBe(true);
+    expect(pic.body.images).toHaveLength(1);
+    expect(pic.body.images[0]).toMatchObject({ mime: 'image/png', name: 'pictures-picture-1.png' });
+    expect(pic.body.summary).toContain('1 picture');
+    // In a task the picture is also kept as an image artifact.
+    const taskId = await createTask(t, repoId, 'Pictures [sim:slow]');
+    const inTask = t.services.tools.openSession({ taskId, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 2, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'analysis', protectedPaths: [] }, 'agent');
+    expect((await t.api('POST', '/api/tool-session/call', { capability: 'mcp.pictures.picture', input: {} }, sessionHeaders(inTask.token))).body.ok).toBe(true);
+    expect(t.services.store.listArtifacts(taskId).filter((a) => a.type === 'image').map((a) => [a.name, a.mime])).toEqual([['pictures-picture-1.png', 'image/png']]);
+    await t.api('POST', `/api/tasks/${taskId}/cancel`);
+    expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
+
   it('keeps a Level 3 generation server out of a Level 2 stage: in Frontend Design only Assets can spend', async () => {
     // Registered as the design runbook registers fal: paid tools at Level 3 (docs/systems/design-agent.md).
     const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');

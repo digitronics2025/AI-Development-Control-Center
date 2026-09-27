@@ -241,6 +241,11 @@ export interface ToolOperation<I = any, O = any> {
   /** What it does and when to use it — agents read this. */
   description: string;
   input: z.ZodType<I>;
+  /**
+   * The JSON Schema agents are shown, when it cannot be derived from `input`: an outside
+   * MCP server's own schema (the call is still validated by `input`).
+   */
+  inputJsonSchema?: Record<string, unknown>;
   /** Permission level for the common case; `classify` may raise (or lower) it per call. */
   level: PermissionLevel;
   classify?(input: I, ctx: ClassifyContext): Partial<ToolRisk>;

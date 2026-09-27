@@ -164,9 +164,10 @@ the task budget raised, a price estimate changed, or a media budget loosened
      - `fal jobs`, Level 2, `allowedTools` = the free tools (search, schema,
        pricing, job status, job result, cancel).
    - Agents reach them as `mcp.fal.*` and `mcp.fal_jobs.*` through
-     `acc_find_capability` / `acc_call_capability`. The gateway returns text
-     only, so results must come back as URLs; long video jobs go through
-     submit + status, never repeated submits (each submission is billed).
+     `acc_find_capability` / `acc_call_capability` (which names each tool's
+     parameters). The gateway passes on text and PNG/JPEG pictures, so other
+     results must come back as URLs; long video jobs go through submit +
+     status, never repeated submits (each submission is billed).
    - Fallback: Replicate's local stdio MCP server with `REPLICATE_API_TOKEN`
      mapped from a credential.
 2. **Media tools on the machine.** ffmpeg on PATH (optimising video, poster

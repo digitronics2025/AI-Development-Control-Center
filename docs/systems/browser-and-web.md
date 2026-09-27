@@ -60,9 +60,11 @@ things the agents could not do.
 ## Pictures the model sees
 
 `OperationResult.images` ([sdk.ts](../../packages/tools/src/sdk.ts)) carries
-PNGs of at most 3 MB for the model: `browser.open`, `browser.snapshot`/`act`
+PNGs (or JPEGs) of at most 3 MB for the model: `browser.open`, `browser.snapshot`/`act`
 with `screenshot`, `browser.screenshot`, `browser.check_page` and the
-screenshot steps of `browser.run_flow` fill it. `POST /api/tool-session/call`
+screenshot steps of `browser.run_flow` fill it, as do `media.image.view`,
+`media.video.frames` ([design-agent.md](design-agent.md)) and the PNG/JPEG
+image blocks an outside MCP server returns ([mcp.md](mcp.md)). `POST /api/tool-session/call`
 returns up to 3 of them base64-encoded; the bridge
 ([bridge.ts](../../packages/mcp/src/bridge.ts)) turns each into an MCP `image`
 content block after the text. They are never stored; the screenshot is also

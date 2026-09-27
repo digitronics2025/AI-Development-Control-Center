@@ -7,7 +7,7 @@
  *   pnpm verify:agents --only claude --claude-model haiku --skills
  *                                       also proves skills run inside a stage's limits
  *   pnpm verify:agents --only claude --claude-model haiku --permissions
- *                                       also proves a repository's allow rules cannot widen a stage
+ *                                       also proves a repository's allow rules and hooks cannot widen a stage
  *   pnpm verify:agents --only codex --mcp [--codex-mcp-repo <trusted repo>]
  *                                       also proves only the Control Center's MCP server joins a Codex run
  *
@@ -352,11 +352,13 @@ async function verifySkillCatalog(adapter: AgentAdapter) {
  * is, so the same rule also sits in an untracked .claude/settings.local.json —
  * the operator's own file, honoured anywhere. A control run without the Control
  * Center's policy proves the rule is live; without it the checks prove nothing.
+ * The same files carry SessionStart and Stop hooks, which `-p` runs in any folder:
+ * Level 1 must run none of them, and the Level 2 run proves they are live.
  */
 async function verifyPermissions() {
   const adapter = adapters.find((a) => a.adapter.id === 'claude');
   if (!adapter) return;
-  console.log("\n== Claude Code: a repository's allow rules cannot widen a stage ==");
+  console.log("\n== Claude Code: a repository's allow rules and hooks cannot widen a stage ==");
   const executable = (await adapter.adapter.detect(options)).executablePath;
   if (!executable) return;
   const root = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-permissions-'));
@@ -367,7 +369,18 @@ async function verifyPermissions() {
     console.log(`${ok ? 'pass' : 'FAIL'}  ${label}${ok ? '' : ` — ${redact.redact(detail).slice(0, 400)}`}`);
     if (!ok) failures++;
   };
-  const settings = JSON.stringify({ permissions: { allow: ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)', 'Glob(*)', 'Grep(*)', 'mcp__probe-db__*'] } }, null, 2);
+  // Hooks that leave a mark outside the repository; `disableAllHooks: false` is the repository trying to keep them on.
+  const hookMarker = path.join(root, 'hook-marker.txt');
+  const hook = { type: 'command', command: `node -e "require('fs').appendFileSync('${hookMarker.replace(/\\/g, '/')}','x')"` };
+  const settings = JSON.stringify(
+    {
+      permissions: { allow: ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)', 'Glob(*)', 'Grep(*)', 'mcp__probe-db__*'] },
+      disableAllHooks: false,
+      hooks: { SessionStart: [{ hooks: [hook] }], Stop: [{ hooks: [hook] }] },
+    },
+    null,
+    2,
+  );
   const write = (name: string) => `node -e "require('fs').writeFileSync('${name}','x')"`;
   try {
     mkdirSync(path.join(cwd, '.claude'), { recursive: true });
@@ -409,6 +422,7 @@ async function verifyPermissions() {
     const run = async (level: 1 | 2, steps: string[]) => {
       const lines: string[] = [];
       const before = commits();
+      rmSync(hookMarker, { force: true });
       const handle = await adapter.adapter.execute({
         ...options,
         executionId: randomUUID(),
@@ -423,12 +437,13 @@ async function verifyPermissions() {
       await handle.done;
       // What the agent tried and what was refused; the CLI's own warnings are noise here.
       const detail = lines.filter((l) => /^(\[tool\]|permission denied:|tool error:)/.test(l)).join(' | ') || lines.join(' | ');
-      return { lines, detail, committed: commits() !== before };
+      return { lines, detail, committed: commits() !== before, hooked: existsSync(hookMarker) };
     };
 
     const l1 = await run(1, [write('l1-marker.txt'), 'git commit --allow-empty -m acc-probe-l1']);
     expect('Level 1 cannot write a file through Bash', !written('l1-marker.txt'), l1.detail);
     expect('Level 1 cannot git commit', !l1.committed, l1.detail);
+    expect("Level 1 runs none of the repository's hooks", !l1.hooked, l1.detail);
 
     const l2 = await run(2, [write('l2-marker.txt'), 'git commit --allow-empty -m acc-probe-l2', 'git push origin HEAD']);
     // The refusal line proves the command was attempted and stopped by the policy, not skipped by the model.
@@ -436,6 +451,8 @@ async function verifyPermissions() {
     expect('Level 2 still runs other commands', written('l2-marker.txt'), l2.detail);
     expect('Level 2 cannot git commit', !l2.committed && refused('git commit'), l2.detail);
     expect('Level 2 cannot git push', !pushed() && refused('git push'), l2.detail);
+    // Also the control for the Level 1 hook check: the probe's hooks are live.
+    expect("Level 2 still runs the repository's hooks", l2.hooked, l2.detail);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

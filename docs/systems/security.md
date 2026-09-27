@@ -153,10 +153,14 @@ settings file a run loads (a repository's `.claude/settings.json` allowing
 `Bash(*)`, for one) to the Control Center's, and only a deny rule or a missing
 tool beats an allow rule; so each level's limits are deny rules, and Level 1,
 whose "read-only commands only" no deny rule can express, has no shell — it
-reads Git through the Control Center's own tools. Codex runs with
+reads Git through the Control Center's own tools. Claude Code hooks are shell
+commands outside every permission rule, and `-p` runs a repository's in any
+folder, trusted or not, so Level 1 runs no hooks at all (`disableAllHooks`); from
+Level 2 hooks stay on so the operator's own secret guards keep working, and a
+repository whose settings switch them off is named in the run log. Codex runs with
 `--ignore-rules`, because an execpolicy `allow` rule runs a command outside the
 sandbox. `pnpm verify:agents --permissions` proves the Claude side with real
-runs in a repository that allows `Bash(*)`.
+runs in a repository that allows `Bash(*)` and carries hooks.
 
 ## Cloud control plane
 

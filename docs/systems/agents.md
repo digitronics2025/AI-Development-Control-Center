@@ -102,7 +102,7 @@ tenten-accounting-in.
 
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
-- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] --strict-mcp-config [--mcp-config <acc>]`
+- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] [--settings {"disableAllHooks":true}] --strict-mcp-config [--mcp-config <acc>]`
 - Permission mapping (`claudeToolPolicy`): L1 `dontAsk`, read-only tools and **no shell**; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Always denied, at every level with a shell (prefix rules on Claude's native Bash — a heuristic, not the Control Center's classifier): force and mirror push, `git reset --hard`, `git clean`, `git restore`, `git checkout --`/`.`/`-f`, `git switch --discard-changes`, `git stash drop|clear`, `git branch -D`, `git worktree remove`, `git filter-branch`, `rm -rf`/`rm -r`, `rmdir /s`, `rd /s`, `del /s`, `Remove-Item`, `npx rimraf`. `Skill` is allowed at every level.
 - Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Skill, ToolSearch, TodoWrite` (and `Bash` denied outright); L2+ adds `Bash, Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
 - **A repository's settings cannot widen a stage.** Settings files the run loads —
@@ -120,6 +120,27 @@ tenten-accounting-in.
   operator trusted (an untracked `settings.local.json` anywhere); excluding the
   `project` setting source, or `--restricted`, would also drop the repository's
   skills and was rejected for that.
+- **Level 1 runs no hooks** (`--settings {"disableAllHooks":true}`). Hooks are shell
+  commands outside every permission rule, and `-p` runs a repository's in trusted
+  and untrusted folders alike (the CLI's gate is "non-interactive or trusted").
+  Measured on 2.1.283 (2026-09-27), without the switch an L1 run in a temporary
+  repository ran every hook event (SessionStart, UserPromptSubmit, Pre/PostToolUse
+  on `Read`, Stop, SessionEnd) from `.claude/settings.json`, `settings.local.json`
+  and a repository skill's frontmatter; so did a trusted isolated worktree. An L2
+  agent can also write hooks into `settings.local.json` (hidden by a global
+  gitignore) for a later stage to run. The switch stops all of them — plugins' and
+  the operator's too — and a repository's `disableAllHooks: false` cannot undo it
+  (the key merges restrictively). Skills still load and run. From L2 hooks stay on:
+  the agent has a shell anyway, a hook answering `allow` does not lift a deny rule
+  (measured: an L2 `git commit` stayed denied), and the switch would take away the
+  operator's own hooks — their secret guards match `Bash|PowerShell`, which L1 does
+  not have.
+- **A repository that switches hooks off is named in the run log.** The key merges
+  restrictively in that direction too: a repository's `disableAllHooks: true`
+  silently switches off the operator's own hooks (measured). At L2+ with user
+  config on, the init line is followed by `Warning: this repository's
+  .claude/settings.json sets disableAllHooks, …` (`repositoryHookSwitches`; a file
+  that does not parse is skipped, as the CLI skips it). The run is not stopped.
 - `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.
 - Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
@@ -128,8 +149,8 @@ tenten-accounting-in.
 ## Skills
 
 With **Load my CLI customisations** on, a run loads the operator's skills,
-hooks and plugins (`--setting-sources` is left at the CLI default); off, only
-the repository's own (`project,local`). Skills run inside the stage's
+hooks and plugins (`--setting-sources` is left at the CLI default; hooks only
+from L2, as L1 runs none); off, only the repository's own (`project,local`). Skills run inside the stage's
 limits, measured with real runs on Claude Code 2.1.280:
 
 | Case | Result |
@@ -157,10 +178,11 @@ Every prompt carries a short "Skills" section
 
 **Tripwire:** these guarantees rest on the CLI's permission semantics. After
 every Claude Code update run `pnpm verify:agents --only claude --claude-model
-haiku --skills --permissions` (5 skill probes, the skill-list checks below, and 6
-probes in a repository whose settings allow `Bash(*)`: a control proving the rule
-is live, then L1 cannot write a file or commit, L2 still runs commands but cannot
-commit or push; exits 1 on any mismatch). A CLI too old for
+haiku --skills --permissions` (5 skill probes, the skill-list checks below, and 8
+probes in a repository whose settings allow `Bash(*)` and carry SessionStart/Stop
+hooks: a control proving the rule is live, then L1 cannot write a file or commit
+and runs none of the hooks, L2 still runs commands but cannot commit or push, and
+still runs the hooks — the control for the L1 hook check; exits 1 on any mismatch). A CLI too old for
 `--tools` fails the run with "unknown option", classified `MODEL_UNAVAILABLE`
 (update the CLI).
 

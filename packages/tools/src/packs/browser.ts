@@ -419,6 +419,228 @@ export async function renderHtml(ctx: OperationContext, input: RenderHtmlInput):
   }
 }
 
+// ---------------------------------------------------------------------------
+// Visual diff and page audit (docs/systems/design-agent.md)
+// ---------------------------------------------------------------------------
+
+/** Pixels whose channels differ by more than this (0–255) count as changed: anti-aliasing noise stays below it. */
+const DIFF_TOLERANCE = 24;
+
+/** Where a page is captured for comparison: settled, motion reduced, animations stopped, the caret hidden. */
+async function stableCapture(browser: Browser, url: string, viewport: ViewportName, colorScheme: 'light' | 'dark', settleMs: number, timeoutSec: number, fullPage: boolean): Promise<Buffer> {
+  const context = await browser.newContext(contextOptions(viewport, { colorScheme, reducedMotion: 'reduce' }));
+  await guardBrowserContext(context);
+  try {
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: 'load', timeout: timeoutSec * 1000 });
+    if (settleMs) await page.waitForTimeout(settleMs);
+    return await page.screenshot({ type: 'png', fullPage, animations: 'disabled', caret: 'hide', timeout: timeoutSec * 1000 });
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Compare two PNGs pixel by pixel in a sealed page (scripts only ours, every
+ * request refused): the share of changed pixels, and a picture of the
+ * baseline in grey with every changed pixel in red.
+ */
+export async function comparePngs(browser: Browser, baseline: Buffer, current: Buffer): Promise<{ width: number; height: number; changed: number; total: number; sizeChanged: boolean; diff: Buffer }> {
+  const context = await browser.newContext({ viewport: { width: 800, height: 600 }, serviceWorkers: 'block' });
+  await guardBrowserContext(context);
+  await context.route('**/*', (route) => route.abort('blockedbyclient'));
+  try {
+    const page = await context.newPage();
+    await page.setContent('<!doctype html><title>diff</title>', { waitUntil: 'load' });
+    const result = await page.evaluate(
+      async ({ a, b, tolerance }) => {
+        // Runs in the page: browser globals through globalThis (this package compiles without DOM types).
+        const g = globalThis as any;
+        const load = (src: string) =>
+          new Promise<any>((resolve, reject) => {
+            const img = new g.Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error('not an image'));
+            img.src = src;
+          });
+        const [ia, ib] = await Promise.all([load(a), load(b)]);
+        const width = Math.max(ia.naturalWidth, ib.naturalWidth);
+        const height = Math.max(ia.naturalHeight, ib.naturalHeight);
+        const pixels = (img: any) => {
+          const c = g.document.createElement('canvas');
+          c.width = width;
+          c.height = height;
+          const x = c.getContext('2d');
+          x.drawImage(img, 0, 0);
+          return x.getImageData(0, 0, width, height).data;
+        };
+        const pa: any = pixels(ia);
+        const pb: any = pixels(ib);
+        const out = g.document.createElement('canvas');
+        out.width = width;
+        out.height = height;
+        const ox = out.getContext('2d');
+        const diff = ox.createImageData(width, height);
+        let changed = 0;
+        for (let i = 0; i < pa.length; i += 4) {
+          const delta = Math.max(Math.abs(pa[i] - pb[i]), Math.abs(pa[i + 1] - pb[i + 1]), Math.abs(pa[i + 2] - pb[i + 2]), Math.abs(pa[i + 3] - pb[i + 3]));
+          if (delta > tolerance) {
+            changed++;
+            diff.data.set([230, 30, 30, 255], i);
+          } else {
+            const grey = Math.round((pa[i] * 0.299 + pa[i + 1] * 0.587 + pa[i + 2] * 0.114) * 0.35 + 166);
+            diff.data.set([grey, grey, grey, 255], i);
+          }
+        }
+        ox.putImageData(diff, 0, 0);
+        return { width, height, changed, total: width * height, sizeChanged: ia.naturalWidth !== ib.naturalWidth || ia.naturalHeight !== ib.naturalHeight, diff: out.toDataURL('image/png') as string };
+      },
+      { a: `data:image/png;base64,${baseline.toString('base64')}`, b: `data:image/png;base64,${current.toString('base64')}`, tolerance: DIFF_TOLERANCE },
+    );
+    return { ...result, diff: Buffer.from(result.diff.replace(/^data:image\/png;base64,/, ''), 'base64') };
+  } finally {
+    await context.close();
+  }
+}
+
+export interface VisualDiffInput {
+  url: string;
+  name: string;
+  viewport: ViewportName;
+  colorScheme: 'light' | 'dark';
+  baselineDir: string;
+  update: boolean;
+  threshold: number;
+  fullPage: boolean;
+  settleMs: number;
+  timeoutSec: number;
+}
+
+export async function visualDiff(ctx: OperationContext, input: VisualDiffInput): Promise<OperationResult> {
+  const file = `${input.baselineDir.replace(/\/+$/, '')}/${input.name}-${input.viewport}-${input.colorScheme}.png`;
+  let abs: string;
+  try {
+    abs = resolveInside(ctx.roots, ctx.cwd, file);
+  } catch (error) {
+    return { ok: false, summary: (error as Error).message, error: { code: 'OUTSIDE_ROOT', message: (error as Error).message } };
+  }
+  return withBrowser(async (browser) => {
+    const current = await stableCapture(browser, input.url, input.viewport, input.colorScheme, input.settleMs, input.timeoutSec, input.fullPage);
+    const rel = path.relative(ctx.cwd, abs).split(path.sep).join('/');
+    const { readFile, writeFile, mkdir } = await import('node:fs/promises');
+    const saved = await readFile(abs).catch(() => null);
+    if (input.update) {
+      const { protectedCheck } = await import('./filesystem.js');
+      const blocked = protectedCheck(ctx, abs);
+      if (blocked) return blocked;
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, current);
+      return { ok: true, summary: `${saved ? 'Updated' : 'Recorded'} the baseline ${rel} (${input.viewport}, ${input.colorScheme})`, output: { baseline: rel, recorded: true }, filesChanged: [rel], images: current.length <= MAX_MODEL_IMAGE_BYTES ? [{ name: path.basename(rel), mime: 'image/png', data: current }] : undefined };
+    }
+    if (!saved) return { ok: false, summary: `No baseline at ${rel}: run again with update to record one (a Level 2 call, it writes that file)`, error: { code: 'INVALID_INPUT', message: `No baseline at ${rel}` } };
+    const cmp = await comparePngs(browser, saved, current);
+    const percent = Math.round((cmp.changed / Math.max(1, cmp.total)) * 10_000) / 100;
+    const matches = !cmp.sizeChanged && percent <= input.threshold;
+    const name = `diff-${input.name}-${input.viewport}-${input.colorScheme}.png`;
+    let artifact: { id: string; name: string } | null = null;
+    if (ctx.artifacts) artifact = await ctx.artifacts.write({ name, type: 'screenshot', content: cmp.diff, mime: 'image/png' });
+    const images: ResultImage[] = [];
+    if (cmp.diff.length <= MAX_MODEL_IMAGE_BYTES) images.push({ name, mime: 'image/png', data: cmp.diff });
+    return {
+      ok: true,
+      summary: matches
+        ? `${input.url} matches ${rel} (${percent}% of pixels changed, within ${input.threshold}%)`
+        : `${input.url} differs from ${rel}: ${percent}% of pixels changed${cmp.sizeChanged ? ', and the page size changed' : ''} (limit ${input.threshold}%); the red in the picture is what moved`,
+      output: { baseline: rel, matches, changedPercent: percent, changedPixels: cmp.changed, width: cmp.width, height: cmp.height, sizeChanged: cmp.sizeChanged, diff: artifact },
+      evidence: [`visual diff of ${input.url} against ${rel}: ${percent}% changed`],
+      artifacts: artifact ? [artifact] : [],
+      networkTargets: [new URL(input.url).host],
+      ...(images.length ? { images } : {}),
+    };
+  });
+}
+
+export interface AuditFinding {
+  kind: 'lcp-slow' | 'cls-high' | 'heavy-page' | 'heavy-image' | 'image-no-dimensions' | 'oversized-image' | 'image-not-lazy' | 'video-no-poster';
+  detail: string;
+}
+
+/** What a page costs and how it loads, measured on this machine (unthrottled): LCP, CLS, weight, and image habits. */
+export async function auditPage(ctx: OperationContext, input: { url: string; viewport: ViewportName; settleMs: number; timeoutSec: number }): Promise<OperationResult> {
+  return withBrowser(async (browser) => {
+    const context = await browser.newContext(contextOptions(input.viewport));
+    await guardBrowserContext(context);
+    try {
+      const page = await context.newPage();
+      const sizes: Array<Promise<{ url: string; type: string; bytes: number }>> = [];
+      page.on('requestfinished', (request) => {
+        sizes.push(
+          request
+            .sizes()
+            .then((sz) => ({ url: redact(request.url()).slice(0, 200), type: request.resourceType(), bytes: sz.responseBodySize }))
+            .catch(() => ({ url: redact(request.url()).slice(0, 200), type: request.resourceType(), bytes: 0 })),
+        );
+      });
+      await page.goto(input.url, { waitUntil: 'load', timeout: input.timeoutSec * 1000 });
+      if (input.settleMs) await page.waitForTimeout(input.settleMs);
+      const measured = await page.evaluate(async () => {
+        // Runs in the page: browser globals through globalThis (this package compiles without DOM types).
+        const g = globalThis as any;
+        const vitals = await new Promise<{ lcp: number | null; cls: number }>((resolve) => {
+          const out = { lcp: null as number | null, cls: 0 };
+          try {
+            new g.PerformanceObserver((list: any) => {
+              for (const e of list.getEntries()) out.lcp = Math.round(e.renderTime || e.loadTime || e.startTime);
+            }).observe({ type: 'largest-contentful-paint', buffered: true });
+            new g.PerformanceObserver((list: any) => {
+              for (const e of list.getEntries()) if (!e.hadRecentInput) out.cls += e.value;
+            }).observe({ type: 'layout-shift', buffered: true });
+          } catch {
+            /* an engine without these entries: report nulls */
+          }
+          setTimeout(() => resolve(out), 100);
+        });
+        const nav = g.performance.getEntriesByType('navigation')[0];
+        const fcp = g.performance.getEntriesByName('first-contentful-paint')[0];
+        const fold = g.innerHeight;
+        const images = [...g.document.images].map((img: any) => {
+          const r = img.getBoundingClientRect();
+          return { src: String(img.currentSrc || img.src).slice(0, 200), natural: img.naturalWidth, shown: Math.round(r.width), hasSize: img.hasAttribute('width') && img.hasAttribute('height'), lazy: img.loading === 'lazy', below: r.top > fold };
+        });
+        const videos = [...g.document.querySelectorAll('video')].map((v: any) => ({ src: String(v.currentSrc || v.src || '').slice(0, 200), poster: Boolean(v.getAttribute('poster')) }));
+        return { ...vitals, ttfb: nav ? Math.round(nav.responseStart) : null, fcp: fcp ? Math.round(fcp.startTime) : null, dpr: g.devicePixelRatio, images, videos };
+      });
+      const resources = await Promise.all(sizes);
+      const total = resources.reduce((n, r) => n + r.bytes, 0);
+      const byType: Record<string, number> = {};
+      for (const r of resources) byType[r.type] = (byType[r.type] ?? 0) + r.bytes;
+      const findings: AuditFinding[] = [];
+      const kb = (n: number) => `${Math.round(n / 1024)} KB`;
+      if (measured.lcp !== null && measured.lcp > 2500) findings.push({ kind: 'lcp-slow', detail: `Largest contentful paint at ${measured.lcp} ms (good is 2500 ms or less)` });
+      const cls = Math.round(measured.cls * 1000) / 1000;
+      if (cls > 0.1) findings.push({ kind: 'cls-high', detail: `Cumulative layout shift ${cls} (good is 0.1 or less): give images and embeds their size, reserve space for late content` });
+      if (total > 2 * 1024 * 1024) findings.push({ kind: 'heavy-page', detail: `The page transferred ${kb(total)} (aim for under 2 MB)` });
+      for (const r of resources) if (r.type === 'image' && r.bytes > 200 * 1024) findings.push({ kind: 'heavy-image', detail: `${r.url}: ${kb(r.bytes)} (aim for about 200 KB; AVIF/WebP at the displayed size)` });
+      for (const img of measured.images) {
+        if (!img.hasSize) findings.push({ kind: 'image-no-dimensions', detail: `${img.src}: no width and height attributes, so the layout shifts when it loads` });
+        if (img.shown > 0 && img.natural > img.shown * measured.dpr * 2) findings.push({ kind: 'oversized-image', detail: `${img.src}: ${img.natural} px wide, shown at ${img.shown} px (serve responsive sizes with srcset)` });
+        if (img.below && !img.lazy) findings.push({ kind: 'image-not-lazy', detail: `${img.src}: below the fold without loading="lazy"` });
+      }
+      for (const v of measured.videos) if (!v.poster) findings.push({ kind: 'video-no-poster', detail: `${v.src || 'a video'}: no poster frame` });
+      const shown = findings.slice(0, 50);
+      return {
+        ok: true,
+        summary: `${input.url} (${input.viewport}, this machine, unthrottled): LCP ${measured.lcp ?? '?'} ms, CLS ${cls}, ${kb(total)} in ${resources.length} requests; ${findings.length ? `${findings.length} finding(s): ${findings.slice(0, 2).map((f) => f.detail).join('; ')}` : 'no findings'}`,
+        output: { metrics: { lcpMs: measured.lcp, cls, fcpMs: measured.fcp, ttfbMs: measured.ttfb, totalBytes: total, requests: resources.length, bytesByType: byType }, findings: shown, truncated: findings.length > shown.length },
+        evidence: [`page audit of ${input.url} (${input.viewport}): LCP ${measured.lcp ?? '?'} ms, CLS ${cls}, ${kb(total)}, ${findings.length} finding(s)`],
+        networkTargets: [new URL(input.url).host],
+      };
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 const flowStep = z.discriminatedUnion('action', [
   z.object({ action: z.literal('goto'), url: httpUrl }),
   z.object({ action: z.literal('click'), selector: z.string().min(1).max(500) }),
@@ -720,6 +942,39 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
         readOnly: true,
         classify: () => ({ reasons: ['Draws HTML offline with scripts off'], effects: [], writes: false }),
         run: (input, ctx) => renderHtml(ctx, input),
+      }),
+      operation({
+        id: 'browser.visual_diff',
+        title: 'Compare a page with its saved picture',
+        description:
+          'Capture a page at a width and colour scheme (motion reduced, animations stopped) and compare it pixel by pixel with its baseline picture in the repository (<baselineDir>/<name>-<viewport>-<scheme>.png): the share of changed pixels, and a picture with every change in red. With update, record or replace the baseline instead (a Level 2 call: it writes that file). Use it to prove a change did not move what it should not.',
+        input: z.object({
+          url: httpUrl,
+          name: z.string().min(1).max(60).regex(/^[\w-]+$/),
+          viewport: viewportField.default('desktop'),
+          colorScheme: z.enum(['light', 'dark']).default('light'),
+          baselineDir: z.string().min(1).max(200).default('visual-baselines').describe('Repository folder of the baseline pictures.'),
+          update: z.boolean().default(false).describe('Record or replace the baseline instead of comparing (writes a file: Level 2).'),
+          threshold: z.number().min(0).max(100).default(0.1).describe('Percent of pixels that may change and still match.'),
+          fullPage: z.boolean().default(true),
+          settleMs: z.number().int().min(0).max(10_000).default(500),
+          timeoutSec: z.number().int().min(5).max(120).default(30),
+        }),
+        level: 1,
+        // Recording a baseline writes a file into the repository; comparing only reads.
+        classify: (input) => (input.update ? { level: 2, reasons: ['Writes a baseline picture into the repository'], effects: ['filesystem'], writes: true } : { effects: isLoopback(input.url) ? [] : ['network'], writes: false }),
+        run: (input, ctx) => visualDiff(ctx, input),
+      }),
+      operation({
+        id: 'browser.audit',
+        title: 'Measure how a page loads',
+        description:
+          'Open a page and measure it on this machine (unthrottled): largest contentful paint, cumulative layout shift, first contentful paint, time to first byte, bytes by type, and image habits that cost users: images over 200 KB, without width and height, far larger than shown, below the fold without lazy loading, and videos without a poster.',
+        input: z.object({ url: httpUrl, viewport: viewportField.default('phone'), settleMs: z.number().int().min(0).max(10_000).default(1500), timeoutSec: z.number().int().min(5).max(120).default(30) }),
+        level: 1,
+        readOnly: true,
+        classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'], writes: false }),
+        run: (input, ctx) => auditPage(ctx, input),
       }),
       operation({
         id: 'browser.storage',

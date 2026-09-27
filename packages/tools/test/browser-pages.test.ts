@@ -53,6 +53,24 @@ const refOf = (snapshot: string, pattern: RegExp) => new RegExp(`${pattern.sourc
 
 let server: http.Server;
 let base: string;
+let diffColour = '#2255dd';
+
+/** An uncompressed 24-bit BMP of the given size, a gradient so it is not blank. */
+function bitmap(width: number, height: number): Buffer {
+  const row = Math.ceil((width * 3) / 4) * 4;
+  const buf = Buffer.alloc(54 + row * height);
+  buf.write('BM', 0, 'latin1');
+  buf.writeUInt32LE(buf.length, 2);
+  buf.writeUInt32LE(54, 10);
+  buf.writeUInt32LE(40, 14);
+  buf.writeInt32LE(width, 18);
+  buf.writeInt32LE(height, 22);
+  buf.writeUInt16LE(1, 26);
+  buf.writeUInt16LE(24, 28);
+  buf.writeUInt32LE(row * height, 34);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) buf.set([x % 256, y % 256, (x + y) % 256], 54 + y * row + x * 3);
+  return buf;
+}
 
 const PAGES: Record<string, string> = {
   '/': `<!doctype html><title>Shop</title><main><h1>Orders</h1><label>Customer <input id="c"></label>
@@ -64,6 +82,9 @@ const PAGES: Record<string, string> = {
   '/cookie': `<!doctype html><title>Cookie</title><script>document.cookie = 'signed=yes; path=/'</script><p>set</p>`,
   '/whoami': `<!doctype html><title>Who</title><h1 id="c"></h1><script>document.getElementById('c').textContent = document.cookie</script>`,
   // Themes, motion and a layout that breaks at phone width (docs/systems/design-agent.md).
+  '/heavy': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Heavy</title><body style="margin:0;font:16px system-ui">
+    <main><h1>Heavy page</h1><p style="height:300px;background:#cde">Content that the late banner pushes down.</p><img src="/big.bmp" alt="Hero" style="width:100px"><div style="height:2000px"></div><img src="/big.bmp" alt="Below" width="400" height="300"><video src="/none.mp4" muted></video></main>
+    <script>setTimeout(() => { const d = document.createElement('div'); d.style.cssText = 'height:400px;background:#eee'; d.textContent = 'Late banner'; document.body.prepend(d); }, 700)</script></body></html>`,
   '/themed': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Themed</title><style>
     :root { color-scheme: light dark; --bg: #ffffff; --fg: #111111; }
     @media (prefers-color-scheme: dark) { :root { --bg: #111111; --fg: #f5f5f5; } }
@@ -76,6 +97,18 @@ const PAGES: Record<string, string> = {
 beforeAll(async () => {
   await health.refresh({ ids: ['playwright', 'web'] });
   server = http.createServer((req, res) => {
+    // A 400×300 bitmap, far larger than it is shown and heavier than 200 KB (browser.audit).
+    if (req.url === '/big.bmp') {
+      res.setHeader('content-type', 'image/bmp');
+      res.end(bitmap(400, 300));
+      return;
+    }
+    // A box whose colour the visual-diff test changes between captures.
+    if (req.url === '/diff') {
+      res.setHeader('content-type', 'text/html');
+      res.end(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;background:#fff}.box{width:200px;height:120px;margin:40px;background:${diffColour}}</style><div class="box"></div><p style="margin:40px;font:16px system-ui">Stable text</p>`);
+      return;
+    }
     const page = PAGES[req.url ?? ''];
     if (!page) {
       res.statusCode = 404;
@@ -355,5 +388,48 @@ describe('browser.render_html (style tiles)', () => {
     expect(op.input.safeParse({ html: 'x'.repeat(1_000_001) }).success).toBe(false);
     expect(op).toMatchObject({ level: 1, readOnly: true });
     expect(op.classify?.(op.input.parse({ html: '<p>x</p>' }), { cwd: temp })).toMatchObject({ effects: [] });
+  }, 90_000);
+});
+
+describe('browser.visual_diff and browser.audit', () => {
+  it('records a baseline (Level 2), then reports a match, then shows what moved', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-visual-'));
+    const at = (update = false) => call('browser.visual_diff', { url: `${base}/diff`, name: 'box', viewport: 'phone', update }, { ...ctx(), cwd: dir, roots: [dir] });
+    const op = registry.provider('playwright')!.operations.find((o) => o.id === 'browser.visual_diff')!;
+    expect(op.classify!(op.input.parse({ url: `${base}/diff`, name: 'box', update: true }), { cwd: dir })).toMatchObject({ level: 2, writes: true });
+    expect(op.classify!(op.input.parse({ url: `${base}/diff`, name: 'box' }), { cwd: dir })).toMatchObject({ writes: false });
+    diffColour = '#2255dd';
+    const none = await at();
+    expect(none.ok).toBe(false);
+    expect(none.summary).toMatch(/No baseline at visual-baselines\/box-phone-light.png/);
+    const recorded = await at(true);
+    expect(recorded.ok, recorded.summary).toBe(true);
+    expect(recorded.filesChanged).toEqual(['visual-baselines/box-phone-light.png']);
+    const same = await at();
+    expect(same.output).toMatchObject({ matches: true, changedPercent: 0, sizeChanged: false });
+    diffColour = '#dd2222';
+    const moved = await at();
+    const out = moved.output as { matches: boolean; changedPercent: number; changedPixels: number };
+    expect(out.matches).toBe(false);
+    // The 200×120 box changed colour: about 24 000 of the phone page's pixels.
+    expect(out.changedPixels).toBeGreaterThan(20_000);
+    expect(out.changedPercent).toBeGreaterThan(1);
+    expect(moved.summary).toMatch(/differs from visual-baselines\/box-phone-light.png/);
+    expect(moved.images?.[0]?.mime).toBe('image/png');
+    diffColour = '#2255dd';
+  }, 120_000);
+
+  it('measures LCP and CLS and names the images and videos that cost users', async () => {
+    const r = await call('browser.audit', { url: `${base}/heavy`, viewport: 'phone', settleMs: 1500 });
+    expect(r.ok, r.summary).toBe(true);
+    const out = r.output as { metrics: { lcpMs: number | null; cls: number; totalBytes: number; bytesByType: Record<string, number> }; findings: Array<{ kind: string; detail: string }> };
+    expect(out.metrics.lcpMs).not.toBeNull();
+    // The late banner pushed the page down.
+    expect(out.metrics.cls).toBeGreaterThan(0.1);
+    expect(out.metrics.bytesByType.image).toBeGreaterThan(300_000);
+    const kinds = new Set(out.findings.map((f) => f.kind));
+    for (const kind of ['cls-high', 'heavy-image', 'image-no-dimensions', 'oversized-image', 'image-not-lazy', 'video-no-poster']) expect(kinds, kind).toContain(kind);
+    expect(out.findings.find((f) => f.kind === 'image-no-dimensions')!.detail).toMatch(/big\.bmp/);
+    expect(r.summary).toMatch(/LCP \d+ ms, CLS/);
   }, 90_000);
 });

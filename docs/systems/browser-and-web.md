@@ -70,9 +70,11 @@ things the agents could not do.
 |---|---|---|
 | `browser.visual_matrix` | 1 | The page at up to five widths in light and dark: one contact sheet per scheme for the model (composed in Chromium from `data:` URLs, scripts off, network refused; JPEG ≤3 MB), every capture kept as an artifact, and status, console errors and horizontal overflow per view |
 | `browser.accessibility` | 1 | axe-core WCAG 2.2 AA at a viewport and colour scheme; each violation with up to ten failing elements (axe's CSS selector, the element's HTML and axe's failure summary, redacted) |
+| `browser.visual_diff` | 1 (2 with `update`) | The page at a width and scheme (motion reduced, animations and caret off, full page) against `<baselineDir>/<name>-<viewport>-<scheme>.png` (default folder `visual-baselines`): pixels whose channels differ by more than 24 counted in a sealed page (scripts only ours, every request refused), `matches` within `threshold` percent (0.1) and no size change, a grey picture with each changed pixel red (returned and kept as a screenshot artifact). `update` records or replaces the baseline: `classify` raises that call to Level 2 (it writes the file; protected paths refused). Comparing never writes |
+| `browser.audit` | 1, read-only | The page on this machine, unthrottled: LCP and CLS (PerformanceObserver, buffered), FCP, TTFB, bytes by resource type (`request.sizes()`), and findings: LCP over 2.5 s, CLS over 0.1, a page over 2 MB, images over 200 KB, `<img>` without width and height, images wider than twice their shown size × pixel ratio, below-the-fold images without `loading="lazy"`, videos without a poster |
 | `browser.render_html` | 1, read-only | HTML the agent wrote (a style tile, up to 1 MB) drawn at one width in light and dark, cut at 4000 px tall; each picture returned for the model (PNG, else JPEG ≤3 MB) and kept as a `tile-<name>-<scheme>.png` screenshot artifact |
 
-All three are in the `LOOK` set of every profile, with `media.image.view` and
+All five are in the `LOOK` set of every profile, with `media.image.view` and
 `media.video.frames` ([design-agent.md](design-agent.md)).
 
 **`browser.render_html` isolation** (`renderHtml` in

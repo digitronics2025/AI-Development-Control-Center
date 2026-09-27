@@ -20,7 +20,7 @@ export interface CapabilityProfile {
 const CORE = ['fs.*', 'git.status', 'git.diff', 'git.log', 'git.show', 'git.branch_list', 'environment.*', 'checkpoint.list', 'tools.*'];
 const INSPECT = ['network.*', 'windows.processes', 'windows.port_owner', 'windows.system_info', 'windows.services', 'process.list', 'process.logs', 'http.*', 'web.*'];
 /** Looking at pages without changing them: open, look, read logs, close. */
-const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'browser.accessibility', 'browser.visual_matrix', 'browser.render_html', 'media.image.view', 'media.video.frames', 'design.contrast_matrix', 'design.lint_tokens'];
+const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'browser.accessibility', 'browser.visual_matrix', 'browser.render_html', 'browser.audit', 'browser.visual_diff', 'media.image.view', 'media.video.frames', 'design.contrast_matrix', 'design.lint_tokens'];
 const DEVELOP = ['shell.*', 'process.*', 'terminal.*', 'node.*', 'checkpoint.*', 'git.*', 'editor.*'];
 
 export const PROFILES: Record<ProfileId, CapabilityProfile> = {

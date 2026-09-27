@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { executionSettingsSchema, mediaSettingsSchema, POLICY_MODES, repositoryRuntimeSchema } from './tools.js';
+import { executionSettingsSchema, mediaSettingsSchema, POLICY_MODES, repositoryRuntimeSchema, STAGE_TOOL_PROFILES } from './tools.js';
 import { learningSettingsSchema } from './learning.js';
 import {
   BILLING_MODES,
@@ -128,6 +128,15 @@ export const stageDefinitionSchema = z.object({
   description: z.string().max(300).optional(),
   /** Run this agent stage as a bounded team of workers (docs/plans/STAGE_TEAMS_PLAN.md); absent = one agent, as always. */
   team: stageTeamSchema.optional(),
+  /**
+   * Agent stages: text appended to the role template for this stage only, so two stages of one role can be told
+   * different things (Frontend Design's Assets and Build) without a new role (docs/systems/design-agent.md).
+   */
+  instructions: z.string().trim().min(1).max(2000).optional(),
+  /** Agent stages: the capability profile its agents' tool list is built from, instead of the one detected from the repository. The stage level still decides what may run. */
+  toolProfile: z.enum(STAGE_TOOL_PROFILES).optional(),
+  /** Agent stages: skills this stage should run when they are installed, as if the task named them with `/name`. */
+  skills: z.array(z.string().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)).max(10).optional(),
 });
 export type StageDefinition = z.infer<typeof stageDefinitionSchema>;
 export type StageDefinitionInput = z.input<typeof stageDefinitionSchema>;

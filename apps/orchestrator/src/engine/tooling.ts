@@ -16,6 +16,7 @@ import {
   planRepair,
   policyCeiling,
   profileForRepository,
+  type ProfileId,
   projectType,
   type FailureClassification,
   type RepairPlan,
@@ -115,7 +116,7 @@ export class EngineTooling {
    * workspace of a multi-repository task); `stage.cwd` starts a call in a
    * folder inside that root, e.g. one repository of the workspace.
    */
-  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string }, sessionId: string | null = null): ToolScope {
+  scope(task: TaskRecord, repo: RepositoryRecord, stage: { level: PermissionLevel; stageId: string | null; cwd?: string; profile?: ProfileId }, sessionId: string | null = null): ToolScope {
     const root = agentWorkdir(task, repo);
     const units = taskRepositories(this.d.store, task);
     const multi = units.length > 1;
@@ -130,7 +131,8 @@ export class EngineTooling {
       autoApproveUpToLevel: task.autoApproveUpToLevel ?? DEFAULT_AUTO_APPROVE_LEVEL,
       mode: this.policyMode(task, repo),
       // Across repositories the task may need any of their tools; permission still comes from level and policy.
-      profile: profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
+      // A stage's own toolProfile wins; otherwise the profile the repository's tooling suggests.
+      profile: stage.profile ?? profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
       escalated: new Set(),
       protectedPaths: task.git.isolated ? [] : task.git.preexistingChanges,
       ...(multi ? { repositories: units.map((u) => ({ id: u.repo.id, root: u.workdir })) } : {}),
@@ -219,7 +221,7 @@ export class EngineTooling {
   openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, opts: { root?: string; level?: PermissionLevel } = {}): AgentToolBridge | null {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return null;
     const level = opts.level !== undefined ? (Math.min(opts.level, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
-    const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}) });
+    const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}), ...(def.toolProfile ? { profile: def.toolProfile } : {}) });
     const { sessionId: _s, escalated: _e, repositories: _r, ...rest } = scope;
     const base = opts.root ? { ...rest, roots: [opts.root], protectedPaths: [] } : { ...rest, ...(scope.repositories ? { repositories: scope.repositories } : {}) };
     const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000);
@@ -258,7 +260,7 @@ export class EngineTooling {
   /** "## Control Center tools" section appended to agent prompts. */
   toolsPromptSection(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): string {
     if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return '';
-    const profile = profileForRepository(repo.tooling, def.permissionLevel);
+    const profile = def.toolProfile ?? profileForRepository(repo.tooling, def.permissionLevel);
     return [
       '## Control Center tools',
       '',
@@ -345,16 +347,17 @@ export class EngineTooling {
       .filter((d) => d.state === 'active' && d.kind !== 'routing' && (d.scope === 'CURRENT_TASK' || d.appliedStageKey === def.key))
       .map((d) => d.text);
     const text = [task.description, ...directives].join('\n');
-    if (!this.d.skills || !text.includes('/')) return '';
+    if (!this.d.skills || (!text.includes('/') && !def.skills?.length)) return '';
     const catalog = await this.d.skills.list(repo.path).catch(() => null);
     if (!catalog) return '';
     const byName = new Map(catalog.skills.map((s) => [s.name, s]));
-    const names = requestedSkills(text, new Set(byName.keys()));
+    // Named by the operator (`/name`) or by the workflow for this stage (`skills`); only installed skills count.
+    const names = [...new Set([...requestedSkills(text, new Set(byName.keys())), ...(def.skills ?? []).filter((n) => byName.has(n))])];
     if (!names.length) return '';
     return [
       '## Requested skills',
       '',
-      'The operator asked for these skills by name (`/name` in the task or a directive):',
+      def.skills?.length ? 'The operator (`/name` in the task or a directive) or this stage of the workflow asked for these skills:' : 'The operator asked for these skills by name (`/name` in the task or a directive):',
       ...names.map((name) => {
         const description = byName.get(name)?.description;
         return `- \`${name}\`${description ? ` — ${description}` : ''}`;

@@ -424,8 +424,10 @@ export class ContextBuilder {
     const tools = await this.toolSections(task, def, repo).catch(() => '');
     // A user-edited template without {{diff_coverage}} still tells the agent what the diff leaves out.
     const coverage = collected.required.length && !/\{\{\s*diff_coverage\s*\}\}/.test(template.body) ? `\n\n## Diff coverage\n\n${collected.coverage}\n` : '';
+    // What the workflow tells this stage beyond its role template (docs/systems/design-agent.md).
+    const instructions = def.instructions ? `\n\n## Stage instructions (from the workflow)\n\n${def.instructions}\n` : '';
     return {
-      prompt: header + renderTemplate(template.body, vars) + coverage + supervisor + lessons + tools,
+      prompt: header + renderTemplate(template.body, vars) + instructions + coverage + supervisor + lessons + tools,
       templateVersion: template.version,
       coverage: { required: collected.required, all: collected.all },
     };

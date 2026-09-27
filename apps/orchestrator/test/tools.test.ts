@@ -393,6 +393,13 @@ describe('MCP servers', () => {
     expect((await t.api('GET', '/api/tools/capabilities')).body.map((c: { id: string }) => c.id)).not.toContain('mcp.echo_fixture.echo');
   }, 60_000);
 
+  it('lists the design tools first in a frontend-design session', async () => {
+    const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 3, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'frontend-design', protectedPaths: [] }, 'agent');
+    const listed = (await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(session.token))).body.tools.map((x: { capability: string }) => x.capability);
+    expect(listed[0]).toMatch(/^media\./);
+    expect(listed).toEqual(expect.arrayContaining(['media.image.view', 'media.asset.optimize', 'media.image.generate', 'browser.visual_matrix', 'verify.web']));
+  });
+
   it("passes an outside tool's pictures to the model, keeps them with the task, and publishes its input schema", async () => {
     const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
     const created = await t.api('POST', '/api/mcp', { name: 'Pictures', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 1 });

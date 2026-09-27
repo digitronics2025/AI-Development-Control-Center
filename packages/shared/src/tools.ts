@@ -326,6 +326,13 @@ export const mediaSettingsSchema = z.object({
 });
 export type MediaSettings = z.infer<typeof mediaSettingsSchema>;
 
+/**
+ * Capability profiles a workflow stage may choose for its agents (`toolProfile`).
+ * `operator` (everything) is for the operator's own sessions, never a stage.
+ */
+export const STAGE_TOOL_PROFILES = ['analysis', 'general', 'web-development', 'cloudflare-worker', 'android-development', 'python', 'frontend-design'] as const;
+export type StageToolProfile = (typeof STAGE_TOOL_PROFILES)[number];
+
 /** Widths the browser tools open pages at (docs/systems/design-agent.md), narrowest real device first. */
 export const BROWSER_VIEWPORTS = ['desktop', 'phone', 'tablet', 'wide', 'narrow-desktop'] as const;
 export type BrowserViewport = (typeof BROWSER_VIEWPORTS)[number];

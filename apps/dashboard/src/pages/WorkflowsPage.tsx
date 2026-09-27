@@ -17,6 +17,7 @@ import {
   PermissionBadge,
   Select,
   Skeleton,
+  Textarea,
   cn,
   useBreakpoint,
   useFeedback,
@@ -29,6 +30,7 @@ import {
   ROLES,
   ROLE_LABEL,
   STAGE_KINDS,
+  STAGE_TOOL_PROFILES,
   validateWorkflow,
   type CommandKind,
   type PermissionLevel,
@@ -156,10 +158,48 @@ function StageInspector({
         />
       ) : null}
       {stage.kind === 'agent' ? <StageTeamEditor stage={stage} issues={issuesFor(issues, index, 'team')} readOnly={readOnly} onChange={(team) => set('team', team)} /> : null}
+      {stage.kind === 'agent' ? (
+        <>
+          <Field label="Stage instructions" optional error={err('instructions')} helper="Added after the role's prompt for this stage only (for example, what this stage may and may not do).">
+            <Textarea value={stage.instructions ?? ''} rows={3} maxLength={2000} onChange={(e) => set('instructions', e.target.value.trim() ? e.target.value : undefined)} />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Tool profile" error={err('toolProfile')} helper="Which Control Center tools the agent is shown first. The permission level still decides what may run.">
+              <Select
+                value={stage.toolProfile ?? '__auto__'}
+                onValueChange={(v) => set('toolProfile', v === '__auto__' ? undefined : (v as StageDefinition['toolProfile']))}
+                options={[{ value: '__auto__', label: 'From the repository', description: 'Chosen from what the repository contains' }, ...STAGE_TOOL_PROFILES.map((p) => ({ value: p, label: TOOL_PROFILE_LABEL[p] }))]}
+                disabled={readOnly}
+              />
+            </Field>
+            <Field label="Skills" optional error={err('skills')} helper="Installed skills this stage should run, separated by commas.">
+              <Input
+                value={(stage.skills ?? []).join(', ')}
+                onChange={(e) => {
+                  const list = e.target.value.split(',').map((x) => x.trim().replace(/^\//, '')).filter(Boolean);
+                  set('skills', list.length ? list : undefined);
+                }}
+                className="font-mono"
+                spellCheck={false}
+              />
+            </Field>
+          </div>
+        </>
+      ) : null}
       {stage.kind === 'command' ? <Checkbox checked={stage.optional} onCheckedChange={(v) => set('optional', v)} disabled={readOnly} label="Skip when no command is configured" /> : null}
     </fieldset>
   );
 }
+
+const TOOL_PROFILE_LABEL: Record<(typeof STAGE_TOOL_PROFILES)[number], string> = {
+  analysis: 'Analysis',
+  general: 'General development',
+  'web-development': 'Web development',
+  'cloudflare-worker': 'Cloudflare Worker',
+  'android-development': 'Android development',
+  python: 'Python',
+  'frontend-design': 'Frontend design',
+};
 
 function newStage(existing: StageDefinition[]): StageDefinition {
   let n = existing.length + 1;

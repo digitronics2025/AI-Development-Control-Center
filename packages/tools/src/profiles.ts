@@ -4,7 +4,9 @@
  * few, and anything else it asks for goes through escalation.
  */
 
-export const PROFILE_IDS = ['analysis', 'general', 'web-development', 'cloudflare-worker', 'android-development', 'python', 'operator'] as const;
+import { STAGE_TOOL_PROFILES } from '@acc/shared';
+
+export const PROFILE_IDS = [...STAGE_TOOL_PROFILES, 'operator'] as const;
 export type ProfileId = (typeof PROFILE_IDS)[number];
 
 export interface CapabilityProfile {
@@ -39,6 +41,13 @@ export const PROFILES: Record<ProfileId, CapabilityProfile> = {
     title: 'Web development',
     description: 'Node tooling, local servers, browser checks and HTTP tests.',
     include: ['browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+  },
+  'frontend-design': {
+    id: 'frontend-design',
+    title: 'Frontend design',
+    description: 'Media (view, fetch, optimise, generate), browser checks at every width and theme, app verification, and a registered fal server (docs/systems/design-agent.md).',
+    // The design tools first: a list over the cap keeps the front. mcp.fal.* are opt-ins by name, as every MCP pattern must be.
+    include: ['media.*', 'browser.*', 'verify.*', 'mcp.fal.*', 'mcp.fal_jobs.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   'cloudflare-worker': {
     id: 'cloudflare-worker',

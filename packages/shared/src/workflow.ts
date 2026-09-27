@@ -122,6 +122,9 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.team) {
       for (const issue of teamIssues(stage)) issues.push({ stageIndex: index, ...issue });
     }
+    for (const field of ['instructions', 'toolProfile', 'skills'] as const) {
+      if (stage[field] !== undefined && stage.kind !== 'agent') issues.push({ stageIndex: index, field, message: 'Only agent stages take instructions, a tool profile or skills' });
+    }
     if (stage.onFail && !stage.verdict && stage.kind !== 'tests' && stage.kind !== 'git' && stage.kind !== 'verify') {
       issues.push({
         stageIndex: index,

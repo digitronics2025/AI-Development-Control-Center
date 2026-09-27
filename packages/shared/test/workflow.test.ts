@@ -71,6 +71,17 @@ describe('validateWorkflow', () => {
     expect(isWriteRole(undefined)).toBe(false);
   });
 
+  it('accepts stage instructions, a tool profile and skills on agent stages only, and never the operator profile', () => {
+    const wf = (extra: Partial<StageDefinitionInput>, kind: StageDefinitionInput['kind'] = 'agent') => ({ id: 'x', name: 'X', stages: [stage({ key: 'build', role: 'designer', kind, next: 'complete', permissionLevel: 2, ...extra })] });
+    const ok = validateWorkflow(wf({ instructions: 'Never call a paid generation tool here.', toolProfile: 'frontend-design', skills: ['tenten-web-design', 'plugin:skill'] }));
+    expect(ok.issues).toEqual([]);
+    expect(ok.profile?.stages[0]).toMatchObject({ toolProfile: 'frontend-design', skills: ['tenten-web-design', 'plugin:skill'] });
+    expect(validateWorkflow(wf({ toolProfile: 'operator' as never })).issues).toContainEqual(expect.objectContaining({ field: 'toolProfile' }));
+    expect(validateWorkflow(wf({ skills: ['../../etc'] })).issues.length).toBeGreaterThan(0);
+    expect(validateWorkflow(wf({ instructions: 'x'.repeat(2001) })).issues).toContainEqual(expect.objectContaining({ field: 'instructions' }));
+    expect(validateWorkflow(wf({ toolProfile: 'frontend-design' }, 'tests')).issues).toContainEqual(expect.objectContaining({ field: 'toolProfile', message: 'Only agent stages take instructions, a tool profile or skills' }));
+  });
+
   it('rejects onFail on a stage without a verdict', () => {
     const bad = { ...normal, stages: normal.stages.map((s) => (s.key === 'implement' ? { ...s, onFail: 'fix' } : s)) };
     expect(validateWorkflow(bad).issues).toContainEqual(expect.objectContaining({ stageIndex: 1, field: 'onFail' }));

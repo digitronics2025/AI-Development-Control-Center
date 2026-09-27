@@ -115,8 +115,10 @@ ambient login. Normal scopes are unaffected.
 ## Profiles ([profiles.ts](../../packages/tools/src/profiles.ts))
 
 `analysis` (every Level 1 stage), `general`, `web-development`,
-`cloudflare-worker`, `android-development`, `python`, `operator`. Chosen from
-repository tooling. MCP capabilities never match a wildcard entry: only the
+`frontend-design` (media, browser and verify tools first, and explicit
+`mcp.fal.*` / `mcp.fal_jobs.*`), `cloudflare-worker`, `android-development`,
+`python`, `operator`. Chosen from repository tooling unless the stage names a
+`toolProfile` (any but `operator`). MCP capabilities never match a wildcard entry: only the
 `operator` profile, or an explicit `mcp.<server>.*` pattern in a profile,
 includes them (`profileIncludes`); an agent otherwise reaches one by
 escalation (`acc_call_capability`) within its stage's level.

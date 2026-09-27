@@ -29,12 +29,16 @@ assembles, in this order:
    agent is a subagent whose reply is a task record (no chat recap or to-do
    block); only its final message is kept; the four marker lines below are
    read by the orchestrator; commits, tests and approvals happen after it.
-3. The role template with its placeholders filled.
+3. The role template with its placeholders filled, then the stage's own
+   `instructions` from the workflow as `## Stage instructions (from the
+   workflow)` (up to 2,000 characters), so two stages of one role can be told
+   different things without a new role.
 4. `## Chairman guidance` when a recovery strategy set one ([chairman.md](chairman.md)).
 5. `## Lessons from earlier tasks` from the learning loop ([learning.md](learning.md)).
 6. The engine's sections ([tooling.ts](../../apps/orchestrator/src/engine/tooling.ts)):
    `## Skills` (how skills and outside tools behave in a run), `## Requested skills`
-   when the task or a directive names `/skills`, `## Environment` for the
+   when the task or a directive names `/skills` or the stage lists `skills`
+   (installed ones only), `## Environment` for the
    investigator, planner, implementer and designer, and `## Control Center tools` when
    the MCP bridge is on.
 

@@ -90,3 +90,46 @@ describe('designer stage prompt', () => {
     expect(prompt).toContain('## Environment (collected by the Control Center)');
   });
 });
+
+describe('stage fields from the workflow (docs/systems/design-agent.md)', () => {
+  it('puts stage instructions after the role template and runs the skills the stage names', async () => {
+    t.services.workflows.save('design-fields', {
+      name: 'Design fields',
+      maxFixCycles: 0,
+      stages: [
+        {
+          key: 'build',
+          name: 'Build',
+          role: 'designer',
+          permissionLevel: 2,
+          next: 'complete',
+          instructions: 'Use only the tokens in design/tokens.css. Never call a paid generation tool.',
+          toolProfile: 'frontend-design',
+          skills: ['file-census', 'not-installed-skill'],
+        },
+      ],
+    });
+    const repositoryId = await addRepo(t, await repoWithSkill());
+    // No /name in the description: the stage's own skills list asks for it.
+    const id = await createTask(t, repositoryId, 'Restyle the page', { workflowId: 'design-fields' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'design-prompt.md'), 'utf8');
+    expect(prompt).toContain('## Stage instructions (from the workflow)\n\nUse only the tokens in design/tokens.css. Never call a paid generation tool.');
+    // After the role template's report headings, before the engine's own sections.
+    expect(prompt.indexOf('## Stage instructions')).toBeGreaterThan(prompt.indexOf('`## Skills used`'));
+    expect(prompt.indexOf('## Stage instructions')).toBeLessThan(prompt.indexOf('## Requested skills'));
+    expect(prompt).toContain('- `file-census` — Count the files in this repository');
+    expect(prompt).not.toContain('not-installed-skill');
+    expect(prompt).toContain('this stage of the workflow asked for these skills');
+  });
+
+  it("builds a stage's tool session from its tool profile", async () => {
+    const repositoryId = await addRepo(t, await repoWithSkill());
+    const id = await createTask(t, repositoryId, 'Profile [sim:slow]');
+    const task = t.services.store.getTask(id)!;
+    const repo = t.services.store.getRepository(repositoryId)!;
+    expect(t.services.tooling.scope(task, repo, { level: 2, stageId: null, profile: 'frontend-design' }).profile).toBe('frontend-design');
+    expect(t.services.tooling.scope(task, repo, { level: 2, stageId: null }).profile).not.toBe('frontend-design');
+    await t.api('POST', `/api/tasks/${id}/cancel`);
+  });
+});

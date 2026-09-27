@@ -23,7 +23,11 @@ Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
 (agent|tests|command|git|verify|release), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
-verdict, commandKinds, optional, requires`. `requires` names stages whose latest
+verdict, commandKinds, optional, requires`, and for agent stages `instructions`
+(appended to the role prompt), `toolProfile` (the capability profile the
+stage's tool list is built from, never `operator`; the level still decides
+what runs) and `skills` (installed skills the stage should run); the three are
+refused on other kinds. `requires` names stages whose latest
 run must have ended SUCCESS; otherwise the stage is SKIPPED before any approval
 is asked (`Skipped: Staging deploy did not run` — Full Autopilot's Smoke
 requires Staging). Validation

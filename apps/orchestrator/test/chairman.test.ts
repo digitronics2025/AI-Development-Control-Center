@@ -307,8 +307,12 @@ describe('strategy runs', () => {
     const dataDir = t.dataDir;
     const repo = await repoWith("if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('1 failed, 3 passed'); process.exit(1); } console.log('4 passed');");
     const id = await createTask(t, await addRepo(t, repo), 'Crash between the result and its evaluation');
-    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
-    const decision = decisions(id).find((d) => d.strategyFingerprint)!;
+    const ended = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const found = decisions(id).find((d) => d.strategyFingerprint);
+    // When no strategy ran, say how the task ended instead of failing on `undefined.id` below.
+    const endedAs = { status: ended.status, finalStatus: ended.finalStatus, stages: t.services.store.listStages(id).map((s) => `${s.stageKey}:${s.status}:${s.errorClass ?? ''}`), decisions: decisions(id).map((d) => `${d.trigger}: ${d.decision}`) };
+    expect(found, `no Chairman strategy ran: ${JSON.stringify(endedAs)}`).toBeDefined();
+    const decision = found!;
     // As if the orchestrator died after the tests passed but before the outcome was written.
     t.services.db.prepare("UPDATE chairman_strategy_runs SET status = 'RUNNING', outcome_summary = NULL, health_after = NULL, evaluated_at = NULL WHERE decision_id = ?").run(decision.id);
     const outcomeEvents = () => events(id).filter((e) => e.type === 'CHAIRMAN_DECISION' && (e.data as { outcome?: string }).outcome).length;

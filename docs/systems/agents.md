@@ -303,4 +303,8 @@ REFUSED with the summary.
   closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
   **Load my CLI customisations** per agent for leaner runs.
 
+## Skills lookup trigger
+
+The skills catalog is listed for a stage only when the task or an active directive names a `/skill` token (`SKILL_TOKEN`, the rule `requestedSkills` uses); a file path or URL no longer triggers a cold listing.
+
 Last verified: 2026-09-27

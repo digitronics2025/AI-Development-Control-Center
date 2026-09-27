@@ -54,4 +54,8 @@ succeeds, the test is re-run and passes, the task completes.
 
 In a batch of parallel-safe checks, repairs (an install, freeing a port) run one at a time, and a check stopped because a sibling failed first is recorded `not_run`, not repaired ([stage-teams.md](stage-teams.md#parallel-safe-checks)).
 
-Last verified: 2026-09-26
+## Repairs inside a parallel batch
+
+A check in a batch of parallel-safe checks never repairs while its siblings run (an `npm ci` would delete `node_modules` under them): its repairable failure is put off, and after the batch it is repaired and run again alone, in order ([stage-teams.md](stage-teams.md#parallel-safe-checks)).
+
+Last verified: 2026-09-27

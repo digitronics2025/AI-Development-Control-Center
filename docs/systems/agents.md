@@ -129,6 +129,13 @@ rule: run it in the stage whose job it matches; the implementation stage when
 none clearly does; at most once per stage; a refusal is an operator decision).
 The description and directives stay the record; there is no separate task field.
 
+`pnpm verify:agents --images` asks each CLI for the colour of a solid red
+square three ways: Claude Code reading a PNG from disk, Codex given it with
+`-i`, and Claude Code shown it as an MCP image block (the fixture
+`packages/mcp/test/fixtures/red-picture-server.mjs` stands in for the `acc`
+bridge). Run it after a CLI update; the design agent relies on all three
+([design-agent.md](design-agent.md)).
+
 `pnpm verify:agents --skills` also compares the picker's list with the CLI's
 (791 = 791 on 2026-09-24, 750 with a description; the rest are built-ins with no file) and checks that the `/skills`
 lookup still uses no model turn.

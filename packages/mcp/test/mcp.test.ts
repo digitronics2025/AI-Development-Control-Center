@@ -45,6 +45,18 @@ describe('McpGateway (real stdio server)', () => {
     expect((await gateway.callTool(fixture, 'echo', { text: 'x' })).images).toEqual([]);
   });
 
+  it("serves the images probe's red picture as a real 64×64 PNG (pnpm verify:agents --images)", async () => {
+    const red = { ...fixture, id: 'red-picture', name: 'red', args: [path.join(import.meta.dirname, 'fixtures', 'red-picture-server.mjs')] };
+    const r = await gateway.callTool(red, 'picture', {});
+    expect(r.images).toHaveLength(1);
+    const png = r.images[0]!.data;
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([64, 64]);
+    const { inflateSync } = await import('node:zlib');
+    const idat = png.subarray(png.indexOf('IDAT') + 4, png.indexOf('IEND') - 8);
+    expect([...inflateSync(idat).subarray(1, 4)]).toEqual([255, 0, 0]);
+    await gateway.disconnect('red-picture');
+  });
+
   it('reports a broken server as unhealthy instead of throwing', async () => {
     const health = await gateway.check({ ...fixture, id: 'broken', args: ['-e', 'process.exit(1)'] });
     expect(health.ok).toBe(false);

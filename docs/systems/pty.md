@@ -4,7 +4,7 @@ sources:
   - packages/pty/**
   - apps/orchestrator/src/tools/terminals.ts
   - apps/dashboard/src/components/terminal.tsx
-verified_at: 010ac0f
+verified_at: 0d4eaf8
 ---
 
 # Interactive terminals
@@ -41,9 +41,26 @@ package, `allowBuilds` only runs its prebuild check).
   are marked exited at startup.
 - Agent input (`terminal.send`) is typed as it arrives and each line is
   classified when Enter arrives — assembled from however many sends it took
-  ([terminals.ts](../../apps/orchestrator/src/tools/terminals.ts)). A line that is
-  dangerous or above the stage level is cancelled with Ctrl+C and the call fails
-  `DENIED`. Tab and escape sequences are dropped, as for the cloud's terminals.
+  ([terminals.ts](../../apps/orchestrator/src/tools/terminals.ts)), with the
+  release gate (`judgeLine`: a push to the task's release branch or a
+  production-named one, one whose destination cannot be read, or a
+  pull-request merge is Level 5 production, judged after the lines that
+  terminal ran before, so `git switch main` then `git push` counts, and `cd
+  web` then `git push` reads `web`'s branch). Those lines are the last 50 and
+  every older one that changed folder, aliased Git or gave a variable a value
+  naming Git (`x="git push origin main"`, which a later `$x` runs;
+  `shellHistory`). An earlier push itself does not make a later line's
+  variables a push: `node server.js --port $PORT` after `git push origin
+  feature/x` is judged on its own. A line
+  ending while the shell still reads a command begun on earlier lines — an
+  open quote, a trailing `\`, backtick or `^`, a trailing pipe or `&&`, a
+  heredoc (`lineContinues`) — is judged alone and as part of that command, so
+  `git push \` then `origin main` counts; a command over 20,000 characters is
+  refused. In bash a line that history expansion would rewrite (`!^`, `!!`,
+  `^old^new`: `expandsHistory`) is Level 5: what runs would not be the line
+  judged. A line that is dangerous, Level 5, production or above the stage
+  level is cancelled with Ctrl+C (which drops the command's earlier lines
+  too) and the call fails `DENIED`. Tab and escape sequences are dropped, as for the cloud's terminals.
 
 ## API
 

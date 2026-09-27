@@ -73,6 +73,13 @@ export type ThemePreference = (typeof THEMES)[number];
 export const PERMISSION_LEVELS = [1, 2, 3, 4, 5] as const;
 export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
 
+/**
+ * Branch names that are production on nearly every Git-connected host
+ * (Pages, Vercel, Netlify): a push to one is treated as a deploy without
+ * asking the host, like a push to a repository's own release branch.
+ */
+export const PRODUCTION_BRANCH_NAMES = ['main', 'master', 'production', 'prod', 'release', 'live'] as const;
+
 export const ERROR_CLASSES = [
   'AUTH_FAILURE',
   'USAGE_LIMIT',

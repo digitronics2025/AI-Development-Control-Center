@@ -6,7 +6,7 @@ import type { PermissionLevel } from '@acc/shared';
 import { z } from 'zod';
 import { clip, detectExecutable, localBin, run, pushBounded } from '../detect.js';
 import { resolveInside } from '../paths.js';
-import { failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
+import { failure, operation, PRODUCTION_BRANCH, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 import { classifySql } from '../sql.js';
 
 /**
@@ -104,8 +104,6 @@ function parseJson(text: string): unknown {
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
 /** A value from the repository's Wrangler config (`name`, `account_id`), for defaults only. */
-/** Branch names that are production on nearly every Pages project: classified production without asking Cloudflare. */
-const PRODUCTION_BRANCH = /^(?:main|master|production|prod|release|live)$/i;
 
 /** The Pages project's production branch as Cloudflare has it, or null when it cannot be read. */
 async function pagesProductionBranch(ctx: OperationContext, project: string): Promise<string | null> {

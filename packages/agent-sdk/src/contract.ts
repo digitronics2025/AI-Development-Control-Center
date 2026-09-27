@@ -125,6 +125,14 @@ export interface AgentExecutionInput extends AgentRuntimeOptions {
    * prompt then names the skill files instead.
    */
   pluginDirs?: string[];
+  /**
+   * Where a push deploys the task's repositories (each release setting that
+   * pushes; a multi-repository task has one per repository): a push there is
+   * Level 5 production, which no agent may do, so adapters deny it in their
+   * native shell rules too, with the production-named branches (main,
+   * master…). Absent when no repository of the task releases by push.
+   */
+  releaseBranches?: Array<{ remote: string; branch: string }>;
   /** Human-readable, already-parsed output lines. Callers redact before persisting. */
   onLine?: (stream: AgentLogStream, text: string) => void;
 }

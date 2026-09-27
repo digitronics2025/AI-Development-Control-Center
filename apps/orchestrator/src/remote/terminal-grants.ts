@@ -1,4 +1,5 @@
-import { alwaysRequiresApproval, classifyCommand } from '@acc/security';
+import { alwaysRequiresApproval, classifyCommand, lineContinues, shellHistory } from '@acc/security';
+import type { CommandRisk, PermissionLevel } from '@acc/shared';
 
 /**
  * Remote terminal grants (docs/systems/remote-node.md §Terminals). A terminal
@@ -7,8 +8,12 @@ import { alwaysRequiresApproval, classifyCommand } from '@acc/security';
  *
  * Every line is classified before its Enter reaches the shell, exactly as an
  * agent's terminal input is: a line above this machine's auto-approve level,
- * or one that always needs approval (dangerous, production), is cancelled with
- * Ctrl+C and a notice. Escape sequences and Tab are dropped, because history
+ * or one that always needs approval (dangerous, production — a push to a
+ * release or production branch or a pull-request merge included, judged by
+ * `judge` after the lines the terminal ran before, and together with the
+ * earlier lines of a command the shell is still reading: an open quote, a
+ * trailing `\`), is cancelled with Ctrl+C and a notice. Escape sequences and
+ * Tab are dropped, because history
  * recall and completion would change the line without the classifier seeing
  * it; Backspace and Ctrl+C work.
  */
@@ -25,7 +30,14 @@ interface Grant {
   expiresAt: number;
   lastInputAt: number;
   line: string;
+  /** Lines this grant ran, oldest first (`shellHistory`): their checkouts, folders and settings hold for a later push. */
+  ran: string[];
+  /** The lines of a command the shell is still reading (`lineContinues`), not yet run. */
+  pending: string;
 }
+
+/** How a line is judged at Enter: its level, risk and whether it touches production. */
+export type LineJudge = (terminalId: string, line: string, before: readonly string[]) => { level: PermissionLevel; risk: CommandRisk; reasons: string[]; production: boolean };
 
 export class TerminalGrants {
   private readonly grants = new Map<string, Grant>();
@@ -38,11 +50,13 @@ export class TerminalGrants {
     private readonly now: () => number = Date.now,
     /** Shows a message to the remote viewer (never typed into the shell). */
     private readonly notify: (terminalId: string, text: string) => void = () => undefined,
+    /** The classifier by default; the service adds the release gate (`TerminalService.judgeLine`). */
+    private readonly judge: LineJudge = (_id, line) => classifyCommand(line),
   ) {}
 
   grant(terminalId: string): void {
     const t = this.now();
-    this.grants.set(terminalId, { expiresAt: t + this.limits.maxMs, lastInputAt: t, line: '' });
+    this.grants.set(terminalId, { expiresAt: t + this.limits.maxMs, lastInputAt: t, line: '', ran: [], pending: '' });
     if (!this.timer) {
       this.timer = setInterval(() => void this.sweep(), Math.min(30_000, Math.max(250, this.limits.idleMs / 4)));
       this.timer.unref?.();
@@ -121,19 +135,28 @@ export class TerminalGrants {
       if (ch === '\r' || ch === '\n') {
         const line = g.line.trim();
         g.line = '';
-        const c = line ? classifyCommand(line) : null;
-        if (c && (alwaysRequiresApproval(c) || c.level > this.maxLevel())) {
+        const whole = g.pending ? `${g.pending}\n${line}` : line;
+        // Judged alone and as part of the command the shell is still reading; either can refuse it.
+        const verdicts = [line ? this.judge(terminalId, line, g.ran) : null, g.pending ? this.judge(terminalId, whole, g.ran) : null];
+        const tooLong = whole.length > 20_000;
+        const c = verdicts.find((v) => v && (alwaysRequiresApproval(v) || v.production || v.level > this.maxLevel()));
+        if (c || tooLong) {
           refused.push(line);
+          g.pending = '';
           out += '\x03';
           flush();
-          this.notify(terminalId, `\r\n[Refused from the cloud: Level ${c.level}${c.risk === 'dangerous' ? ', dangerous' : ''} (${c.reasons.slice(0, 2).join(', ')}). Run it on this machine or through a task that asks for approval.]\r\n`);
+          const why = c ? `Level ${c.level}${c.risk === 'dangerous' ? ', dangerous' : ''} (${c.reasons.slice(0, 2).join(', ')})` : 'the command is too long to judge';
+          this.notify(terminalId, `\r\n[Refused from the cloud: ${why}. Run it on this machine or through a task that asks for approval.]\r\n`);
           continue;
         }
+        if (line) g.ran = shellHistory([...g.ran, line], 50);
+        g.pending = whole && lineContinues(whole) ? whole : '';
         out += '\r';
         continue;
       }
       if (ch === '\x03') {
         g.line = '';
+        g.pending = '';
         out += ch;
         continue;
       }

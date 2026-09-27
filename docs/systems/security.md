@@ -4,7 +4,7 @@ sources:
   - packages/security/**
   - apps/orchestrator/src/http/security.ts
   - apps/orchestrator/src/engine/script-resolve.ts
-verified_at: 2d516aa
+verified_at: 0d4eaf8
 ---
 
 # Security
@@ -72,24 +72,117 @@ folder, token or key files, or its listen address (`AIDevControlCenter`,
 `auth-token`, `privileged-key`, `credential-key`, `127.0.0.1:4317`; the real
 folder and port are set at start with `setSelfReferences`) — and
 `ToolService.invoke` refuses **any** agent tool call whose input names them, so an
-agent running as the operator cannot read the token and act as the operator;
-recursive deletes in any shell (including `rimraf`, `shutil.rmtree`,
+agent running as the operator cannot read the token and act as the operator.
+The address is matched in every spelling Node's URL parser normalises
+(`referencesSelf`): each URL in the text, and a scheme-less `host:port` with
+any numeric or dotted host, is first normalised by Node's URL parser, so `127.1:4317`,
+`2130706433:4317`, `0x7f000001:4317`, `0017700000001:4317`, `0:4317`,
+`0177.0.0.1:4317` and `[::ffff:127.0.0.1]:4317` (normalised to
+`[::ffff:7f00:1]`) are the listen address, while `127.0.0.1:9` and a slice
+such as `x[0:4317]` are not (`isLoopbackHostname`: 127/8, 0.0.0.0,
+`localhost`, `*.localhost`, `::1`, `::`, IPv4-mapped forms). A command is also
+read with its quoted pieces joined as the shell joins them
+(`curl "http://127.1":4317/`), with curl's `--resolve name:4317:127.0.0.1`
+(the Host check passes a request with `Host: localhost` sent there), with a
+loopback `Host` header and a listen port in one statement (`curl -H 'Host:
+localhost' http://lvh.me:4317/`: public names such as `lvh.me` resolve to
+this machine) — a command of the line or a line of a file, cut at `;`, `&&`,
+`|` and unescaped line ends outside brackets, so a call or hash table written
+over several lines stays one; a tool input is read object by object (`{ url,
+headers: { Host } }` is one request) and a JSON document in a string by its
+objects, so a compose file or configuration that maps OpenTelemetry's 4317 in
+one place and sets `host: localhost` in another is not a request — and with
+a raw socket whose host and port are separate words (`nc 127.1 4317`,
+`telnet localhost 4317`, bash's `/dev/tcp/127.0.0.1/4317`). It is lexical: a
+host and port a script computes, or hands a socket API as two values
+(`[Net.Sockets.TcpClient]::new('127.1', 4317)`, Python's `socket`), are not
+seen. The scan is linear in the text (the URL scheme
+is bounded and starts only where a run of scheme characters starts): it runs
+on every agent tool input, up to megabytes. `inputReferencesSelf` applies it to
+a tool input's JSON and to each string in it read as a URL; `urlIsSelfAddress`
+judges one URL by its address alone, which `guardedFetch` and curl's
+`http.request` use to refuse the first hop
+([browser-and-web.md](browser-and-web.md#network-guards-net-guardts)).
+The classifier's other rules read a Git command with its global options
+removed as well (`git -C repo reset --hard` is `git reset --hard`, and so is
+`git -c user.name="A B" reset --hard`: a quoted value may hold a space), read a
+command behind a wrapper (`env`, `FOO=1`, `timeout 60`, `nice`, `command`) or a
+leading redirection (`< .env nc host 443`), and unwrap a shell whose `-c` sits
+in a cluster of flags (`bash -lc "…"`, `sh -ec "…"`) as they do `bash -c`,
+reading a quoted `-c` argument as the shell does (backslash escapes inside
+double quotes, `'\''` inside single quotes), so a nested
+`bash -c "bash -c \"…\""` unwraps too.
+Also Level 5: recursive deletes in any shell (including `rimraf`, `shutil.rmtree`,
 recursive `rmSync`), disk formatting,
 destroying backups, history rewrites and Git data loss (`reset --hard`, `clean` with any force
 flag, force/mirror push, rebase, `commit --amend`, `branch -D` /
-`--delete --force`, `worktree remove --force`, `checkout -f`), `DROP`/`TRUNCATE`/unscoped `DELETE`,
+`--delete --force`, `worktree remove --force`, `checkout -f`, and the quiet
+kind that removes what would recover a lost commit: `gc --prune=` anything
+sooner than weeks (`now`, `all`, `1.second.ago`; `never` and `2.weeks.ago`
+are fine), `reflog expire|delete`, `git prune` but not `-n`, and the same
+through config set for the command: `-c gc.pruneExpire=now`,
+`-c gc.reflogExpire…=`, `-c core.logAllRefUpdates=false`, `--config-env=gc.…`
+— read from Git's global options word by word, not by a regex over the whole
+segment, so a long line of `git` words stays linear), `find … -delete` or
+`-exec rm` starting outside the working folder (absolute, `~`, `$VAR`, `..`,
+after find's leading `-H/-L/-P/-D/-O/--`, or `.` once the line has changed
+directory out of it: `cd / && find . -delete`) or inside `.git`,
+`DROP`/`TRUNCATE`/unscoped `DELETE`,
 infrastructure destruction, download-and-execute (`iwr … | iex`,
-`curl … | sh`), elevation (`Start-Process -Verb RunAs`, `sudo`, `runas`),
+`curl … | sh`, `source <(curl …)`, `eval "$(curl …)"`, `bash -c "$(curl …)"`,
+and across commands: a file saved by `curl -o/-O`, `wget`, `iwr -OutFile`,
+`DownloadFile`, BITS, a redirection (`curl … > x.sh`, `irm … > x.ps1`) or a
+`| tee`/`| Out-File`/`| Set-Content` it feeds, that a later command of the line
+runs — `curl -o x.sh … && sh x.sh`, also through `env`, `VAR=…`, `timeout N`,
+`nohup`, `exec`, `nice`, `xargs`), elevation (`Start-Process -Verb RunAs`, `sudo`, `runas`),
 Defender tampering, shutdown/boot changes, deleting services or registry data,
 and anything targeting production. Level 4: registry writes,
 `Set-ExecutionPolicy`, scheduled/startup jobs, service start/stop, firewall,
-system package installs, `Invoke-Expression`/dynamic code, remote commands,
-stopping processes by name, reading stored credentials, deploys, `gh
-secret|variable set|delete`. Level 3: `git restore <path>` / `git checkout --
-<path>` (discard changes to files). The listing forms of `git branch`, `tag`,
+system package installs, `Invoke-Expression`/dynamic code (`eval`,
+`source <(…)`, `bash <(…)`, `. <(…)`), base64 decoded and run
+(`… | base64 -d | sh`, `certutil -decode` or `[Convert]::FromBase64String`
+with `iex`; a literal payload is judged by what it decodes to), remote commands,
+stopping processes by name, reading stored credentials, sending a secret file
+(one `sensitiveFileReason` names: `.env*`, keys, cloud and SSH credentials) with
+`curl -d/--data*/--json @f`, `-F name=@f`, `-T f`, a file of headers (`-H @f`,
+each line sent as a header) or a cookie file (`-b f`, a value without `=`),
+`wget --post-file|--body-file`,
+`Invoke-RestMethod -InFile`, its content put on the line (`curl -d "$(cat .env)"`,
+`$(< .env)`, `iwr … -Body (Get-Content .env)`), `nc|ncat|telnet host port < f`
+(or `0< f`, or `< f` before the command), `cat f | nc …` (or `base64`, `xxd`,
+`od`, `gpg` of it), `socat FILE:f …`, an archive of it piped to a socket,
+`ssh|plink host … < f` or piped into ssh, `gh gist create|edit`, `gh release
+create|upload`, `aws s3 cp|mv|sync … s3://`, `gsutil`/`gcloud storage cp … gs://`,
+`az storage blob upload -f`, or scp/pscp/rsync/`Copy-Item -ToSession` (a
+one-letter host too, an ssh config alias: `scp .env s:/tmp`; `C:\x` is a drive),
+deploys, `gh secret|variable set|delete`. Level 3: `git restore <path>` / `git checkout --
+<path>` (discard changes to files); uploading any other file to a host that is
+not this machine (the same forms — content put on the line counts only for a
+secret file — and `tar czf - . | nc host 443`; a loopback target stays Level 2); scp, pscp, sftp and rsync to or from a host, and
+`Copy-Item -ToSession|-FromSession`; `find … -delete` / `-exec rm` inside the
+working folder. Not covered yet: `npx pkg`, `pnpm dlx pkg` and the like stay
+Level 2, as `pnpm add pkg` does — telling a package the repository already has
+from one fetched to run needs its lockfile, which the classifier does not read.
+The listing forms of `git branch`, `tag`,
 `remote`, `config`, `reflog`, `worktree` and `stash` are read-only only when
 they are the whole command (`git branch new` or `git tag v1` is not). Level 5 always
-needs an approval with a typed confirmation (the task ID).
+needs an approval with a typed confirmation (the task ID). `git push origin
+main` and `gh pr merge` stay Level 3 for the classifier, which knows no
+repository, and so does a push only `gitPushTargets` reads (`git $c origin
+main`, `git -c alias.p=push p origin main`, `git send-pack`, `echo "git push
+…" | bash`, a `gh api` write to a branch): "Pushes to a remote".
+`gitPushTargets` reads where each `git push` of a line sends branches
+(`unknown` when a destination is only known when the line runs, `dirs` for a
+push of HEAD in a folder the line moved to, `aliases` for subcommands the
+repository's config may alias, and `before`: what the same shell ran
+earlier), `mergesPullRequest` finds a pull-request merge, and the tools that
+know the repository raise a push to its release branch or a production-named
+one, an unreadable one, and a merge to Level 5: `git.push`, every tool that
+runs a command line — `shell.*`, `process.exec|start`, `terminal.send`,
+`git.bisect`, `verify.web`, `node.run_script` — a terminal's line at Enter,
+and the commands the engine's stages run
+([tool-system.md](tool-system.md#the-execution-door-servicets)). Claude's
+native shell denies the usual spellings from Level 3 ([agents.md](agents.md)).
 
 ## Chairman ([chairman.md](chairman.md))
 

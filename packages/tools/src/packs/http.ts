@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { redact } from '@acc/security';
+import { isLoopbackHostname, redact, urlIsSelfAddress } from '@acc/security';
 import { z } from 'zod';
 import { detectExecutable, run } from '../detect.js';
 import { guardedFetch, MAX_RESPONSE_BYTES, readCapped, RedirectRefused } from '../net-guard.js';
@@ -25,10 +25,14 @@ export function isLoopbackUrl(url: string): boolean {
   }
 }
 
+/** A header name or value is one line: curl reads headers from a config file, where a line break would start another option (SEC-1). */
+const ONE_LINE = /^[^\r\n\0]*$/;
+const ONE_LINE_MESSAGE = 'A header name or value cannot hold a line break or NUL';
+
 const requestInput = z.object({
   method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']).default('GET'),
   url: z.string().url().max(4000).refine((u) => /^https?:\/\//i.test(u), 'Only http(s) URLs'),
-  headers: z.record(z.string().max(200), z.string().max(8000)).default({}),
+  headers: z.record(z.string().max(200).regex(ONE_LINE, ONE_LINE_MESSAGE), z.string().max(8000).regex(ONE_LINE, ONE_LINE_MESSAGE)).default({}),
   json: z.unknown().optional().describe('JSON body (sets content-type).'),
   body: z.string().max(5_000_000).optional().describe('Raw text body.'),
   multipart: z
@@ -36,7 +40,7 @@ const requestInput = z.object({
     .max(50)
     .optional()
     .describe('Form fields; `file` is a path inside the repository.'),
-  auth: z.object({ credential: z.string().min(1).max(100), scheme: z.enum(['Bearer', 'Basic', 'Token', 'header']).default('Bearer'), header: z.string().max(100).optional() }).optional().describe('Use a stored credential (the value is never shown).'),
+  auth: z.object({ credential: z.string().min(1).max(100), scheme: z.enum(['Bearer', 'Basic', 'Token', 'header']).default('Bearer'), header: z.string().max(100).regex(ONE_LINE, ONE_LINE_MESSAGE).optional() }).optional().describe('Use a stored credential (the value is never shown).'),
   timeoutSec: z.number().int().min(1).max(300).default(30),
   expectStatus: z.union([z.number().int(), z.array(z.number().int())]).optional(),
   expectJson: z.record(z.string(), z.unknown()).optional().describe('Top-level fields the JSON response must contain with these values.'),
@@ -64,6 +68,28 @@ function matches(expected: Record<string, unknown>, actual: unknown): string[] {
   return problems;
 }
 
+/**
+ * The request names this machine in a `Host` (or `:authority`) header of its
+ * own. The Control Center answers only requests addressed to a loopback name,
+ * and a public name can resolve to this machine (`lvh.me`, `*.nip.io`), so such
+ * a header is how a request would reach it under another name (SEC-1).
+ */
+export function overridesHostToLoopback(headers: Record<string, string>): boolean {
+  return Object.entries(headers).some(([name, value]) => {
+    if (!/^\s*(?:host|:authority)\s*$/i.test(name)) return false;
+    try {
+      return isLoopbackHostname(new URL(`http://${value.trim()}/`).hostname);
+    } catch {
+      return true;
+    }
+  });
+}
+
+/**
+ * Whether the answer meets the call's expectations, judged on the body as
+ * the caller is shown it (redacted): an expectation is never an oracle for a
+ * secret the output hides.
+ */
 function assertions(input: RequestInput, status: number, text: string, json: unknown, latencyMs: number): string[] {
   const problems: string[] = [];
   const expected = input.expectStatus === undefined ? null : Array.isArray(input.expectStatus) ? input.expectStatus : [input.expectStatus];
@@ -128,12 +154,13 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
         /* declared JSON but is not */
       }
     }
-    const problems = assertions(input, res.status, text, json, latencyMs);
+    const shownJson = json === undefined ? undefined : JSON.parse(redact(JSON.stringify(json)));
+    const problems = assertions(input, res.status, redact(text), shownJson, latencyMs);
     const shownBody = redact(text.length > 64 * 1024 ? `${text.slice(0, 64 * 1024)}\n[… ${text.length - 64 * 1024} more bytes]` : text);
     return {
       ok: problems.length === 0,
       summary: `${input.method} ${redact(input.url)} → ${res.status} in ${latencyMs}ms${redirectedTo ? ` · redirects to ${redact(redirectedTo)} (another host: not followed — request it directly so it is judged on its own)` : ''}${truncated ? ' · body cut at 16 MB' : ''}${problems.length ? ` · ${problems[0]}` : ''}`,
-      output: { status: res.status, url: redact(answeredBy), redirectedTo: redirectedTo ? redact(redirectedTo) : null, headers: safeHeaders(res.headers), body: shownBody, json: json === undefined ? undefined : JSON.parse(redact(JSON.stringify(json))), latencyMs, bytes: buffer.length, truncated, problems },
+      output: { status: res.status, url: redact(answeredBy), redirectedTo: redirectedTo ? redact(redirectedTo) : null, headers: safeHeaders(res.headers), body: shownBody, json: shownJson, latencyMs, bytes: buffer.length, truncated, problems },
       evidence: [`${input.method} ${redact(input.url)} → ${res.status} (${latencyMs}ms)${problems.length ? ` · ${problems.join('; ')}` : ''}`],
       networkTargets: [new URL(input.url).host],
       ...(problems.length ? { error: { code: 'FAILED' as const, message: problems.join('; ') } } : {}),
@@ -152,17 +179,24 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
 
 async function viaCurl(input: RequestInput, ctx: OperationContext): Promise<OperationResult> {
   if (input.multipart) return failure('INVALID_INPUT', 'Multipart through curl is not supported; use the built-in HTTP provider');
+  // curl reads a URL differently from Node (`http://x\@0017700000001:4317/` is host `x` to Node and 127.0.0.1 to curl),
+  // so it is handed the URL exactly as it was checked — Node's normalised form — and never the Control Center's address (SEC-1).
+  const target = new URL(input.url);
+  if (urlIsSelfAddress(target) || overridesHostToLoopback(input.headers)) return failure('DENIED', `${input.method} ${redact(input.url)}: Refused a request to the Control Center's own address`, { networkTargets: [target.host] });
   const exe = ctx.detection('curl')?.path ?? (process.platform === 'win32' ? 'curl.exe' : 'curl');
   const auth = await authHeaders(input, ctx);
   if ('ok' in auth && typeof auth.ok === 'boolean') return auth as OperationResult;
-  // Headers (including brokered auth) go through stdin as a config file, never argv.
-  const config = Object.entries({ ...input.headers, ...(auth as Record<string, string>), ...(input.json !== undefined ? { 'content-type': 'application/json' } : {}) })
-    .map(([k, v]) => `header = "${k}: ${v.replace(/"/g, '\\"')}"`)
-    .join('\n');
+  // Headers (including brokered auth) go through stdin as a config file, never argv. Each is one quoted line: a line
+  // break (refused here as well as by the schema, since a stored credential is not checked there) would end it and
+  // start another option (`data-binary = @file`, `output = path`), and inside the quotes `\` and `"` are escapes.
+  const headers = Object.entries({ ...input.headers, ...(auth as Record<string, string>), ...(input.json !== undefined ? { 'content-type': 'application/json' } : {}) });
+  if (headers.some(([k, v]) => !ONE_LINE.test(k) || !ONE_LINE.test(v))) return failure('INVALID_INPUT', `${ONE_LINE_MESSAGE}; not sent`);
+  const config = headers.map(([k, v]) => `header = "${`${k}: ${v}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join('\n');
   // No -L: curl would follow a redirect to any host with the same method and body (audit F-31).
-  const args = ['-sS', '--max-filesize', String(MAX_RESPONSE_BYTES), '-X', input.method, '--max-time', String(input.timeoutSec), '-K', '-', '-w', '\n%{http_code} %{time_total}', input.url];
+  const args = ['-sS', '--max-filesize', String(MAX_RESPONSE_BYTES), '-X', input.method, '--max-time', String(input.timeoutSec), '-K', '-', '-w', '\n%{http_code} %{time_total}', target.href];
   const data = input.json !== undefined ? JSON.stringify(input.json) : input.body;
-  const r = await run(exe, data !== undefined ? [...args.slice(0, -1), '--data-binary', data, input.url] : args, { cwd: ctx.cwd, env: ctx.env, stdin: config, timeoutMs: (input.timeoutSec + 5) * 1000 });
+  // `--data-raw` sends the body as written: to `--data-binary`, a body starting with `@` names a file to upload (SEC-1).
+  const r = await run(exe, data !== undefined ? [...args.slice(0, -1), '--data-raw', data, target.href] : args, { cwd: ctx.cwd, env: ctx.env, stdin: config, timeoutMs: (input.timeoutSec + 5) * 1000 });
   if (r.spawnError) return failure('NOT_INSTALLED', 'curl is not installed');
   const lines = r.stdout.split('\n');
   const [statusText, time] = (lines.pop() ?? '').split(' ');
@@ -176,7 +210,7 @@ async function viaCurl(input: RequestInput, ctx: OperationContext): Promise<Oper
     /* not JSON */
   }
   const latencyMs = Math.round(Number(time) * 1000);
-  const problems = assertions(input, status, text, json, latencyMs);
+  const problems = assertions(input, status, redact(text), json === undefined ? undefined : JSON.parse(redact(JSON.stringify(json))), latencyMs);
   return {
     ok: problems.length === 0,
     summary: `${input.method} ${redact(input.url)} → ${status} in ${latencyMs}ms (curl)`,

@@ -1,5 +1,6 @@
 import { classifyCommand } from '@acc/security';
 import { z } from 'zod';
+import { withReleaseGate } from '../release-gate.js';
 import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider } from '../sdk.js';
 import { checkPage } from './browser.js';
 import { waitForHttp } from './http.js';
@@ -97,10 +98,10 @@ export function verifyProvider(): ToolProvider {
         input: webVerifyInput,
         level: 2,
         // The start command is a free-form command line run by a shell: it is judged like one (audit F-04).
-    classify: (input) => {
+    classify: (input, ctx) => {
       if (!input.startCommand) return { level: 1 };
       const c = classifyCommand(input.startCommand);
-      return { level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: ['Starts the app for verification', ...c.reasons], effects: ['process', ...c.effects], production: c.production };
+      return withReleaseGate({ level: c.level === 1 ? 2 : c.level, risk: c.risk, reasons: ['Starts the app for verification', ...c.reasons], effects: ['process', ...c.effects], production: c.production }, input.startCommand, ctx);
     },
         run: (input, ctx) => verifyWeb(input, ctx),
       }),

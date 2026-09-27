@@ -1,6 +1,6 @@
 import type { ShellInfo, ShellKind, StreamName } from '@acc/executor';
 import type { CommandEffect } from '@acc/security';
-import type { CommandRisk, PermissionLevel } from '@acc/shared';
+import { PRODUCTION_BRANCH_NAMES, type CommandRisk, type PermissionLevel } from '@acc/shared';
 import type { z } from 'zod';
 
 /**
@@ -75,7 +75,17 @@ export interface ClassifyContext {
   cwd: string;
   /** Whether a pid was started by this task (only those may be stopped at low risk). */
   isTaskOwnedPid?: (pid: number) => boolean;
+  /**
+   * The branches a push to which deploys this call's repository (its release
+   * setting, docs/systems/release.md): one for a call in a repository, every
+   * repository's for a call at the root of a multi-repository workspace,
+   * empty when none releases by push.
+   */
+  releaseBranches?: readonly string[];
 }
+
+/** Branch names that are production on nearly every Git-connected host (Pages, Vercel, Netlify): classified production without asking. */
+export const PRODUCTION_BRANCH = new RegExp(`^(?:${PRODUCTION_BRANCH_NAMES.join('|')})$`, 'i');
 
 /** Long-running processes the orchestrator owns on behalf of a task. */
 export interface ProcessHost {

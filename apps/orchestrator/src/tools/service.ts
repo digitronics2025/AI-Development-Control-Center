@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, maskPersonalData, maskPersonalText, redact, referencesSelf, sanitizeEnv } from '@acc/security';
+import { constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -204,6 +204,7 @@ export class ToolService {
   private readonly folderDetections = new Map<string, { at: number; detection: ToolDetection }>();
   private events: (taskId: string, type: EventType, message: string, data?: Record<string, unknown>, stageId?: string | null) => void = () => undefined;
   private checkpointsFor: (taskId: string) => CheckpointHost | undefined = () => undefined;
+  private releaseBranchOf: (repositoryId: string) => string | null = () => null;
   private privileged: OperationContext['privileged'];
 
   constructor(private readonly d: ToolServiceDeps) {
@@ -221,11 +222,27 @@ export class ToolService {
     this.syncRegistry();
   }
 
-  /** Late wiring: the engine's event publisher and the Chairman's checkpoints exist after this service. */
-  attach(opts: { events?: ToolService['events']; checkpoints?: (taskId: string) => CheckpointHost | undefined; privileged?: OperationContext['privileged'] }): void {
+  /**
+   * Late wiring: the engine's event publisher and the Chairman's checkpoints exist after this service.
+   * `releaseBranch` names the branch a push to which deploys a repository (its release setting), read
+   * at each call so a changed setting applies at once.
+   */
+  attach(opts: { events?: ToolService['events']; checkpoints?: (taskId: string) => CheckpointHost | undefined; privileged?: OperationContext['privileged']; releaseBranch?: (repositoryId: string) => string | null }): void {
     if (opts.events) this.events = opts.events;
     if (opts.checkpoints) this.checkpointsFor = opts.checkpoints;
     if (opts.privileged) this.privileged = opts.privileged;
+    if (opts.releaseBranch) this.releaseBranchOf = opts.releaseBranch;
+  }
+
+  /**
+   * Branches a push to which deploys what this call can reach: its
+   * repository's release branch and, in a multi-repository task, every
+   * repository's — a shell in one of them can `cd ../other` or `git -C
+   * ../other push` as easily as one at the workspace root.
+   */
+  private releaseBranchesOf(scope: ToolScope): string[] {
+    const ids = [...(scope.repositoryId ? [scope.repositoryId] : []), ...(scope.repositories ?? []).map((r) => r.id)];
+    return [...new Set(ids.flatMap((id) => this.releaseBranchOf(id) ?? []))];
   }
 
   registerProvider(provider: ToolProvider, source = 'builtin'): void {
@@ -453,13 +470,15 @@ export class ToolService {
 
     // 3. Classify this concrete call.
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const classified = operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid) });
+    const classified = operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
     const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
     // An agent never reaches the Control Center itself — its token, keys, data folder or API — through
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
-    if (req.origin === 'agent' && referencesSelf(JSON.stringify(input) ?? '')) {
+    // Every URL in the input is read the way the tool's own `new URL()` will read it, so `127.1:4317`,
+    // `2130706433:4317` and `[::ffff:127.0.0.1]:4317` are the listen address too (SEC-1).
+    if (req.origin === 'agent' && inputReferencesSelf(input)) {
       const self: ToolRisk = { ...risk, level: 5, risk: 'dangerous', reasons: ["Reaches the Control Center's own token, data folder or API"] };
       this.escalate(scope, req.capability, 'denied', self.reasons[0]!, 5);
       return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);
@@ -594,7 +613,7 @@ export class ToolService {
       shell: (k) => this.shell(k),
       detection: (id) => this.health.get(id),
       processes: this.d.processes.host(scope.taskId, scope.stageId),
-      terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel) : undefined,
+      terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel, this.releaseBranchesOf(scope)) : undefined,
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
       credentials: {

@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { runProcess, runScript, type ShellKind } from '@acc/executor';
-import { classifyCommand, redact } from '@acc/security';
+import { classifyCommand, quoteWord, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, firstVersion, run, pushBounded } from '../detect.js';
 import { resolveInside } from '../paths.js';
-import { failure, missing, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
+import { inFolder, withReleaseGate } from '../release-gate.js';
+import { failure, missing, operation, type ClassifyContext, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 
 /**
  * Shell providers (V2 plan §10–11): PowerShell (7 preferred, Windows
@@ -23,9 +24,17 @@ const runInput = scriptInput.extend({
   shell: z.enum(['powershell', 'cmd', 'bash', 'wsl']).optional().describe('Pick a shell; by default the router chooses (PowerShell on Windows).'),
 });
 
-export function classifyScript(script: string, args: readonly string[] = []): Partial<ToolRisk> {
-  const c = classifyCommand([script, ...args].join(' '));
-  return { level: c.level, risk: c.risk, reasons: c.reasons, effects: c.effects, production: c.production };
+/**
+ * A script's risk. With a classify context, a `git push` in it to the
+ * repository's release branch or a production-named one is Level 5
+ * production, as `git.push` rates it (SEC-1): the classifier alone knows no
+ * repository.
+ */
+export function classifyScript(script: string, args: readonly string[] = [], ctx?: ClassifyContext): Partial<ToolRisk> {
+  const command = [script, ...args].join(' ');
+  const c = classifyCommand(command);
+  const risk: Partial<ToolRisk> = { level: c.level, risk: c.risk, reasons: c.reasons, effects: c.effects, production: c.production };
+  return ctx ? withReleaseGate(risk, command, ctx) : risk;
 }
 
 const MAX_OUTPUT_LINES = 4000;
@@ -82,7 +91,7 @@ function shellProvider(kind: ShellKind, meta: { id: string; name: string; descri
     description: `Run a script in ${meta.name}. The script is classified before it runs; destructive or machine-wide commands are refused or need approval.`,
     input: scriptInput,
     level: 2,
-    classify: (input) => classifyScript(input.script, input.args),
+    classify: (input, ctx) => classifyScript(input.script, input.args, inFolder(ctx, input.cwd)),
     run: (input, ctx) => execute(kind, input, ctx),
   });
   const generic = operation({
@@ -91,7 +100,7 @@ function shellProvider(kind: ShellKind, meta: { id: string; name: string; descri
     description: 'Run a script in the best available shell (PowerShell on Windows unless `shell` says otherwise). Prefer a specific capability (git.*, fs.*, http.request) when one exists.',
     input: runInput,
     level: 2,
-    classify: (input) => classifyScript(input.script, input.args),
+    classify: (input, ctx) => classifyScript(input.script, input.args, inFolder(ctx, input.cwd)),
     run: (input, ctx) => execute(kind, input, ctx),
   });
   return {
@@ -155,7 +164,13 @@ export function shellProviders(): ToolProvider[] {
           description: 'Run one executable with arguments (no shell). Use this when quoting through a shell would be error-prone.',
           input: execInput,
           level: 2,
-          classify: (input) => classifyScript([input.command, ...input.args].join(' ')),
+          classify: (input, ctx) => {
+            const argv = [input.command, ...input.args];
+            const c = classifyScript(argv.join(' '));
+            // No shell reads this argv, so the release gate reads it word for word: quoted, a program path with a space
+            // (`C:\Program Files\Git\cmd\git.exe`) or a branch named with a quote (`x'`) stays one word.
+            return withReleaseGate(c, argv.map(quoteWord).join(' '), inFolder(ctx, input.cwd));
+          },
           async run(input, ctx) {
             let cwd = ctx.cwd;
             let command = input.command;

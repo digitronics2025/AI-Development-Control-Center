@@ -60,6 +60,11 @@ describe('remote terminals', () => {
     await waitFor(() => output(r, terminalId), (o) => o.includes('remote-ok-4242'), 30_000, 'safe line output');
     r.send({ type: 'terminal.input', payload: { terminalId, data: 'git reset --hard HEAD\r' } });
     await waitFor(() => output(r, terminalId), (o) => o.includes('Refused from the cloud'), 15_000, 'refusal notice');
+    // A push to a production branch split across two messages is judged whole at Enter, with the release gate (SEC-1).
+    r.send({ type: 'terminal.input', payload: { terminalId, data: 'git push origin ma' } });
+    r.send({ type: 'terminal.input', payload: { terminalId, data: 'in\r' } });
+    await waitFor(() => output(r, terminalId).split('Refused from the cloud').length - 1, (n) => n >= 2, 15_000, 'push refusal notice');
+    expect(output(r, terminalId)).toMatch(/Refused from the cloud: Level 5[^\]]*Deploys: main is a production branch/);
     // History recall cannot smuggle a line past the classifier: escape sequences are dropped.
     r.send({ type: 'terminal.input', payload: { terminalId, data: '\x1b[A\r' } });
     // Terminal output is realtime only: nothing of it is in the mirrored events.

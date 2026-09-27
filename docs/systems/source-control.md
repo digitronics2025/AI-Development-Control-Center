@@ -9,7 +9,7 @@ sources:
   - apps/dashboard/src/pages/source-control/**
   - apps/dashboard/src/api/source-control.ts
   - workflows/staged-review.yaml
-verified_at: 2d516aa
+verified_at: 0d4eaf8
 ---
 
 # Source Control
@@ -38,7 +38,7 @@ out. Read-only workflows never supply attribution.
 | Git primitives (argv only, literal NUL pathspecs on stdin, no ext-diff/textconv) | [source-control.ts](../../packages/git/src/source-control.ts) |
 | State, version, scopes | [state.ts](../../apps/orchestrator/src/source-control/state.ts) |
 | Reads, mutations, journal | [service.ts](../../apps/orchestrator/src/source-control/service.ts) |
-| Secret preflight | [preflight.ts](../../apps/orchestrator/src/source-control/preflight.ts) |
+| Secret preflight | [preflight.ts](../../packages/git/src/preflight.ts) (re-exported by [source-control/preflight.ts](../../apps/orchestrator/src/source-control/preflight.ts)) |
 | Restart recovery | [reconcile.ts](../../apps/orchestrator/src/source-control/reconcile.ts) |
 | Commit message + staged review | [assist.ts](../../apps/orchestrator/src/source-control/assist.ts) |
 | Coordination with tasks | [repository-coordinator.ts](../../apps/orchestrator/src/services/repository-coordinator.ts) |
@@ -115,7 +115,10 @@ of the conflicted path, commit and sync.
 ## Secret preflight
 
 Before a commit (staged diff, `-U0`, 20 MB bound) and before a push or publish
-(`git log -p` of outgoing commits): files matching
+(`git log -p` of outgoing commits, with `--diff-merges=remerge` so a merge
+commit's own changes — a conflict resolution, an edit made in a `--no-commit`
+merge — are read too: `git log` shows no diff for a merge by default; Git
+before 2.36 gets `-m`, each parent's diff): files matching
 [sensitive-files.ts](../../packages/security/src/sensitive-files.ts) and added
 lines matching the high-confidence `blocking` rules of
 [redact.ts](../../packages/security/src/redact.ts) block the action with
@@ -124,15 +127,18 @@ lines matching the high-confidence `blocking` rules of
 reports them; staging one explicitly is allowed but its commit is blocked.
 AI context omits sensitive files entirely and redacts the rest.
 The push check is `scanOutgoing(root, tip, exclude)` in
-[preflight.ts](../../apps/orchestrator/src/source-control/preflight.ts); a
+[packages/git/src/preflight.ts](../../packages/git/src/preflight.ts); a
 release runs the same function on the commits it would send
-([release.md](release.md)). A release holds the repository writer lock while
+([release.md](release.md)), and so does the `git.push` tool before every push
+([tool-system.md](tool-system.md#the-execution-door-servicets)), which excludes
+what the remote it pushes to already has (`--remotes=<remote>` when it has no
+remote-tracking branch), never what another remote has. A release holds the repository writer lock while
 it checks and pushes, so Source Control mutations refuse meanwhile
 (`BLOCKED_BY_TASK`); its push moves only the remote branch, and the automatic
 fast-forward later brings the local branch up to date.
 
-File names: a push takes its file list from `git log --name-only -z`, so no
-name is quoted or split. Patch headers are read by `patchHeaderPath`
+File names: a push takes its file list from `git log --name-only -z` (merge
+commits the same way), so no name is quoted or split. Patch headers are read by `patchHeaderPath`
 ([source-control.ts](../../packages/git/src/source-control.ts)), which
 un-C-quotes names with quotes, backslashes or control characters and settles
 unquoted names that contain a space before `b/`; a header it cannot read still has its added

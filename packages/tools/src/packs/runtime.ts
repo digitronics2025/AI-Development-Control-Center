@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess, which } from '@acc/executor';
-import { classifyCommand, redact } from '@acc/security';
+import { classifyCommand, quoteWord, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable, pushBounded } from '../detect.js';
-import { expandPackageScripts } from '../package-scripts.js';
+import { expandPackageScripts, packageScriptLines } from '../package-scripts.js';
 import { resolveInside } from '../paths.js';
+import { withReleaseGate } from '../release-gate.js';
 import { failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
 
 /** Node, Python and Java toolchains (V2 plan §2 scope). Project dependency installs are Level 2 (allowed in Autopilot). */
@@ -114,7 +115,14 @@ export function runtimeProviders(): ToolProvider[] {
           description: 'Run a script from package.json (e.g. test, build, lint). What the script really runs is classified, not just its name.',
           input: z.object({ script: scriptName, args: z.array(z.string().max(1000)).max(40).default([]), timeoutSec: z.number().int().min(5).max(7200).optional() }),
           level: 2,
-          classify: (input, ctx) => risk(expandPackageScripts(ctx.cwd, `${packageManager(ctx.cwd) ?? 'npm'} run ${input.script} ${input.args.join(' ')}`)),
+          classify: (input, ctx) => {
+            const pm = packageManager(ctx.cwd) ?? 'npm';
+            const invocation = `${pm} run ${input.script} ${input.args.join(' ')}`;
+            // A script that pushes to the release branch (`"ship": "git push origin main"`) deploys like the push itself (SEC-1),
+            // with the call's args appended to its body as the package manager appends them (`"q": "git push"` + `origin main`).
+            const lines = packageScriptLines(ctx.cwd, [pm, 'run', input.script, ...(input.args.length ? ['--', ...input.args] : [])].map(quoteWord).join(' '));
+            return withReleaseGate(risk(expandPackageScripts(ctx.cwd, invocation)), lines, ctx);
+          },
           async run(input, ctx) {
             const pm = packageManager(ctx.cwd) ?? 'npm';
             return exec(ctx, pm, ['run', input.script, ...(input.args.length ? (pm === 'npm' ? ['--', ...input.args] : input.args) : [])], { timeoutMs: input.timeoutSec ? input.timeoutSec * 1000 : undefined });
@@ -126,7 +134,8 @@ export function runtimeProviders(): ToolProvider[] {
           description: 'Run a binary installed in the project (npx/pnpm exec), e.g. `tsc --noEmit` or `vitest run file`.',
           input: z.object({ bin: z.string().min(1).max(100).regex(/^[\w@./-]+$/), args: z.array(z.string().max(2000)).max(80).default([]), timeoutSec: z.number().int().min(5).max(7200).optional() }),
           level: 2,
-          classify: (input) => risk(`${input.bin} ${input.args.join(' ')}`),
+          // `pnpm exec` and `npx` run any program on PATH too (`pnpm exec git push origin main`): the release gate reads its argv.
+          classify: (input, ctx) => withReleaseGate(risk(`${input.bin} ${input.args.join(' ')}`), [input.bin, ...input.args].map(quoteWord).join(' '), ctx),
           async run(input, ctx) {
             const pm = packageManager(ctx.cwd) ?? 'npm';
             const [cmd, args] = pm === 'pnpm' ? ['pnpm', ['exec', input.bin, ...input.args]] : pm === 'yarn' ? ['yarn', [input.bin, ...input.args]] : pm === 'bun' ? ['bunx', [input.bin, ...input.args]] : ['npx', ['--no-install', input.bin, ...input.args]];

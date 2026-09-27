@@ -136,6 +136,8 @@ describe('rendered stage prompts', () => {
     expect(design).toMatch(/- design\.md \(1 KB\): the repository's design standard: read it in full before designing/);
     expect(design).toContain('- design/tokens.css (1 KB): design memory');
     expect(design).toContain('### design/brief.md\n\nAudience: shoppers in Casablanca. Brand words: calm, precise, warm.');
+    // The designer keeps that memory for the next design task.
+    expect(design).toMatch(/Keep the design memory\.\*\* When the repository has a `design\/` folder.+`design\/brief\.md`/);
     const review = promptOf(id, 'review');
     expect(review).toMatch(/- landing-phone-dark\.png \(screenshot, stage build, 1 KB\): .+landing-phone-dark\.png/);
   }, 90_000);

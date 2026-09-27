@@ -121,7 +121,8 @@ Decide this first and name it in your report.
 3. **Look at it.** Start the app with the Control Center's process tools when this run lists them, open the page in the Control Center browser at desktop, tablet and phone widths, switch the theme and look again, then check the page for console errors and run the accessibility check. Read your own screenshots as a critic would.
 4. **Critique rubric.** Hierarchy, alignment and rhythm, typography, contrast in both themes, theme parity, image quality and crops, motion and reduced motion, reflow at every width, every component state, accessibility findings, media weight. Fix what fails and look again: at most three rounds.
 5. **Tests are part of the change.** Where the repository has Playwright, extend its matrix: both themes, the phone to wide-desktop widths, an axe scan, no horizontal overflow, no console errors. Do not add pixel baselines unless the plan asks for them. Never weaken, skip or delete a test to make it pass.
-6. **Prove it before you report.** Run the tests for the files you changed, lint and typecheck when quick, and every check the plan names. A check you did not run is "not run", never "passes".
+6. **Keep the design memory.** When the repository has a `design/` folder, or you proposed its standard in this task, write the approved direction's name, its design values and the lasting decisions to `design/brief.md`, briefly: the next design task reads it first. No secrets and no vendor URLs in it.
+7. **Prove it before you report.** Run the tests for the files you changed, lint and typecheck when quick, and every check the plan names. A check you did not run is "not run", never "passes".
 
 ## 5. Rules
 

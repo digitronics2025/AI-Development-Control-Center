@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { redact } from '@acc/security';
-import type { ChairmanStrategyRun, LearningSignal, LearningSignalKind, StageInstance, ToolExecution } from '@acc/shared';
+import { formatUsd, isJudgeRole, type ChairmanStrategyRun, type LearningSignal, type LearningSignalKind, type StageInstance, type ToolExecution } from '@acc/shared';
 import type { TaskRecord } from '../store/store.js';
 
 /**
@@ -20,6 +20,17 @@ export interface SignalInputs {
   failedTestRuns: number;
   /** Tool-layer providers that offer a capability, to name a missing program. */
   providersFor(capability: string): string[];
+  /** The task's estimated paid-media spend and its budget (Settings → Media), in nano-dollars. */
+  media?: { spentNanos: number; budgetNanos: number };
+}
+
+/** axe rule ids, as `browser.accessibility` names them in its summary ("… violation(s) (dark): color-contrast at p, …"). */
+const AXE_RULE = /^[a-z0-9][a-z0-9-]{1,59}$/;
+
+export function axeRulesOf(summary: string | null): string[] {
+  const list = /^\d+ accessibility violation\(s\)[^:]*: (.+)$/.exec(summary ?? '')?.[1];
+  if (!list) return [];
+  return [...new Set(list.split(', ').map((part) => part.split(' at ')[0]!.trim()).filter((id) => AXE_RULE.test(id)))];
 }
 
 /** SQL LIKE patterns the service uses to pick candidate log lines; `parseLogLine` decides. */
@@ -67,9 +78,9 @@ export function collectSignals(input: SignalInputs): LearningSignal[] {
     add('tool_missing', key, `${list[0]!.capability} could not run: ${list[0]!.summary ?? `${key} is not installed`}`, list.length, list.map((c) => stageName(input.stages, c.stageId)));
   }
 
-  // A capability that kept failing for other reasons.
+  // A capability that kept failing for other reasons. An accessibility check that found violations worked: those count as a11y_rule below.
   const failing = new Map<string, ToolExecution[]>();
-  for (const c of calls.filter((c) => c.status === 'failed' && c.errorCode && !['NOT_INSTALLED', 'INVALID_INPUT', 'CANCELLED'].includes(c.errorCode))) {
+  for (const c of calls.filter((c) => c.status === 'failed' && c.errorCode && !['NOT_INSTALLED', 'INVALID_INPUT', 'CANCELLED'].includes(c.errorCode) && !(c.capability === 'browser.accessibility' && axeRulesOf(c.summary).length))) {
     failing.set(c.capability, [...(failing.get(c.capability) ?? []), c]);
   }
   for (const [capability, list] of failing) {
@@ -93,12 +104,38 @@ export function collectSignals(input: SignalInputs): LearningSignal[] {
     add(e.kind, e.key, e.kind === 'command_missing' ? `An agent's command "${e.key}" was not found (${e.count}×): ${e.example.slice(0, 160)}` : `The stage's permission level refused the skill ${e.key} (${e.count}×)`, e.count, e.stages);
   }
 
-  // Rounds of fixing before the checks passed.
+  // Rounds of fixing before the checks passed; a design workflow fixes in its build stage (a designer run in a fix cycle).
   const fixers = input.stages.filter((s) => s.role === 'fixer' && s.kind === 'agent').length;
   const rounds = Math.max(input.task.fixCycles, fixers);
   if (rounds >= 2) {
     const source = input.failedTestRuns >= 2 ? 'tests' : 'review';
-    add('fix_loops', source, `${rounds} fix rounds before the ${source === 'tests' ? 'tests passed' : 'review passed'}`, rounds, input.stages.filter((s) => s.role === 'fixer').map((s) => s.stageKey));
+    add('fix_loops', source, `${rounds} fix rounds before the ${source === 'tests' ? 'tests passed' : 'review passed'}`, rounds, input.stages.filter((s) => s.role === 'fixer' || (s.role === 'designer' && s.cycle > 0)).map((s) => s.stageKey));
+  }
+
+  // Design work judged failing more than once in one judge stage (a visual critique, or a review of a designer's work).
+  const designed = input.stages.some((s) => s.role === 'designer' && s.kind === 'agent');
+  const judged = new Map<string, StageInstance[]>();
+  for (const s of input.stages.filter((s) => s.verdict === 'FAIL' && isJudgeRole(s.role) && (s.role === 'visual-critic' || designed))) judged.set(s.stageKey, [...(judged.get(s.stageKey) ?? []), s]);
+  for (const [stageKey, fails] of judged) {
+    if (fails.length < 2) continue;
+    add('design_critique', stageKey, `${fails[0]!.name} failed the design ${fails.length} times`, fails.length, [stageKey]);
+  }
+
+  // The same accessibility rule failing in more than one check (a width, a theme, or a later round).
+  const rules = new Map<string, ToolExecution[]>();
+  for (const c of calls.filter((c) => c.capability === 'browser.accessibility')) for (const id of axeRulesOf(c.summary)) rules.set(id, [...(rules.get(id) ?? []), c]);
+  for (const [id, list] of rules) {
+    if (list.length < 2) continue;
+    add('a11y_rule', id, `The accessibility rule ${id} failed in ${list.length} checks`, list.length, list.map((c) => stageName(input.stages, c.stageId)));
+  }
+
+  // Paid media: most of the task budget used, or a call refused because it would not fit.
+  const refusedForBudget = calls.filter((c) => c.errorCode === 'DENIED' && c.capability.startsWith('media.') && /\bbudget\b/i.test(c.summary ?? ''));
+  const media = input.media;
+  const nearCap = media && media.budgetNanos > 0 && media.spentNanos >= media.budgetNanos * 0.8;
+  if (nearCap || refusedForBudget.length) {
+    const used = media ? `${formatUsd(media.spentNanos)} of the ${formatUsd(media.budgetNanos)} task budget` : 'the task budget';
+    add('media_spend', 'task_budget', `Paid media used ${used}${refusedForBudget.length ? `; ${refusedForBudget.length} call(s) refused for the budget` : ''}`, Math.max(1, refusedForBudget.length), refusedForBudget.map((c) => stageName(input.stages, c.stageId)));
   }
 
   // Chairman recovery strategies, grouped by what failed.

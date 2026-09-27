@@ -82,6 +82,38 @@ export function fingerprintOf(f: { kind: FindingKind; scope: LearningScope; repo
   return hash(`${f.kind}:${where}:${titleKey(f.title)}`);
 }
 
+const DESIGN_SIGNALS: ReadonlySet<LearningSignalKind> = new Set(['design_critique', 'a11y_rule', 'media_spend']);
+const SAFE_KEY = /^[a-z0-9][a-z0-9_-]{0,59}$/;
+
+/**
+ * The repository's design-system playbook the design signals propose
+ * (docs/systems/learning.md#design). Built only from recorded values — rule
+ * ids, stage keys, counts, amounts — and fixed text, never from an agent's
+ * words, so nothing planted in a report becomes standing advice.
+ */
+export function designSystemSkill(signals: LearningSignal[]): Extract<LearningProposal, { type: 'AUTHOR_SKILL' }> {
+  const of = (kind: LearningSignalKind) => signals.filter((s) => s.kind === kind && SAFE_KEY.test(s.key));
+  const steps = [
+    "Start from this repository's design standard: design.md or DESIGN.md, the design/ folder (design memory; design/brief.md holds the approved direction) and the theme or design values file. Use its colour roles, type scale, spacing and components, and change the standard first when the work truly needs a new value.",
+  ];
+  const rules = of('a11y_rule').sort((a, b) => b.count - a.count).slice(0, 8);
+  if (rules.length) steps.push(`These accessibility rules failed more than once here: ${rules.map((r) => `${r.key} (${r.count} checks)`).join(', ')}. Run browser.accessibility in light and dark on every page you change and clear these first.`);
+  const critiques = of('design_critique');
+  if (critiques.length) steps.push(`The design was judged failing more than once here (${critiques.map((c) => `stage ${c.key}, ${c.count} times`).join('; ')}). Before you report, look at the result with browser.visual_matrix at every width in both themes and fix theme parity, reflow and missing states the way a critic would.`);
+  if (of('media_spend').length) steps.push('Paid media came close to or over the task budget here. Check each media estimate before a paid call, explore at the cheapest settings, keep a running total and stop at 80 percent of the budget.');
+  steps.push('When you build, record the direction and its lasting decisions in design/brief.md, briefly, so the next design task starts from them.');
+  return {
+    type: 'AUTHOR_SKILL',
+    name: 'design-system',
+    description: 'What design work in this repository keeps failing on, and the checks to run before reporting UI work',
+    body: [
+      'Read this before designing or building UI in this repository. It lists what earlier design tasks here kept failing on, as the Control Center recorded it.',
+      '',
+      ...steps.map((step, i) => `${i + 1}. ${step}`),
+    ].join('\n'),
+  };
+}
+
 /** Findings that need no model: a missing program is a fact, a refused skill is recorded. */
 export function ruleFindings(signals: LearningSignal[], repositoryId: string | null): ReviewFinding[] {
   const out: ReviewFinding[] = [];
@@ -103,6 +135,12 @@ export function ruleFindings(signals: LearningSignal[], repositoryId: string | n
       const base = { kind: 'process' as const, scope: 'repository' as const, repositoryId, title: `A stage was not allowed to run the skill ${s.key}`, proposal: null };
       out.push({ ...base, fingerprint: hash(`skill-denied:${repositoryId ?? '-'}:${s.key.toLowerCase()}`), detail: `${s.summary}. The skill asks for more than that stage's permission level; run it in a stage with a higher level, or change the skill.`, confidence: 'MEDIUM', observed: true, signalIds: [s.id] });
     }
+  }
+  // Design friction in a repository: one playbook for its design stages, proposed after one task and written after two.
+  const design = signals.filter((s) => DESIGN_SIGNALS.has(s.kind));
+  if (design.length && repositoryId) {
+    const base = { kind: 'missing_skill' as const, scope: 'repository' as const, repositoryId, title: 'Write a design-system skill for this repository', proposal: designSystemSkill(design) };
+    out.push({ ...base, fingerprint: fingerprintOf(base), detail: `${design.map((s) => s.summary).join('; ')}. A repository skill would put these checks in front of every design stage.`.slice(0, 1000), confidence: 'MEDIUM', observed: true, signalIds: design.map((s) => s.id) });
   }
   return out;
 }
@@ -137,6 +175,9 @@ const SIGNAL_LEGEND: Record<LearningSignalKind, string> = {
   completion_limits: 'the task finished with unmet checks',
   slow_stage: 'an agent stage ran over twenty minutes',
   task_stuck: 'the task ended on a blocker',
+  design_critique: 'a visual critique or review failed the design more than once',
+  a11y_rule: 'the same accessibility (axe) rule failed in more than one check',
+  media_spend: 'paid media used most of the task budget, or a call was refused for the budget',
 };
 
 export function reviewPrompt(c: ReviewContext): string {

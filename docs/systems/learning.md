@@ -39,12 +39,15 @@ the engine.
    | `command_missing` | agent log lines matching "command not found" / "is not recognized" (bash, cmd, PowerShell) |
    | `tool_failures` | one capability failing ≥ 2 times (not NOT_INSTALLED / INVALID_INPUT / CANCELLED) |
    | `skill_denied` | log `permission denied: Skill <name>` |
-   | `fix_loops` | `fix_cycles` or fixer stages ≥ 2 |
+   | `fix_loops` | `fix_cycles` or fixer stages ≥ 2 (stage keys: fixers, and designer runs in a fix cycle) |
    | `recovery` | `chairman_strategy_runs` other than provider reroutes, per failure category |
    | `stage_timeout`, `provider_block` | stage `error_class` TIMEOUT; USAGE_LIMIT / MODEL_UNAVAILABLE / AUTH_FAILURE |
    | `completion_limits` | `final_status = NEEDS_USER_ACTION` |
    | `slow_stage` | an agent stage over 20 minutes |
    | `task_stuck` | a stuck task's blocker (kind and message) |
+   | `design_critique` | one judge stage with ≥ 2 `FAIL` verdicts, when it is a visual critic or the task ran a designer; key = stage key |
+   | `a11y_rule` | an axe rule id named in ≥ 2 `browser.accessibility` summaries (a width, a theme or a later round); key = rule id. Such a call found violations, so it is left out of `tool_failures` |
+   | `media_spend` | the task's paid-media spend (the media ledger) at ≥ 80% of Settings → Media's task budget, or a `media.*` call refused (`DENIED`) for the budget |
 
    No signal → review `skipped` ("clean run"), no model call.
 3. **Review** ([reviewer.ts](../../apps/orchestrator/src/learning/reviewer.ts)):
@@ -89,6 +92,22 @@ the engine.
    once (a re-review does not count again); a recurrence is the review seeing
    the improvement's finding. `trialVerdict`: recurrences × 2 ≥ target → undo
    (`ineffective`, by `chairman`, finding `failed`); seen ≥ target → `active`.
+
+## Design
+
+`design_critique`, `a11y_rule` and `media_spend` in a task with a repository
+give one rule finding ([reviewer.ts](../../apps/orchestrator/src/learning/reviewer.ts)
+`designSystemSkill`): *Write a design-system skill for this repository*,
+kind `missing_skill`, scope `repository`, `AUTHOR_SKILL` named `design-system`,
+MEDIUM and observed, so it is proposed after one task and written after a
+second (the fingerprint is the skill's name in the repository, so each task
+adds to one finding and the latest body wins). The body is numbered steps
+built only from recorded values (rule ids and stage keys that match
+`^[a-z0-9][a-z0-9_-]*$`, counts) and fixed text, never from an agent's words:
+read the design standard and `design/` first, clear the named axe rules in
+both themes, look with `browser.visual_matrix` before reporting, keep paid
+media under 80% of the budget, and record lasting decisions in
+`design/brief.md` ([design-agent.md](design-agent.md)).
 
 ## Safety ([safety.ts](../../apps/orchestrator/src/learning/safety.ts))
 

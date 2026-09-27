@@ -22,6 +22,9 @@ export const LEARNING_SIGNAL_KINDS = [
   'completion_limits',
   'slow_stage',
   'task_stuck',
+  'design_critique',
+  'a11y_rule',
+  'media_spend',
 ] as const;
 export type LearningSignalKind = (typeof LEARNING_SIGNAL_KINDS)[number];
 
@@ -258,6 +261,9 @@ export const SIGNAL_KIND_LABEL: Record<LearningSignalKind, string> = {
   completion_limits: 'Finished with unmet checks',
   slow_stage: 'Slow stage',
   task_stuck: 'Task got stuck',
+  design_critique: 'Design judged failing again',
+  a11y_rule: 'Accessibility rule kept failing',
+  media_spend: 'Paid media near its budget',
 };
 
 /** Blockers that mean the work itself got stuck — worth learning from before anyone resumes it. */

@@ -216,6 +216,22 @@ Media: ≤N images, ≤M loops ≤8 s, hard budget $X, no text inside images.
 /tenten-web-design
 ```
 
+## Design memory and learning
+
+`{{design_context}}` ([context.ts](../../apps/orchestrator/src/engine/context.ts)
+`designContext`) lists the repository's design standard (`design.md`,
+`DESIGN.md`, `docs/design.md`, a Tailwind config) and every file in
+`design/` by path and size, and inlines `design/brief.md` (8 KB, redacted).
+The designer keeps that memory: when the repository has a `design/` folder,
+or it proposed the standard in this task, it writes the approved direction,
+its design values and lasting decisions to `design/brief.md`, so the next
+design task starts from them.
+
+The learning loop reads design friction — a visual critique failing twice,
+the same axe rule in two checks, paid media near its budget — and proposes a
+repository-scoped `design-system` skill after one such task, written after a
+second ([learning.md](learning.md#design)).
+
 ## Guardrails
 
 - **Media keys are ambient credentials.** `FAL_KEY`, `REPLICATE_API_TOKEN`,

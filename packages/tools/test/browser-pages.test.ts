@@ -284,3 +284,76 @@ describe.skipIf(!browser)('design checks (real Chromium)', () => {
     for (const image of r.images!) expect(image.data.length).toBeLessThanOrEqual(3 * 1024 * 1024);
   }, 90_000);
 });
+
+describe('browser.render_html (style tiles)', () => {
+  let bait: http.Server;
+  let baitBase: string;
+  const hits: string[] = [];
+
+  beforeAll(async () => {
+    bait = http.createServer((req, res) => {
+      hits.push(req.url ?? '');
+      res.setHeader('content-type', req.url?.endsWith('.css') ? 'text/css' : 'text/html');
+      res.end(req.url?.endsWith('.css') ? 'html { height: 9000px }' : '<p>reached</p>');
+    });
+    await new Promise<void>((r) => bait.listen(0, '127.0.0.1', r));
+    baitBase = `http://127.0.0.1:${(bait.address() as { port: number }).port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((r) => bait.close(() => r()));
+  });
+
+  it('loads data: pictures, runs no script and reaches nothing, naming every refused request', async () => {
+    // Tall only when the data: picture loads (3000 px); taller than the cut (9000 px) if a script or the stylesheet ran.
+    const tallSvg = encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="3000"><rect width="10" height="3000" fill="#0a7a5a"/></svg>`);
+    const html = `<!doctype html><html><head>
+      <meta http-equiv="refresh" content="0;url=${baitBase}/refresh">
+      <link rel="stylesheet" href="${baitBase}/sheet.css">
+      <link rel="preconnect" href="${baitBase}"><link rel="prefetch" href="${baitBase}/prefetch">
+      <style>@import url('${baitBase}/import.css'); @font-face { font-family: X; src: url('${baitBase}/font.woff2'); }
+        body { margin: 0; font-family: X, system-ui; background: url('${baitBase}/bg.png'); } img { display: block; }</style>
+      <script src="${baitBase}/script.js"></script>
+      <script>document.documentElement.style.height = '9000px'; fetch('${baitBase}/fetch'); new Image().src = '${baitBase}/js-image';</script>
+    </head><body><h1>Tile</h1><img alt="" src="data:image/svg+xml,${tallSvg}"><img alt="" src="${baitBase}/remote.png" width="10" height="10">
+      <iframe src="${baitBase}/frame"></iframe><object data="${baitBase}/object"></object><video poster="${baitBase}/poster.jpg" src="${baitBase}/clip.mp4"></video></body></html>`;
+    const r = await call('browser.render_html', { html, name: 'bold', viewport: 'desktop', colorSchemes: ['light', 'dark'] });
+    expect(r.ok, r.summary).toBe(true);
+    const out = r.output as { tiles: Array<{ colorScheme: string; width: number; height: number; clipped: boolean }>; refusedRequests: Array<{ url: string; type: string }> };
+    expect(out.tiles.map((t) => [t.colorScheme, t.width, t.clipped])).toEqual([['light', 1280, false], ['dark', 1280, false]]);
+    for (const tile of out.tiles) {
+      expect(tile.height).toBeGreaterThanOrEqual(3000);
+      expect(tile.height).toBeLessThan(4000);
+    }
+    // Nothing reached the network, and what the page asked for is named.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(hits).toEqual([]);
+    const refused = out.refusedRequests.map((q) => q.url.replace(baitBase, ''));
+    for (const url of ['/sheet.css', '/remote.png', '/frame']) expect(refused).toContain(url);
+    expect(refused).not.toContain('/fetch');
+    expect(refused).not.toContain('/js-image');
+    expect(r.summary).toMatch(/outside request\(s\) refused \(127\.0\.0\.1:\d+\)/);
+    expect(r.images?.map((i) => i.name)).toEqual(['tile-bold-light.png', 'tile-bold-dark.png']);
+    expect(r.artifacts?.map((a) => a.name)).toEqual(['tile-bold-light.png', 'tile-bold-dark.png']);
+  }, 90_000);
+
+  it('never draws a local file', async () => {
+    // A 3000 px tall picture on disk: the tile stays short when it is not loaded.
+    const { writeFileSync } = await import('node:fs');
+    const file = path.join(temp, 'tall.svg');
+    writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="3000"><rect width="10" height="3000"/></svg>');
+    const r = await call('browser.render_html', { html: `<!doctype html><body style="margin:0"><img alt="" src="file://${file}"><iframe src="file://${file}"></iframe></body>`, colorSchemes: ['light'] });
+    expect(r.ok, r.summary).toBe(true);
+    expect((r.output as { tiles: Array<{ height: number }> }).tiles[0]!.height).toBeLessThan(3000);
+  }, 90_000);
+
+  it('cuts a tall page, and refuses HTML over the size limit', async () => {
+    const r = await call('browser.render_html', { html: '<!doctype html><body style="margin:0"><div style="height:6000px;background:#123"></div></body>', colorSchemes: ['light'], viewport: 'phone' });
+    expect(r.ok, r.summary).toBe(true);
+    expect((r.output as { tiles: Array<{ width: number; height: number; clipped: boolean }> }).tiles).toEqual([expect.objectContaining({ width: 390, height: 4000, clipped: true })]);
+    expect(r.summary).toMatch(/cut at 4000 px/);
+    const op = registry.provider('playwright')!.operations.find((o) => o.id === 'browser.render_html')!;
+    expect(op.input.safeParse({ html: 'x'.repeat(1_000_001) }).success).toBe(false);
+    expect(op).toMatchObject({ level: 1, readOnly: true });
+    expect(op.classify?.(op.input.parse({ html: '<p>x</p>' }), { cwd: temp })).toMatchObject({ effects: [] });
+  }, 90_000);
+});

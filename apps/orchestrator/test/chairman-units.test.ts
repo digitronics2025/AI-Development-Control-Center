@@ -141,6 +141,12 @@ describe('recovery policy', () => {
     expect(recoveryCandidates(ctx({ trigger: 'plan_mismatch', failingStageKey: 'verify' })).map((c) => c.kind)).toEqual(['replan', 'rca']);
   });
 
+  it('re-plans in an art direction stage when the workflow has no planner', () => {
+    const design: WorkflowProfile = { ...WORKFLOW, stages: WORKFLOW.stages.map((s) => (s.key === 'plan' ? { ...s, key: 'direction', name: 'Art direction', role: 'art-director' as const } : s)) };
+    const replan = recoveryCandidates(ctx({ trigger: 'plan_mismatch', failingStageKey: 'verify', workflow: design })).find((c) => c.kind === 'replan');
+    expect(replan?.id).toBe('replan:direction');
+  });
+
   it('hands a blocked or crashing stage to another agent, not one that already failed', () => {
     const blocked = recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'implement' }));
     expect(blocked.map((c) => c.id)).toEqual(['change_agent:implement:codex']);
@@ -242,6 +248,19 @@ describe('ask vs act', () => {
       ],
     };
     expect(classifyMessage('Use Claude for the designer, with max effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'build', agentId: 'claude', effort: 'max' } });
+  });
+
+  it('routes art direction and visual critique words to their stages', () => {
+    const design: IntentContext = {
+      ...ctx,
+      stages: [
+        { key: 'look', name: 'Look', role: 'art-director', kind: 'agent' },
+        { key: 'build', name: 'Build', role: 'designer', kind: 'agent' },
+        { key: 'judge', name: 'Judge', role: 'visual-critic', kind: 'agent' },
+      ],
+    };
+    expect(classifyMessage('Use Claude for the art direction.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'look', agentId: 'claude' } });
+    expect(classifyMessage('Switch the visual critic to codex with high effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'judge', agentId: 'codex', effort: 'high' } });
   });
 
   it('maps clear commands to typed actions', () => {
@@ -402,6 +421,25 @@ describe('completion gate', () => {
     const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
     const violated = completionGate({ ...base, stages: [assets, tests, review], activeDirectives: [protect] });
     expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'build' } }] });
+  });
+
+  it('counts a visual critic verdict as a review', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'critique',
+      stages: [def('build', 'designer', 2, { next: 'critique' }), def('critique', 'visual-critic', 1, { verdict: true, onFail: 'build' })],
+    };
+    const build = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    const base = { workflow: design, testRuns: [], activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set<never>() };
+    expect(completionGate({ ...base, stages: [build, stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' })] }).pass).toBe(true);
+    const failed = completionGate({ ...base, stages: [build, stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' })] });
+    expect(failed.failures).toEqual([expect.objectContaining({ code: 'review', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'critique' } }] })]);
+    // A critique that ran before the last build has not seen it.
+    const early = completionGate({ ...base, stages: [stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' }), stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 })] });
+    expect(early.failures.map((f) => f.code)).toEqual(['review']);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isWriteRole, resolveAssignment, validateWorkflow, workflowPath, WRITE_ROLES, type StageDefinitionInput } from '../src/index.js';
+import { isJudgeRole, isPlanRole, isWriteRole, judgeKind, resolveAssignment, ROLE_CLASS, ROLES, roleClass, validateWorkflow, workflowPath, WRITE_ROLES, type StageDefinitionInput } from '../src/index.js';
 
 const stage = (s: Partial<StageDefinitionInput> & { key: string; next: string }): StageDefinitionInput => ({
   name: s.key,
@@ -69,6 +69,31 @@ describe('validateWorkflow', () => {
     expect(isWriteRole('designer')).toBe(true);
     expect(isWriteRole('reviewer')).toBe(false);
     expect(isWriteRole(undefined)).toBe(false);
+  });
+
+  it('gives every role a class: the art director plans and the visual critic judges like a reviewer', () => {
+    expect(Object.keys(ROLE_CLASS).sort()).toEqual([...ROLES].sort());
+    expect(roleClass('art-director')).toBe('plan');
+    expect(isPlanRole('art-director')).toBe(true);
+    expect(isPlanRole('planner')).toBe(true);
+    expect(isPlanRole('designer')).toBe(false);
+    expect(isJudgeRole('visual-critic')).toBe(true);
+    expect(judgeKind('visual-critic')).toBe('review');
+    expect(judgeKind('reviewer')).toBe('review');
+    expect(judgeKind('verifier')).toBe('verify');
+    expect(judgeKind('designer')).toBeNull();
+    expect(judgeKind(undefined)).toBeNull();
+    expect(roleClass('toString')).toBeNull();
+    const design = {
+      id: 'roles',
+      name: 'Roles',
+      stages: [
+        stage({ key: 'direction', role: 'art-director', next: 'build' }),
+        stage({ key: 'build', role: 'designer', next: 'critique', permissionLevel: 2 }),
+        stage({ key: 'critique', role: 'visual-critic', next: 'complete', onFail: 'build', verdict: true }),
+      ],
+    };
+    expect(validateWorkflow(design).issues).toEqual([]);
   });
 
   it('accepts stage instructions, a tool profile and skills on agent stages only, and never the operator profile', () => {

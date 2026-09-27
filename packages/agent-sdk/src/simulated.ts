@@ -191,7 +191,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
   }
 
   async execute(input: AgentExecutionInput): Promise<AgentExecutionHandle> {
-    const role = /^Role: (\w+)/m.exec(input.prompt)?.[1]?.toLowerCase() ?? 'agent';
+    const role = /^Role: ([\w-]+)/m.exec(input.prompt)?.[1]?.toLowerCase() ?? 'agent';
     const taskId = /^Task: (TASK-\d+)/m.exec(input.prompt)?.[1] ?? 'TASK';
     const has = (marker: string) => input.prompt.includes(`[sim:${marker}]`);
     const slow = has('slow');
@@ -276,6 +276,9 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         case 'investigator':
           output = `## Findings\n\nThe repository at ${path.basename(input.cwd)} was inspected.\n\n## Relevant files\n\n- README.md\n\n## Risks\n\nNone found.`;
           break;
+        case 'art-director':
+          output = `## Summary\n\nSimulated art direction: calm, precise, warm.\n\n## Direction\n\nCalm product-led direction.\n\n## Design values\n\n- Accent #0a7a5a on light, #3fd0a0 on dark\n\n## Asset list\n\nNo generated media.\n\n## Media budget\n\n$0`;
+          break;
         case 'planner': {
           output = `## Goal\n\nComplete the requested change.\n\n## Implementation Plan\n\n1. Update sim-output.md\n\n## Success Criteria\n\n- sim-output.md contains the change\n- tests pass`;
           // A workflow with an adaptive team stage lists it in the prompt; [sim:team] splits the work for it.
@@ -326,6 +329,11 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             role === 'designer'
               ? `## Summary\n\nSimulated designer run: restyled sim-output.md.\n\n## Design decisions\n\n- Kept the existing tokens.\n\n## Changes\n\n- Updated sim-output.md\n\n## Visual verification\n\nNot run (simulated).`
               : `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          break;
+        }
+        case 'visual-critic': {
+          const fail = has('critic-fail-always') || (has('critic-fail-once') && this.once(`${taskId}:critic`));
+          output = fail ? '## Visual review\n\n- The dark theme hero loses contrast.\n\nVERDICT: FAIL' : '## Visual review\n\nBoth themes hold up at every width.\n\nVERDICT: PASS';
           break;
         }
         case 'reviewer': {
@@ -407,7 +415,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         default:
           output = `Simulated ${role} output.`;
       }
-      if ((role === 'reviewer' || role === 'verifier') && !has('review-miss-coverage') && !(has('review-miss-coverage-once') && this.once(`${taskId}:${role}:coverage`))) {
+      if ((role === 'reviewer' || role === 'verifier' || role === 'visual-critic') && !has('review-miss-coverage') && !(has('review-miss-coverage-once') && this.once(`${taskId}:${role}:coverage`))) {
         // A diligent reviewer names every file the diff did not show (docs/plans/AUTOPILOT_GATES_PLAN.md §3.A).
         const notShown = [...input.prompt.matchAll(/^- (.+?) \([^\n]*\) → read: /gm)].map((m) => m[1]!);
         if (notShown.length) output = output.replace(/\n(VERDICT: \w+)\s*$/, `\n## Files reviewed\n\n${[...new Set(notShown)].map((p) => `- ${p}: read from disk`).join('\n')}\n\n$1`);

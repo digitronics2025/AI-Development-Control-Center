@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, headCommit, isGitRepository, removeWorktree, repositoryStatus, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
-import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
+import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun, roleClass } from '@acc/shared';
 import {
   assessVerification,
   classifyFailure,
@@ -42,7 +42,7 @@ const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml',
 /** How the operator's own skills and outside tools behave inside a Control Center run (docs/systems/agents.md). */
 /** How to look at UI work with the Control Center's tools (docs/systems/design-agent.md). */
 export const VISUAL_LOOP_LINE =
-  'For UI work, look at the result, not the code alone: browser.open with viewport and colorScheme (then browser.snapshot and browser.act for states), browser.visual_matrix for every width in light and dark as contact sheets, browser.accessibility for WCAG failures with the failing elements, and media.image.view / media.video.frames for image and video files; media.asset.optimize, media.svg.optimize and media.video.encode prepare files for the web.';
+  'For UI work, look at the result, not the code alone: browser.open with viewport and colorScheme (then browser.snapshot and browser.act for states), browser.visual_matrix for every width in light and dark as contact sheets, browser.accessibility for WCAG failures with the failing elements, browser.render_html to draw a style tile you wrote (scripts off, nothing fetched), and media.image.view / media.video.frames for image and video files; media.asset.optimize, media.svg.optimize and media.video.encode prepare files for the web.';
 
 export const SKILLS_PROMPT_SECTION = [
   '## Skills',
@@ -331,7 +331,7 @@ export class EngineTooling {
     parts.push(SKILLS_PROMPT_SECTION);
     const requested = await this.requestedSkillsSection(task, def, repo);
     if (requested) parts.push(requested);
-    if (['investigator', 'planner', 'implementer', 'designer'].includes(def.role)) {
+    if (['investigate', 'plan', 'write'].includes(roleClass(def.role) ?? '') && def.role !== 'fixer') {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);
     }

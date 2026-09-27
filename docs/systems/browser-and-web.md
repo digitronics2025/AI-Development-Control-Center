@@ -70,9 +70,20 @@ things the agents could not do.
 |---|---|---|
 | `browser.visual_matrix` | 1 | The page at up to five widths in light and dark: one contact sheet per scheme for the model (composed in Chromium from `data:` URLs, scripts off, network refused; JPEG ≤3 MB), every capture kept as an artifact, and status, console errors and horizontal overflow per view |
 | `browser.accessibility` | 1 | axe-core WCAG 2.2 AA at a viewport and colour scheme; each violation with up to ten failing elements (axe's CSS selector, the element's HTML and axe's failure summary, redacted) |
+| `browser.render_html` | 1, read-only | HTML the agent wrote (a style tile, up to 1 MB) drawn at one width in light and dark, cut at 4000 px tall; each picture returned for the model (PNG, else JPEG ≤3 MB) and kept as a `tile-<name>-<scheme>.png` screenshot artifact |
 
-Both are in the `LOOK` set of every profile, with `media.image.view` and
-`media.video.frames` ([design-agent.md](design-agent.md)). **Horizontal
+All three are in the `LOOK` set of every profile, with `media.image.view` and
+`media.video.frames` ([design-agent.md](design-agent.md)).
+
+**`browser.render_html` isolation** (`renderHtml` in
+[browser.ts](../../packages/tools/src/packs/browser.ts)): its own Chromium
+launched with a proxy on a closed port that loopback does not bypass
+(`<-loopback>`) and DNS prefetch off, so a preconnect or anything request
+routing never sees goes nowhere; a context with scripts off, service
+workers blocked and downloads refused; every routed request refused and
+listed (URL redacted, first 50) with a summary naming the hosts, a refused
+navigation (a meta refresh, a frame) answered 204 so the page stays on the
+tile. Only `data:` URLs load. Nothing is written into the repository. **Horizontal
 overflow** compares `scrollWidth` with `documentElement.clientWidth`: under
 mobile emulation `innerWidth` grows to the content's width, so comparing with
 it never caught a page wider than the phone.
@@ -82,7 +93,7 @@ it never caught a page wider than the phone.
 `OperationResult.images` ([sdk.ts](../../packages/tools/src/sdk.ts)) carries
 PNGs (or JPEGs) of at most 3 MB for the model: `browser.open`, `browser.snapshot`/`act`
 with `screenshot`, `browser.screenshot`, `browser.check_page` and the
-screenshot steps of `browser.run_flow` fill it, as do `media.image.view`,
+screenshot steps of `browser.run_flow` fill it, as do `browser.render_html`, `media.image.view`,
 `media.video.frames` ([design-agent.md](design-agent.md)) and the PNG/JPEG
 image blocks an outside MCP server returns ([mcp.md](mcp.md)). `POST /api/tool-session/call`
 returns up to 3 of them base64-encoded; the bridge

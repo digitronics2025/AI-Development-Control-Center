@@ -15,6 +15,7 @@ import {
   type StageInstance,
   type TaskContract,
   type TaskLimits,
+  judgeKind,
 } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { ContextBuilder } from '../engine/context.js';
@@ -117,8 +118,8 @@ export class Chairman implements SupervisorHooks {
     const has = (pred: (s: StageDefinition) => boolean) => task.workflow.stages.some(pred);
     const criteria = ['The requested change is implemented'];
     if (has((s) => s.kind === 'tests')) criteria.push('The repository checks pass after the last change');
-    if (has((s) => s.role === 'reviewer' && s.verdict)) criteria.push('Review passes');
-    if (has((s) => s.role === 'verifier' && s.verdict)) criteria.push('Verification passes');
+    if (has((s) => judgeKind(s.role) === 'review' && s.verdict)) criteria.push('Review passes');
+    if (has((s) => judgeKind(s.role) === 'verify' && s.verdict)) criteria.push('Verification passes');
     const repo = this.d.store.getRepository(task.repositoryId);
     return {
       taskId: task.id,

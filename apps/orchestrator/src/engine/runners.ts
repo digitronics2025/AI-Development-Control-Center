@@ -21,6 +21,7 @@ import {
   type StageInstance,
   type TestRun,
   type RepositoryCommand,
+  isJudgeRole,
 } from '@acc/shared';
 import type { RepairPlan, RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
@@ -170,6 +171,9 @@ export const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: str
   fixer: { type: 'fix-report', name: 'fix-report.md', prompt: 'fix-prompt.md' },
   // A designer builds like an implementer: its report is what reviewers, verifiers and fixers read as {{implementation_report}}.
   designer: { type: 'implementation-report', name: 'design-report.md', prompt: 'design-prompt.md' },
+  // The art direction is the plan later stages read as {{plan}}; a visual critique is a review.
+  'art-director': { type: 'plan', name: 'art-direction.md', prompt: 'art-direction-prompt.md' },
+  'visual-critic': { type: 'review', name: 'visual-review.md', prompt: 'visual-review-prompt.md' },
   reviewer: { type: 'review', name: 'review.md', prompt: 'review-prompt.md' },
   verifier: { type: 'verification', name: 'verification.md', prompt: 'verification-prompt.md' },
 };
@@ -426,7 +430,7 @@ export class StageRunners {
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
     await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: output, stageId: stage.id, stageKey: def.key });
 
-    if (def.role !== 'reviewer' && def.role !== 'verifier') {
+    if (!isJudgeRole(def.role)) {
       // Reviewers and verifiers list operator items without stopping (NEEDS OPERATOR); a work stage that cannot proceed stops the task.
       const questions = extractOperatorBlockers(output);
       if (questions.length) {
@@ -473,7 +477,7 @@ export class StageRunners {
           return this.failStage(stage, 'REVIEW_INCOMPLETE', `${def.name} gave PASS twice without reviewing ${still.length} changed file${still.length === 1 ? '' : 's'} the diff did not show: ${still.slice(0, 20).join(', ')}${still.length > 20 ? ', …' : ''}`);
         }
       }
-    } else if (def.role === 'reviewer' || def.role === 'verifier') {
+    } else if (isJudgeRole(def.role)) {
       // Advisory verdict: recorded for the report, but it does not route the
       // workflow (a review-only workflow completes and says changes were requested).
       verdict = parseVerdict(output);

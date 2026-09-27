@@ -1,4 +1,4 @@
-import { isWriteRole, type ChairmanActionInput, type CommandKind, type Directive, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
+import { isWriteRole, judgeKind, type ChairmanActionInput, type CommandKind, type Directive, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
 import { matchesAny } from './rules.js';
 
 /**
@@ -58,13 +58,14 @@ export function completionGate(input: GateInput): GateResult {
       });
     }
   }
-  for (const role of ['reviewer', 'verifier'] as const) {
-    const def = has((s) => s.role === role && s.kind === 'agent' && s.verdict);
+  // Each kind of verdict (review: reviewer or visual critic; verify: verifier) must have passed since the last change.
+  for (const kind of ['review', 'verify'] as const) {
+    const def = has((s) => judgeKind(s.role) === kind && s.kind === 'agent' && s.verdict);
     if (!def) continue;
-    const last = lastOf(stages, (s) => s.role === role && s.status === 'SUCCESS');
+    const last = lastOf(stages, (s) => judgeKind(s.role) === kind && s.status === 'SUCCESS');
     if (!last || last.verdict !== 'PASS' || !after(last)) {
       failures.push({
-        code: role === 'reviewer' ? 'review' : 'verify',
+        code: kind,
         message: `${def.name} has not passed${last && last.verdict === 'PASS' ? ' since the last change' : ''}.`,
         remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: def.key } }],
       });

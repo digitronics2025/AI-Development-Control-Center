@@ -30,6 +30,7 @@ import {
   type StageWorkUnit,
   type WorkUnitKind,
   type WorkUnitManifestUnit,
+  isJudgeRole,
 } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import { limitReached } from '../chairman/policy.js';
@@ -305,7 +306,7 @@ export class StageTeamRunner {
       const stopped = waveResults.results.find((r) => r.stopped);
       if (stopped || control.stopReason) return this.stopAll(stage, rows, control.stopReason ?? stopped!.stopped!);
       const questions = waveResults.results.flatMap((r) => r.questions);
-      if (questions.length && def.role !== 'reviewer' && def.role !== 'verifier') {
+      if (questions.length && !isJudgeRole(def.role)) {
         this.markRemaining(rows, pending, 'CANCELLED', 'A worker needs your decision first');
         await this.writeAggregate(task, def, stage, results);
         this.d.publisher.updateStage(stage.id, { status: 'PAUSED', summary: summarize(questions.join('\n')), finishedAt: now() });
@@ -350,7 +351,7 @@ export class StageTeamRunner {
     await this.writeAggregate(task, def, stage, results, lead);
     let verdict: 'PASS' | 'FAIL' | null = null;
     const failedBy: string[] = [];
-    if (def.verdict || def.role === 'reviewer' || def.role === 'verifier') {
+    if (def.verdict || isJudgeRole(def.role)) {
       const verdicts = results.map((r) => ({ r, v: parseVerdict(r.output ?? '') }));
       const missing = verdicts.filter((x) => !x.v);
       if (def.verdict && missing.length) {
@@ -457,7 +458,7 @@ export class StageTeamRunner {
       return { kind: 'limit', message: limit };
     }
     const prompt = [
-      built.prompt.replace(/^Role: \w+$/m, 'Role: decomposer'),
+      built.prompt.replace(/^Role: [\w-]+$/m, 'Role: decomposer'),
       '',
       '## Decomposition only (from the orchestrator)',
       '',

@@ -10,16 +10,16 @@ import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitFor, waitForSta
 
 const PROMPTS_DIR = path.join(ROOT, 'prompts');
 const templates = Object.fromEntries(readdirSync(PROMPTS_DIR).map((f) => [f.replace(/\.md$/, ''), readFileSync(path.join(PROMPTS_DIR, f), 'utf8')]));
-const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer', 'designer'];
-const JUDGE_ROLES = ['reviewer', 'verifier'];
+const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer', 'designer', 'art-director'];
+const JUDGE_ROLES = ['reviewer', 'verifier', 'visual-critic'];
 
 /**
  * The template-to-parser contract (docs/systems/prompts.md): what the built-in
  * templates promise the engine, the report and the Chairman can read.
  */
 describe('built-in prompt templates', () => {
-  it('cover the seven agent roles and use only placeholders the builder fills', () => {
-    expect(Object.keys(templates).sort()).toEqual(['designer', 'fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier']);
+  it('cover the nine agent roles and use only placeholders the builder fills', () => {
+    expect(Object.keys(templates).sort()).toEqual(['art-director', 'designer', 'fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier', 'visual-critic']);
     for (const [role, body] of Object.entries(templates)) {
       expect(unknownPlaceholders(body), `${role}.md`).toEqual([]);
       expect(placeholdersIn(body).length, `${role}.md uses placeholders`).toBeGreaterThan(5);
@@ -50,15 +50,19 @@ describe('built-in prompt templates', () => {
   });
 
   it('give each role the loop context it lacked', () => {
-    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner', 'designer']) {
+    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner', 'designer', 'art-director', 'visual-critic']) {
       expect(templates[role], role).toContain('{{diff}}');
       expect(templates[role], role).toContain('{{test_results}}');
       expect(templates[role], role).toContain('{{review}}');
     }
     for (const role of ['investigator', 'planner', 'implementer', 'designer', 'reviewer', 'verifier']) expect(templates[role], role).toContain('{{attachments}}');
     // Pictures are evidence for visual work: the designer, reviewer and verifier see what the Control Center captured.
-    for (const role of ['designer', 'reviewer', 'verifier']) expect(templates[role], role).toContain('{{screenshots}}');
-    expect(templates.designer).toContain('{{design_context}}');
+    for (const role of ['designer', 'reviewer', 'verifier', 'visual-critic', 'art-director']) expect(templates[role], role).toContain('{{screenshots}}');
+    for (const role of ['designer', 'art-director', 'visual-critic']) expect(templates[role], role).toContain('{{design_context}}');
+    // The art direction is what the Assets stage spends against: it must state a budget and an asset list.
+    expect(templates['art-director']).toContain('- `## Media budget`');
+    expect(templates['art-director']).toContain('- `## Asset list`');
+    expect(templates['art-director']).toContain('- `## Success Criteria`');
     for (const role of ['implementer', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_commands}}');
     for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{implementation_report}}');
     for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_report}}');

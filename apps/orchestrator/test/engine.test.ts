@@ -125,6 +125,33 @@ describe('designer stage', () => {
     const report = await t.services.artifacts.latestText(id, 'implementation-report');
     expect(report).toMatch(/^## Summary/m);
   });
+
+  it('treats the art director as a planner and the visual critic as a reviewer', async () => {
+    t.services.workflows.save('design-roles', {
+      name: 'Design roles',
+      maxFixCycles: 2,
+      stages: [
+        { key: 'direction', name: 'Art direction', role: 'art-director', permissionLevel: 1, next: 'build' },
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'critique' },
+        { key: 'critique', name: 'Visual critique', role: 'visual-critic', permissionLevel: 1, verdict: true, next: 'complete', onFail: 'build' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Restyle the output file [sim:critic-fail-once]', { workflowId: 'design-roles', mode: 'discuss', supervised: false });
+    // Discuss First stops after the plan-class stage for plan review.
+    const waiting = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED', 'FAILED']);
+    expect(waiting.blocker?.kind).toBe('approval');
+    expect(t.services.store.listStages(id).map((s) => s.stageKey)).toEqual(['direction']);
+    expect(await t.services.artifacts.latestText(id, 'plan')).toContain('## Media budget');
+    const [approval] = (await t.api('GET', '/api/approvals')).body.filter((a: { taskId: string }) => a.taskId === id);
+    expect(approval).toMatchObject({ kind: 'plan_review' });
+    await t.api('POST', `/api/approvals/${approval.id}/approve`, {});
+    // The critic's FAIL is a review verdict: it loops back to the build, then passes.
+    expect((await waitForStatus(t, id, ['COMPLETED', 'FAILED'])).status).toBe('COMPLETED');
+    const stages = t.services.store.listStages(id);
+    expect(stages.map((s) => s.stageKey)).toEqual(['direction', 'build', 'critique', 'build', 'critique']);
+    expect(stages.filter((s) => s.stageKey === 'critique').map((s) => s.verdict)).toEqual(['FAIL', 'PASS']);
+    expect(await t.services.artifacts.latestText(id, 'review')).toContain('VERDICT: PASS');
+  });
 });
 
 describe('image attachments', () => {

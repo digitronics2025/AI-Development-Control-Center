@@ -15,7 +15,7 @@ verified_at: b9ce60f
 # Role prompts
 
 What each agent stage is told, and what the orchestrator reads back from its
-reply. The seven built-in templates live in [prompts/](../../prompts) (plan:
+reply. The nine built-in templates live in [prompts/](../../prompts) (plan:
 [ROLE_PROMPTS_PLAN.md](../plans/ROLE_PROMPTS_PLAN.md)); the contract between
 them and the code is the placeholder catalog and the marker lines below.
 
@@ -38,8 +38,9 @@ assembles, in this order:
 6. The engine's sections ([tooling.ts](../../apps/orchestrator/src/engine/tooling.ts)):
    `## Skills` (how skills and outside tools behave in a run), `## Requested skills`
    when the task or a directive names `/skills` or the stage lists `skills`
-   (installed ones only), `## Environment` for the
-   investigator, planner, implementer and designer, and `## Control Center tools` when
+   (installed ones only), `## Environment` for the investigate, plan and write
+   role classes (`ROLE_CLASS` in [constants.ts](../../packages/shared/src/constants.ts)) except
+   the fixer, and `## Control Center tools` when
    the MCP bridge is on.
 
 Templates never repeat 4–6; each adds only what the generic text cannot know
@@ -61,14 +62,14 @@ Templates saved before the check keep rendering `(none)` for unknown names.
 | `task_id`, `title`, `request` | the task; `request` is the title as `#` heading plus the description |
 | `role`, `stage_name`, `workflow_name` | the stage definition and the task's workflow snapshot |
 | `repository_name`, `repository_path`, `repository_facts`, `git_status` | the repository record, the task's working directory (its worktree when isolated — `repository_facts`' `- Path:` too, so an isolated task's agents are never pointed at the operator's checkout), `git status` at stage start. A Stage Team write worker's prompt has every spelling of the task worktree and of the operator's checkout rewritten to its own checkout ([stage-teams.md](stage-teams.md)) |
-| `attachments` | text attachments inline (≤ 50 KB each, redacted), others by path; the investigator, planner, implementer, designer, reviewer and verifier templates use it |
-| `screenshots` | the task's `screenshot`, `image` and `video` artifacts (browser checks, the visual matrix, generated media, pictures from MCP servers), newest 30, as `name (type, stage, size): path`; the designer, reviewer and verifier templates use it |
+| `attachments` | text attachments inline (≤ 50 KB each, redacted), others by path; the investigator, planner, implementer, designer, art director, visual critic, reviewer and verifier templates use it |
+| `screenshots` | the task's `screenshot`, `image` and `video` artifacts (browser checks, the visual matrix, generated media, pictures from MCP servers), newest 30, as `name (type, stage, size): path`; the designer, visual critic, reviewer and verifier templates use it |
 | `design_context` | the repository's design standard and design memory by path and size: `design.md`, `DESIGN.md`, `docs/design.md`, a Tailwind config, every file in `design/`, with `design/brief.md` inline (8 KB, redacted) ([design-agent.md](design-agent.md)) |
 | `directives` | active, non-routing directives for this stage, marked `(constraint)` or `(completion requirement)` |
 | `investigation`, `plan`, `implementation_report`, `review`, `verification_report` | artifacts: every investigation, the latest plan, every implementation and fix report (20 KB each), the latest review, the latest `browser-verification.md` |
 | `test_results` | the last test stage: each command's status and summary, the failing command's last 80 log lines, a commit the repository's hook rejected; failures the baseline commit already had are listed apart under "Already failing before this task — do not fix unless asked" |
 | `diff`, `changed_files` | against the task baseline for every agent role, packed by priority into 150 KB (redacted; `changed_files` carries `+a −d`); a Staged Review task gets the staged diff instead |
-| `diff_coverage` | "Diff shows N of M changed files in full" and one line per file not shown with its reason and how to read it. Reviewer and verifier must name each under `## Files reviewed`, or a PASS is asked again once and then fails `REVIEW_INCOMPLETE`; a user-edited template without the placeholder gets the block appended |
+| `diff_coverage` | "Diff shows N of M changed files in full" and one line per file not shown with its reason and how to read it. A verdict stage (reviewer, visual critic, verifier) must name each under `## Files reviewed`, or a PASS is asked again once and then fails `REVIEW_INCOMPLETE`; a user-edited template without the placeholder gets the block appended |
 | `verification_commands` | enabled lint, typecheck, test and build commands |
 | `preexisting_changes` | files with uncommitted user work at task start, or `none` |
 | `previous_attempt` | the last FAILED, CANCELLED, INTERRUPTED or PAUSED run of this stage with its last 40 log lines |
@@ -91,8 +92,8 @@ a new built-in version. Roles without a file (deployer, reporter) use
 |---|---|---|
 | first prose line under `## Summary` (else Goal/Findings, else the first prose line) | `summarize` in [runners.ts](../../apps/orchestrator/src/engine/runners.ts) | the stage line in timelines; write roles (implementer, fixer, designer: `WRITE_ROLES`) fill the report's "Changed" |
 | `VERDICT: PASS` / `VERDICT: FAIL`, last one wins | `parseVerdict` | routes a `verdict` stage to `next` or `onFail`; missing → the stage fails as `UNKNOWN` |
-| `BLOCKED ON OPERATOR: <decision, options, recommendation>` from a work stage (investigator, planner, implementer, fixer, designer) | `extractOperatorBlockers` in [report.ts](../../apps/orchestrator/src/engine/report.ts) | task `WAITING_FOR_USER`, blocker `decision`; a directive answers and re-runs the stage; cut at 600 characters |
-| `NEEDS OPERATOR: <item>` from a reviewer or verifier | `extractOperatorItems` | "Needs your decision" in the completion report and `NEEDS_USER_ACTION`; the verifier's list replaces the review's, so the verifier repeats items still open |
+| `BLOCKED ON OPERATOR: <decision, options, recommendation>` from a work stage (any role outside the judge class: investigator, planner, art director, implementer, fixer, designer) | `extractOperatorBlockers` in [report.ts](../../apps/orchestrator/src/engine/report.ts) | task `WAITING_FOR_USER`, blocker `decision`; a directive answers and re-runs the stage; cut at 600 characters |
+| `NEEDS OPERATOR: <item>` from a judge-class role (reviewer, visual critic, verifier) | `extractOperatorItems` | "Needs your decision" in the completion report and `NEEDS_USER_ACTION`; the verifier's list replaces the review's, so the verifier repeats items still open |
 | `CAUSE: code` / `CAUSE: plan` with a FAIL | `causeMarker` in [signatures.ts](../../apps/orchestrator/src/chairman/signatures.ts) | `plan` classifies the failure `REQUIREMENT_OR_PLAN` (the Chairman re-plans first); `code` keeps it `CODE_OR_TEST` even when the text names "success criteria"; without the line the word list decides |
 
 Marker lines may be bold or listed; `summarize` never returns a verdict or
@@ -114,9 +115,11 @@ the headings it lists.
 | Reviewer | reports as claims, the previous review, diff and its coverage, test results, app check | Summary, Previous findings, Issues graded blocking or advisory, Advisory, Files reviewed (each file the diff did not show), Skills used, `NEEDS OPERATOR:` lines, `CAUSE:` with a FAIL, `VERDICT:`. Only blocking issues fail |
 | Fixer | plan, reports, review, failing checks (incl. a rejected commit hook), app check, diff, verification commands, fix cycle N of M | Summary, Root causes, Fixes, Disputed findings, Verification performed, Remaining concerns, Skills used. Never weakens a check to pass it |
 | Designer ([design-agent.md](design-agent.md)) | attachments (reference images: open each), approved art direction, directions explored, reports, verification commands, work so far, app check; mode by the `Stage:` line: `assets` = media only (the one stage allowed to pay for generation), any other key = build | Summary, Design decisions (the standard that binds), Assets, Spend, Changes, Visual verification, Verification performed, Known limitations, Found for Later, Skills used. Its report is saved as `design-report.md` (type `implementation-report`) |
+| Art director ([design-agent.md](design-agent.md)) | attachments (open each), design standard and memory, directions explored, repository facts, and on a re-plan the previous direction with what came of it. Plan class: its report is saved as `art-direction.md` (type `plan`) and read by later stages as `{{plan}}`; Discuss First stops after it for plan review | Summary the operator can approve on, Direction, Design values (both themes, with contrast), Components and pages, Asset list, Media budget, Success Criteria, Decisions, Found for Later, Skills used |
+| Visual critic ([design-agent.md](design-agent.md)) | approved direction, design standard and memory, reports as claims, the previous review, diff and its coverage, test results, app check, screenshots. Judge class with the reviewer's verdict kind: its report is saved as `visual-review.md` (type `review`) and counts as the review in the completion gate | Summary, What I looked at (each picture and check, with width and scheme), Issues graded blocking or advisory, Advisory, Files reviewed, Skills used, `NEEDS OPERATOR:`, `CAUSE:` with a FAIL, `VERDICT:` |
 | Verifier | plan, reports as claims, review, diff and its coverage, test results, app check | Summary, Criteria (met / not met / unverified with named evidence), Review follow-up, Files reviewed, Remaining limitations, Skills used, `NEEDS OPERATOR:` (repeating the review's open ones; one for a central criterion nothing can verify), `CAUSE:`, `VERDICT:` |
 
-Level 1 roles (investigator, planner, reviewer, verifier) are told what they
+Level 1 roles (investigator, planner, art director, reviewer, visual critic, verifier) are told what they
 can run: the read tools, read-only Git, and Level 1 Control Center checks
 against something already running ([agents.md](agents.md), the `analysis`
 profile in [autopilot.md](autopilot.md)). Level 2 roles must run the

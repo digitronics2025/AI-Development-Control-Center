@@ -50,6 +50,8 @@ export const ROLE_LABEL: Record<Role, string> = {
   deployer: 'Deployer',
   reporter: 'Reporter',
   designer: 'Designer',
+  'art-director': 'Art director',
+  'visual-critic': 'Visual critic',
 };
 
 /** Present-participle form for "Codex Investigating" style status text. */
@@ -64,6 +66,8 @@ export const ROLE_ACTIVITY: Record<Role, string> = {
   deployer: 'Deploying',
   reporter: 'Reporting',
   designer: 'Designing',
+  'art-director': 'Directing',
+  'visual-critic': 'Critiquing',
 };
 
 export const MODE_LABEL: Record<TaskMode, string> = {

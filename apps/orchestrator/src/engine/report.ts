@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import { isWriteRole, nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { isWriteRole, judgeKind, nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -87,10 +87,11 @@ export function extractOperatorBlockers(output: string | null | undefined): stri
  * The operator decisions to report. The verifier reads the review before it
  * writes, so when a verification exists its list is the current one; taking
  * both listed the same concern twice in different words. Without a
- * verification the review's list stands.
+ * verification the reviews' lists stand: the latest review of each review
+ * stage (a visual critique and a code review judge different things).
  */
-export function latestOperatorItems(review: string | null | undefined, verification: string | null | undefined): string[] {
-  return verification ? extractOperatorItems(verification) : extractOperatorItems(review);
+export function latestOperatorItems(reviews: string | ReadonlyArray<string | null | undefined> | null | undefined, verification: string | null | undefined): string[] {
+  return verification ? extractOperatorItems(verification) : extractOperatorItems(...(typeof reviews === 'string' || reviews === null || reviews === undefined ? [reviews] : reviews));
 }
 
 export interface ReportResult {
@@ -151,8 +152,8 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   if (mixed.length) limitations.push(`${mixed.length} file(s) mix your pre-existing uncommitted work with task changes: ${mixed.map((f) => f.path).join(', ')}.`);
 
   const verdictStages = stages.filter((s) => s.verdict !== null);
-  const lastReview = [...verdictStages].reverse().find((s) => s.role === 'reviewer');
-  const lastVerify = [...verdictStages].reverse().find((s) => s.role === 'verifier');
+  const lastReview = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'review');
+  const lastVerify = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'verify');
   if (lastReview?.verdict === 'FAIL') limitations.push('The last review did not pass.');
   if (lastVerify?.verdict === 'FAIL') limitations.push('The last verification did not pass.');
   for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);

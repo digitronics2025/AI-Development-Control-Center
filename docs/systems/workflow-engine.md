@@ -39,7 +39,14 @@ resolvable transitions and `requires` keys, every stage reachable, reaches `comp
 Frontend Design ([design-agent.md](design-agent.md)) runs a designer role
 twice: Assets at Level 3 with approval on every attempt (the only stage a
 Level 3 generation server can run in) and Build at Level 2, which every
-`onFail` returns to, so a fix loop never pays for media.
+`onFail` returns to, so a fix loop never pays for media. Its Art direction
+is an `art-director` stage and its Visual critique a `visual-critic` stage.
+
+The engine reads roles by class (`ROLE_CLASS` in
+[constants.ts](../../packages/shared/src/constants.ts)): investigate, plan
+(planner, art director), write (implementer, fixer, designer), judge
+(reviewer, visual critic, verifier), test, deploy, report. A judge's verdict
+kind is `verify` for the verifier and `review` for the others.
 
 A `tests` stage runs the repository's enabled commands of its `commandKinds`,
 by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design add `e2e`, so an
@@ -97,7 +104,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 
 | Outcome | Result |
 |---|---|
-| success / skipped | go to `next`; in Discuss First mode a successful planner stage creates a `plan_review` approval first |
+| success / skipped | go to `next`; in Discuss First mode a successful plan-class stage (planner, art director) creates a `plan_review` approval first |
 | verdict FAIL / tests failed / commit rejected by a hook (git stage with `onFail`) | go to `onFail` and count a fix cycle; at `maxFixCycles` → `WAITING_FOR_USER` (fix_limit). Resume grants one more cycle |
 | `USAGE_LIMIT` | `WAITING_FOR_USAGE_RESET`, stage PAUSED — never a paid fallback |
 | `AUTH_FAILURE`, `MODEL_UNAVAILABLE`, `PERMISSION_DENIED`, `CONTEXT_FAILURE` | `WAITING_FOR_USER` with the reason (an exceeded `STOP_NEW_RUNS` budget arrives as `PERMISSION_DENIED`, [usage.md](usage.md#budgets)) |
@@ -106,7 +113,7 @@ WAITING_APPROVAL, CANCELLED, INTERRUPTED, SKIPPED`.
 | a release stage finds its target branch moved (`goto`) | the task is updated from it in its worktree and continues at the tests stage; the release asks again ([release.md](release.md)) |
 | a `stage_permission` approval for a `release` stage is denied | stage SKIPPED "Release declined", event `RELEASE_DECLINED`, go to `next` (every other denied approval fails the task) |
 | `REVIEW_INCOMPLETE` (a verdict stage passed twice without naming files the diff did not show) | an error like any other: retried, then (supervised) the Chairman retries or changes agent; never a code fix |
-| a work stage (not reviewer/verifier) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
+| a work stage (any role outside the judge class) ends with `BLOCKED ON OPERATOR:` lines | `WAITING_FOR_USER`, blocker `decision` carrying the question(s); the stage is PAUSED and runs again on resume. Supervised or not, no tests, fix loop or recovery run around it |
 
 **Supervised tasks** (Autopilot with the Chairman on) differ: a test or
 verdict failure asks the Chairman, which keeps the local fix loop while it
@@ -139,24 +146,24 @@ baseline), `release` stages are release; parked runs from `TASK_WAITING`,
 test or e2e command in full (evidence only). Computed on demand, no table;
 an error gives "Not enough data" and never stops the report. The report lists any `browser-recheck-*.md` re-checks under
 Verification coverage as operator-observed evidence, never as a pass
-([connected-apps.md](connected-apps.md)). A reviewer/verifier stage with `verdict: false` still records an
+([connected-apps.md](connected-apps.md)). A judge-class stage with `verdict: false` still records an
 advisory verdict (it does not route); a FAIL makes the report
 `NEEDS_USER_ACTION` (used by the built-in Staged Review workflow). The final
 status is `READY` only when the last *finished* test stage (a cancelled or
 interrupted instance does not count) passed with at least one passing command
-and came after the last successful implementer/fixer stage, the last
-review/verification passed, and no file mixes pre-existing user work with task
+and came after the last successful write-class stage (implementer, fixer,
+designer), the last review (reviewer or visual critic) and verification passed, and no file mixes pre-existing user work with task
 changes; otherwise `NEEDS_USER_ACTION` with the reason (`No test stage ran.`,
 `Tests have not run since the last change.` …) — the same rule the supervised
 completion gate applies ([report.ts](../../apps/orchestrator/src/engine/report.ts),
 [gate.ts](../../apps/orchestrator/src/chairman/gate.ts)). Lines starting `NEEDS OPERATOR:` in the
-latest verification (or, when none ran, the latest review) — things only the operator can settle, which
+latest verification (or, when none ran, the latest review of each review stage) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
 **Decisions** ([report.ts](../../apps/orchestrator/src/engine/report.ts)
 `extractOperatorBlockers`, [runners.ts](../../apps/orchestrator/src/engine/runners.ts)).
-The investigator, planner, implementer and fixer prompts tell the agent to
+The investigator, planner, art director, implementer, fixer and designer prompts tell the agent to
 change nothing and end with `BLOCKED ON OPERATOR: <decision, options,
 recommendation>` when the goal cannot be met correctly without the operator —
 contradictory requirements or tests, a forbidden action, missing access. The

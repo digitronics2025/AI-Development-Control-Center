@@ -1,6 +1,7 @@
 # Frontend design (docs/systems/design-agent.md): three competing art
-# directions, one approved direction, generated media, a build with a visual
-# critique loop, checks across themes and widths, and a two-lens design review.
+# directions, one approved art direction, generated media, a build that looks at
+# its own result, checks across themes and widths, a visual critique and a code
+# review.
 #
 # Spending is confined to one stage: Assets is the only Level 3 agent stage, so
 # the paid media tools (media.image.generate and the rest, Level 3) and a Level 3
@@ -32,7 +33,11 @@ stages:
       words, colour roles for light and dark with hex values, a type pairing with a
       scale, spacing and radius, imagery and motion style, two or three real sites
       whose qualities it borrows (open them with the browser tools), how it handles
-      FR/AR right-to-left when the product needs it, and the risks. No code.
+      FR/AR right-to-left when the product needs it, and the risks. Draw it as a
+      style tile (one self-contained HTML page: colour roles, type scale,
+      buttons in every state, spacing, an image mood) with browser.render_html
+      in light and dark, name the tile pictures, and look at them before you
+      report. No code in the repository.
     team:
       mode: fixed
       maxWorkers: 3
@@ -51,7 +56,8 @@ stages:
           model: sonnet
   - key: direction
     name: Art direction
-    role: planner
+    # Plan class: Discuss First stops here for plan review, and later stages read it as the plan.
+    role: art-director
     model: opus
     effort: high
     permissionLevel: 1
@@ -59,12 +65,9 @@ stages:
     description: Pick or merge a direction; name the asset list and the media budget
     toolProfile: frontend-design
     instructions: >-
-      Choose or merge one direction from the investigation. The plan must state:
-      the direction and why; the design values (colour roles for both themes, type
-      scale, spacing, radius, motion durations); the asset list (each with its
-      purpose, size, format, where it is used and a prompt idea, or "no generated
-      media"); the media budget in US dollars ("0" when nothing is generated); and
-      the pages and components to build with their states.
+      Choose or merge one direction from the investigation, with concrete design
+      values for both themes, the asset list (or "no generated media") and the
+      media budget in US dollars ("0" when nothing is generated).
     next: assets
   - key: assets
     name: Assets
@@ -122,10 +125,26 @@ stages:
     # Starts the app (Repositories → Runtime) and opens it in Chromium.
     permissionLevel: 2
     timeoutSec: 900
+    next: critique
+    onFail: build
+  - key: critique
+    name: Visual critique
+    # Judge class, counted as the review: both themes, every width, against the direction.
+    role: visual-critic
+    effort: high
+    permissionLevel: 1
+    verdict: true
+    retry: { maxAttempts: 2 }
     next: review
     onFail: build
+    toolProfile: frontend-design
+    skills: [tenten-web-design]
+    instructions: >-
+      Open the screenshots listed above, and when the app is running use
+      browser.visual_matrix and browser.accessibility in both schemes. A
+      regression in one theme or at one width is blocking.
   - key: review
-    name: Design review
+    name: Code review
     role: reviewer
     effort: high
     permissionLevel: 1
@@ -134,19 +153,10 @@ stages:
     next: complete
     onFail: build
     toolProfile: frontend-design
-    skills: [tenten-web-design]
     instructions: >-
-      Review the running result as well as the diff: open the screenshots listed
-      above, and when the app is running use browser.visual_matrix and
-      browser.accessibility. Judge against the approved plan's design values and
-      the repository's design standard; a regression in one theme or at one width
-      is blocking.
-    team:
-      mode: fixed
-      maxWorkers: 2
-      workers:
-        - key: correctness
-          focus: Correctness of the diff and the design rules
-          primary: true
-        - key: craft
-          focus: Visual craft, a11y, both themes, media weight
+      Review the diff for correctness and the repository's rules: semantic
+      design values instead of literals, every component state, accessible
+      markup, responsive images with dimensions, no vendor URLs at runtime and
+      tests that cover both themes and the phone to wide widths. The visual
+      critique before you judged the look; a blocking issue it missed is still
+      blocking.

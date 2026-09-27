@@ -2,6 +2,8 @@
 system: design-agent
 sources:
   - prompts/designer.md
+  - prompts/art-director.md
+  - prompts/visual-critic.md
   - workflows/frontend-design.yaml
   - packages/shared/src/constants.ts
   - apps/orchestrator/src/chairman/gate.ts
@@ -22,19 +24,25 @@ model. The design agent is:
 
 | Piece | Where |
 |---|---|
-| Role `designer` (a write role, like implementer and fixer) | `ROLES`, `WRITE_ROLES`, `isWriteRole` in [constants.ts](../../packages/shared/src/constants.ts) |
-| Prompt | [prompts/designer.md](../../prompts/designer.md): mode by the `Stage:` header line (`assets` = media only; any other key = build) |
+| Role `designer` (write class, like implementer and fixer) | `ROLES`, `ROLE_CLASS`, `isWriteRole` in [constants.ts](../../packages/shared/src/constants.ts) |
+| Role `art-director` (plan class, like planner) and `visual-critic` (judge class, verdict kind `review`, like reviewer) | `ROLE_CLASS`, `isPlanRole`, `judgeKind` in the same file |
+| Prompts | [prompts/designer.md](../../prompts/designer.md): mode by the `Stage:` header line (`assets` = media only; any other key = build); [prompts/art-director.md](../../prompts/art-director.md); [prompts/visual-critic.md](../../prompts/visual-critic.md) |
 | Workflow | [workflows/frontend-design.yaml](../../workflows/frontend-design.yaml) |
-| Report | `design-report.md`, type `implementation-report` (`ROLE_ARTIFACT` in [runners.ts](../../apps/orchestrator/src/engine/runners.ts)), so reviewers, verifiers and fixers read it as `{{implementation_report}}` |
-| Default assignment | Claude, effort high (`DEFAULT_ROLE_DEFAULTS`); the workflow pins opus at `max` for Build and `xhigh` for Assets |
+| Reports | `design-report.md`, type `implementation-report` (`ROLE_ARTIFACT` in [runners.ts](../../apps/orchestrator/src/engine/runners.ts)), so reviewers, verifiers and fixers read it as `{{implementation_report}}`; `art-direction.md` (type `plan`, read as `{{plan}}`); `visual-review.md` (type `review`) |
+| Default assignment | Claude, effort high for all three (`DEFAULT_ROLE_DEFAULTS`); the workflow pins opus at `max` for Build, `xhigh` for Assets and opus for Art direction |
 
 ## How a design task flows
 
 1. **Design brief** (investigator, Level 1, fixed team of three): bold, calm
-   and contrarian directions side by side.
-2. **Art direction** (planner, Level 1): picks or merges one, names the
-   asset list and the media budget. Run the task in **Discuss First**: this
-   plan is approved before anything is generated.
+   and contrarian directions side by side, each drawn as a style tile with
+   `browser.render_html` in light and dark (scripts off, nothing fetched;
+   [browser-and-web.md](browser-and-web.md)). The tiles are screenshot
+   artifacts, so the art director opens them through `{{screenshots}}`.
+2. **Art direction** (art director, Level 1): picks or merges one and
+   states concrete design values for both themes, the components and pages,
+   the asset list and the media budget. It is a plan-class role, so run the
+   task in **Discuss First**: this plan is approved (`plan_review`) before
+   anything is generated, and the Chairman re-plans here.
 3. **Assets** (designer, **Level 3**, `requiresApproval`, one attempt):
    generates, downloads and optimises the approved media and writes
    `manifest.json`. The only stage where a Level 3 generation tool can run;
@@ -44,13 +52,18 @@ model. The design agent is:
    and critiques its own screenshots.
 5. **Checks and visual matrix** (tests: lint, typecheck, test, build, e2e) and
    **App check** (verify). Failures return to Build.
-6. **Design review** (reviewer, fixed team: correctness primary, craft).
+6. **Visual critique** (visual critic, Level 1, verdict): the screenshots,
+   `browser.visual_matrix` and `browser.accessibility` in both schemes,
+   judged against the approved direction. A FAIL returns to Build.
+7. **Code review** (reviewer, verdict): correctness and the repository's
+   rules. Both verdicts are of kind `review`; the completion gate needs the
+   latest one to have passed after the last change.
 
 Every agent stage sets `toolProfile: frontend-design` (media, browser and
 verify tools listed first), stage `instructions` (what each direction must
-contain, what the art-direction plan must state including the media budget,
+contain, what the art direction must state including the media budget,
 Assets = media only, Build = no paid generation and look before reporting,
-review the running result in both themes), and `skills: [tenten-web-design]`
+the critique looks in both themes, the review checks the code), and `skills: [tenten-web-design]`
 where it helps (ignored when that skill is not installed).
 
 Every `onFail` goes to Build, and Build is Level 2, so a fix loop never pays

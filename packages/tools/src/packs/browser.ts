@@ -321,6 +321,104 @@ export async function visualMatrix(ctx: OperationContext, input: MatrixInput): P
   });
 }
 
+/** The most HTML one style tile takes (inline styles and `data:` pictures included). */
+export const MAX_TILE_HTML = 1_000_000;
+/** Taller tiles are cut here: a style tile is a board, not a whole site. */
+const MAX_TILE_HEIGHT = 4000;
+
+/**
+ * A Chromium that cannot reach anything: every connection goes to a closed
+ * port through a proxy that loopback does not bypass, so even what request
+ * routing never sees (a preconnect, a prefetch) goes nowhere.
+ */
+async function launchSealed(): Promise<Browser> {
+  const choice = await findBrowser();
+  if (!choice) throw new Error('No browser available: run `npx playwright install chromium` (or install Chrome/Edge)');
+  const { chromium } = await import('playwright-core');
+  return chromium.launch({
+    headless: true,
+    executablePath: choice.executablePath ?? undefined,
+    args: ['--no-first-run', '--no-default-browser-check', '--dns-prefetch-disable'],
+    proxy: { server: 'http://127.0.0.1:9', bypass: '<-loopback>' },
+    env: credentialFreeEnv(process.env) as Record<string, string>,
+  });
+}
+
+export interface RenderHtmlInput {
+  html: string;
+  name: string;
+  viewport: ViewportName;
+  colorSchemes: Array<'light' | 'dark'>;
+  timeoutSec: number;
+}
+
+/**
+ * A style tile or any self-contained HTML drawn for the model
+ * (docs/systems/design-agent.md): scripts off, service workers blocked, every
+ * request refused and named (only `data:` URLs load), at one width in each
+ * colour scheme. Nothing is fetched and nothing in the repository changes.
+ */
+export async function renderHtml(ctx: OperationContext, input: RenderHtmlInput): Promise<OperationResult> {
+  const browser = await launchSealed();
+  try {
+    const blocked = new Map<string, string>();
+    const tiles: Array<{ colorScheme: 'light' | 'dark'; width: number; height: number; clipped: boolean; screenshot: { id: string; name: string } | null }> = [];
+    const images: ResultImage[] = [];
+    for (const scheme of input.colorSchemes) {
+      const context = await browser.newContext({ ...contextOptions(input.viewport, { colorScheme: scheme }), javaScriptEnabled: false, serviceWorkers: 'block', acceptDownloads: false });
+      try {
+        await guardBrowserContext(context);
+        await context.route('**/*', (route) => {
+          const request = route.request();
+          if (blocked.size < 50) blocked.set(redact(request.url()).slice(0, 300), request.resourceType());
+          // A refused navigation (a meta refresh, a frame) answers 204 so the browser stays on the tile instead of an error page.
+          return request.isNavigationRequest() ? route.fulfill({ status: 204, body: '' }) : route.abort('blockedbyclient');
+        });
+        const page = await context.newPage();
+        await page.setContent(input.html, { waitUntil: 'load', timeout: input.timeoutSec * 1000 });
+        const size = await page.locator('html').boundingBox();
+        const width = VIEWPORTS[input.viewport].width;
+        const full = Math.max(1, Math.ceil(size?.height ?? VIEWPORTS[input.viewport].height));
+        const height = Math.min(full, MAX_TILE_HEIGHT);
+        const png = await page.screenshot({ type: 'png', fullPage: true, clip: { x: 0, y: 0, width, height }, timeout: input.timeoutSec * 1000 });
+        const name = `tile-${input.name}-${scheme}.png`;
+        let screenshot: { id: string; name: string } | null;
+        if (ctx.artifacts) screenshot = await ctx.artifacts.write({ name, type: 'screenshot', content: png, mime: 'image/png' });
+        else {
+          const dir = path.join(ctx.tempDir, 'screenshots');
+          mkdirSync(dir, { recursive: true });
+          const { writeFile } = await import('node:fs/promises');
+          await writeFile(path.join(dir, name), png);
+          screenshot = { id: path.join(dir, name), name };
+        }
+        let image: ResultImage | null = png.length <= MAX_MODEL_IMAGE_BYTES ? { name, mime: 'image/png', data: png } : null;
+        for (const quality of [85, 70, 55]) {
+          if (image) break;
+          const jpeg = await page.screenshot({ type: 'jpeg', quality, fullPage: true, clip: { x: 0, y: 0, width, height }, timeout: input.timeoutSec * 1000 });
+          if (jpeg.length <= MAX_MODEL_IMAGE_BYTES) image = { name: name.replace(/\.png$/, '.jpg'), mime: 'image/jpeg', data: jpeg };
+        }
+        if (image) images.push(image);
+        tiles.push({ colorScheme: scheme, width, height, clipped: full > height, screenshot });
+      } finally {
+        await context.close();
+      }
+    }
+    const refused = [...blocked].map(([url, type]) => ({ url, type }));
+    const hosts = [...new Set(refused.map((r) => /^[a-z][\w+.-]*:\/\/([^/?#]+)/i.exec(r.url)?.[1] ?? r.url.slice(0, 40)))];
+    const clipped = tiles.some((t) => t.clipped);
+    return {
+      ok: true,
+      summary: `Rendered ${input.name} at ${input.viewport} ${VIEWPORTS[input.viewport].width} px in ${input.colorSchemes.join(' and ')}${clipped ? `, cut at ${MAX_TILE_HEIGHT} px` : ''}${refused.length ? `; ${refused.length} outside request(s) refused (${hosts.slice(0, 3).join(', ')}): inline them as data: URLs or use system fonts` : ''}`,
+      output: { tiles, refusedRequests: refused },
+      artifacts: tiles.flatMap((t) => (t.screenshot ? [t.screenshot] : [])),
+      evidence: [`rendered ${input.name} (${input.colorSchemes.join(', ')}) with scripts off and the network refused`],
+      ...(images.length ? { images } : {}),
+    };
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 const flowStep = z.discriminatedUnion('action', [
   z.object({ action: z.literal('goto'), url: httpUrl }),
   z.object({ action: z.literal('click'), selector: z.string().min(1).max(500) }),
@@ -605,6 +703,23 @@ export function browserProvider(extra: ToolOperation[] = []): ToolProvider {
         level: 1,
         classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
         run: (input, ctx) => visualMatrix(ctx, input),
+      }),
+      operation({
+        id: 'browser.render_html',
+        title: 'Draw a style tile or other self-contained HTML',
+        description:
+          'Draw HTML you wrote (a style tile: colour roles, type scale, buttons and states, spacing, an image mood) at one width in light and dark, and get the pictures back. Scripts are off and nothing is fetched: only data: URLs load, and every outside reference (a web font, a CDN stylesheet, a remote image) is refused and listed. Use it to compare art directions before any code is written.',
+        input: z.object({
+          html: z.string().min(1).max(MAX_TILE_HTML).describe('A complete, self-contained HTML document: inline <style>, data: images, system fonts.'),
+          name: z.string().min(1).max(60).regex(/^[\w-]+$/).default('style-tile').describe('Names the saved pictures (tile-<name>-light.png).'),
+          viewport: viewportField.default('desktop'),
+          colorSchemes: z.array(z.enum(['light', 'dark'])).min(1).max(2).default(['light', 'dark']),
+          timeoutSec: z.number().int().min(5).max(60).default(20),
+        }),
+        level: 1,
+        readOnly: true,
+        classify: () => ({ reasons: ['Draws HTML offline with scripts off'], effects: [], writes: false }),
+        run: (input, ctx) => renderHtml(ctx, input),
       }),
       operation({
         id: 'browser.storage',

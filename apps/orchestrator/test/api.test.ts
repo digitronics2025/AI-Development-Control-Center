@@ -132,6 +132,9 @@ describe('REST API', () => {
     expect(agentStages.filter((s: { permissionLevel: number }) => s.permissionLevel >= 3).map((s: { key: string }) => s.key)).toEqual(['assets']);
     expect(design.stages.find((s: { key: string }) => s.key === 'assets')).toMatchObject({ role: 'designer', requiresApproval: true, retry: { maxAttempts: 1 } });
     for (const s of design.stages.filter((x: { onFail?: string }) => x.onFail)) expect(s.onFail).toBe('build');
+    // The art director plans (Discuss First reviews it); the visual critic judges the look before the code review.
+    expect(design.stages.map((s: { key: string; role: string }) => `${s.key}:${s.role}`)).toEqual(['brief:investigator', 'direction:art-director', 'assets:designer', 'build:designer', 'checks:tester', 'app-check:tester', 'critique:visual-critic', 'review:reviewer']);
+    expect(design.stages.filter((s: { verdict?: boolean }) => s.verdict).map((s: { key: string }) => s.key)).toEqual(['critique', 'review']);
     // Every agent stage lists the design tools first; Assets and Build are told their mode.
     for (const s of agentStages) expect(s.toolProfile, s.key).toBe('frontend-design');
     expect(design.stages.find((s: { key: string }) => s.key === 'assets').instructions).toMatch(/^Media only\./);

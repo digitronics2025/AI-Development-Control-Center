@@ -294,6 +294,15 @@ create it.
 Objective only: last tests after the last change passed, last review and
 verification PASS after it, required check kinds passed in the last tests
 stage, no task-owned file matching a protected pattern. `READY` needs the gate.
+Roles are read by class (`ROLE_CLASS` in
+[constants.ts](../../packages/shared/src/constants.ts)): a change is any
+write-class stage (implementer, fixer, designer); the review is the latest
+judge-class verdict of kind `review` (reviewer or visual critic) and the
+verification the verifier's. The protected-paths remedy goes to the fixer,
+else the first write stage at Level 2 or below, so it never lands on a paid
+Level 3 Assets stage ([design-agent.md](design-agent.md)). Re-plan
+(`REPLAN` and the re-plan candidate) goes to the planner, else another
+plan-class stage (an art director).
 A waived kind is never required. A test stage whose only failures already
 failed on the baseline commit passed; a required kind whose run is such a
 pre-existing failure is not a pass either, and the gate says so with no remedy

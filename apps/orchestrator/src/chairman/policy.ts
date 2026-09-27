@@ -1,4 +1,4 @@
-import type { ChairmanActionInput, ChairmanDiagnosis, ChairmanDiagnosisConfidence, ChairmanHealth, ChairmanStrategyKind, FailureCategory, StageDefinition, TaskLimits, WorkflowProfile } from '@acc/shared';
+import { type ChairmanActionInput, type ChairmanDiagnosis, type ChairmanDiagnosisConfidence, type ChairmanHealth, type ChairmanStrategyKind, type FailureCategory, type StageDefinition, type TaskLimits, type WorkflowProfile, isPlanRole } from '@acc/shared';
 import { hashOf, type FailureSource } from './signatures.js';
 
 /**
@@ -162,7 +162,8 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         break;
       }
       case 'replan': {
-        const stage = byRole(wf, 'planner');
+        // The planner, else another plan-class stage (an art director).
+        const stage = byRole(wf, 'planner') ?? wf.stages.find((s) => isPlanRole(s.role) && s.kind === 'agent') ?? null;
         if (!stage) break;
         add('replan', 4, stage.key, '', `Re-plan in ${stage.name}`, 'The current plan does not lead to a passing result; produce a different plan that addresses the failure.', [
           { type: 'REPLAN', params: { guidance: `The Chairman asked for a new plan. The previous plan led to "${failure}". Produce a materially different approach and state how it avoids that failure.` } },

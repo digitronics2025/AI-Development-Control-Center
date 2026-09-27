@@ -11,6 +11,7 @@ import {
   type EventType,
   type TaskBlocker,
   type TaskLimits,
+  judgeKind,
 } from '@acc/shared';
 import type { AgentRegistry } from '../services/agents.js';
 import type { Store, TaskRecord } from '../store/store.js';
@@ -88,8 +89,8 @@ export class SnapshotService {
     const def = this.views.stageDef(task, task.currentStageKey);
     const instance = task.currentStageId ? stages.find((s) => s.id === task.currentStageId) ?? null : null;
     const running = this.store.listExecutions(task.id).filter((e) => e.status === 'running' && e.kind === 'agent').at(-1) ?? null;
-    const lastVerdict = (role: 'reviewer' | 'verifier') => {
-      const s = [...stages].reverse().find((x) => x.role === role && x.verdict !== null);
+    const lastVerdict = (kind: 'review' | 'verify') => {
+      const s = [...stages].reverse().find((x) => judgeKind(x.role) === kind && x.verdict !== null);
       return s ? { verdict: s.verdict, summary: s.summary, at: s.finishedAt ?? s.createdAt } : null;
     };
     const lastTests = [...stages].reverse().find((s) => s.kind === 'tests' && ['SUCCESS', 'FAILED'].includes(s.status));
@@ -127,8 +128,8 @@ export class SnapshotService {
       activeDirectives: activeDirectives(this.store.listDirectives(task.id)).map((d) => ({ id: d.id, text: d.text, kind: d.kind, scope: d.scope, status: d.status })),
       recentEvents: events.map((e) => ({ type: e.type, message: e.message, at: e.at })),
       unresolvedFailures: failures.slice(-5).map((f) => ({ stageKey: f.stageKey, source: f.source, message: f.message, failureCount: f.failureCount, at: f.createdAt })),
-      latestReview: lastVerdict('reviewer'),
-      latestVerify: lastVerdict('verifier'),
+      latestReview: lastVerdict('review'),
+      latestVerify: lastVerdict('verify'),
       latestTests: lastTests ? this.store.listTestRuns(task.id, lastTests.id).map((r) => ({ name: r.name, kind: r.kind, status: r.status, summary: r.summary })) : [],
       checkpoints: this.chairman.listCheckpoints(task.id).slice(-5).map((c) => ({ id: c.id, seq: c.seq, label: c.label, stageKey: c.stageKey, at: c.createdAt })),
       usage: { agentRuns: usage.agentRuns, workMinutes: Math.round(usage.workMs / 60_000) },

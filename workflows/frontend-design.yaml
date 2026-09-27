@@ -4,10 +4,12 @@
 # review.
 #
 # Spending is confined to one stage: Assets is the only Level 3 agent stage, so
-# the paid media tools (media.image.generate and the rest, Level 3) and a Level 3
-# generation server registered in the MCP gateway (for example fal) run only
+# the paid media tools (media.image.generate and the rest, Level 3) run only
 # there, it asks for approval on every attempt, and the spend gate still needs
-# Settings → Media → Allow paid generation and a budget. Build and every fix
+# Settings → Media → Allow paid generation and a budget. Generation goes through
+# those tools only: an outside generation server in the MCP gateway is not
+# budget-gated, so the design profile does not list one and the designer is
+# told never to call one. Build and every fix
 # loop run at Level 2 and cannot call them, so a failing check never pays for
 # new images. Run it in Discuss First mode: the plan (the art direction, the
 # asset list and the media budget) is approved before anything is generated.

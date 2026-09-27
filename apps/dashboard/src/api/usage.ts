@@ -128,7 +128,7 @@ export function useUsageHealth() {
 /** Paid media generation estimates the spend gate reserved (docs/systems/design-agent.md). */
 export function useMediaSpend(days = 30) {
   const api = useApi();
-  return useQuery({ queryKey: keys.usage(`media-${days}`), queryFn: ({ signal }) => api.get<MediaSpendSummary>(`/api/usage/media?days=${days}`, signal) });
+  return useQuery({ queryKey: keys.usage(`media-${days}`), queryFn: ({ signal }) => api.get<MediaSpendSummary>(`/api/usage/media?days=${days}`, signal), refetchInterval: FALLBACK_REFRESH_MS });
 }
 
 export function useBudgets() {

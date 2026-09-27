@@ -53,11 +53,14 @@ export function estimate(model: string, unit: MediaPriceUnit, units: number, pri
 
 const modelField = (fallback: string) => z.string().min(3).max(120).regex(MODEL, 'A fal endpoint id such as fal-ai/flux/dev').default(fallback);
 const credentialField = z.string().min(1).max(100).default('fal').describe('Name of the media credential that holds the fal key (Tools → Credentials, kind media).');
+/** Parameters that set how much a call bills: only the validated fields (count, durationSec) may set them. */
+const BILLED_KEYS = /^(?:num_images|num_outputs|num_samples|num_videos|num_frames|n|count|samples|batch_size|batch_count|duration|seconds|video_length|length|frames)$/i;
 const argumentsField = z
   .record(z.string().max(60), z.unknown())
   .refine((a) => Object.keys(a).length <= 30 && JSON.stringify(a).length <= 8192, 'At most 30 extra arguments, 8 KB')
+  .refine((a) => !Object.keys(a).some((k) => BILLED_KEYS.test(k)), 'Set how many images and how long a video with count and durationSec, not in arguments: they decide the cost')
   .optional()
-  .describe("Extra model parameters, exactly as the model's fal schema names them.");
+  .describe("Extra model parameters, exactly as the model's fal schema names them (not the number of images or the video length).");
 const folderField = mediaPath.describe('Repository folder the results are saved in, e.g. public/generated.');
 const nameField = z
   .string()
@@ -297,12 +300,13 @@ export function falMediaProvider(): ToolProvider {
             ctx,
             input,
             {
+              // Extra parameters first: the validated fields below always win.
+              ...input.arguments,
               prompt: input.prompt,
               num_images: input.count,
               ...(input.aspectRatio ? { image_size: IMAGE_SIZE[input.aspectRatio] } : {}),
               ...(input.seed !== undefined ? { seed: input.seed } : {}),
               ...(input.negativePrompt ? { negative_prompt: input.negativePrompt } : {}),
-              ...input.arguments,
             },
             estimate(input.model, 'image', input.count, ctx.prices),
           ),
@@ -318,7 +322,7 @@ export function falMediaProvider(): ToolProvider {
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { prompt: input.prompt, image_url: image, ...input.arguments }, estimate(input.model, 'edit', 1, ctx.prices));
+          return generate(ctx, input, { ...input.arguments, prompt: input.prompt, image_url: image }, estimate(input.model, 'edit', 1, ctx.prices));
         },
       }),
       operation({
@@ -332,7 +336,7 @@ export function falMediaProvider(): ToolProvider {
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, scale: input.scale, ...input.arguments }, estimate(input.model, 'upscale', 1, ctx.prices));
+          return generate(ctx, input, { ...input.arguments, image_url: image, scale: input.scale }, estimate(input.model, 'upscale', 1, ctx.prices));
         },
       }),
       operation({
@@ -346,7 +350,7 @@ export function falMediaProvider(): ToolProvider {
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'remove-background', 1, ctx.prices));
+          return generate(ctx, input, { ...input.arguments, image_url: image }, estimate(input.model, 'remove-background', 1, ctx.prices));
         },
       }),
       operation({
@@ -360,7 +364,7 @@ export function falMediaProvider(): ToolProvider {
         run: async (input, ctx) => {
           const image = await sourceImage(ctx, input.image);
           if (isFailure(image)) return image;
-          return generate(ctx, input, { image_url: image, ...input.arguments }, estimate(input.model, 'vectorize', 1, ctx.prices));
+          return generate(ctx, input, { ...input.arguments, image_url: image }, estimate(input.model, 'vectorize', 1, ctx.prices));
         },
       }),
       operation({
@@ -387,7 +391,7 @@ export function falMediaProvider(): ToolProvider {
           const model = videoModel(input);
           const image = input.image ? await sourceImage(ctx, input.image) : null;
           if (image && isFailure(image)) return image;
-          const body = { prompt: input.prompt, duration: String(input.durationSec), ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}), ...(image ? { image_url: image } : {}), ...input.arguments };
+          const body = { ...input.arguments, prompt: input.prompt, duration: String(input.durationSec), ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}), ...(image ? { image_url: image } : {}) };
           return generate(ctx, { ...input, model }, body, estimate(model, 'video-second', input.durationSec, ctx.prices));
         },
       }),

@@ -249,6 +249,8 @@ export class CacheSync {
       case 'toolExecution': {
         const e = message.execution;
         if (e.taskId) qc.setQueryData<TaskExecutionView>(keys.taskExecution(e.taskId), (old) => (old ? { ...old, executions: [e, ...old.executions.filter((x) => x.id !== e.id)] } : old));
+        // A media call may have reserved or settled paid spend (the media ledger publishes nothing of its own).
+        if (e.capability.startsWith('media.')) this.refreshUsage();
         return;
       }
       case 'taskProcess': {

@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveShell } from '@acc/executor';
 import { builtinProviders, dimensions, findBrowser, sanitizeSvg, sniff, ToolHealthCache, ToolRegistry, ToolRouter, type OperationContext, type OperationResult } from '../src/index.js';
+import { readMedia, streamToFile } from '../src/packs/media-files.js';
 
 /**
  * The media tools (docs/systems/design-agent.md) against temporary folders, a
@@ -126,6 +127,47 @@ describe('media file facts', () => {
     // Split or nested constructs cannot survive one pass.
     expect(sanitizeSvg('<svg><scr<script></script>ipt>alert(1)</script></svg>')).not.toMatch(/<script/i);
     expect(sanitizeSvg('<svg><a href="jav&#x09;ascript:x" onmouseover = "y"></a></svg>')).not.toMatch(/href=|onmouseover/i);
+    // Entity-encoded attribute names in an animation, a renamed xlink prefix, entity- or escape-built url().
+    const tricks = [
+      '<svg xmlns:foo="http://www.w3.org/1999/xlink"><image id="i"/>',
+      '<animate xlink:href="#i" attributeName="hr&#x65;f" to="https://attacker.example/pixel" dur="1s"/>',
+      '<animateMotion dur="1s"><mpath href="#p"/></animateMotion>',
+      '<image foo:href="https://attacker.example/foo.png"/>',
+      '<rect style="fill:url&#40;https://attacker.example/entity)"/>',
+      '<rect style="fill:u\\72l(https://attacker.example/escape)"/>',
+      '<rect fill="url&#x28;https://attacker.example/attr)"/>',
+      '<style>.a{fill:u\\72l(https://attacker.example/block)}</style>',
+      '<rect fill="url(#g)" title="a &#x22;quote&#x22; &#60;kept&#62;"/></svg>',
+    ].join('');
+    const clean2 = sanitizeSvg(tricks);
+    expect(clean2).not.toMatch(/attacker\.example|<animate|<set|foo:href/i);
+    expect(clean2).toContain('fill="url(#g)"');
+    // What must stay escaped for well-formed markup stays escaped.
+    expect(clean2).toContain('title="a &#x22;quote&#x22; &#60;kept&#62;"');
+  });
+});
+
+describe('media file limits and writes', () => {
+  it('reads only a prefix to learn the type, then applies the image or video limit', async () => {
+    const big = (name: string, head: Buffer) => {
+      const file = path.join(repo, name);
+      writeFileSync(file, head);
+      truncateSync(file, 30 * 1024 * 1024);
+      return name;
+    };
+    // A 30 MB image is over the 25 MB image limit; a 30 MB video is fine and its body is never buffered.
+    const image = await readMedia(ctx(repo), big('huge.png', PNG));
+    expect((image as OperationResult).ok).toBe(false);
+    expect((image as OperationResult).summary).toMatch(/larger than 25 MB, the limit for an image/);
+    const video = await readMedia(ctx(repo), big('long.webm', Buffer.from('1a45dfa3a34286810142f7810142f2810442f381084282847765626d', 'hex')));
+    expect(video).toMatchObject({ kind: 'webm', bytes: 30 * 1024 * 1024 });
+    expect((video as { buf: Buffer }).buf.length).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it.skipIf(!existsSync('/dev/full'))('turns a write error (a full disk) into a failure instead of an unhandled stream error', async () => {
+    const body = new Blob([Buffer.alloc(256 * 1024, 1)]).stream();
+    await expect(streamToFile(body as never, '/dev/full', 1024 * 1024)).rejects.toThrow(/ENOSPC|no space/i);
+    await expect(streamToFile(new Blob([Buffer.alloc(2048, 1)]).stream() as never, path.join(repo, '.acc-cap-test'), 1024)).rejects.toThrow(/larger than/);
   });
 });
 
@@ -287,6 +329,18 @@ describe('fal generation (a stand-in queue)', () => {
     expect(again.summary).toMatch(/already exists/);
   });
 
+  it('never lets extra arguments set what is billed: the count and length decide, and the validated fields win', async () => {
+    reset();
+    const op = (id: string) => registry.provider('fal')!.operations.find((o) => o.id === id)!;
+    for (const args of [{ num_images: 100 }, { N: 4 }, { batch_size: 8 }]) expect(op('media.image.generate').input.safeParse({ prompt: 'x', path: 'p', name: 'n', arguments: args }).success, JSON.stringify(args)).toBe(false);
+    expect(op('media.video.generate').input.safeParse({ prompt: 'x', path: 'p', name: 'n', arguments: { duration: '30' } }).success).toBe(false);
+    expect(op('media.image.edit').input.safeParse({ prompt: 'x', image: 'a.png', path: 'p', name: 'n', arguments: { num_outputs: 4 } }).success).toBe(false);
+    result = { images: [{ url: `${falBase}/files/c.png` }] };
+    const r = await call('media.image.generate', { prompt: 'The real prompt', count: 1, path: 'public/generated', name: 'args', arguments: { prompt: 'another prompt', guidance_scale: 4 } }, falCtx());
+    expect(r.ok, r.summary).toBe(true);
+    expect(seen.find((q) => q.method === 'POST')!.body).toMatchObject({ prompt: 'The real prompt', num_images: 1, guidance_scale: 4 });
+  });
+
   it('hands back a job id when the result is not ready, and status and fetch finish it without submitting again', async () => {
     reset();
     state = 'IN_QUEUE';
@@ -401,6 +455,10 @@ describe('FFmpeg media tools', () => {
     expect(files.filter((f) => f.kind === 'webp').map((f) => f.width)).toEqual([320, 640, 800]);
     const out = r.output as { srcset: Record<string, string>; snippet: string };
     expect(out.srcset.webp).toBe('/img/hero-shot-320.webp 320w, /img/hero-shot-640.webp 640w, /img/hero-shot-800.webp 800w');
+    // AVIF carries its widths too (its dimensions are not read from the bytes).
+    expect(out.srcset.avif).toBe('/img/hero-shot-320.avif 320w, /img/hero-shot-640.avif 640w, /img/hero-shot-800.avif 800w');
+    const avifOnly = await call('media.asset.optimize', { image: 'media src/Hero Shot.png', widths: [400], formats: ['avif'], outDir: 'public/img', name: 'only' }, ctx(repo));
+    expect((avifOnly.output as { snippet: string }).snippet).toMatch(/width="400" height="300"/);
     expect(out.snippet).toContain('<source type="image/avif"');
     expect(out.snippet).toMatch(/width="800" height="600"/);
     for (const f of files) expect(sniff(readFileSync(path.join(repo, f.path)))).toBe(f.kind);

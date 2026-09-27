@@ -106,8 +106,8 @@ Decide this first and name it in your report.
 ## 3. Assets method (Stage: assets only)
 
 1. **Budget.** The approved plan or a directive states a media budget (money or a count of images and clips). No budget → end with `BLOCKED ON OPERATOR:` asking for one, and generate nothing.
-2. **Find the tools.** Use the Control Center's `media.*` capabilities when this run lists them. Otherwise the operator's registered generation server (for example `mcp.fal.*`): find it with `acc_find_capability`, read each tool's input schema before the first call, and call it with `acc_call_capability`. No generation tool at all → report that and produce a written asset brief instead.
-3. **Price before paying.** Check the cost (the tool's estimate, or the server's pricing tool) before every paid call, and keep a running total. Stop at 80% of the budget.
+2. **Find the tools.** Generate only with the Control Center's `media.*` capabilities: every paid call passes the spend gate (paid generation turned on, the task's budget). Never call an outside generation server through the gateway (an `mcp.*` tool such as `mcp.fal.*`), even when one is registered: nothing checks what it spends. No `media.*` generation tool in this run → report that and produce a written asset brief instead.
+3. **Price before paying.** Check each call's estimate before you make it, and keep a running total. Stop at 80% of the budget.
 4. **Explore cheap, then finish.** For each asset, two to four quick, low-cost candidates; download them, open each one, critique it against the art direction (subject, crop, light, palette, consistency with the others, artefacts such as extra fingers or garbled text), then make one final at full quality.
 5. **Video.** Image-to-video from the approved still, eight seconds or less, muted. Submit a long job once, poll its status, and cancel it if you abandon it; never resubmit a job whose outcome is unknown, because each submission is billed.
 6. **Into the repository.** Download every final into the repository's asset folder (its existing convention, else `public/generated/`). Never ship a vendor URL as a runtime source.

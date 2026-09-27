@@ -153,6 +153,12 @@ export function ffmpegProvider(): ToolProvider {
               if (failed) return failed;
               const s = await saved(dest);
               if (isFailure(s)) return s;
+              // AVIF dimensions are not read from the bytes: ask ffprobe, else use the scale FFmpeg was given.
+              if (s.width === null || s.height === null) {
+                const p = await probe(ctx, t, dest.abs);
+                s.width = p?.width ?? w;
+                s.height = p?.height ?? (info.width && info.height ? Math.round((w * info.height) / info.width / 2) * 2 : null);
+              }
               files.push(s);
             }
           }
@@ -165,7 +171,7 @@ export function ffmpegProvider(): ToolProvider {
           const total = files.reduce((n, f) => n + f.bytes, 0);
           return {
             ok: true,
-            summary: `${src.rel} (${kb(src.buf.length)}) → ${files.length} files, ${kb(total)} in total${notes.length ? ` · ${notes.join('; ')}` : ''}`,
+            summary: `${src.rel} (${kb(src.bytes)}) → ${files.length} files, ${kb(total)} in total${notes.length ? ` · ${notes.join('; ')}` : ''}`,
             output: { source: info, files, srcset: Object.fromEntries((['avif', 'webp', 'jpeg'] as const).filter((k) => files.some((f) => f.kind === k)).map((k) => [k, srcset(k)])), snippet, notes },
             filesChanged: files.map((f) => f.path),
           };
@@ -218,7 +224,7 @@ export function ffmpegProvider(): ToolProvider {
           const snippet = [`<video autoplay muted loop playsinline preload="metadata" poster="">`, ...files.map((f) => `  <source src="${url(f)}" type="${f.mime}">`), `</video>`].join('\n');
           return {
             ok: true,
-            summary: `${src.rel} (${kb(src.buf.length)}) → ${files.map((f) => `${f.path} (${kb(f.bytes)})`).join(', ')}`,
+            summary: `${src.rel} (${kb(src.bytes)}) → ${files.map((f) => `${f.path} (${kb(f.bytes)})`).join(', ')}`,
             output: { files, snippet, audio: input.keepAudio },
             filesChanged: files.map((f) => f.path),
           };
@@ -275,8 +281,8 @@ export function ffmpegProvider(): ToolProvider {
             const data = await readFile(sheet);
             if (data.length > MAX_MODEL_IMAGE_BYTES) return failure('FAILED', 'The contact sheet is too large to show; ask for fewer frames');
             const size = facts?.width && facts.height ? `${facts.width}×${facts.height}` : 'size unknown';
-            const summary = `${src.rel}: ${src.kind}, ${facts?.duration ? `${facts.duration.toFixed(1)} s` : 'duration unknown'}, ${size}, ${facts ? (facts.audio ? 'with audio' : 'no audio') : 'audio unknown'}, ${kb(src.buf.length)}`;
-            return { ok: true, summary, output: { path: src.rel, kind: src.kind, bytes: src.buf.length, ...facts }, images: [{ name: `${path.basename(src.rel)}-frames.jpg`, mime: 'image/jpeg', data }], evidence: [`Viewed ${input.count} frames of ${src.rel}`] };
+            const summary = `${src.rel}: ${src.kind}, ${facts?.duration ? `${facts.duration.toFixed(1)} s` : 'duration unknown'}, ${size}, ${facts ? (facts.audio ? 'with audio' : 'no audio') : 'audio unknown'}, ${kb(src.bytes)}`;
+            return { ok: true, summary, output: { path: src.rel, kind: src.kind, bytes: src.bytes, ...facts }, images: [{ name: `${path.basename(src.rel)}-frames.jpg`, mime: 'image/jpeg', data }], evidence: [`Viewed ${input.count} frames of ${src.rel}`] };
           } finally {
             await rm(sheet, { force: true }).catch(() => undefined);
           }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { git } from '@acc/git';
+import { redact } from '@acc/security';
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
@@ -151,6 +152,15 @@ describe('credential broker', () => {
     expect(other.status).toBe(201);
     expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { envVar: 'OPENAI_API_KEY' })).status).toBe(400);
     expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { description: 'unrelated edit' })).status).toBe(200);
+    // A refused update (a new value with a kind that cannot keep its variable) changes nothing, the redactor included.
+    const kept = ['quokka', 'marble', 'lantern', 'orbit'].join('');
+    const own = await t.api('POST', '/api/credentials', { name: 'plain-kept', kind: 'other', envVar: 'MY_OTHER_KEY', value: kept });
+    expect(redact(`leaked ${kept}`)).not.toContain(kept);
+    expect((await t.api('PATCH', `/api/credentials/${own.body.id}`, { kind: 'media', value: ['walrus', 'pepper', 'meadow'].join('') })).status).toBe(400);
+    // Checked before anything reads the value again (a read registers it anew).
+    expect(redact(`leaked ${kept}`)).not.toContain(kept);
+    expect(await t.services.credentials.value('plain-kept', repoId)).toBe(kept);
+    expect((await t.api('DELETE', `/api/credentials/${own.body.id}`)).status).toBeLessThan(300);
     // The media tools ask for kind media: another secret named by an agent is never handed to a vendor.
     expect(await t.services.credentials.value('fal', repoId, { kind: 'media' })).toBe(value);
     expect(await t.services.credentials.value('plain', repoId, { kind: 'media' })).toBeNull();
@@ -468,8 +478,9 @@ describe('MCP servers', () => {
     expect(assets.body.summary).toMatch(/Paid generation is off/);
   });
 
-  it('keeps a Level 3 generation server out of a Level 2 stage: in Frontend Design only Assets can spend', async () => {
-    // Registered as the design runbook registers fal: paid tools at Level 3 (docs/systems/design-agent.md).
+  it('keeps a Level 3 generation server out of a Level 2 stage', async () => {
+    // A billed server registered at Level 3 (docs/systems/mcp.md). The spend gate cannot see its calls, which is why
+    // Frontend Design lists none and generates through media.* only (docs/systems/design-agent.md).
     const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
     const created = await t.api('POST', '/api/mcp', { name: 'fal', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 3 });
     expect(created.status).toBe(201);
@@ -479,7 +490,7 @@ describe('MCP servers', () => {
     const build = await call(session(2).token);
     expect(build.body).toMatchObject({ ok: false, decision: 'deny' });
     expect(build.body.summary).toMatch(/needs Level 3, and this stage is Level 2/);
-    // The Assets stage (Level 3, auto-approve 3) reaches it by escalation, outside the stage's profile.
+    // A Level 3 stage with auto-approval up to 3 still reaches it by escalation, outside the stage's profile.
     const assets = await call(session(3).token);
     expect(assets.body.ok).toBe(true);
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);

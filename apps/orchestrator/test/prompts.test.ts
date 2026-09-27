@@ -1,4 +1,5 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
@@ -140,6 +141,24 @@ describe('rendered stage prompts', () => {
     expect(design).toMatch(/Keep the design memory\.\*\* When the repository has a `design\/` folder.+`design\/brief\.md`/);
     const review = promptOf(id, 'review');
     expect(review).toMatch(/- landing-phone-dark\.png \(screenshot, stage build, 1 KB\): .+landing-phone-dark\.png/);
+  }, 90_000);
+
+  it('never read design memory through a link that leaves the repository', async () => {
+    const outside = mkdtempSync(path.join(os.tmpdir(), 'acc-outside-'));
+    writeFileSync(path.join(outside, 'brief.md'), 'Private notes from another folder.\n');
+    const repoPath = await makeRepo();
+    symlinkSync(outside, path.join(repoPath, 'design'), 'dir');
+    for (const args of [['add', 'design'], ['commit', '-m', 'design link']]) expect((await git(repoPath, args)).code).toBe(0);
+    t.services.workflows.save('design-link', {
+      name: 'Design link',
+      maxFixCycles: 0,
+      stages: [{ key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'complete' }],
+    });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the landing page', { workflowId: 'design-link' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const design = promptOf(id, 'build');
+    expect(design).not.toContain('Private notes from another folder');
+    expect(design).not.toContain('design/brief.md (');
   }, 90_000);
 
   it('are saved for every agent stage under the role name', async () => {

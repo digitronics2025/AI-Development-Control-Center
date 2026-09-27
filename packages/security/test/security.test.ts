@@ -60,6 +60,14 @@ describe('Redactor', () => {
     expect(r.redact(`Basic ${fake('dXNlcjpw', 'YXNzd29y', 'ZA==')}`)).toBe(`Basic ${REDACTED}`);
     expect(r.redact(`apiKey: "${fake('abcdef', '123456')}"`)).toBe(`apiKey: "${REDACTED}"`);
     expect(r.redact(`authToken=${fake('ghij', 'kl78', '90')}`)).toBe(`authToken=${REDACTED}`);
+    // Real credentials need no digit, capital or punctuation, and the scheme is matched in any case.
+    expect(r.redact(`Authorization: Bearer ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`Authorization: Bearer ${REDACTED}`);
+    expect(r.redact(`authorization: bEaReR ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`authorization: bEaReR ${REDACTED}`);
+    expect(r.redact(`Authorization: Key ${fake('abcd', 'efgh', 'ijkl')}`)).toBe(`Authorization: Key ${REDACTED}`);
+    expect(r.redact(`BeArEr ${fake('abcdefgh', 'ijklmnop')}`)).toBe(`BeArEr ${REDACTED}`);
+    expect(r.redact(`TOKEN ${fake('qwertyui', 'opasdfgh')}`)).toBe(`TOKEN ${REDACTED}`);
+    // Code that builds the header is not a credential.
+    expect(r.redact('headers: { Authorization: `Bearer ${token}` }')).toBe('headers: { Authorization: `Bearer ${token}` }');
   });
 
   it('redacts URL credentials but keeps the host', () => {

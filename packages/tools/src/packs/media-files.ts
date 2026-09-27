@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { referencesSelf } from '@acc/security';
 import { guardedFetch, RedirectRefused } from '../net-guard.js';
 import { OutsideRootError, relativeTo, resolveInside } from '../paths.js';
@@ -126,6 +129,24 @@ export function dimensions(buf: Buffer, kind: MediaKind): { width: number; heigh
  * instructions, comments, metadata and editor namespaces. Repeated until
  * nothing changes, so nested or split constructs cannot survive one pass.
  */
+/**
+ * Attribute values as the XML parser will read them: numeric character
+ * references decoded (`hr&#x65;f`, `url&#40;`), except the characters that
+ * must stay escaped for the markup to stay well formed, so every rule below
+ * judges the value the browser will use.
+ */
+function decodeAttributeValues(svg: string): string {
+  const keep = new Set(['"', "'", '<', '>', '&']);
+  const decode = (value: string) =>
+    value.replace(/&#(x[0-9a-f]{1,6}|\d{1,7});/gi, (ref, code: string) => {
+      const n = code[0]!.toLowerCase() === 'x' ? parseInt(code.slice(1), 16) : parseInt(code, 10);
+      if (!Number.isFinite(n) || n <= 0 || n > 0x10ffff) return '';
+      const ch = String.fromCodePoint(n);
+      return keep.has(ch) ? ref : ch;
+    });
+  return svg.replace(/(\s[\w:.-]+\s*=\s*)(["'])([\s\S]*?)\2/g, (_m, lead: string, q: string, value: string) => `${lead}${q}${decode(value)}${q}`);
+}
+
 export function sanitizeSvg(input: string): string {
   let svg = input.replace(/^\uFEFF/, '');
   const passes: Array<[RegExp, string]> = [
@@ -136,14 +157,20 @@ export function sanitizeSvg(input: string): string {
     [/<!\[CDATA\[[\s\S]*?\]\]>/g, ''],
     [/<(script|foreignObject|iframe|embed|object|audio|video|canvas|handler|listener|metadata)\b[\s\S]*?<\/\1\s*>/gi, ''],
     [/<(script|foreignObject|iframe|embed|object|audio|video|canvas|handler|listener|metadata|set)\b[^>]*\/?>/gi, ''],
-    [/<animate\w*\b[^>]*attributeName\s*=\s*["']?\s*(?:xlink:)?href[\s\S]*?(?:\/>|<\/animate\w*\s*>)/gi, ''],
+    // Every SMIL animation goes: one can retarget any attribute (a link, a style) after the rules below have run.
+    [/<(animate\w*|set|discard)\b[^>]*?(?:\/>|>[\s\S]*?<\/\1\s*>)/gi, ''],
+    [/<\/?(?:animate\w*|set|discard)\b[^>]*>/gi, ''],
+    // CSS escapes (u\72l, @imp\6frt) would rebuild a reference the rules cannot see: such styles go whole.
+    [/<style\b[^>]*>[^<]*\\[\s\S]*?<\/style\s*>/gi, ''],
+    [/\sstyle\s*=\s*(["'])[^"']*\\[^"']*\1/gi, ''],
     [/<(sodipodi|inkscape):[\w-]+\b[\s\S]*?(?:\/>|<\/\1:[\w-]+\s*>)/gi, ''],
     [/\s(?:sodipodi|inkscape):[\w-]+\s*=\s*(?:"[^"]*"|'[^']*')/gi, ''],
     [/\sxmlns:(?:sodipodi|inkscape)\s*=\s*(?:"[^"]*"|'[^']*')/gi, ''],
     [/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, ''],
     // Links: only same-document fragments and raster data images survive.
-    [/\s((?:xlink:)?href|src)\s*=\s*(["'])\s*(?!#|data:image\/(?:png|jpe?g|gif|webp);base64,)[^"']*\2/gi, ''],
-    [/\s((?:xlink:)?href|src)\s*=\s*(?!["'])[^\s>]+/gi, ''],
+    // Any namespace prefix: xlink may be bound to another name (xmlns:foo=".../xlink", then foo:href).
+    [/\s((?:[\w.-]+:)?href|src)\s*=\s*(["'])\s*(?!#|data:image\/(?:png|jpe?g|gif|webp);base64,)[^"']*\2/gi, ''],
+    [/\s((?:[\w.-]+:)?href|src)\s*=\s*(?!["'])[^\s>]+/gi, ''],
     [/@import[^;]*;?/gi, ''],
     [/url\(\s*(["']?)\s*(?!#)[^)]*\)/gi, 'none'],
     [/expression\s*\(/gi, '('],
@@ -151,6 +178,7 @@ export function sanitizeSvg(input: string): string {
   ];
   for (let round = 0; round < 10; round++) {
     const before = svg;
+    svg = decodeAttributeValues(svg);
     for (const [re, to] of passes) svg = svg.replace(re, to);
     if (svg === before) break;
   }
@@ -186,8 +214,16 @@ export function destination(ctx: OperationContext, requested: string, overwrite:
 
 export const isFailure = (v: unknown): v is OperationResult => typeof v === 'object' && v !== null && 'ok' in v && (v as OperationResult).ok === false;
 
-/** Read a confined repository file that is an image or video, by its bytes. */
-export async function readMedia(ctx: OperationContext, requested: string): Promise<{ abs: string; rel: string; buf: Buffer; kind: MediaKind } | OperationResult> {
+/** How much of a file is read to learn what it is. */
+const HEAD_BYTES = 64 * 1024;
+
+/**
+ * Read a confined repository file that is an image or video, by its bytes.
+ * Only a bounded prefix is read to learn the type; the limit then depends on
+ * it (images 25 MB, video 200 MB). `buf` holds an image's whole content but
+ * only a video's first bytes: the FFmpeg tools need its path, not its body.
+ */
+export async function readMedia(ctx: OperationContext, requested: string): Promise<{ abs: string; rel: string; buf: Buffer; bytes: number; kind: MediaKind } | OperationResult> {
   let abs: string;
   try {
     abs = resolveInside(ctx.roots, ctx.cwd, requested);
@@ -196,11 +232,21 @@ export async function readMedia(ctx: OperationContext, requested: string): Promi
   }
   const s = await stat(abs).catch(() => null);
   if (!s?.isFile()) return failure('INVALID_INPUT', `${requested} is not a file`);
-  if (s.size > MAX_VIDEO_BYTES) return failure('INVALID_INPUT', `${requested} is larger than ${MAX_VIDEO_BYTES / 1024 / 1024} MB`);
-  const buf = await readFile(abs);
-  const kind = sniff(buf);
+  const handle = await open(abs, 'r');
+  let head: Buffer;
+  try {
+    const chunk = Buffer.alloc(Math.min(s.size, HEAD_BYTES));
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, 0);
+    head = chunk.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+  const kind = sniff(head);
   if (!kind) return failure('INVALID_INPUT', `${requested} is not an image or video this tool reads (PNG, JPEG, GIF, WebP, AVIF, SVG, MP4, WebM)`);
-  return { abs, rel: relativeTo(ctx.cwd, abs), buf, kind };
+  const cap = isVideo(kind) ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+  if (s.size > cap) return failure('INVALID_INPUT', `${requested} is larger than ${cap / 1024 / 1024} MB, the limit for ${isVideo(kind) ? 'a video' : 'an image'}`);
+  const buf = isVideo(kind) ? head : await readFile(abs);
+  return { abs, rel: relativeTo(ctx.cwd, abs), buf, bytes: s.size, kind };
 }
 
 /** Describe saved bytes; SVG is sanitised before it is written. */
@@ -233,31 +279,36 @@ async function fetchToTemp(ctx: OperationContext, url: string, dir: string, cap:
     await res.body.cancel().catch(() => undefined);
     return failure('INVALID_INPUT', `The file is ${Math.round(declared / 1024 / 1024)} MB; the limit is ${cap / 1024 / 1024} MB`);
   }
-  await mkdir(dir, { recursive: true });
   const temp = path.join(dir, `.acc-download-${randomBytes(6).toString('hex')}`);
-  const out = createWriteStream(temp);
-  const reader = res.body.getReader();
-  let total = 0;
-  let head = Buffer.alloc(0);
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > cap) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`The file is larger than ${cap / 1024 / 1024} MB`);
-      }
-      if (head.length < 4096) head = Buffer.concat([head, Buffer.from(value.subarray(0, 4096 - head.length))]);
-      if (!out.write(value)) await new Promise<void>((resolve) => out.once('drain', () => resolve()));
-    }
-    await new Promise<void>((resolve, reject) => out.end((error?: Error | null) => (error ? reject(error) : resolve())));
+    await mkdir(dir, { recursive: true });
+    const head = await streamToFile(res.body as WebReadableStream<Uint8Array>, temp, cap);
     return { temp, head };
   } catch (error) {
-    out.destroy();
+    await res.body.cancel().catch(() => undefined);
     await rm(temp, { force: true }).catch(() => undefined);
     return failure('INVALID_INPUT', (error as Error).message);
   }
+}
+
+/**
+ * Write a response body to `file` under a size cap and return its first 4 KB.
+ * A write error (a full disk, a folder that cannot be written) rejects instead
+ * of escaping as an unhandled stream error.
+ */
+export async function streamToFile(body: WebReadableStream<Uint8Array>, file: string, cap: number): Promise<Buffer> {
+  let total = 0;
+  let head = Buffer.alloc(0);
+  const limit = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      total += chunk.length;
+      if (total > cap) return done(new Error(`The file is larger than ${cap / 1024 / 1024} MB`));
+      if (head.length < 4096) head = Buffer.concat([head, chunk.subarray(0, 4096 - head.length)]);
+      done(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(body), limit, createWriteStream(file));
+  return head;
 }
 
 /** Move a downloaded temporary file into place (SVG sanitised first) and describe it. */

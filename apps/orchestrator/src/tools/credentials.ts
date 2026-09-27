@@ -329,12 +329,15 @@ export class CredentialBroker {
     if (input.value !== undefined && link?.authority === 'myvault' && link.state !== 'detached') {
       throw new CredentialError('This credential is managed by MyVault: change the value there and sync, or detach it first', 'MANAGED');
     }
+    // Refuse a bad kind/variable before anything changes: the redactor must never forget a value that stays stored.
+    if (input.kind !== undefined || input.envVar !== undefined) checkEnvVar(input.kind ?? current.kind, input.envVar === undefined ? current.envVar : input.envVar);
     let sealed = { ciphertext: current.ciphertext, iv: current.iv, tag: current.tag };
     let fingerprint = current.fingerprint;
+    let previous: string | null = null;
     if (input.value !== undefined) {
       const key = await this.loadKey();
       try {
-        unregisterSecretValues([openSecret(key, current, current.id)]);
+        previous = openSecret(key, current, current.id);
       } catch {
         /* previous value unreadable: nothing to forget */
       }
@@ -342,7 +345,6 @@ export class CredentialBroker {
       fingerprint = secretFingerprint(input.value);
       registerSecretValues([input.value]);
     }
-    if (input.kind !== undefined || input.envVar !== undefined) checkEnvVar(input.kind ?? current.kind, input.envVar === undefined ? current.envVar : input.envVar);
     const rec: CredentialRecord = {
       ...current,
       kind: input.kind ?? current.kind,
@@ -358,6 +360,8 @@ export class CredentialBroker {
       // A new value for a generated secret is owed to MyVault again.
       if (input.value !== undefined && link?.authority === 'control-center' && link.state !== 'detached') this.store.upsertVaultLink({ ...link, state: 'pending_push', lastError: null, updatedAt: now() });
     });
+    // Only once the new value is stored is the old one no longer a secret to mask.
+    if (previous !== null && previous !== input.value) unregisterSecretValues([previous]);
     this.syncManagedEnv();
     if (input.value !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'replace', direction: 'local', status: 'ok' });
     if (input.repositoryIds !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'scope', direction: 'local', status: 'ok', target: rec.repositoryIds === null ? 'all repositories' : `${rec.repositoryIds.length} repositories` });

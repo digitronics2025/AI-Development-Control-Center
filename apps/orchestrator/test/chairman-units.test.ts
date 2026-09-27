@@ -421,6 +421,10 @@ describe('completion gate', () => {
     const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
     const violated = completionGate({ ...base, stages: [assets, tests, review], activeDirectives: [protect] });
     expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'build' } }] });
+    // A Level 3 fixer, or only write stages that could spend: the failure stands with no remedy.
+    const spending: WorkflowProfile = { ...design, stages: [def('assets', 'designer', 3, { next: 'fix' }), def('fix', 'fixer', 3, { next: 'checks' }), def('checks', 'tester', 2, { kind: 'tests', next: 'review' }), def('review', 'reviewer', 1, { verdict: true })] };
+    const none = completionGate({ ...base, workflow: spending, stages: [assets, tests, review], activeDirectives: [protect] });
+    expect(none.failures[0]).toMatchObject({ code: 'protected_paths', remedy: null });
   });
 
   it('counts a visual critic verdict as a review', () => {
@@ -872,5 +876,10 @@ describe('repair stage', () => {
     expect(repairStage(design, 'check')?.key).toBe('build');
     // Existing workflows are unchanged: the fixer first.
     expect(repairStage(WORKFLOW, 'verify')?.key).toBe('fix');
+    // Only stages that could spend (a Level 3 fixer and designer): no implicit repair target at all.
+    const spending: WorkflowProfile = { ...design, stages: [def('assets', 'designer', 3, { next: 'fix' }), def('fix', 'fixer', 3, { next: 'check' }), def('check', 'tester', 2, { kind: 'verify', next: 'complete' })] };
+    expect(repairStage(spending, 'check')).toBeNull();
+    // The workflow's own onFail is its explicit choice and still wins.
+    expect(repairStage({ ...spending, stages: spending.stages.map((st) => (st.key === 'check' ? { ...st, onFail: 'fix' } : st)) }, 'check')?.key).toBe('fix');
   });
 });

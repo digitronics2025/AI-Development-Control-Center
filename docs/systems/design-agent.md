@@ -67,9 +67,11 @@ the critique looks in both themes, the review checks the code), and `skills: [te
 where it helps (ignored when that skill is not installed).
 
 Every `onFail` goes to Build, and Build is Level 2, so a fix loop never pays
-for media. When a workflow has no fixer, the completion gate's remedy
-(protected paths) and the Chairman's repair stage go to the first write
-stage at Level 2 or below, never to the paid Assets stage
+for media. The completion gate's remedy (protected paths) and the
+Chairman's implicit repair stage go only to a fixer or write stage at
+Level 2 or below, never to the paid Assets stage or a Level 3 fixer; when no
+such stage exists there is no automatic remedy (a stage's own `onFail` still
+wins)
 ([gate.ts](../../apps/orchestrator/src/chairman/gate.ts),
 [policy.ts](../../apps/orchestrator/src/chairman/policy.ts)).
 
@@ -91,7 +93,7 @@ handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
 | `media.job.status` | 1 | A generation job's state; free |
 | `media.asset.fetch` | 2 | Downloads one image or video into the repository |
 | `media.svg.optimize` | 2 | Sanitises and minifies an SVG |
-| `media.asset.optimize` | 2 (FFmpeg) | AVIF/WebP (or JPEG) widths, never upscaled, with `srcset` and a `<picture>` snippet |
+| `media.asset.optimize` | 2 (FFmpeg) | AVIF/WebP (or JPEG) widths, never upscaled, with `srcset` and a `<picture>` snippet (AVIF sizes from ffprobe, else the requested width) |
 | `media.video.encode` / `media.video.poster` | 2 (FFmpeg) | WebM (VP9) + MP4 (H.264, `+faststart`), no audio unless asked, `<video>` snippet; a poster frame |
 | `media.job.fetch` / `media.job.cancel` | 2 | Saves a finished job's files; cancels a queued job |
 | `media.image.generate`, `.edit`, `.upscale`, `.remove_background`, `.vectorize`, `media.video.generate` | 3 (paid) | fal queue API; results saved as `<folder>/<name>-N.<ext>` |
@@ -100,12 +102,17 @@ handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
 user's own uncommitted work (`protectedCheck`). A file's type comes from its
 bytes and must match its extension; downloads are https (or loopback http),
 redirects judged hop by hop and never into the Control Center, streamed to a
-temporary file under a cap (25 MB image, 200 MB video) and moved into place
-only when valid. Every SVG saved or optimised is sanitised: scripts, event
-handlers, foreign objects, embedded documents, link-retargeting animations,
-`javascript:` and external references, style imports, DOCTYPE and entity
-declarations, comments, metadata and editor data are removed until nothing
-changes.
+temporary file under a cap (25 MB image, 200 MB video) through one stream
+pipeline (a write error is a tool failure, never an unhandled stream error)
+and moved into place only when valid. Reading a repository file sniffs a
+64 KB prefix first and applies the image or video limit by type; a video's
+body is never buffered. Every SVG saved or optimised is sanitised until
+nothing changes: attribute values are read with character references decoded
+(`hr&#x65;f`), then scripts, event handlers, foreign objects, embedded
+documents, every SMIL animation (`animate*`, `set`, `discard`), styles that
+use CSS escapes, `javascript:` and external references under any namespace
+prefix (`foo:href` for a renamed xlink), style imports, DOCTYPE and entity
+declarations, comments, metadata and editor data are removed.
 
 **Generation (fal).** The key is the value of a `media` credential (default
 name `fal`; the input `credential` names another), read by name for that call
@@ -119,7 +126,10 @@ paid call returns a conservative cost estimate (`DEFAULT_MEDIA_PRICES`). The
 default models are starting points (`fal-ai/flux/dev`, `fal-ai/flux-pro/kontext`,
 `fal-ai/esrgan`, `fal-ai/bria/background/remove`, `fal-ai/recraft/vectorize`,
 Kling 2.1 for video); `model` and `arguments` pass any fal endpoint and its
-parameters. `ACC_FAL_API_BASE` may point the pack at a loopback stand-in (tests)
+parameters. `arguments` go first and the validated fields after them, and a
+key that sets what is billed (`num_images`, `n`, `batch_size`, `duration`,
+`num_frames` and the like) is refused there: the count and `durationSec`
+decide the estimate and the call. `ACC_FAL_API_BASE` may point the pack at a loopback stand-in (tests)
 and nowhere else.
 
 **FFmpeg.** Fixed argument templates, no shell; numbers and choices come from
@@ -140,7 +150,7 @@ closed:
    off refuses the call.
 2. The estimate (conservative defaults, or the operator's per-model price in
    `media.prices`) must fit what the task has left of **Budget per task**
-   (default $5), and every enabled `MEDIA` budget with policy
+   (default $5; Settings takes whole cents, such as 0.50), and every enabled `MEDIA` budget with policy
    `STOP_NEW_RUNS` for its day, week, month or total (Usage & Costs →
    Budgets). An estimate that cannot be computed refuses the call.
 3. The check and a `reserved` row in `media_usage_events` (migration 20) are
@@ -153,7 +163,8 @@ closed:
 
 Amounts are estimates; the fal bill is the truth. `GET /api/usage/media`
 (`usage.media` from the cloud) lists them; the Usage page shows them under
-Paid media generation. From the cloud, paid generation cannot be turned on,
+Paid media generation, refreshed after every `media.*` tool event (the ledger
+publishes nothing of its own) and every minute. From the cloud, paid generation cannot be turned on,
 the task budget raised, a price estimate changed, or a media budget loosened
 ([remote-node.md](remote-node.md)).
 
@@ -165,31 +176,14 @@ the task budget raised, a price estimate changed, or a media budget loosened
    fal key (no environment variable), and **Settings → Media → Allow paid
    generation** turned on with a budget per task; optionally a Paid media
    generation budget (Usage & Costs → Budgets, policy "Stop new runs") for a
-   daily, weekly or monthly cap. The alternative below uses fal's own MCP
-   server through the gateway (not covered by the spend gate: its tools
-   declare no estimate).
-   - Create a dedicated fal account and key with a prepaid balance; the
-     balance is the hard spending cap.
-   - Tools → Credentials: add an **unscoped** credential (no repositories:
-     MCP servers resolve credentials with no repository) of kind `http`, no
-     environment variable, whose value is the **whole header value** fal's
-     MCP server expects (for example `Key <key>` or `Bearer <key>`, as its
-     documentation says). Never give it the variable name `OPENAI_API_KEY`
-     or `GEMINI_API_KEY`: the broker strips a credential's variable from
-     every process, which would break the subscription CLIs' own checks.
-   - Tools → MCP servers: register fal's MCP URL (streamable HTTP) **twice**,
-     mapping the header name (for example `Authorization`) to that
-     credential:
-     - `fal`, **Level 3**, `allowedTools` = the paid tools (run, submit, upload);
-     - `fal jobs`, Level 2, `allowedTools` = the free tools (search, schema,
-       pricing, job status, job result, cancel).
-   - Agents reach them as `mcp.fal.*` and `mcp.fal_jobs.*` through
-     `acc_find_capability` / `acc_call_capability` (which names each tool's
-     parameters). The gateway passes on text and PNG/JPEG pictures, so other
-     results must come back as URLs; long video jobs go through submit +
-     status, never repeated submits (each submission is billed).
-   - Fallback: Replicate's local stdio MCP server with `REPLICATE_API_TOKEN`
-     mapped from a credential.
+   daily, weekly or monthly cap. Use a dedicated fal account with a prepaid
+   balance: the balance is the hard cap behind the estimates.
+   - Do not route generation through an outside MCP server (fal's own, or
+     Replicate's): its tools declare no cost estimate, so the spend gate
+     cannot see them. The `frontend-design` profile lists none and the
+     designer is told never to call one; a Level 3 stage with auto-approval
+     could still enable a registered one by escalation, so do not register
+     a paid generation server at all while this workflow runs unattended.
 2. **Media tools on the machine.** ffmpeg on PATH (optimising video, poster
    frames).
 3. **The target repository.**

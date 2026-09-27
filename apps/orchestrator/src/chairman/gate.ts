@@ -39,10 +39,10 @@ export function completionGate(input: GateInput): GateResult {
   const failures: GateFailure[] = [];
   const has = (pred: (s: WorkflowProfile['stages'][number]) => boolean) => workflow.stages.find(pred) ?? null;
   const testsDef = has((s) => s.kind === 'tests');
-  // The remedy target edits code: the fixer, else the first write stage that can only edit (≤ Level 2), so a
-  // remedy never re-runs a stage allowed to spend, such as Frontend Design's paid Assets stage.
-  const writeDefs = workflow.stages.filter((s) => isWriteRole(s.role) && s.kind === 'agent');
-  const fixDef = has((s) => s.role === 'fixer' && s.kind === 'agent') ?? writeDefs.find((s) => s.permissionLevel <= 2) ?? writeDefs[0] ?? null;
+  // The remedy target edits code: the fixer, else the first write stage, and only one that can only edit (≤ Level 2),
+  // so a remedy never re-runs a stage allowed to spend (Frontend Design's paid Assets stage, a Level 3 fixer). None: no remedy.
+  const editing = (s: WorkflowProfile['stages'][number]) => isWriteRole(s.role) && s.kind === 'agent' && s.permissionLevel <= 2;
+  const fixDef = has((s) => s.role === 'fixer' && editing(s)) ?? has(editing);
 
   const lastWrite = lastOf(stages, (s) => isWriteRole(s.role) && s.status === 'SUCCESS');
   const after = (s: StageInstance | null) => !lastWrite || (s !== null && s.createdAt >= lastWrite.createdAt);

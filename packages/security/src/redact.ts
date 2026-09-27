@@ -40,13 +40,17 @@ const RULES: Rule[] = [
   { name: 'stripe', pattern: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, replace: REDACTED, blocking: true },
   { name: 'npm', pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replace: REDACTED, blocking: true },
   { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replace: REDACTED },
-  // Authorization headers. The value must look like a credential: it has a digit, a capital or one of
-  // `_.~+/=`, and does not start with `--`. So "token --color-accent" (a CSS custom property) and
-  // "Basic typography-scale" (plain words) stay readable (docs/systems/design-agent.md). The
-  // keyword is matched in its usual spellings, not case-insensitively, so the value test stays case-sensitive.
+  // An Authorization header's value is a credential whatever it looks like (any scheme, any case, all lowercase).
+  {
+    name: 'authorization',
+    pattern: /\b(authorization\s*[:=]\s*["'`]?\s*(?:(?:bearer|basic|token|digest|key)\s+)?)(?!--)[A-Za-z0-9._~+/=-]{8,}/gi,
+    replace: `$1${REDACTED}`,
+  },
+  // Bearer/Basic/Token values elsewhere, in any case. Two design spellings stay readable (docs/systems/design-agent.md):
+  // a CSS custom property ("token --color-accent") and plain hyphenated words ("Basic typography-scale").
   {
     name: 'bearer',
-    pattern: /\b(Bearer|bearer|BEARER|Basic|basic|BASIC|Token|token|TOKEN)\s+(?!--)(?=[A-Za-z0-9._~+/=-]*[0-9A-Z_.~+/=])[A-Za-z0-9._~+/=-]{12,}/g,
+    pattern: /\b(bearer|basic|token)\s+(?!--)(?![a-z]+(?:-[a-z]+)+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{12,}/gi,
     replace: `$1 ${REDACTED}`,
   },
   // Signed URLs (S3, GCS, Azure SAS, CloudFront): only the signature and session parameters are masked, so the

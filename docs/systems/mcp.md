@@ -72,10 +72,13 @@ server marks `readOnlyHint` (and not `destructiveHint`) is a read
 (`readOnly`), so a read-only session can call it when it is on the session's
 allow-list.
 
-A server whose calls are billed (image or video generation) is registered at
-Level 3 so it runs only in a Level 3 agent stage, such as Frontend Design's
-Assets stage; its free tools (search, pricing, job status) can be a second
-registration at Level 2 ([design-agent.md](design-agent.md#operator-setup)).
+A server whose calls are billed (image or video generation) is not seen by
+the media spend gate: its tools declare no cost estimate. Register one at
+Level 3 so only a Level 3 stage can reach it, but note that a Level 3 stage
+with auto-approval enables it by escalation. Frontend Design generates through the
+built-in `media.*` tools instead: its profile lists no generation server and
+the designer is told never to call one
+([design-agent.md](design-agent.md#operator-setup)).
 
 API: `GET/POST /api/mcp`, `PATCH/DELETE /api/mcp/:id`, `POST /api/mcp/:id/check`.
 Realtime: `mcpServer`, `mcpServer.deleted`.

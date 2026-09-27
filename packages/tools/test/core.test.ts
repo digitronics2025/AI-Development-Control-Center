@@ -112,10 +112,10 @@ describe('profiles', () => {
     // Looking is Level 1 everywhere: accessibility, the visual matrix and viewing media files (docs/systems/design-agent.md).
     for (const cap of ['browser.accessibility', 'browser.visual_matrix', 'media.image.view', 'media.video.frames']) expect(profileIncludes('analysis', cap), cap).toBe(true);
     expect(profileIncludes('analysis', 'media.image.generate')).toBe(false);
-    // The frontend-design profile puts the design tools first and opts in to a server named fal by name only.
+    // The frontend-design profile puts the design tools first; it lists no outside generation server, whose calls the spend gate cannot see.
     expect(profileIncludes('frontend-design', 'media.image.generate')).toBe(true);
-    expect(profileIncludes('frontend-design', 'mcp.fal.run_model')).toBe(true);
-    expect(profileIncludes('frontend-design', 'mcp.fal_jobs.check_job')).toBe(true);
+    expect(profileIncludes('frontend-design', 'mcp.fal.run_model')).toBe(false);
+    expect(profileIncludes('frontend-design', 'mcp.fal_jobs.check_job')).toBe(false);
     expect(profileIncludes('frontend-design', 'mcp.github.create_issue')).toBe(false);
     expect(profileRank('frontend-design', 'media.asset.optimize')).toBeLessThan(profileRank('frontend-design', 'fs.read'));
     expect(profileIncludes('operator', 'mcp.github.create_issue')).toBe(true);

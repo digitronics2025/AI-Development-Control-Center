@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
 import { redact } from '@acc/security';
+import { resolveInside } from '@acc/tools';
 import {
   nonBlockingFailure,
   COMMAND_KIND_LABEL,
@@ -332,7 +333,18 @@ export class ContextBuilder {
    */
   private async designContext(workdir: string): Promise<string> {
     const lines: string[] = [];
-    const size = async (rel: string) => (await stat(path.join(workdir, rel)).catch(() => null))?.size ?? null;
+    // Inside the repository after following links: a `design` link to a folder elsewhere reads as absent.
+    const confined = (rel: string) => {
+      try {
+        return resolveInside([workdir], workdir, rel);
+      } catch {
+        return null;
+      }
+    };
+    const size = async (rel: string) => {
+      const abs = confined(rel);
+      return abs ? ((await stat(abs).catch(() => null))?.size ?? null) : null;
+    };
     const known: Array<[string, string]> = [
       ['design.md', "the repository's design standard: read it in full before designing"],
       ['DESIGN.md', "the repository's design standard: read it in full before designing"],
@@ -344,14 +356,16 @@ export class ContextBuilder {
       const s = await size(rel);
       if (s !== null) lines.push(`- ${rel} (${Math.max(1, Math.round(s / 1024))} KB): ${what}`);
     }
-    const files = await readdir(path.join(workdir, 'design'), { withFileTypes: true }).catch(() => []);
-    const entries = files.filter((f) => f.isFile()).map((f) => f.name).sort().slice(0, 30);
+    const designDir = confined('design');
+    const files = designDir ? await readdir(designDir, { withFileTypes: true }).catch(() => []) : [];
+    const entries = files.filter((f) => f.isFile() && confined(`design/${f.name}`)).map((f) => f.name).sort().slice(0, 30);
     for (const name of entries) {
       const s = await size(`design/${name}`);
       lines.push(`- design/${name}${s !== null ? ` (${Math.max(1, Math.round(s / 1024))} KB)` : ''}: design memory`);
     }
-    if (entries.includes('brief.md')) {
-      const brief = await readFile(path.join(workdir, 'design', 'brief.md'), 'utf8').catch(() => '');
+    const briefPath = entries.includes('brief.md') ? confined('design/brief.md') : null;
+    if (briefPath) {
+      const brief = await readFile(briefPath, 'utf8').catch(() => '');
       if (brief.trim()) lines.push('', '### design/brief.md', '', redact(brief.length > 8000 ? `${brief.slice(0, 8000)}\n\n[truncated]` : brief).trim());
     }
     return lines.join('\n');

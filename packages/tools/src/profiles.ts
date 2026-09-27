@@ -45,9 +45,9 @@ export const PROFILES: Record<ProfileId, CapabilityProfile> = {
   'frontend-design': {
     id: 'frontend-design',
     title: 'Frontend design',
-    description: 'Media (view, fetch, optimise, generate), browser checks at every width and theme, app verification, and a registered fal server (docs/systems/design-agent.md).',
-    // The design tools first: a list over the cap keeps the front. mcp.fal.* are opt-ins by name, as every MCP pattern must be.
-    include: ['media.*', 'browser.*', 'verify.*', 'mcp.fal.*', 'mcp.fal_jobs.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    description: 'Media (view, fetch, optimise, generate through the spend gate), browser checks at every width and theme, and app verification (docs/systems/design-agent.md).',
+    // The design tools first: a list over the cap keeps the front. No outside generation server: only media.* calls pass the spend gate.
+    include: ['media.*', 'browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   'cloudflare-worker': {
     id: 'cloudflare-worker',

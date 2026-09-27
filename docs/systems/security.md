@@ -50,11 +50,12 @@ Stripe/npm tokens, JWTs, bearer/basic headers, URL credentials, cookies,
 values, so host, path and expiry stay readable), and the literal values of
 sensitive environment variables present on the machine.
 
-Narrowed on purpose ([design-agent.md](design-agent.md)), with regression
-tests showing real credentials still masked: a `Bearer`/`Basic`/`Token` value
-must look like a credential (a digit, a capital or one of `_.~+/=`, and not
-starting with `--`), so "token --color-accent" and "Basic typography-scale"
-stay readable; a `key=value` secret stops at `&` (the next URL parameter is not
+An `Authorization:` header value is masked whatever it looks like (any
+scheme, any case, all lowercase). A `Bearer`/`Basic`/`Token` value elsewhere
+is masked in any case too, with two design spellings left readable
+([design-agent.md](design-agent.md)) and regression tests showing real
+credentials still masked: a CSS custom property (`token --color-accent`) and
+plain hyphenated words (`Basic typography-scale`). A `key=value` secret stops at `&` (the next URL parameter is not
 part of it) and skips design values after names such as `accentToken`
 (`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`).
 

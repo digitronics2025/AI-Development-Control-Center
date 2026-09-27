@@ -56,8 +56,13 @@ model. The design agent is:
    `browser.visual_matrix` and `browser.accessibility` in both schemes,
    judged against the approved direction. A FAIL returns to Build.
 7. **Code review** (reviewer, verdict): correctness and the repository's
-   rules. Both verdicts are of kind `review`; the completion gate needs the
-   latest one to have passed after the last change.
+   rules. Both verdicts are of kind `review`, but the completion gate asks
+   each judge role for its own pass since the last change (`completionGate`
+   in [gate.ts](../../apps/orchestrator/src/chairman/gate.ts)): a critique
+   PASS does not stand for the code review, and the role's latest verdict
+   run decides, so a re-review after a fix stands for the review before it.
+   The Chairman judges a strategy by the same judge role's next verdict
+   ([chairman.md](chairman.md)).
 
 Every agent stage sets `toolProfile: frontend-design` (media, browser and
 verify tools listed first), stage `instructions` (what each direction must
@@ -77,7 +82,9 @@ wins)
 
 Designer edits count everywhere implementer and fixer edits count: the READY
 gate ("tests have not run since the last change"), the report's Changed
-section, and "undo last change".
+section, and "undo last change"; in a supervised task's completion report a
+Build run in a fix cycle counts as a fix attempt (`buildFinalReport` in
+[report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
 ## Media tools
 
@@ -98,8 +105,8 @@ handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
 | `media.job.fetch` / `media.job.cancel` | 2 | Saves a finished job's files; cancels a queued job |
 | `media.image.generate`, `.edit`, `.upscale`, `.remove_background`, `.vectorize`, `media.video.generate` | 3 (paid) | fal queue API; results saved as `<folder>/<name>-N.<ext>` |
 | `browser.visual_diff`, `browser.audit` | 1 (a baseline write 2) | A page against its saved picture (red = what moved), and LCP, CLS, weight and image habits ([browser-and-web.md](browser-and-web.md#design-checks-browserts)) |
-| `design.contrast_matrix` | 1, read-only | WCAG 2 contrast of colour roles per theme: a stylesheet's custom properties (light `:root`; dark `prefers-color-scheme: dark`, `.dark`, `[data-theme=dark]`; `var()` followed) or given colours; foreground roles (`fg`, `text`, `on-…`) and UI boundaries (`border`, `ring`, `focus`, 3:1) paired with background roles (`bg`, `surface`, `canvas`…) or named pairs; hex, `rgb()`, `hsl()`, `oklch()`; translucent layers painted first; AA and AAA per pair ([design.ts](../../packages/tools/src/packs/design.ts)) |
-| `design.lint_tokens` | 1, read-only | Colours written as literals (hex, `rgb()`/`hsl()`/`oklch()`…), Tailwind default-palette classes and pixel font sizes in stylesheets, outside token/theme/variables files, `tailwind.config` and custom-property definitions; anchors and id selectors are not colours; never follows links; `allow` for deliberate literals |
+| `design.contrast_matrix` | 1, read-only | WCAG 2 contrast of colour roles per theme: a stylesheet's custom properties (light `:root`; dark `prefers-color-scheme: dark`, `.dark`, `[data-theme=dark]`; `var()` followed) or given colours. A role is read by its head: `on-X` is a foreground, otherwise the last role word decides (`card-foreground` foreground, `card-border` UI boundary, `link-hover-bg` background). Foregrounds (`fg`, `text`, `foreground`…) and UI boundaries (`border`, `ring`, `focus`, 3:1) are paired with background roles (`bg`, `surface`, `canvas`…), or named pairs are checked; a foreground named for a background (`card-foreground` → `card`, `on-surface` → `surface`, `md-sys-color-on-primary` → `md-sys-color-primary`) is checked on that one only, listed first. Hex, `rgb()`, `hsl()` (in the modern syntax saturation and lightness may drop `%`; out of range is refused), `oklch()`; translucent layers painted first; AA and AAA decided on the exact ratio, the ratio shown cut (not rounded) to two decimals ([design.ts](../../packages/tools/src/packs/design.ts)) |
+| `design.lint_tokens` | 1, read-only | Colours written as literals (hex, `rgb()`/`hsl()`/`oklch()`…), Tailwind default-palette classes and pixel font sizes in stylesheets, outside token/theme/variables files, `tailwind.config` and custom-property definitions (all their lines); a hex on a continuation line of a multi-line value (a wrapped `box-shadow`) counts; anchors and id selectors are not colours; never follows links; `allow` for deliberate literals. Minified files, files over 512 KB and lines over 4096 characters are not read and are listed in `output.skipped` |
 
 **Files.** Every path is confined to the task's roots and never touches the
 user's own uncommitted work (`protectedCheck`). A file's type comes from its
@@ -120,8 +127,12 @@ declarations, comments, metadata and editor data are removed.
 **Generation (fal).** The key is the value of a `media` credential (default
 name `fal`; the input `credential` names another), read by name for that call
 only ([credential-broker.md](credential-broker.md)). A submission is never
-retried: a timeout is reported as "may have been accepted and billed", with
-the job id. Job ids carry fal's own status, result and cancel URLs, each
+retried: one that does not answer is reported as "may still have been
+accepted and billed" (no job id is known). Once fal has accepted a job, every
+later failure (a dropped status or result connection, a failed write, an
+artifact-store error) returns its job id with status `UNKNOWN` or
+`COMPLETED` and says to poll `media.job.status` or save it with
+`media.job.fetch`, never to submit again. Job ids carry fal's own status, result and cancel URLs, each
 proven to be on the queue's origin before the key is sent. A result is
 downloaded into the repository by its real type (a vendor's URL is never
 shipped) and kept as a task artifact (`image`/`video`, up to 50 MB). Each
@@ -138,7 +149,10 @@ and nowhere else.
 **FFmpeg.** Fixed argument templates, no shell; numbers and choices come from
 the schema; every path is passed as `file:<absolute path>` with
 `-protocol_whitelist file`, so a name can never be an option or another
-protocol. Missing FFmpeg is `NOT_INSTALLED` with the install hint; it is in
+protocol. A path with `%`, input or output, is refused: FFmpeg's image
+reader and writer read it as a sequence pattern (`x%d` is `x1`), so the file
+touched would not be the one checked; single JPEG outputs are written with
+`-update 1`. Missing FFmpeg is `NOT_INSTALLED` with the install hint; it is in
 the reviewed installer catalog (`Gyan.FFmpeg`).
 
 ## Spend gate
@@ -159,15 +173,17 @@ closed:
 3. The check and a `reserved` row in `media_usage_events` (migration 20) are
    one transaction, so concurrent calls cannot both fit into the last dollar.
 4. After the call the row is settled once: `charged` when the result carries
-   the vendor's job id (or succeeded), `released` when the vendor refused it
-   before billing (invalid input, no key, not installed, outside the
-   repository), and `unknown` otherwise (a timeout or an unanswered
-   submission may have been billed, so it stays counted).
+   the vendor's job id (every failure after fal accepted the job does) or
+   succeeded, `released` when the vendor refused it before billing (invalid
+   input, no key, not installed, outside the repository), and `unknown`
+   otherwise (an unanswered submission may have been billed, so it stays
+   counted; so does a call `ToolService.invoke`'s own timeout or stop cuts
+   off, even after fal accepted it).
 
 Amounts are estimates; the fal bill is the truth. `GET /api/usage/media`
 (`usage.media` from the cloud) lists them; the Usage page shows them under
 Paid media generation, refreshed after every `media.*` tool event (the ledger
-publishes nothing of its own) and every minute. From the cloud, paid generation cannot be turned on,
+publishes nothing of its own), after a settings change and every minute. From the cloud, paid generation cannot be turned on,
 the task budget raised, a price estimate changed, or a media budget loosened
 ([remote-node.md](remote-node.md)).
 
@@ -232,7 +248,8 @@ changed image or video counts as a file the diff did not show. When a changed
 match the entry's SHA-256 when one is given, reviewers see its size, weight
 and use and need not list it under Files reviewed. A picture no manifest
 names, or whose bytes differ from the manifest, must be viewed and named like
-any other unseen file.
+any other unseen file. Pre-existing user files the task never touched are
+never required.
 
 The learning loop reads design friction — a visual critique failing twice,
 the same axe rule in two checks, paid media near its budget — and proposes a
@@ -247,13 +264,21 @@ second ([learning.md](learning.md#design)).
   `MINIMAX_API_KEY`, `ELEVENLABS_API_KEY` and `HIGGSFIELD_*` are stripped
   from every agent, command, terminal and hook in every billing mode
   ([env-guard.ts](../../packages/security/src/env-guard.ts)).
+- **A media key opens only for the media tools.** A `media` credential is
+  returned only to `value(name, {kind: 'media'})`; a read without that kind
+  (`http.request`, a secret put, an MCP server's variables) gets nothing, so a
+  paid key never leaves past the spend gate
+  ([credentials.ts](../../apps/orchestrator/src/tools/credentials.ts)).
 - **Level 3 allows `git commit` in Claude's Bash**; the designer prompt
   forbids committing, pushing and deploying in every mode.
 - **The Control Center's own UI** follows design.md: the prompt's first rule
   forbids generated hero media and decorative loops there.
-- **Design value names** built on token, secret, auth or key followed by a
-  value are masked by the redactor in logs and in the reviewer's diff; the
-  prompt asks for plain names.
+- **Design value names** built on token, secret, auth or key are secret names
+  to the redactor: the value after one is masked in logs and in the
+  reviewer's diff unless the whole value is a colour, `var()` or a length
+  (`accentToken: #3355ff` stays readable, `#Bad!Pass99` does not;
+  [redact.ts](../../packages/security/src/redact.ts)). The prompt asks for
+  plain names.
 
 ## Not yet
 
@@ -263,7 +288,8 @@ second ([learning.md](learning.md#design)).
   the design stages do not use one. Generate in your own session and attach
   the files to the task (up to 10), or use the `media.*` tools.
 - Whether `claude -p` shows a local PNG to the model when the designer reads
-  it has not been observed; the Control Center browser's screenshots do
+  it has not been observed (`pnpm verify:agents --images` asks the signed-in
+  CLIs); the Control Center browser's screenshots do
   reach the model (MCP image blocks, three per call).
 
 Last verified: 2026-09-27

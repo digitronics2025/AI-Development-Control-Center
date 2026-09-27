@@ -83,11 +83,16 @@ release lives in `tasks.git`, [release.md](release.md)), and
 `repositories.test_selection` (default `'full'`) with `test_runs.selection`
 (migration 18, [workflow-engine.md](workflow-engine.md#affected-tests-only)), and
 `stage_work_units` with `executions.work_unit_id` and `usage_events.work_unit_key`
-(migration 19, [stage-teams.md](stage-teams.md)). Access goes through
+(migration 19, [stage-teams.md](stage-teams.md)), and the spend gate's
+`media_usage_events` (migration 20, a reservation settled once;
+[usage.md](usage.md), [design-agent.md](design-agent.md)), and
+`mcp_servers.auth`, `mcp_servers.oauth_scope` and `mcp_oauth` (migration 21,
+the sign-in sealed with the broker's key beside plain sign-in and expiry times;
+[mcp.md](mcp.md)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 
-## HTTP API (all under `/api`, bearer token required)
+## HTTP API (under `/api`, bearer token required)
 
 | Area | Endpoints |
 |---|---|
@@ -105,12 +110,16 @@ before any row is written.
 | Repository automation | `GET repository-automation`, `POST repository-automation/run` — see [repository-automation.md](repository-automation.md) |
 | Settings | `GET/PATCH settings` (a PATCH changes only the keys sent; a section sent in part keeps its other fields — `mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)), `GET prompts`, `PUT prompts/:role` (400 when the body uses a placeholder outside the catalog, [prompts.md](prompts.md)), `POST prompts/:role/reset` |
 | Learning | `GET learning`, `GET learning/tasks/:id`, `POST learning/tasks/:id/review`, `POST learning/improvements/:id/revert`, `POST learning/findings/:id/{dismiss,act}`; tables `learning_*` (migration 11); see [learning.md](learning.md#api) |
-| Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile; see [usage.md](usage.md#api-apiusage-bearer-token) |
-| Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…`, `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
+| Usage & Costs | `usage/…` — overview, breakdowns, task ledger, attempts, providers, budgets, pricing, export, reconcile, `GET usage/media?taskId&days` (paid media settings, spend and ledger rows); see [usage.md](usage.md#api-apiusage-bearer-token) |
+| Tools | `tools…`, `tool-executions`, `tasks/:id/{execution,processes,checkpoints,restore}`, `processes…`, `terminals…`, `mcp…` (with `POST mcp/:id/oauth/{start,sign-out}`, 403 `REMOTE_FORBIDDEN` when relayed from the cloud; [mcp.md](mcp.md)), `credentials…`, `privileged/validate`, `tool-sessions` — see [tool-system.md](tool-system.md) |
 | Tool sessions | `tool-session/{tools,find,call}` — session token only, never the local API token ([mcp.md](mcp.md)) |
 | Connected apps | `connected-apps[/…]` (dashboard) and `connected-app/*` — the paired app's token only ([connected-apps.md](connected-apps.md)) |
 
-`GET /healthz` is unauthenticated and returns only `{ok:true}`. The built
+`GET /healthz` is unauthenticated and returns only `{ok:true}`. `GET
+/oauth/mcp/callback` is outside `/api`, so it takes no token (the Host and
+Origin checks still apply): an authorization server sends the browser there,
+and only a single-use state the orchestrator issued is accepted
+([mcp.md](mcp.md)). The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
 strict CSP. `index.html` is re-read whenever its mtime changes and assets are
 looked up per request, so rebuilding the dashboard needs no restart; while
@@ -163,7 +172,8 @@ interrupted supervised tasks and answers pending chat, the learning loop and
 phone alerts start — alerts send what a restart left unsent in the last hour,
 [operations.md](operations.md#phone-alerts) — and `close()` stops alerts
 before the learning loop), gives the tool layer
-its listen URL (agent tool sessions need it), refreshes stale tool detection
+its listen URL (agent tool sessions need it) and the MCP service its listen
+port (OAuth sign-ins come back to it), refreshes stale tool detection
 and loads stored credentials into the redactor in the background,
 schedules queued tasks, starts Source Control reconciliation (then
 repository automation, once it settles) and the Chairman's watchdog (15 s).

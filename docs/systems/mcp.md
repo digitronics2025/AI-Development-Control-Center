@@ -68,7 +68,9 @@ keeps `mcp_servers` and turns each enabled, healthy server into a provider
 `mcp:<id>` with capabilities `mcp.<server-slug>.<tool>` at the server's
 permission level (tools the server marks destructive need at least Level 3).
 Environment variables (stdio) or headers (HTTP) are filled from named
-credentials by the broker; `allowedTools` narrows what is exposed.
+credentials by the broker (never a `media` key: a read that names no kind gets
+none, [credential-broker.md](credential-broker.md#flow)); `allowedTools`
+narrows what is exposed.
 
 **What passes through.** Text content is joined (and redacted); other content
 is named in the text (`[image image/png]`). PNG and JPEG image blocks (bytes
@@ -108,13 +110,14 @@ that accept no static key.
   exchange and refresh. `McpOAuthProvider` only keeps what they produce and
   never opens a browser. Its requests never go to the Control Center's own
   address.
-- **Sign-in** (`POST /api/mcp/:id/oauth/start`, refused with 403
-  `REMOTE_FORBIDDEN` when relayed from the cloud): a random single-use state
+- **Sign-in** (`POST /api/mcp/:id/oauth/start`): a random single-use state
   (ten minutes, at most 20 pending, in memory) and the authorization address,
   which the dashboard opens in a new tab and also shows as a link. The
   callback address is `http://127.0.0.1:<port>/oauth/mcp/callback`, the port
   the operator reached the orchestrator on. A client registered for another
-  port is registered again.
+  port is registered again. Start and sign-out are refused with 403
+  `REMOTE_FORBIDDEN` when relayed from the cloud, and the cloud dashboard
+  disables both buttons.
 - **The callback** (`GET /oauth/mcp/callback`) is outside `/api`, so it needs
   no API token. The Host check still applies (421 for any non-loopback host),
   and the state is the proof: unknown, used or expired → 400; an
@@ -126,15 +129,18 @@ that accept no static key.
   verifier in progress) as one JSON value sealed with the credential broker's
   key (`sealValue`, bound to `mcp-oauth:<server id>`). Beside it are the
   plain `signed_in_at` and `expires_at`, so the view shows the status
-  (`oauth: { signedIn, signedInAt, expiresAt }`) without decrypting. The tokens
-  are registered with the redactor whenever they are loaded or saved. They
-  never appear in a response, an event or the database in plain text.
+  (`oauth: { signedIn, signedInAt, expiresAt }`) without decrypting; the list
+  shows when access renews only while that time is ahead (tokens renew when the
+  server is next used). The tokens are registered with the redactor whenever
+  they are loaded or saved. They never appear in a response, an event or the
+  database in plain text.
 - **Background calls** (check, tool calls) use the saved tokens and refresh
   them silently. A server nobody signed in to is never contacted: no client
   registration and no discovery. Its check reports "Not signed in", and its
   tools answer `AUTH_REQUIRED`. When a refresh fails the gateway stops with
-  `McpSignInRequired` instead of starting a sign-in. Signing out, a new URL,
-  or turning OAuth off forgets the sign-in; removing the server deletes it.
+  `McpSignInRequired` (the call answers `AUTH_REQUIRED`) instead of starting a
+  sign-in. Signing out, a new URL, or turning OAuth off forgets the sign-in;
+  removing the server deletes it.
 
 ## Verified
 

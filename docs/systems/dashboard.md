@@ -93,27 +93,43 @@ Home (System Health marks a signed-in agent whose last run reported it
 cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New Task (execution policy, isolated worktree; **Also work in** adds linked repositories — local only, the worktree switch then locked on — [multi-repository-tasks.md](multi-repository-tasks.md); typing `/` in the description opens the skill picker — [SlashTextarea](../../packages/ui/src/components/slash-textarea.tsx), `useSkills`, design.md §8.3 — and a line under the field names the skills the text requests; the Directive box on Task Detail has the same picker via `useSkillPicker`), Task Detail
 (Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
-validation), Agents, Repositories (+ detail; a Remote column, the automation summary
+validation; an agent stage also takes **Stage instructions**, a **Tool profile**
+— "From the repository" by default — and **Skills**, comma-separated and kept
+as typed; changing **Runs as** drops the fields the new kind does not take,
+`withStageKind`, so a hidden field never blocks saving — [workflow-engine.md](workflow-engine.md#profiles)), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md); the
 Commands panel ends with **Run only affected unit tests**, see
 [workflow-engine.md](workflow-engine.md#affected-tests-only)),
 Tools (`/tools/:tab`: Overview, Processes, Terminals, MCP servers,
 Credentials, Connected apps (local and VS Code only), Policy — see
-[tool-system.md](tool-system.md); Connected apps is
+[tool-system.md](tool-system.md); MCP servers can add an HTTP server with
+**Sign in with OAuth** (optional scopes) and shows its sign-in state with
+**Sign in** (opens the authorization page in a new tab, also shown as a link)
+or **Sign out**, a failed start or sign-out as a banner, and when access
+renews only while that time is ahead — [mcp.md](mcp.md#oauth); Connected apps is
 [pages/tools/ConnectedAppsTab.tsx](../../apps/dashboard/src/pages/tools/ConnectedAppsTab.tsx),
 see [connected-apps.md](connected-apps.md), and tasks a connected app created
 carry a From Private Browser badge in the task row and header; Credentials lives in
-[pages/tools/CredentialsTab.tsx](../../apps/dashboard/src/pages/tools/CredentialsTab.tsx), and the
+[pages/tools/CredentialsTab.tsx](../../apps/dashboard/src/pages/tools/CredentialsTab.tsx)
+(kind **media** holds an image or video generation key), and the
 bare `/vault-bridge` page is MyVault's popup relay, rendered outside the Shell —
 see [credential-broker.md](credential-broker.md)),
 Usage & Costs (`/usage`: Overview, Tasks, Models, Agents, Providers, Budgets,
 Attempts; `/usage/tasks/:id` cost ledger; a live Usage panel in the task
-inspector — see [usage.md](usage.md)), Settings (12 sections, including Repositories; Workflows
+inspector; Overview's **Paid media generation** panel, [MediaPanel.tsx](../../apps/dashboard/src/pages/usage/MediaPanel.tsx),
+is refetched after a `media.*` tool event and a settings broadcast (`sync.ts`)
+and every 60 s; Budgets offers a Paid media generation scope with no scope id
+— see [usage.md](usage.md)), Settings (14 sections, 11 in cloud mode, including Repositories; Media
+generation holds **Allow paid generation** and **Budget per task** in dollars,
+whole cents allowed (`LimitField` with `cents`; empty is invalid, not $0),
+see [design-agent.md](design-agent.md#spend-gate); Workflows
 edits the role prompt templates with the placeholder list and an unknown-placeholder
 warning, see [prompts.md](prompts.md); a settings broadcast replaces the draft only
 when there are no unsaved edits, otherwise a "changed elsewhere" banner offers Load
 or Keep; the API-billing dialog's typed phrase is sent to and checked by the server). Routes are
-lazy-loaded; logs are virtualised; diffs load per file. The Tests tab shows
+lazy-loaded; logs are virtualised; diffs load per file; an image or video
+artifact's preview only says to download it (its bytes are not fetched as
+text). The Tests tab shows
 each command's recorded summary — the runner's totals line when it passed,
 the failure line when it failed — plus the first failing test ids; a failure
 the baseline commit already had gets a warning icon and a **pre-existing**
@@ -163,7 +179,10 @@ often agents ran a full suite themselves ([workflow-engine.md](workflow-engine.m
   back over the same WebSocket ([pty.md](pty.md)). xterm ships only in the
   lazy Task Detail and Tools route chunks.
 - Repository detail edits the repository's policy, Git mode *Isolated
-  worktree* and the **App runtime** used by the App check.
+  worktree* and the **App runtime** used by the App check; with the browser
+  check it also sets **Widths** (desktop and phone, or all five) and
+  **Themes** (light, or light and dark) —
+  [workflow-engine.md](workflow-engine.md#profiles).
 
 ## Installable app (PWA)
 
@@ -255,8 +274,8 @@ is `{kind:'local', token}` or `{kind:'cloud', node()}`; cloud requests send
 the Nodes page (`/nodes`), the top-bar node selector (remembered in
 localStorage), offline and update-required banners, New Task "Run on" /
 "Run when the node is back", and a confirmation before a remote terminal; it
-hides Settings → Remote access, Learning, Tools → Connected apps and the vault
-bridge page, and disables attachments. Local mode shows
+hides Settings → Remote access, Learning, Ask, Tools → Connected apps and the vault
+bridge page, and disables attachments and MCP **Sign in** / **Sign out**. Local mode shows
 Settings → Remote access instead. Tests: `pnpm e2e:cloud`
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)). See
 [cloud-control.md](cloud-control.md#dashboard-in-cloud-mode).
@@ -283,13 +302,17 @@ Settings → Remote access instead. Tests: `pnpm e2e:cloud`
 ([stage-teams.md](stage-teams.md)) Workflows: agent stages get an **Execution**
 control ([StageTeamEditor.tsx](../../apps/dashboard/src/pages/StageTeamEditor.tsx)):
 single agent, fixed team (2–4 worker rows: key, focus, agent/model/effort,
-"Primary reviewer" only on verdict stages, exactly one) or adaptive team,
+"Primary reviewer" only on verdict stages, exactly one), adaptive team, or
+competing variants (2–4 variant rows: key, approach, agent/model/effort, no
+primary reviewer, plus a **Judge** picker that defaults to the stage's agent),
 plus maximum workers; server validation issues show per field; built-ins show
-it read-only. A fixed team's row names its workers' agents ("Codex + Claude
-Code"; a worker without a pin counts as the stage's agent). Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
-done" ([team.ts](../../apps/dashboard/src/pages/task/team.ts)); Execution has a
+it read-only. A fixed team's or variants' row names its workers' agents ("Codex + Claude
+Code"; a worker without a pin counts as the stage's agent); variants read "3
+competing variants". Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
+judging" (a variants judge running) / "Team of 3 · done"
+([team.ts](../../apps/dashboard/src/pages/task/team.ts)); Execution has a
 **Stage Team** panel (units, agent, status, live duration, errors, reused,
-Integration / Split the fix rows); Logs label a worker's execution "Stage ·
+Integration / Split the fix / Judge rows); Logs label a worker's execution "Stage ·
 Unit". Realtime `workUnit` messages upsert into `TaskDetail.workUnits`
 ([sync.ts](../../apps/dashboard/src/api/sync.ts)). Repository Commands: a
 **Parallel-safe** checkbox for lint/typecheck/test/build/e2e. Usage task page:

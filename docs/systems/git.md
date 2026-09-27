@@ -71,13 +71,14 @@ at the baseline); files added since are deleted. `deleteRefs` only accepts
 `refs/acc/`. The Chairman refuses a rollback when HEAD moved since the
 checkpoint. Used by [chairman.md](chairman.md#checkpoints).
 
-The copy is dated one second before the real index (`withPrivateIndex`). Git
-trusts a cached stat unless the file is as new as the index file (racy git),
-and with `core.checkstat=minimal` it compares only whole seconds and the size;
-a copy dated when it was made looked newer, so a same-size change written in
-the index's own second was missed a second later (the checkpoint, the Stage
-Team wave base and `committableTree` held the old blob; seen as a Stage Team
-test failing under load). Dating it earlier only re-hashes more files.
+The copy's modification time is set to the whole second before the real
+index's (`withPrivateIndex`). Git trusts a cached stat unless the file is as
+new as the index file (racy git), and with `core.checkstat=minimal` it
+compares only whole seconds and the size; a copy dated when it is made would
+look newer, so a same-size change written in the index's own second would be
+missed a second later and the checkpoint, the Stage Team wave base and
+`committableTree` would record the old blob. Dating it earlier only re-hashes
+more files.
 
 ## Diff packing ([diff-pack.ts](../../packages/git/src/diff-pack.ts))
 

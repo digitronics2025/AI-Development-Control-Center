@@ -51,13 +51,19 @@ values, so host, path and expiry stay readable), and the literal values of
 sensitive environment variables present on the machine.
 
 An `Authorization:` header value is masked whatever it looks like (any
-scheme, any case, all lowercase). A `Bearer`/`Basic`/`Token` value elsewhere
-is masked in any case too, with two design spellings left readable
-([design-agent.md](design-agent.md)) and regression tests showing real
-credentials still masked: a CSS custom property (`token --color-accent`) and
-plain hyphenated words (`Basic typography-scale`). A `key=value` secret stops at `&` (the next URL parameter is not
-part of it) and skips design values after names such as `accentToken`
-(`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`).
+scheme, any case, all lowercase), `:` included, so both halves of a fal
+`Key <id>:<secret>` go. A `Bearer`/`Basic`/`Token` value elsewhere is masked
+in any case too. Two design spellings stay readable
+([design-agent.md](design-agent.md)) only when they are the whole value, with
+regression tests showing real credentials still masked: a CSS custom property
+(`token --color-accent`, also after `Authorization:`) and, outside that
+header, plain hyphenated words (`Basic typography-scale`); a value that only
+starts with `--` is masked. A `?`/`&` parameter that names a secret
+(`?api_key=…`, a form body's `&client_secret=…`) ends at the next parameter,
+so the rest of the URL stays readable; any other `key=value` secret keeps `&`
+(a password may hold one). After names such as `accentToken` a design value
+(`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`) is skipped only when it
+is the whole value: `#Bad!Pass99` and `2024%SummerPass` are masked.
 
 `detectSecrets` reports which **blocking** rules match (provider keys, cloud
 and registry tokens, credentials in URLs, private keys — not JWTs or the broad
@@ -148,7 +154,10 @@ needs an approval with a typed confirmation (the task ID).
 - Credentials: [credential-broker.md](credential-broker.md), including the
   MyVault bridge: its routes take the local token like any `/api` route, are
   not tools, not MCP and not remote operations, and trusted MyVault origins
-  are added only from the dashboard. Policy and the
+  are added only from the dashboard. A `media` (generation) key opens only for
+  a read that asks for that kind — the media tools, behind the spend gate;
+  `http.request`, a secret put or an MCP server's variables get nothing.
+  Policy and the
   privileged helper: [autopilot.md](autopilot.md). Terminals are loopback only
   ([pty.md](pty.md)).
 - Redaction also covers values the broker hands out
@@ -186,7 +195,9 @@ dials out, stays on `127.0.0.1`, and the local token never leaves the machine.
 The cloud may only ask for typed catalog operations, each mapped to one fixed
 local route, so the classifier, approvals, tool policy and subscription-only
 guard apply unchanged; the node also refuses anything that would loosen what
-runs without asking (billing, auto-approve, policy, repository commands).
+runs without asking or what may be spent (billing, auto-approve, policy,
+repository commands, paid media generation and media budgets), and MCP
+server sign-in and sign-out happen on the machine only.
 Everything sent is allowlisted by message type, stripped of path and secret
 fields, path-scrubbed and redacted ([remote-node.md](remote-node.md#egress)).
 Revocation from the cloud or the admin CLI stops the node for good.

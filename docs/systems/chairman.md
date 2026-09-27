@@ -31,7 +31,7 @@ hooks). Chat works for all tasks.
 | Hook | When | Effect |
 |---|---|---|
 | `beforeStage` | after the Git baseline, before a stage instance | limits check (→ `limit` blocker); checkpoint before every write-capable agent stage |
-| `afterSuccess` | a stage succeeded | judges open strategies on the recorded results; a passing check (tests, or a review/verify PASS) after a failure from the same source this cycle sets health PROGRESSING. The verdict is read from the stored stage row: the instance the engine passes predates the runner's update and has none |
+| `afterSuccess` | a stage succeeded | judges open strategies on the recorded results; a passing check (tests, or a review/verify PASS) after a failure from the same source this cycle sets health PROGRESSING — for a verdict, only a failure of a stage with the same judge role (a critique passing is not the code review passing). The verdict is read from the stored stage row: the instance the engine passes predates the runner's update and has none |
 | `onFailure` | tests failed / verdict FAIL | records the failure signature, classifies progress, judges the previous strategy on it, then `local_fix` (normal onFail route, "Fix attempt N of M") or a recovery cycle |
 | `onError` | `blocked`: usage/model/auth → hand the stage to another healthy agent, else legacy wait; `exhausted`: retries used → recovery cycle |
 | `beforeComplete` | loop reaches `complete` | completion gate (also the observation that resolves open strategies); remediable failures start a cycle, else complete with the unmet checks as limitations |
@@ -59,6 +59,14 @@ candidate refused before it started costs no cycle:
 | check_failed (a required command stage failed: "the check command failed") | retry the stage → root-cause → re-plan; the retry is left out when the files, commands and repository settings are the same as when it failed, and the hard blocker then says running it again would change nothing |
 | review_incomplete (`REVIEW_INCOMPLETE`) | retry the stage → hand it to another agent; never a code fix |
 | provider_blocked | change agent (not a recovery cycle) |
+
+Rollback, and a change of agent for anything but a worker failure, a
+provider block or an incomplete review, act on the repair stage
+(`repairStage`): the failing stage's `onFail` target, else the first fixer,
+implementer or designer at Level 2 or below, never a stage allowed to spend
+(paid media); with none, those candidates are left out. Re-plan (`REPLAN`
+and the re-plan candidate) goes to the planner, else another plan-class
+stage (an art director).
 
 A provider block is agent-wide unless it is `MODEL_UNAVAILABLE` (`providerWide`
 in [policy.ts](../../apps/orchestrator/src/chairman/policy.ts)): the same
@@ -154,7 +162,9 @@ outcome comes only from recorded results.
 `reconcile(taskId)` reads stage results created since the strategy started
 (failure signatures by stage id, passing tests, PASS verdicts, successful
 agent stages) and finalizes on the first **comparable** one (same source; for
-an agent failure, the same stage):
+an agent failure, the same stage; for a review or verify failure, a stage with
+the same judge role, so a visual critique passing says nothing about a failed
+code review while a re-review after a fix does):
 
 | Observation | Outcome |
 |---|---|
@@ -263,13 +273,17 @@ only from its own typed approval or the Release button ([release.md](release.md)
 Messages persist at once (`client_message_id` dedupes) and are processed one
 at a time per task. Deterministic ask-vs-act first: questions (incl. "Would
 rollback help?", "Could Claude review this?") never act and the model is
-offered no actions; `/status /blockers /directives` answer from the snapshot,
+offered no actions; `/status /blockers /directives` answer from the snapshot
+(its latest review is the newest verdict of a reviewer or visual critic and
+names its stage: "Last review (Visual critique): passed"),
 and so does a question only when every clause of it is about status ("What is
 happening, and would a rollback help?" goes to the model, which answers both);
 commands map to actions; "Do not …" → constraint directive (interrupts a
 running write stage, which re-runs under it; new contract version); "Run E2E
 before finishing" → requirement directive; "Use Claude for review" → deferred
-routing, keeping an effort said with it ("… with high effort", "at max effort";
+routing (a stage is named by its key, its name or a role word: "design", "art
+direction" and "critique" name the designer, art director and visual critic
+stages), keeping an effort said with it ("… with high effort", "at max effort";
 the reply names it). Unclear sentences become an instruction directive unless the model
 reads them differently — and a model may only add non-destructive actions, with
 directive text pinned to the user's own words — and its kind and rule derived
@@ -291,18 +305,21 @@ create it.
 
 ## Completion gate ([gate.ts](../../apps/orchestrator/src/chairman/gate.ts))
 
-Objective only: last tests after the last change passed, last review and
-verification PASS after it, required check kinds passed in the last tests
+Objective only: last tests after the last change passed, a PASS from each
+judge role after it, required check kinds passed in the last tests
 stage, no task-owned file matching a protected pattern. `READY` needs the gate.
 Roles are read by class (`ROLE_CLASS` in
 [constants.ts](../../packages/shared/src/constants.ts)): a change is any
-write-class stage (implementer, fixer, designer); the review is the latest
-judge-class verdict of kind `review` (reviewer or visual critic) and the
-verification the verifier's. The protected-paths remedy goes to the fixer,
+write-class stage (implementer, fixer, designer). Each judge role with a
+verdict stage (reviewer and visual critic, code `review`; verifier, code
+`verify`) must have passed since the last change, role by role, so a visual
+critique's PASS never stands for the code review. The role's latest run of
+any of its verdict stages decides (a re-review after a fix stands for the
+review before it), a run of an advisory (`verdict: false`) stage counts for
+nothing, and the remedy returns to the stage of that run (the role's first
+verdict stage when none ran). The protected-paths remedy goes to the fixer,
 else the first write stage at Level 2 or below, so it never lands on a paid
-Level 3 Assets stage ([design-agent.md](design-agent.md)). Re-plan
-(`REPLAN` and the re-plan candidate) goes to the planner, else another
-plan-class stage (an art director).
+Level 3 Assets stage ([design-agent.md](design-agent.md)).
 A waived kind is never required. A test stage whose only failures already
 failed on the baseline commit passed; a required kind whose run is such a
 pre-existing failure is not a pass either, and the gate says so with no remedy
@@ -391,7 +408,7 @@ never the evidence itself.
 
 The Chairman stays at stage level: a team returns one outcome. Its snapshot
 carries `team` (the latest team stage's units, statuses and errors, as EVIDENCE
-text); worker, decomposer and integration runs count toward `maxAgentRuns`
+text); worker, decomposer, integration and judge runs count toward `maxAgentRuns`
 and runtime; the watchdog checks every running execution of a task
 ([stage-teams.md](stage-teams.md)).
 

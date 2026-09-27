@@ -30,8 +30,10 @@ platform (no file contents). Checkpoints are taken:
   `checkpoint.create`, or the Chairman chat.
 
 Restore: `POST /api/tasks/:id/restore {checkpointId?}`, the Execution tab's
-**Roll back**, or `checkpoint.restore` (Level 3). The API routes go through
-the Chairman's Action Gateway, which stops a running write stage first. All
+**Roll back**, or `checkpoint.restore` (Level 3). Without a `checkpointId` it
+restores the last automatic checkpoint taken before the latest write-class
+stage (implementer, fixer, designer; `lastChangeTarget`). The API routes go
+through the Chairman's Action Gateway, which stops a running write stage first. All
 checkpoints work on the task's working directory, which is its worktree when
 isolated.
 

@@ -40,10 +40,12 @@ A stage's `team` may be fixed, adaptive or `variants` (competing attempts, a
 read-only judge keeps one; [stage-teams.md](stage-teams.md#variants)).
 
 Frontend Design ([design-agent.md](design-agent.md)) runs a designer role
-twice: Assets at Level 3 with approval on every attempt (the only stage a
-Level 3 generation server can run in) and Build at Level 2, which every
-`onFail` returns to, so a fix loop never pays for media. Its Art direction
-is an `art-director` stage and its Visual critique a `visual-critic` stage.
+twice: Assets at Level 3 with approval on every attempt and one attempt (the
+only stage the paid Level 3 `media.*` tools can run in, still behind the spend
+gate) and Build at Level 2, which every
+`onFail` returns to, so a fix loop never pays for media. Its Design brief is
+a fixed team of three directions, its Art direction an `art-director` stage
+and its Visual critique a `visual-critic` stage before the Code review.
 
 The engine reads roles by class (`ROLE_CLASS` in
 [constants.ts](../../packages/shared/src/constants.ts)): investigate, plan
@@ -56,7 +58,8 @@ by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design ad
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
 
-A `verify` stage (Full Autopilot's **App check**, after Test) starts the app
+A `verify` stage (the **App check** after the tests stage in Full Autopilot and
+Frontend Design) starts the app
 from the repository runtime (Repositories → a repository → App runtime),
 waits until it answers, opens each configured path in Chromium at the
 runtime's widths (`verifyViewports`, desktop and phone by default; up to all
@@ -90,7 +93,9 @@ close ([browser-and-web.md](browser-and-web.md)), whenever the loop exits in a
 state other than running or queued; completion and cancellation also close
 terminals, remove the worktree and add "Verification coverage" (the checks
 the project type calls for, plus any browser, HTTP or device evidence the
-orchestrator observed) and
+orchestrator observed; a succeeded `verify.web`, `browser.check_page`,
+`browser.run_flow`, `browser.visual_matrix` or `browser.accessibility` is
+browser evidence) and
 "Execution" sections to the report.
 
 Assignment precedence: global role default → workflow stage pin → repository
@@ -169,11 +174,15 @@ advisory verdict (it does not route); a FAIL makes the report
 status is `READY` only when the last *finished* test stage (a cancelled or
 interrupted instance does not count) passed with at least one passing command
 and came after the last successful write-class stage (implementer, fixer,
-designer), the last review (reviewer or visual critic) and verification passed, and no file mixes pre-existing user work with task
+designer), the latest review verdict (reviewer or visual critic) and the
+latest verification did not fail, and no file mixes pre-existing user work with task
 changes; otherwise `NEEDS_USER_ACTION` with the reason (`No test stage ran.`,
-`Tests have not run since the last change.` …) — the same rule the supervised
-completion gate applies ([report.ts](../../apps/orchestrator/src/engine/report.ts),
-[gate.ts](../../apps/orchestrator/src/chairman/gate.ts)). Lines starting `NEEDS OPERATOR:` in the
+`Tests have not run since the last change.` …) — the rule the supervised
+completion gate applies too, where each judge role with a verdict stage must
+have passed since the last change, so a visual critique's PASS never stands
+for the code review ([report.ts](../../apps/orchestrator/src/engine/report.ts),
+[gate.ts](../../apps/orchestrator/src/chairman/gate.ts),
+[chairman.md](chairman.md#completion-gate)). Lines starting `NEEDS OPERATOR:` in the
 latest verification (or, when none ran, the latest review of each review stage) — things only the operator can settle, which
 those roles are told not to fail for — are listed as "Needs your decision"
 and also make it `NEEDS_USER_ACTION` ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
@@ -197,8 +206,8 @@ without asking for approval (`skipsForLackOfCommands`).
 
 An agent stage with a `team` runs as a **Stage Team** — several workers, write
 workers in their own checkouts, one outcome — or falls back to one agent
-([stage-teams.md](stage-teams.md)); the built-in Architecture and Full Autopilot
-workflows use teams. A tests stage runs consecutive commands the
+([stage-teams.md](stage-teams.md)); the built-in Architecture, Full Autopilot
+and Frontend Design workflows use teams. A tests stage runs consecutive commands the
 repository marked `parallelSafe` together, stopping the batch at the first
 real failure; a check whose failure a repair would fix is repaired and run
 again alone once the rest of its batch is done
@@ -218,7 +227,13 @@ Smoke after a skipped Staging, the unit suite run three times):
   boundary). Every changed file not shown in full is listed in
   `{{diff_coverage}}` with its `+a −d`, the reason and how to read it; a task
   across repositories packs every repository into one budget, and a staged
-  review packs its staged diff. The changed-files list carries `+a −d`. A PASS
+  review packs its staged diff. The changed-files list carries `+a −d`. An
+  added or changed image or video, which the diff shows only as "Binary files
+  … differ", counts as not shown: one a changed `manifest.json` names (its
+  SHA-256 checked when the entry gives one) is listed as generated media that
+  need not be named; any other must be viewed and named
+  ([design-agent.md](design-agent.md#design-memory-and-learning)).
+  Pre-existing user work the task never touched is never listed. A PASS
   from a `verdict` stage must name every listed file (full path, or a
   basename no other changed file shares, `unreviewedFiles`): otherwise the
   runner asks the same agent once more inside the same stage (a second
@@ -462,6 +477,8 @@ a composed `1 failed | 2 passed (3)`
 The final report's Tests line counts commands, not tests
 (`1 command passed · 0 failed · 0 not run`), and each passing or failing
 row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
-([report.ts](../../apps/orchestrator/src/engine/report.ts)).
+([report.ts](../../apps/orchestrator/src/engine/report.ts)). A supervised
+task's `Fix attempts` counts fixer runs and designer runs started in a fix
+cycle (a design workflow's rebuilds), as the learning `fix_loops` signal does.
 
 Last verified: 2026-09-27

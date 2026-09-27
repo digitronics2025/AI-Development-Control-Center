@@ -89,7 +89,9 @@ The workspace layout, each folder's facts, Git status and changed files, and
 all diffs packed together by priority into one 150 KB budget (folder-prefixed; every file
 not shown is named in `{{diff_coverage}}`, [workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth)) replace the
 single-repository variables; the prompt tells agents to read each folder's
-`AGENTS.md`/`CLAUDE.md`.
+`AGENTS.md`/`CLAUDE.md`. `{{design_context}}` looks at the workspace root,
+which holds only the repository folders, so it names no repository's design
+standard or `design/` memory ([design-agent.md](design-agent.md)).
 
 ## API and clients
 

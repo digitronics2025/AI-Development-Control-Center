@@ -86,16 +86,21 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
    repository scope (choosing it there is its scope), still held back while
    MyVault has not saved it — or none, never another credential of the kind.
 3. Every value handed out, imported or generated is first registered with the
-   shared redactor; all stored values are registered at startup.
+   shared redactor; all stored values are registered at startup. A replaced
+   value is forgotten only after the new one is stored (a refused update, such
+   as a variable a media credential may not take, forgets nothing).
 4. The variables the broker manages are stripped from every inherited
    environment ([env-guard.ts](../../packages/security/src/env-guard.ts)).
 
 Kinds: `cloudflare`, `github`, `postgres`, `mysql`, `http`, `npm`, `media`, `other`.
 A `media` credential (an image or video generation key, [design-agent.md](design-agent.md))
-takes no environment variable and is read only by name with `value(name, {kind: 'media'})`,
-which returns null for any other kind, so an agent cannot have another secret sent
-to a vendor by naming it. A credential saved by hand may not take a billing
-variable (`API_BILLING_ENV_VARS`: `OPENAI_API_KEY`, `GEMINI_API_KEY` …; also
+takes no environment variable and opens only for a read that asks for that kind,
+`value(name, {kind: 'media'})` — the media tools, behind the spend gate. A kind-less
+read (`http.request`, a secret put, an MCP server's variables) gets null for it, so a
+paid key never leaves past the gate; and a read that names a kind gets null for any
+other kind, so an agent cannot have another secret sent to a vendor by naming it.
+A credential saved by hand may not take a billing variable
+(`API_BILLING_ENV_VARS`: `OPENAI_API_KEY`, `GEMINI_API_KEY` …; also
 reserved for generated and imported ones): the broker strips a credential's
 variable everywhere, so it would stand in for the agent CLIs' own billing selection.
 `GET /api/credentials` adds `source` (`manual` / `myvault` / `generated`) and

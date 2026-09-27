@@ -52,7 +52,8 @@ the engine.
    No signal → review `skipped` ("clean run"), no model call.
 3. **Review** ([reviewer.ts](../../apps/orchestrator/src/learning/reviewer.ts)):
    rule findings always (a missing catalog program → `INSTALL_TOOL`, observed,
-   HIGH; a refused skill → a report); plus, when Settings → Learning *Use the
+   HIGH; a refused skill → a report; design friction → a `design-system`
+   skill, [Design](#design)); plus, when Settings → Learning *Use the
    Chairman agent* is on and the reasoner is available, `Reasoner.review`
    (same read-only runner as recovery, usage step `learning`). The prompt
    (`Role: chairman`, `Mode: learning`) carries a legend of the signal kinds,
@@ -102,11 +103,12 @@ kind `missing_skill`, scope `repository`, `AUTHOR_SKILL` named `design-system`,
 MEDIUM and observed, so it is proposed after one task and written after a
 second (the fingerprint is the skill's name in the repository, so each task
 adds to one finding and the latest body wins). The body is numbered steps
-built only from recorded values (rule ids and stage keys that match
-`^[a-z0-9][a-z0-9_-]*$`, counts) and fixed text, never from an agent's words:
-read the design standard and `design/` first, clear the named axe rules in
-both themes, look with `browser.visual_matrix` before reporting, keep paid
-media under 80% of the budget, and record lasting decisions in
+built only from recorded values (rule ids and stage keys of at most 60
+characters matching `^[a-z0-9][a-z0-9_-]*$`, counts) and fixed text, never
+from an agent's words: read the design standard and `design/` first, clear
+the named axe rules (the eight most frequent) in both themes, look with
+`browser.visual_matrix` before reporting, keep paid media under 80% of the
+budget, and record lasting decisions in
 `design/brief.md` ([design-agent.md](design-agent.md)).
 
 ## Safety ([safety.ts](../../apps/orchestrator/src/learning/safety.ts))
@@ -143,9 +145,9 @@ Provider `installer` (built-in): `software.catalog` (Level 1) and
 `software.install {toolId}` (Level 3, `elevated`, persistence + network — the
 classifier's class for `npm -g`). `toolId` is an enum of
 `INSTALLABLE_TOOLS` ([learning.ts](../../packages/shared/src/learning.ts)):
-gh, jq, yq, ripgrep, uv, adb (winget, `--exact --scope user --silent`) and
-wrangler (`npm install -g`). Under the default Autopilot policy it runs on
-its own; under Safe it needs approval, which the page's **Do it now** gives
+gh, jq, yq, ripgrep, uv, adb, ffmpeg (winget,
+`--exact --scope user --silent`) and wrangler (`npm install -g`). Under the
+default Autopilot policy it runs on its own; under Safe it needs approval, which the page's **Do it now** gives
 (`preApproved`). Not in any agent profile except `operator`; an agent in a
 Level 3 stage can still reach it by escalation. `refreshedPath` merges the
 user and machine PATH from the registry into the orchestrator's environment.

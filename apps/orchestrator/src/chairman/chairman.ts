@@ -236,7 +236,9 @@ export class Chairman implements SupervisorHooks {
     const source: FailureSource | null = def.kind === 'tests' ? 'tests' : verdict === 'PASS' ? (def.role === 'verifier' ? 'verify' : 'review') : null;
     if (!source) return;
     const task = this.task(taskId);
-    const failures = this.store.listFailures(taskId, { recoveryCycle: task.recoveryCycle }).filter((f) => f.source === source);
+    // A judge's PASS speaks for failures of the same judge role only (a critique passing is not the code review passing).
+    const roleOf = (key: string) => task.workflow.stages.find((s) => s.key === key)?.role;
+    const failures = this.store.listFailures(taskId, { recoveryCycle: task.recoveryCycle }).filter((f) => f.source === source && (source === 'tests' || roleOf(f.stageKey) === def.role));
     if (!failures.length) return;
     this.store.updateSession(taskId, { health: classifyProgress(failures, true) });
     this.publishState(taskId);

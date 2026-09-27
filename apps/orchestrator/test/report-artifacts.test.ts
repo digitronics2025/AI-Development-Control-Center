@@ -149,6 +149,19 @@ describe('final report Changed section', () => {
     const md = buildFinalReport({ task, repo: { name: 'r', path: '/r' } as never, stages, testRuns: [], files: [], testsSkipped: false, deployed: 'none' }).markdown;
     expect(md.slice(md.indexOf('## Changed'), md.indexOf('## Files changed'))).toContain('- Build: New hero, tokens and both themes');
   });
+
+  it('counts a design workflow\'s rebuilds in a fix cycle as fix attempts under the Chairman', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 8, 27, 12, m)).toISOString();
+    const task = {
+      id: 'TASK-0101', title: 'x', description: 'Restyle the landing page', mode: 'autopilot', supervised: true, fixCycles: 2, maxFixCycles: 3, recoveryCycle: 0,
+      git: { baselineBranch: 'main', baselineCommit: null, taskBranch: null, isolated: false, commits: [] }, workflow: { name: 'Frontend Design', stages: [{ key: 'build', kind: 'agent' }] },
+    } as never;
+    const build = (id: string, cycle: number, m: number) => ({ id, role: 'designer', kind: 'agent', status: 'SUCCESS', cycle, createdAt: at(m), name: 'Build', summary: null, verdict: null, errorMessage: null });
+    const critique = (id: string, verdict: string, m: number) => ({ id, role: 'visual-critic', kind: 'agent', status: 'SUCCESS', cycle: 0, createdAt: at(m), name: 'Visual critique', summary: null, verdict, errorMessage: null });
+    const stages = [build('b1', 0, 1), critique('c1', 'FAIL', 2), build('b2', 1, 3), critique('c2', 'FAIL', 4), build('b3', 2, 5), critique('c3', 'PASS', 6)] as never[];
+    const md = buildFinalReport({ task, repo: { name: 'r', path: '/r' } as never, stages, testRuns: [], files: [], testsSkipped: false, deployed: 'none' }).markdown;
+    expect(md).toContain('- Fix attempts: 2 across 1 strategy');
+  });
 });
 
 describe('media artifacts', () => {

@@ -12,6 +12,7 @@ import { completionGate } from '../src/chairman/gate.js';
 import { classifyMessage, type IntentContext } from '../src/chairman/intent.js';
 import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, repairStage, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
 import { classifyProgress } from '../src/chairman/progress.js';
+import { SnapshotService } from '../src/chairman/snapshot.js';
 import { chatPrompt, extractJson, fenceEvidence, parseRecoveryChoice, recoveryPrompt } from '../src/chairman/reasoner.js';
 import { deriveRule, globToRegExp, matchesAny } from '../src/chairman/rules.js';
 import { causeMarker, failingTestIds, normalizeMessage, pointsAtPlan, signatureOf, testFailureCount } from '../src/chairman/signatures.js';
@@ -795,6 +796,13 @@ describe('strategy outcomes', () => {
     expect(evaluateStrategy(worker, [{ kind: 'passed', source: 'worker', stageKey: 'plan' }])).toBeNull();
     expect(evaluateStrategy(worker, [{ kind: 'passed', source: 'worker', stageKey: 'implement' }])).toMatchObject({ status: 'SUCCEEDED' });
     expect(evaluateStrategy(worker, [failed('h1', null, 'worker', 'implement')])).toMatchObject({ status: 'FAILED' });
+    // A verdict is judged by the same judge role: a visual critique passing is not the failed code review passing,
+    // while a re-review after a fix speaks for the review before it.
+    const roles: Record<string, string> = { critique: 'visual-critic', review: 'reviewer', rereview: 'reviewer' };
+    const review = { ...run, failureSource: 'review', failureStageKey: 'review', failureCount: null };
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'critique' }], (k) => roles[k])).toBeNull();
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'critique' }, { kind: 'passed', source: 'review', stageKey: 'review' }], (k) => roles[k])).toMatchObject({ status: 'SUCCEEDED' });
+    expect(evaluateStrategy(review, [{ kind: 'passed', source: 'review', stageKey: 'rereview' }], (k) => roles[k])).toMatchObject({ status: 'SUCCEEDED' });
   });
 
   it('reads observations from stage results recorded after the strategy started', () => {
@@ -879,6 +887,12 @@ describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
     { id: 'rca:investigate', kind: 'rca', level: 3, label: 'Root-cause analysis in Investigate', description: 'Stop patching symptoms.', actions: [], fingerprint: 'f1', targetStageKey: 'investigate', targetAgentId: null },
     { id: 'change_agent:fix:codex', kind: 'change_agent', level: 5, label: 'Hand Fix to Codex', description: 'A different agent.', actions: [], fingerprint: 'f2', targetStageKey: 'fix', targetAgentId: 'codex' },
   ];
+
+  it('says which judge gave the latest review verdict (a visual critique is not the code review)', () => {
+    const service = new SnapshotService(null as never, null as never, null as never, { has: () => false } as never);
+    const text = service.describe({ ...snapshot(), latestReview: { verdict: 'PASS', summary: 'Both themes hold', at: 'now', stage: 'Visual critique' } });
+    expect(text).toContain('Last review (Visual critique): passed — Both themes hold.');
+  });
 
   it('tells the recovery model how to read the state, that candidates are ordered, and what each field is for', () => {
     const prompt = recoveryPrompt(snapshot(), 'the same failure keeps repeating', candidates(), fenceEvidence('current failure (OBSERVED)', '2 failed'), { category: 'CODE_OR_TEST', summary: 'Code or test: 2 failed' });

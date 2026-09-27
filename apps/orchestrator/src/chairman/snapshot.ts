@@ -41,8 +41,9 @@ export interface ChairmanTaskSnapshot {
   activeDirectives: Array<{ id: string; text: string; kind: string; scope: string; status: string }>;
   recentEvents: Array<{ type: EventType; message: string; at: string }>;
   unresolvedFailures: Array<{ stageKey: string; source: string; message: string; failureCount: number | null; at: string }>;
-  latestReview: { verdict: string | null; summary: string | null; at: string } | null;
-  latestVerify: { verdict: string | null; summary: string | null; at: string } | null;
+  /** The latest verdict of any review-kind judge (a code review or a visual critique: `stage` names which). */
+  latestReview: { verdict: string | null; summary: string | null; at: string; stage?: string } | null;
+  latestVerify: { verdict: string | null; summary: string | null; at: string; stage?: string } | null;
   latestTests: Array<{ name: string; kind: string; status: string; summary: string | null }>;
   checkpoints: Array<{ id: string; seq: number; label: string; stageKey: string | null; at: string }>;
   usage: { agentRuns: number; workMinutes: number };
@@ -91,7 +92,7 @@ export class SnapshotService {
     const running = this.store.listExecutions(task.id).filter((e) => e.status === 'running' && e.kind === 'agent').at(-1) ?? null;
     const lastVerdict = (kind: 'review' | 'verify') => {
       const s = [...stages].reverse().find((x) => judgeKind(x.role) === kind && x.verdict !== null);
-      return s ? { verdict: s.verdict, summary: s.summary, at: s.finishedAt ?? s.createdAt } : null;
+      return s ? { verdict: s.verdict, summary: s.summary, at: s.finishedAt ?? s.createdAt, stage: s.name } : null;
     };
     const lastTests = [...stages].reverse().find((s) => s.kind === 'tests' && ['SUCCESS', 'FAILED'].includes(s.status));
     const usage = this.chairman.usage(task.id);
@@ -182,7 +183,7 @@ export class SnapshotService {
     const f = s.unresolvedFailures.at(-1);
     if (f && !finished) lines.push(`Latest failure (${f.stageKey}): ${f.message}`);
     if (s.latestVerify) lines.push(`Last verification: ${s.latestVerify.verdict === 'PASS' ? 'passed' : 'rejected'}${s.latestVerify.summary ? ` — ${sentence(s.latestVerify.summary)}` : ''}.`);
-    else if (s.latestReview) lines.push(`Last review: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
+    else if (s.latestReview) lines.push(`Last review${s.latestReview.stage ? ` (${s.latestReview.stage})` : ''}: ${s.latestReview.verdict === 'PASS' ? 'passed' : 'changes requested'}${s.latestReview.summary ? ` — ${sentence(s.latestReview.summary)}` : ''}.`);
     if (s.strategySummary && !finished) lines.push(`Current strategy: ${s.strategySummary}`);
     if (s.lastStrategy) {
       const l = s.lastStrategy;

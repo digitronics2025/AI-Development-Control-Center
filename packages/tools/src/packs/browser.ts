@@ -632,8 +632,9 @@ export async function auditPage(ctx: OperationContext, input: { url: string; vie
       const findings: AuditFinding[] = [];
       const kb = (n: number) => `${Math.round(n / 1024)} KB`;
       if (measured.lcp !== null && measured.lcp > 2500) findings.push({ kind: 'lcp-slow', detail: `Largest contentful paint at ${measured.lcp} ms (good is 2500 ms or less)` });
-      const cls = Math.round(measured.cls * 1000) / 1000;
-      if (cls > 0.1) findings.push({ kind: 'cls-high', detail: `Cumulative layout shift ${cls} (good is 0.1 or less): give images and embeds their size, reserve space for late content` });
+      // Decided on the measured value; shown to four decimals so a flagged 0.1004 never reads as 0.1.
+      const cls = Math.round(measured.cls * 10_000) / 10_000;
+      if (measured.cls > 0.1) findings.push({ kind: 'cls-high', detail: `Cumulative layout shift ${cls} (good is 0.1 or less): give images and embeds their size, reserve space for late content` });
       if (total > 2 * 1024 * 1024) findings.push({ kind: 'heavy-page', detail: `The page transferred ${kb(total)} (aim for under 2 MB)` });
       for (const r of resources) if (r.type === 'image' && r.bytes > 200 * 1024) findings.push({ kind: 'heavy-image', detail: `${r.url}: ${kb(r.bytes)} (aim for about 200 KB; AVIF/WebP at the displayed size)` });
       for (const img of measured.images) {

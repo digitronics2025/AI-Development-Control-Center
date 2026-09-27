@@ -213,7 +213,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     ...(lastVerify ? [`- Verification: ${lastVerify.verdict === 'PASS' ? 'passed' : 'failed'}`] : []),
     ...(task.supervised
       ? [
-          `- Fix attempts: ${stages.filter((s) => s.role === 'fixer').length} across ${task.recoveryCycle + 1} strateg${task.recoveryCycle ? 'ies' : 'y'}`,
+          `- Fix attempts: ${stages.filter((s) => s.role === 'fixer' || (s.role === 'designer' && s.cycle > 0)).length} across ${task.recoveryCycle + 1} strateg${task.recoveryCycle ? 'ies' : 'y'}`,
           `- Chairman recovery cycles: ${task.recoveryCycle}`,
         ]
       : [`- Fix cycles used: ${task.fixCycles} of ${task.maxFixCycles}`]),

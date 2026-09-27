@@ -88,7 +88,8 @@ release lives in `tasks.git`, [release.md](release.md)), and
 [usage.md](usage.md), [design-agent.md](design-agent.md)), and
 `mcp_servers.auth`, `mcp_servers.oauth_scope` and `mcp_oauth` (migration 21,
 the sign-in sealed with the broker's key beside plain sign-in and expiry times;
-[mcp.md](mcp.md)). Access goes through
+[mcp.md](mcp.md)), and `task_stages.condition_digest` (migration 22, the UI
+files a conditional stage saw; [workflow-engine.md](workflow-engine.md#profiles)). Access goes through
 [store.ts](../../apps/orchestrator/src/store/store.ts). Secrets are redacted
 before any row is written.
 

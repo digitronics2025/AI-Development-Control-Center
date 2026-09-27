@@ -179,6 +179,8 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:source-only]` (implementer and fixer change `sim-output.ts` instead of `sim-output.md`),
 `[sim:review-miss-coverage]` / `[sim:review-miss-coverage-once]` (reviewer and verifier
 leave out the files the diff did not show; by default they name them under `## Files reviewed`).
+Role `designer` changes files like the implementer (the same markers apply) and
+reports with `## Summary` and `## Design decisions` ([design-agent.md](design-agent.md)).
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 Role `ask` answers "Simulated answer to: <question>" and names the repository
 and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`

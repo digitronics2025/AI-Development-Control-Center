@@ -125,7 +125,13 @@ describe('REST API', () => {
 
   it('lists built-in workflows as read-only and validates custom ones', async () => {
     const list = await t.api('GET', '/api/workflows');
-    expect(list.body.map((w: { id: string }) => w.id).sort()).toEqual(['architecture', 'deep-investigation', 'full-autopilot', 'normal-development', 'quick-change', 'staged-review']);
+    expect(list.body.map((w: { id: string }) => w.id).sort()).toEqual(['architecture', 'deep-investigation', 'frontend-design', 'full-autopilot', 'normal-development', 'quick-change', 'staged-review']);
+    // Frontend Design: one Level 3 agent stage (Assets, approval every attempt); build and every fix loop at Level 2.
+    const design = list.body.find((w: { id: string }) => w.id === 'frontend-design');
+    const agentStages = design.stages.filter((s: { kind: string }) => s.kind === 'agent');
+    expect(agentStages.filter((s: { permissionLevel: number }) => s.permissionLevel >= 3).map((s: { key: string }) => s.key)).toEqual(['assets']);
+    expect(design.stages.find((s: { key: string }) => s.key === 'assets')).toMatchObject({ role: 'designer', requiresApproval: true, retry: { maxAttempts: 1 } });
+    for (const s of design.stages.filter((x: { onFail?: string }) => x.onFail)) expect(s.onFail).toBe('build');
     expect((await t.api('PUT', '/api/workflows/normal-development', list.body[0])).status).toBe(409);
     const copy = await t.api('POST', '/api/workflows/quick-change/duplicate', {});
     expect(copy.status).toBe(201);

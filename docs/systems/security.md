@@ -25,7 +25,9 @@ loses `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
 keys (case-insensitive). In **every** billing mode each child also loses the
 ambient provider credentials an operator keeps in their own environment
 (`AMBIENT_CREDENTIAL_ENV_VARS`: `CLOUDFLARE_API_TOKEN`, `GH_TOKEN`/`GITHUB_TOKEN`,
-`NPM_TOKEN`, `AWS_*` keys, `DATABASE_URL`, deploy-platform tokens …); a tool that
+`NPM_TOKEN`, `AWS_*` keys, `DATABASE_URL`, deploy-platform tokens, and image,
+video and voice generation keys such as `FAL_KEY`, `REPLICATE_API_TOKEN`,
+`RUNWAYML_API_SECRET`, `ELEVENLABS_API_KEY` …); a tool that
 needs one receives it from the credential broker for that call only. Git — and
 therefore every repository hook — and the Playwright browser run with
 `credentialFreeEnv`, which strips all of the above whatever the mode. At start

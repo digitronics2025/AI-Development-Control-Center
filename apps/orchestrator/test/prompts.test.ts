@@ -9,7 +9,7 @@ import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitForStatus, type
 
 const PROMPTS_DIR = path.join(ROOT, 'prompts');
 const templates = Object.fromEntries(readdirSync(PROMPTS_DIR).map((f) => [f.replace(/\.md$/, ''), readFileSync(path.join(PROMPTS_DIR, f), 'utf8')]));
-const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer'];
+const WORK_ROLES = ['investigator', 'planner', 'implementer', 'fixer', 'designer'];
 const JUDGE_ROLES = ['reviewer', 'verifier'];
 
 /**
@@ -17,8 +17,8 @@ const JUDGE_ROLES = ['reviewer', 'verifier'];
  * templates promise the engine, the report and the Chairman can read.
  */
 describe('built-in prompt templates', () => {
-  it('cover the six agent roles and use only placeholders the builder fills', () => {
-    expect(Object.keys(templates).sort()).toEqual(['fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier']);
+  it('cover the seven agent roles and use only placeholders the builder fills', () => {
+    expect(Object.keys(templates).sort()).toEqual(['designer', 'fixer', 'implementer', 'investigator', 'planner', 'reviewer', 'verifier']);
     for (const [role, body] of Object.entries(templates)) {
       expect(unknownPlaceholders(body), `${role}.md`).toEqual([]);
       expect(placeholdersIn(body).length, `${role}.md uses placeholders`).toBeGreaterThan(5);
@@ -49,15 +49,21 @@ describe('built-in prompt templates', () => {
   });
 
   it('give each role the loop context it lacked', () => {
-    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner']) {
+    for (const role of ['implementer', 'reviewer', 'fixer', 'verifier', 'investigator', 'planner', 'designer']) {
       expect(templates[role], role).toContain('{{diff}}');
       expect(templates[role], role).toContain('{{test_results}}');
       expect(templates[role], role).toContain('{{review}}');
     }
-    for (const role of ['investigator', 'planner', 'implementer']) expect(templates[role], role).toContain('{{attachments}}');
-    for (const role of ['implementer', 'fixer']) expect(templates[role], role).toContain('{{verification_commands}}');
-    for (const role of ['reviewer', 'verifier', 'fixer']) expect(templates[role], role).toContain('{{implementation_report}}');
-    for (const role of ['reviewer', 'verifier', 'fixer']) expect(templates[role], role).toContain('{{verification_report}}');
+    for (const role of ['investigator', 'planner', 'implementer', 'designer']) expect(templates[role], role).toContain('{{attachments}}');
+    for (const role of ['implementer', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_commands}}');
+    for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{implementation_report}}');
+    for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_report}}');
+    // The designer's two modes, and the rules that keep a paid or committing action out of the wrong stage.
+    expect(templates.designer).toContain('**`Stage: assets`**');
+    expect(templates.designer).toContain('You never call a paid generation tool here');
+    expect(templates.designer).toContain('**Never commit, push or deploy**');
+    expect(templates.designer).toContain('- `## Spend`');
+    expect(templates.designer).toContain('- `## Visual verification`');
     expect(templates.investigator).toContain('{{investigation}}');
     expect(templates.verifier).toContain("Repeat the review's `NEEDS OPERATOR:` items");
     expect(templates.planner).toContain('- `## Success Criteria`');

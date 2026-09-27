@@ -15,7 +15,7 @@ verified_at: b9ce60f
 # Role prompts
 
 What each agent stage is told, and what the orchestrator reads back from its
-reply. The six built-in templates live in [prompts/](../../prompts) (plan:
+reply. The seven built-in templates live in [prompts/](../../prompts) (plan:
 [ROLE_PROMPTS_PLAN.md](../plans/ROLE_PROMPTS_PLAN.md)); the contract between
 them and the code is the placeholder catalog and the marker lines below.
 
@@ -35,7 +35,7 @@ assembles, in this order:
 6. The engine's sections ([tooling.ts](../../apps/orchestrator/src/engine/tooling.ts)):
    `## Skills` (how skills and outside tools behave in a run), `## Requested skills`
    when the task or a directive names `/skills`, `## Environment` for the
-   investigator, planner and implementer, and `## Control Center tools` when
+   investigator, planner, implementer and designer, and `## Control Center tools` when
    the MCP bridge is on.
 
 Templates never repeat 4–6; each adds only what the generic text cannot know
@@ -83,9 +83,9 @@ a new built-in version. Roles without a file (deployer, reporter) use
 
 | Line | Read by | Effect |
 |---|---|---|
-| first prose line under `## Summary` (else Goal/Findings, else the first prose line) | `summarize` in [runners.ts](../../apps/orchestrator/src/engine/runners.ts) | the stage line in timelines; implementer and fixer lines fill the report's "Changed" |
+| first prose line under `## Summary` (else Goal/Findings, else the first prose line) | `summarize` in [runners.ts](../../apps/orchestrator/src/engine/runners.ts) | the stage line in timelines; write roles (implementer, fixer, designer: `WRITE_ROLES`) fill the report's "Changed" |
 | `VERDICT: PASS` / `VERDICT: FAIL`, last one wins | `parseVerdict` | routes a `verdict` stage to `next` or `onFail`; missing → the stage fails as `UNKNOWN` |
-| `BLOCKED ON OPERATOR: <decision, options, recommendation>` from a work stage (investigator, planner, implementer, fixer) | `extractOperatorBlockers` in [report.ts](../../apps/orchestrator/src/engine/report.ts) | task `WAITING_FOR_USER`, blocker `decision`; a directive answers and re-runs the stage; cut at 600 characters |
+| `BLOCKED ON OPERATOR: <decision, options, recommendation>` from a work stage (investigator, planner, implementer, fixer, designer) | `extractOperatorBlockers` in [report.ts](../../apps/orchestrator/src/engine/report.ts) | task `WAITING_FOR_USER`, blocker `decision`; a directive answers and re-runs the stage; cut at 600 characters |
 | `NEEDS OPERATOR: <item>` from a reviewer or verifier | `extractOperatorItems` | "Needs your decision" in the completion report and `NEEDS_USER_ACTION`; the verifier's list replaces the review's, so the verifier repeats items still open |
 | `CAUSE: code` / `CAUSE: plan` with a FAIL | `causeMarker` in [signatures.ts](../../apps/orchestrator/src/chairman/signatures.ts) | `plan` classifies the failure `REQUIREMENT_OR_PLAN` (the Chairman re-plans first); `code` keeps it `CODE_OR_TEST` even when the text names "success criteria"; without the line the word list decides |
 
@@ -107,6 +107,7 @@ the headings it lists.
 | Implementer | attachments, plan, investigation, verification commands, and the work so far (diff, test results, review, fix cycles) when a check or review sent the task back | Summary, Changes (with deviations from the plan), Verification performed (each check: ran and passed, failed, or not run), Known limitations, Found for Later, Skills used |
 | Reviewer | reports as claims, the previous review, diff and its coverage, test results, app check | Summary, Previous findings, Issues graded blocking or advisory, Advisory, Files reviewed (each file the diff did not show), Skills used, `NEEDS OPERATOR:` lines, `CAUSE:` with a FAIL, `VERDICT:`. Only blocking issues fail |
 | Fixer | plan, reports, review, failing checks (incl. a rejected commit hook), app check, diff, verification commands, fix cycle N of M | Summary, Root causes, Fixes, Disputed findings, Verification performed, Remaining concerns, Skills used. Never weakens a check to pass it |
+| Designer ([design-agent.md](design-agent.md)) | attachments (reference images: open each), approved art direction, directions explored, reports, verification commands, work so far, app check; mode by the `Stage:` line: `assets` = media only (the one stage allowed to pay for generation), any other key = build | Summary, Design decisions (the standard that binds), Assets, Spend, Changes, Visual verification, Verification performed, Known limitations, Found for Later, Skills used. Its report is saved as `design-report.md` (type `implementation-report`) |
 | Verifier | plan, reports as claims, review, diff and its coverage, test results, app check | Summary, Criteria (met / not met / unverified with named evidence), Review follow-up, Files reviewed, Remaining limitations, Skills used, `NEEDS OPERATOR:` (repeating the review's open ones; one for a central criterion nothing can verify), `CAUSE:`, `VERDICT:` |
 
 Level 1 roles (investigator, planner, reviewer, verifier) are told what they

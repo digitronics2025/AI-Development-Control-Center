@@ -54,8 +54,20 @@ export const ROLES = [
   'verifier',
   'deployer',
   'reporter',
+  'designer',
 ] as const;
 export type Role = (typeof ROLES)[number];
+
+/**
+ * Roles whose agent stage writes code: the READY gate, the report's Changed
+ * section, "undo last change" and the Chairman's remedy target count their
+ * edits. `designer` builds UI and places generated media (docs/plans/frontend-design-agent.md).
+ */
+export const WRITE_ROLES: readonly Role[] = ['implementer', 'fixer', 'designer'];
+
+export function isWriteRole(role: Role | string | null | undefined): boolean {
+  return (WRITE_ROLES as readonly string[]).includes(role ?? '');
+}
 
 /** `release`: send the tested commit live after a typed approval (docs/plans/RELEASE_STAGE_PLAN.md). */
 export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify', 'release'] as const;

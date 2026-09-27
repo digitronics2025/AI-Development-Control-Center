@@ -168,6 +168,8 @@ export const ROLE_ARTIFACT: Partial<Record<Role, { type: ArtifactType; name: str
   planner: { type: 'plan', name: 'plan.md', prompt: 'plan-prompt.md' },
   implementer: { type: 'implementation-report', name: 'implementation-report.md', prompt: 'implementation-prompt.md' },
   fixer: { type: 'fix-report', name: 'fix-report.md', prompt: 'fix-prompt.md' },
+  // A designer builds like an implementer: its report is what reviewers, verifiers and fixers read as {{implementation_report}}.
+  designer: { type: 'implementation-report', name: 'design-report.md', prompt: 'design-prompt.md' },
   reviewer: { type: 'review', name: 'review.md', prompt: 'review-prompt.md' },
   verifier: { type: 'verification', name: 'verification.md', prompt: 'verification-prompt.md' },
 };

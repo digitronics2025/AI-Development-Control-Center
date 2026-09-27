@@ -116,8 +116,10 @@ ambient login. Normal scopes are unaffected.
 
 `analysis` (every Level 1 stage), `general`, `web-development`,
 `cloudflare-worker`, `android-development`, `python`, `operator`. Chosen from
-repository tooling; MCP capabilities are never in a profile except
-`operator`.
+repository tooling. MCP capabilities never match a wildcard entry: only the
+`operator` profile, or an explicit `mcp.<server>.*` pattern in a profile,
+includes them (`profileIncludes`); an agent otherwise reaches one by
+escalation (`acc_call_capability`) within its stage's level.
 
 ## Environment discovery
 

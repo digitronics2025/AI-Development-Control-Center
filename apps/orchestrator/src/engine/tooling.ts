@@ -324,7 +324,7 @@ export class EngineTooling {
     parts.push(SKILLS_PROMPT_SECTION);
     const requested = await this.requestedSkillsSection(task, def, repo);
     if (requested) parts.push(requested);
-    if (['investigator', 'planner', 'implementer'].includes(def.role)) {
+    if (['investigator', 'planner', 'implementer', 'designer'].includes(def.role)) {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);
     }
@@ -360,7 +360,7 @@ export class EngineTooling {
         return `- \`${name}\`${description ? ` — ${description}` : ''}`;
       }),
       '',
-      `You are the ${def.role} in stage "${def.name}". Run a requested skill with your skill mechanism (the Skill tool in Claude Code) in the stage whose job it matches: skills that change code in implementation or fix stages; review, audit and check skills in review or verification stages; investigation and planning skills in those stages. When no stage clearly fits, the implementation stage runs it.`,
+      `You are the ${def.role} in stage "${def.name}". Run a requested skill with your skill mechanism (the Skill tool in Claude Code) in the stage whose job it matches: skills that change code in implementation, design or fix stages; design, UI and media skills in design stages; review, audit and check skills in review or verification stages; investigation and planning skills in those stages. When no stage clearly fits, the implementation (or design build) stage runs it.`,
       "Run each at most once in this stage and name in your report the skills you ran. A skill this stage's limits refuse is an operator decision: report it, do not work around it.",
     ].join('\n');
   }

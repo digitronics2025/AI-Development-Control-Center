@@ -70,3 +70,23 @@ describe('GET /api/skills', () => {
     expect((await t.api('GET', '/api/skills')).status).toBe(400);
   });
 });
+
+describe('designer stage prompt', () => {
+  it('gets the environment report and a routing sentence that names design stages', async () => {
+    t.services.workflows.save('design-skill', {
+      name: 'Design skill',
+      maxFixCycles: 0,
+      stages: [{ key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'complete' }],
+    });
+    const repositoryId = await addRepo(t, await repoWithSkill());
+    const id = await createTask(t, repositoryId, 'Restyle the page and run /file-census.', { workflowId: 'design-skill' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'design-prompt.md'), 'utf8');
+    expect(prompt).toContain('## Requested skills');
+    expect(prompt).toContain('You are the designer in stage "Build"');
+    expect(prompt).toContain('design, UI and media skills in design stages');
+    const env = await t.services.artifacts.latestText(id, 'environment');
+    expect(env).toBeTruthy();
+    expect(prompt).toContain('## Environment (collected by the Control Center)');
+  });
+});

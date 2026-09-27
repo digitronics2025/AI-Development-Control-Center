@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAssignment, validateWorkflow, workflowPath, type StageDefinitionInput } from '../src/index.js';
+import { isWriteRole, resolveAssignment, validateWorkflow, workflowPath, WRITE_ROLES, type StageDefinitionInput } from '../src/index.js';
 
 const stage = (s: Partial<StageDefinitionInput> & { key: string; next: string }): StageDefinitionInput => ({
   name: s.key,
@@ -53,6 +53,22 @@ describe('validateWorkflow', () => {
     const { issues } = validateWorkflow({ id: 'x', name: 'X', stages: [{ key: 'Bad Key', name: 'a', role: 'nope', next: 'complete' }] });
     expect(issues.some((i) => i.stageIndex === 0 && i.field === 'key')).toBe(true);
     expect(issues.some((i) => i.stageIndex === 0 && i.field === 'role')).toBe(true);
+  });
+
+  it('accepts the designer role and counts it as a write role', () => {
+    const design = {
+      id: 'design',
+      name: 'Design',
+      stages: [
+        stage({ key: 'build', role: 'designer', next: 'review', permissionLevel: 2 }),
+        stage({ key: 'review', role: 'reviewer', next: 'complete', verdict: true }),
+      ],
+    };
+    expect(validateWorkflow(design).issues).toEqual([]);
+    expect(WRITE_ROLES).toEqual(['implementer', 'fixer', 'designer']);
+    expect(isWriteRole('designer')).toBe(true);
+    expect(isWriteRole('reviewer')).toBe(false);
+    expect(isWriteRole(undefined)).toBe(false);
   });
 
   it('rejects onFail on a stage without a verdict', () => {

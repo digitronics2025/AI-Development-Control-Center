@@ -104,6 +104,29 @@ describe('normal development workflow', () => {
   });
 });
 
+describe('designer stage', () => {
+  it('writes files like an implementer and reports with a Summary the timeline reads', async () => {
+    t.services.workflows.save('design-sim', {
+      name: 'Design sim',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'test' },
+        { key: 'test', name: 'Test', role: 'tester', kind: 'tests', permissionLevel: 2, next: 'complete' },
+      ],
+    });
+    const repoPath = await makeRepo({ scripts: { test: 'node -e "console.log(\'1 passed\')"' } });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the output file', { workflowId: 'design-sim' });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('COMPLETED');
+    const build = t.services.store.latestStage(id, 'build');
+    expect(build?.status).toBe('SUCCESS');
+    expect(build?.summary).toContain('Simulated designer run');
+    expect(readFileSync(path.join(repoPath, 'sim-output.md'), 'utf8')).toContain('designer change at');
+    const report = await t.services.artifacts.latestText(id, 'implementation-report');
+    expect(report).toMatch(/^## Summary/m);
+  });
+});
+
 describe('discuss first', () => {
   it('stops after planning for plan review, then continues on approval', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Refactor the thing', { mode: 'discuss' });

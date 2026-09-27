@@ -49,6 +49,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   verifier: 'Verifier',
   deployer: 'Deployer',
   reporter: 'Reporter',
+  designer: 'Designer',
 };
 
 /** Present-participle form for "Codex Investigating" style status text. */
@@ -62,6 +63,7 @@ export const ROLE_ACTIVITY: Record<Role, string> = {
   verifier: 'Verifying',
   deployer: 'Deploying',
   reporter: 'Reporting',
+  designer: 'Designing',
 };
 
 export const MODE_LABEL: Record<TaskMode, string> = {

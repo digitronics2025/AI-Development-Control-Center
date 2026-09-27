@@ -1,5 +1,5 @@
 import { taskIdFromBranch } from '@acc/git';
-import { nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
+import { isWriteRole, nonBlockingFailure, supersededRun, type ChangedFile, type FinalStatus, type StageInstance, type TaskRelease, type TestRun } from '@acc/shared';
 import type { RepositoryRecord, TaskRecord } from '../store/store.js';
 
 export interface ReportInput {
@@ -117,7 +117,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   // The test run that counts is the last one that finished — a cancelled or interrupted
   // instance proves nothing — and it must come after the last change (audit F-06, as gate.ts).
   const lastTestStage = [...stages].reverse().find((s) => s.kind === 'tests' && (s.status === 'SUCCESS' || s.status === 'FAILED' || s.status === 'SKIPPED'));
-  const lastWrite = [...stages].reverse().find((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
+  const lastWrite = [...stages].reverse().find((s) => isWriteRole(s.role) && s.status === 'SUCCESS');
   // A run of affected tests replaced by the whole suite in the same stage is neither a pass nor a failure (AFFECTED_TESTS_PLAN §3.4).
   const latestRuns = lastTestStage ? testRuns.filter((r) => r.stageId === lastTestStage.id && !supersededRun(r)) : [];
   const passed = latestRuns.filter((r) => r.status === 'passed').length;
@@ -181,7 +181,7 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '## Changed',
     '',
     ...(stages
-      .filter((s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS' && s.summary)
+      .filter((s) => isWriteRole(s.role) && s.status === 'SUCCESS' && s.summary)
       .map((s) => `- ${s.name}: ${s.summary}`) as string[]),
     '',
     '## Files changed',

@@ -32,8 +32,13 @@ resolvable transitions and `requires` keys, every stage reachable, reaches `comp
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
 `maxFixCycles`. Each task stores a snapshot of its profile.
 
+Frontend Design ([design-agent.md](design-agent.md)) runs a designer role
+twice: Assets at Level 3 with approval on every attempt (the only stage a
+Level 3 generation server can run in) and Build at Level 2, which every
+`onFail` returns to, so a fix loop never pays for media.
+
 A `tests` stage runs the repository's enabled commands of its `commandKinds`,
-by default `lint, typecheck, test, build`. Full Autopilot adds `e2e`, so an
+by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design add `e2e`, so an
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
 

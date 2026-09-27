@@ -113,6 +113,17 @@ describe('sanitizeEnv', () => {
     expect(detectAmbientCredentials(ambient)).toEqual(['CLOUDFLARE_API_TOKEN', 'GH_TOKEN', 'DATABASE_URL']);
   });
 
+  it('strips media generation keys in every billing mode: generation is billed per call', () => {
+    const media = { PATH: '/bin', FAL_KEY: fake('fal-', ALNUM), replicate_api_token: fake('r8_', ALNUM), RUNWAYML_API_SECRET: fake('key_', ALNUM), ELEVENLABS_API_KEY: fake('el', ALNUM), HIGGSFIELD_API_KEY: fake('hf', ALNUM) };
+    for (const mode of ['subscription', 'api'] as const) {
+      const { env, removed } = sanitizeEnv(media, mode);
+      expect(Object.keys(env)).toEqual(['PATH']);
+      expect(removed).toEqual(expect.arrayContaining(['FAL_KEY', 'REPLICATE_API_TOKEN', 'RUNWAYML_API_SECRET', 'ELEVENLABS_API_KEY', 'HIGGSFIELD_API_KEY']));
+    }
+    expect(credentialFreeEnv(media)).toEqual({ PATH: '/bin' });
+    expect(detectAmbientCredentials(media)).toEqual(expect.arrayContaining(['FAL_KEY', 'REPLICATE_API_TOKEN']));
+  });
+
   it('reports present API credentials by name only', () => {
     expect(detectApiCredentials(source)).toEqual(expect.arrayContaining(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY']));
     expect(detectApiCredentials({ PATH: '/bin' })).toEqual([]);

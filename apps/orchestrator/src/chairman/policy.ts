@@ -107,11 +107,17 @@ export interface CandidateContext {
 
 const byRole = (wf: WorkflowProfile, role: StageDefinition['role']) => wf.stages.find((s) => s.role === role && s.kind === 'agent') ?? null;
 
-/** Where repairs happen: the failing stage's onFail target, else the workflow's fixer, else its implementer. */
+/** A designer stage that can only edit (≤ Level 2), so a repair never re-runs a stage allowed to spend (paid media). */
+function editingDesigner(wf: WorkflowProfile): StageDefinition | null {
+  const designers = wf.stages.filter((s) => s.role === 'designer' && s.kind === 'agent');
+  return designers.find((s) => s.permissionLevel <= 2) ?? designers[0] ?? null;
+}
+
+/** Where repairs happen: the failing stage's onFail target, else the workflow's fixer, else its implementer, else its editing designer. */
 export function repairStage(wf: WorkflowProfile, failingStageKey: string): StageDefinition | null {
   const failing = wf.stages.find((s) => s.key === failingStageKey);
   const target = failing?.onFail ? wf.stages.find((s) => s.key === failing.onFail) : null;
-  return target ?? byRole(wf, 'fixer') ?? byRole(wf, 'implementer');
+  return target ?? byRole(wf, 'fixer') ?? byRole(wf, 'implementer') ?? editingDesigner(wf);
 }
 
 const ORDER: Record<RecoveryTrigger, StrategyKind[]> = {

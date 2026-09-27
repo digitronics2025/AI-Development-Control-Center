@@ -13,6 +13,7 @@ export const DEFAULT_ROLE_DEFAULTS: RoleAssignments = {
   verifier: { agentId: 'codex', model: 'default', effort: 'medium' },
   deployer: { agentId: 'claude', model: 'default', effort: 'medium' },
   reporter: { agentId: 'claude', model: 'default', effort: 'low' },
+  designer: { agentId: 'claude', model: 'default', effort: 'high' },
 };
 
 const KEY = 'settings';

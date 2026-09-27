@@ -363,6 +363,23 @@ describe('MCP servers', () => {
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
     expect((await t.api('GET', '/api/tools/capabilities')).body.map((c: { id: string }) => c.id)).not.toContain('mcp.echo_fixture.echo');
   }, 60_000);
+
+  it('keeps a Level 3 generation server out of a Level 2 stage: in Frontend Design only Assets can spend', async () => {
+    // Registered as the design runbook registers fal: paid tools at Level 3 (docs/systems/design-agent.md).
+    const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const created = await t.api('POST', '/api/mcp', { name: 'fal', transport: 'stdio', command: process.execPath, args: [fixture], permissionLevel: 3 });
+    expect(created.status).toBe(201);
+    const session = (stageLevel: 2 | 3) =>
+      t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel, autoApproveUpToLevel: 3, mode: 'autopilot', profile: 'web-development', protectedPaths: [] }, 'agent');
+    const call = (token: string) => t.api('POST', '/api/tool-session/call', { capability: 'mcp.fal.echo', input: { text: 'hero image' } }, sessionHeaders(token));
+    const build = await call(session(2).token);
+    expect(build.body).toMatchObject({ ok: false, decision: 'deny' });
+    expect(build.body.summary).toMatch(/needs Level 3, and this stage is Level 2/);
+    // The Assets stage (Level 3, auto-approve 3) reaches it by escalation, outside the stage's profile.
+    const assets = await call(session(3).token);
+    expect(assets.body.ok).toBe(true);
+    expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
 });
 
 describe.skipIf(process.platform !== 'win32')('privileged helper validation (real PowerShell, never elevated here)', () => {

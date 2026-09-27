@@ -10,7 +10,7 @@ import type { Store, TaskRecord } from '../src/store/store.js';
 import { migrate, openDatabase } from '../src/db/database.js';
 import { completionGate } from '../src/chairman/gate.js';
 import { classifyMessage, type IntentContext } from '../src/chairman/intent.js';
-import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
+import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, repairStage, type CandidateContext, type RankingFacts } from '../src/chairman/policy.js';
 import { classifyProgress } from '../src/chairman/progress.js';
 import { chatPrompt, extractJson, fenceEvidence, parseRecoveryChoice, recoveryPrompt } from '../src/chairman/reasoner.js';
 import { deriveRule, globToRegExp, matchesAny } from '../src/chairman/rules.js';
@@ -233,6 +233,17 @@ describe('ask vs act', () => {
     expect(c('Use Claude for review').actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'review', agentId: 'claude' } });
   });
 
+  it('routes design words to the designer stage', () => {
+    const design: IntentContext = {
+      ...ctx,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', kind: 'agent' },
+        { key: 'review', name: 'Design review', role: 'reviewer', kind: 'agent' },
+      ],
+    };
+    expect(classifyMessage('Use Claude for the designer, with max effort.', design).actions[0]).toEqual({ type: 'CHANGE_AGENT', params: { stageKey: 'build', agentId: 'claude', effort: 'max' } });
+  });
+
   it('maps clear commands to typed actions', () => {
     expect(c('Rollback the last bad change.').actions).toEqual([{ type: 'ROLLBACK_CHECKPOINT', params: {} }]);
     expect(c('Pause after this stage.').actions).toEqual([{ type: 'PAUSE_TASK', params: { when: 'after_stage' } }]);
@@ -362,6 +373,35 @@ describe('completion gate', () => {
     const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
     const violated = completionGate({ ...base, stages: [impl, tests, review, verify], activeDirectives: [protect] });
     expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'fix' } }] });
+  });
+
+  it('counts designer edits as changes and never sends a remedy to the paid assets stage', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'frontend-design',
+      stages: [
+        def('assets', 'designer', 3, { next: 'build', requiresApproval: true }),
+        def('build', 'designer', 2, { next: 'checks' }),
+        def('checks', 'tester', 2, { kind: 'tests', next: 'review', onFail: 'build' }),
+        def('review', 'reviewer', 1, { verdict: true, onFail: 'build' }),
+      ],
+    };
+    const assets = stage({ stageKey: 'assets', role: 'designer', permissionLevel: 3 });
+    const tests = stage({ stageKey: 'checks', role: 'tester', kind: 'tests' });
+    const review = stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' });
+    const runs: TestRun[] = [{ id: 'r', taskId: 'T', stageId: tests.id, executionId: null, name: 'unit', kind: 'test', command: 'x', status: 'passed', exitCode: 0, durationMs: 1, summary: null, startedAt: null, finishedAt: null }];
+    const base = { workflow: design, testRuns: runs, activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set(['test' as const]) };
+    expect(completionGate({ ...base, stages: [assets, tests, review] }).pass).toBe(true);
+    // A designer build after the tests and review is a change they have not seen: not READY.
+    const lateBuild = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    expect(completionGate({ ...base, stages: [assets, tests, review, lateBuild] }).failures.map((f) => f.code)).toEqual(['tests', 'review']);
+    // With no fixer, the remedy goes to the Level 2 build stage, never the Level 3 assets stage that can spend.
+    const protect = directive({ text: 'Do not modify a.ts', rule: { type: 'protect_paths', patterns: ['**/a.ts'] } });
+    const violated = completionGate({ ...base, stages: [assets, tests, review], activeDirectives: [protect] });
+    expect(violated.failures[0]).toMatchObject({ code: 'protected_paths', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'build' } }] });
   });
 });
 
@@ -779,5 +819,20 @@ describe('Chairman prompts (docs/plans/CHAIRMAN_PROMPTS_PLAN.md)', () => {
     expect(instruction).not.toContain('- REPLAN:');
     expect(instruction).toContain('AGENTS: codex (Codex)');
     expect(instruction).toContain('return the one or two actions that carry it out');
+  });
+});
+
+describe('repair stage', () => {
+  it('falls back to a designer stage that can only edit, never the paid assets stage', () => {
+    const def = (key: string, role: WorkflowProfile['stages'][number]['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'frontend-design',
+      stages: [def('assets', 'designer', 3, { next: 'build' }), def('build', 'designer', 2, { next: 'check' }), def('check', 'tester', 2, { kind: 'verify', next: 'complete' })],
+    };
+    expect(repairStage(design, 'check')?.key).toBe('build');
+    // Existing workflows are unchanged: the fixer first.
+    expect(repairStage(WORKFLOW, 'verify')?.key).toBe('fix');
   });
 });

@@ -69,3 +69,51 @@ describe('final report Tests section', () => {
     expect(text).toContain('- ✕ build (2.0s) — error TS2322');
   });
 });
+
+describe('designer report', () => {
+  let t: TestApp;
+  beforeEach(async () => {
+    SimulatedAgentAdapter.reset();
+    t = await createTestApp();
+  });
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it('is saved as an implementation report and reaches the reviewer as {{implementation_report}}', async () => {
+    t.services.workflows.save('design-flow', {
+      name: 'Design flow',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Design review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo(), IN_PLACE), 'Restyle the landing page', { workflowId: 'design-flow' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const artifacts = t.services.store.listArtifacts(id);
+    const report = artifacts.find((a) => a.name === 'design-report.md');
+    expect(report?.type).toBe('implementation-report');
+    expect(artifacts.some((a) => a.name === 'design-prompt.md')).toBe(true);
+    const designOutput = await t.services.artifacts.latestText(id, 'implementation-report');
+    expect(designOutput).toBeTruthy();
+    const reviewPrompt = artifacts.find((a) => a.name === 'review-prompt.md');
+    const { content } = await t.services.artifacts.read(reviewPrompt!, 200_000);
+    expect(content).toContain(designOutput!.trim().split('\n')[0]!);
+  });
+});
+
+describe('final report Changed section', () => {
+  it('lists what a designer stage changed, like an implementer', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 8, 27, 12, m)).toISOString();
+    const task = {
+      id: 'TASK-0100', title: 'x', description: 'Restyle the landing page', mode: 'autopilot', supervised: false, fixCycles: 0, maxFixCycles: 3, recoveryCycle: 0,
+      git: { baselineBranch: 'main', baselineCommit: null, taskBranch: null, isolated: false, commits: [] }, workflow: { name: 'Frontend Design', stages: [{ key: 'build', kind: 'agent' }] },
+    } as never;
+    const stages = [
+      { id: 'b', role: 'designer', kind: 'agent', status: 'SUCCESS', createdAt: at(1), name: 'Build', summary: 'New hero, tokens and both themes', verdict: null, errorMessage: null },
+    ] as never[];
+    const md = buildFinalReport({ task, repo: { name: 'r', path: '/r' } as never, stages, testRuns: [], files: [], testsSkipped: false, deployed: 'none' }).markdown;
+    expect(md.slice(md.indexOf('## Changed'), md.indexOf('## Files changed'))).toContain('- Build: New hero, tokens and both themes');
+  });
+});

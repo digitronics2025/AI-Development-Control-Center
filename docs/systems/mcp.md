@@ -60,6 +60,11 @@ permission level (tools the server marks destructive need at least Level 3).
 Environment variables (stdio) or headers (HTTP) are filled from named
 credentials by the broker; `allowedTools` narrows what is exposed.
 
+A server whose calls are billed (image or video generation) is registered at
+Level 3 so it runs only in a Level 3 agent stage, such as Frontend Design's
+Assets stage; its free tools (search, pricing, job status) can be a second
+registration at Level 2 ([design-agent.md](design-agent.md#operator-setup)).
+
 API: `GET/POST /api/mcp`, `PATCH/DELETE /api/mcp/:id`, `POST /api/mcp/:id/check`.
 Realtime: `mcpServer`, `mcpServer.deleted`.
 

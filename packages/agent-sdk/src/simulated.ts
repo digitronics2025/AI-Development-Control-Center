@@ -289,7 +289,8 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           break;
         }
         case 'implementer':
-        case 'fixer': {
+        case 'fixer':
+        case 'designer': {
           if (has('needs-decision') && !/ANSWER:/.test(input.prompt)) {
             output =
               '## Summary\n\nBlocked. No code was changed: the two tests expect opposite results for the same input.\n\n' +
@@ -319,7 +320,10 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             }
           }
           base.filesChanged = files;
-          output = `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          output =
+            role === 'designer'
+              ? `## Summary\n\nSimulated designer run: restyled sim-output.md.\n\n## Design decisions\n\n- Kept the existing tokens.\n\n## Changes\n\n- Updated sim-output.md\n\n## Visual verification\n\nNot run (simulated).`
+              : `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
           break;
         }
         case 'reviewer': {

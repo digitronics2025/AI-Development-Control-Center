@@ -1,4 +1,4 @@
-import type { ChairmanActionInput, CommandKind, Directive, StageInstance, TestRun, WorkflowProfile } from '@acc/shared';
+import { isWriteRole, type ChairmanActionInput, type CommandKind, type Directive, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
 import { matchesAny } from './rules.js';
 
 /**
@@ -39,9 +39,12 @@ export function completionGate(input: GateInput): GateResult {
   const failures: GateFailure[] = [];
   const has = (pred: (s: WorkflowProfile['stages'][number]) => boolean) => workflow.stages.find(pred) ?? null;
   const testsDef = has((s) => s.kind === 'tests');
-  const fixDef = has((s) => s.role === 'fixer' && s.kind === 'agent') ?? has((s) => s.role === 'implementer' && s.kind === 'agent');
+  // The remedy target edits code: the fixer, else the first write stage that can only edit (≤ Level 2), so a
+  // remedy never re-runs a stage allowed to spend, such as Frontend Design's paid Assets stage.
+  const writeDefs = workflow.stages.filter((s) => isWriteRole(s.role) && s.kind === 'agent');
+  const fixDef = has((s) => s.role === 'fixer' && s.kind === 'agent') ?? writeDefs.find((s) => s.permissionLevel <= 2) ?? writeDefs[0] ?? null;
 
-  const lastWrite = lastOf(stages, (s) => (s.role === 'implementer' || s.role === 'fixer') && s.status === 'SUCCESS');
+  const lastWrite = lastOf(stages, (s) => isWriteRole(s.role) && s.status === 'SUCCESS');
   const after = (s: StageInstance | null) => !lastWrite || (s !== null && s.createdAt >= lastWrite.createdAt);
 
   let lastTests: StageInstance | null = null;

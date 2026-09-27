@@ -127,6 +127,36 @@ describe('designer stage', () => {
   });
 });
 
+describe('image attachments', () => {
+  it('go on the command line to an agent that takes pictures, and only to it', async () => {
+    t.services.workflows.save('image-refs', {
+      name: 'Image refs',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', agentId: 'codex', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', agentId: 'claude', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64').toString('base64');
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Match the reference', {
+      workflowId: 'image-refs',
+      attachments: [
+        { name: 'reference.png', contentBase64: png },
+        { name: 'notes.txt', contentBase64: Buffer.from('Use the reference colours').toString('base64') },
+      ],
+    });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    const logsOf = (stageKey: string) => {
+      const stage = t.services.store.latestStage(id, stageKey)!;
+      const exec = t.services.store.listExecutions(id).filter((e) => e.stageId === stage.id).at(-1)!;
+      return t.services.store.tailLogLines(exec.id, 200).map((l) => l.text).join('\n');
+    };
+    // Codex (-i) receives the picture, never the text file; Claude Code reads attachments by path instead.
+    expect(logsOf('build')).toContain('[designer] images: reference.png');
+    expect(logsOf('review')).not.toContain('images:');
+  });
+});
+
 describe('discuss first', () => {
   it('stops after planning for plan review, then continues on approval', async () => {
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Refactor the thing', { mode: 'discuss' });

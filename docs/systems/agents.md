@@ -39,6 +39,12 @@ removed when the run ends.
 
 - Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
+- Images: `launchAgent` passes the task's image attachments (PNG, JPEG, WebP,
+  GIF; five at most, 10 MB each) as `images` to any adapter whose
+  capabilities say `images: true` — Codex, as `-i <path>` — so reference
+  pictures reach the model without the agent copying anything out of the data
+  folder. Claude Code (`images: false`) reads them by path from
+  `{{attachments}}` ([design-agent.md](design-agent.md)).
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).
 - Output: JSONL events (`agent_message`, `command_execution`, `file_change`, `turn.failed`).

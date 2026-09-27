@@ -156,7 +156,8 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       repositoryRead: true,
       repositoryWrite: true,
       commandExecution: false,
-      images: false,
+      // Like the real CLIs: Codex takes pictures on its command line (`-i`), Claude Code does not.
+      images: this.id === 'codex',
       interactive: false,
       nonInteractive: true,
       modelSelection: true,
@@ -269,6 +270,7 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         };
       }
 
+      if (input.images?.length) emit(`[${role}] images: ${input.images.map((i) => path.basename(i)).join(', ')}`);
       let output: string;
       switch (role) {
         case 'investigator':

@@ -523,6 +523,18 @@ export class StageRunners {
    * the usage ledger see it), as its own execution with its own log and tool
    * session. Never changes the stage row: the caller decides what the result means.
    */
+  /**
+   * Reference images the operator attached, handed to an agent that takes pictures on its command line
+   * (Codex `-i`) as well as being listed by path in {{attachments}}. The orchestrator passes them, so the
+   * agent never has to copy anything out of the data folder (docs/systems/design-agent.md).
+   */
+  private async imageAttachments(task: TaskRecord, adapter: { getCapabilities(): Promise<{ images: boolean }> }): Promise<{ images?: string[] }> {
+    const pictures = task.attachments.filter((a) => /\.(png|jpe?g|webp|gif)$/i.test(a.name) && a.size <= 10 * 1024 * 1024).slice(0, 5);
+    if (!pictures.length) return {};
+    const capable = await adapter.getCapabilities().then((c) => c.images).catch(() => false);
+    return capable ? { images: pictures.map((a) => a.path) } : {};
+  }
+
   async launchAgent(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, opts: AgentLaunch): Promise<AgentRun> {
     const { store, publisher, agents } = this.d;
     const { agentId } = opts;
@@ -575,6 +587,7 @@ export class StageRunners {
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
         pluginDirs: await this.d.context.pluginDirs(task).catch(() => []),
+        ...(await this.imageAttachments(task, adapter)),
       }, {
         origin: 'stage',
         projectId: task.repositoryId,

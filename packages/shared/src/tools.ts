@@ -155,6 +155,12 @@ export interface McpServerView {
   /** When set, only these tools are exposed. */
   allowedTools: string[] | null;
   timeoutMs: number;
+  /** `oauth`: an HTTP server the operator signs in to (docs/systems/mcp.md#oauth); its tokens are sealed and never shown. */
+  auth: 'none' | 'oauth';
+  /** OAuth scopes to ask for, space-separated; null lets the server decide. */
+  oauthScope: string | null;
+  /** Sign-in state of an `oauth` server (never the tokens); null for other servers. */
+  oauth: { signedIn: boolean; signedInAt: string | null; expiresAt: string | null } | null;
   health: { ok: boolean; serverName: string | null; serverVersion: string | null; error: string | null; checkedAt: string; tools: McpToolView[] } | null;
   createdAt: string;
   updatedAt: string;
@@ -372,8 +378,11 @@ export const mcpServerInputSchema = z
     permissionLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]).default(2),
     allowedTools: z.array(z.string().min(1).max(200)).max(500).nullable().default(null),
     timeoutMs: z.number().int().min(1000).max(600_000).default(60_000),
+    auth: z.enum(['none', 'oauth']).default('none'),
+    oauthScope: z.string().trim().max(500).regex(/^[\x21\x23-\x5b\x5d-\x7e ]*$/, 'Scope names separated by spaces').nullable().default(null),
   })
-  .refine((v) => (v.transport === 'stdio' ? Boolean(v.command) : Boolean(v.url)), { message: 'A stdio server needs a command; an HTTP server needs a URL' });
+  .refine((v) => (v.transport === 'stdio' ? Boolean(v.command) : Boolean(v.url)), { message: 'A stdio server needs a command; an HTTP server needs a URL' })
+  .refine((v) => v.auth === 'none' || v.transport === 'http', { message: 'Only an HTTP server signs in with OAuth', path: ['auth'] });
 export type McpServerInput = z.input<typeof mcpServerInputSchema>;
 
 export const credentialInputSchema = z.object({

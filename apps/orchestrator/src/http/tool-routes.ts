@@ -18,6 +18,7 @@ import { redact } from '@acc/security';
 import type { AppServices } from '../app.js';
 import { EngineError } from '../engine/engine.js';
 import { agentWorkdir } from '../engine/task-repositories.js';
+import { MCP_OAUTH_CALLBACK } from '../tools/mcp.js';
 import { ToolService, type ToolScope, type ToolSession } from '../tools/service.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
@@ -195,6 +196,31 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
   });
   app.post('/api/mcp/:id/check', async (request) => s.mcp.check(idParam.parse(request.params).id));
 
+  // OAuth sign-in (docs/systems/mcp.md#oauth): started and ended on this machine only, never relayed from the cloud.
+  const localOnly = (request: FastifyRequest, reply: FastifyReply) =>
+    request.headers['x-acc-remote-request'] ? reply.code(403).send({ error: { code: 'REMOTE_FORBIDDEN', message: 'Signing in to an MCP server happens on this machine only.' } }) : null;
+  app.post('/api/mcp/:id/oauth/start', async (request, reply) => localOnly(request, reply) ?? s.mcp.startSignIn(idParam.parse(request.params).id, requestPort(request)));
+  app.post('/api/mcp/:id/oauth/sign-out', async (request, reply) => localOnly(request, reply) ?? s.mcp.signOut(idParam.parse(request.params).id));
+  // The authorization server sends the browser here, without the API token: the single-use state it carries is the proof.
+  app.get(MCP_OAUTH_CALLBACK, async (request, reply) => {
+    const q = z.object({ state: z.string().max(200).optional(), code: z.string().max(4096).optional(), error: z.string().max(200).optional(), error_description: z.string().max(500).optional() }).parse(request.query ?? {});
+    const page = (status: number, title: string, text: string) =>
+      reply
+        .code(status)
+        .type('text/html; charset=utf-8')
+        .send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><body style="font:16px system-ui,sans-serif;margin:2rem;max-width:40rem"><h1 style="font-size:1.25rem">${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p><p><a href="/tools/mcp">Back to MCP servers</a></p></body></html>`);
+    if (q.error || !q.code || !q.state) {
+      if (q.state) s.mcp.cancelSignIn(q.state);
+      return page(400, 'Sign-in not completed', q.error ? `The authorization server answered: ${redact(`${q.error}${q.error_description ? ` (${q.error_description})` : ''}`)}. Start signing in again from Tools → MCP servers.` : 'The sign-in answer is incomplete. Start signing in again from Tools → MCP servers.');
+    }
+    try {
+      const server = await s.mcp.finishSignIn(q.state, q.code);
+      return page(200, `Signed in to ${server.name}`, server.health?.ok ? 'Its tools are available to the Control Center. You can close this tab.' : `Signed in, but the server check failed: ${server.health?.error ?? 'unknown error'}.`);
+    } catch (error) {
+      return page(400, 'Sign-in not completed', (error as Error).message);
+    }
+  });
+
   // ----- credentials (values are write-only) ----------------------------------------------
 
   app.get('/api/credentials', async () => s.credentials.list());
@@ -257,3 +283,12 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
     return { ok: outcome.result.ok, summary: outcome.result.summary, decision: outcome.decision, executionId: outcome.execution.id, text: redact(ToolService.formatForModel(outcome)), images };
   });
 }
+
+/** The port the operator reached this orchestrator on (the Host header, already proven to be loopback). */
+function requestPort(request: FastifyRequest): number {
+  const host = request.headers.host ?? '';
+  const port = Number(/:(\d{1,5})$/.exec(host)?.[1] ?? 80);
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : 80;
+}
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

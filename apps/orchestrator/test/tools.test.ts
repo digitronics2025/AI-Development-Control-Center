@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { git } from '@acc/git';
 import { redact } from '@acc/security';
+import { startOAuthMcpServer } from '../../../packages/mcp/test/fixtures/oauth-server.js';
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
@@ -494,6 +495,74 @@ describe('MCP servers', () => {
     const assets = await call(session(3).token);
     expect(assets.body.ok).toBe(true);
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
+});
+
+describe('MCP OAuth sign-in (a stand-in authorization server)', () => {
+  it('signs in through the browser, seals the tokens, calls a tool with them, and never shows them', async () => {
+    const remote = await startOAuthMcpServer();
+    const callback = (url: string) => t.app.inject({ method: 'GET', url, headers: { host: '127.0.0.1:4317' } });
+    try {
+      // OAuth is for HTTP servers only.
+      expect((await t.api('POST', '/api/mcp', { name: 'Local oauth', transport: 'stdio', command: process.execPath, auth: 'oauth' })).status).toBe(400);
+      const created = await t.api('POST', '/api/mcp', { name: 'Remote design', transport: 'http', url: remote.url, auth: 'oauth', permissionLevel: 1 });
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({ auth: 'oauth', oauth: { signedIn: false }, health: { ok: false } });
+      expect(created.body.health.error).toMatch(/Not signed in to Remote design/);
+      const id = created.body.id as string;
+
+      // Started on this machine only; the address carries PKCE, the state and our loopback callback.
+      expect((await t.api('POST', `/api/mcp/${id}/oauth/start`, {}, { 'x-acc-remote-request': '1' })).status).toBe(403);
+      const start = await t.api('POST', `/api/mcp/${id}/oauth/start`, {});
+      expect(start.status).toBe(200);
+      expect(start.body.authorized).toBe(false);
+      const auth = new URL(start.body.authorizationUrl);
+      expect(auth.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:4317/oauth/mcp/callback');
+      expect(auth.searchParams.get('code_challenge_method')).toBe('S256');
+
+      // The operator approves; the browser comes back without the API token. A forged state is refused first.
+      const back = new URL(await remote.approve(start.body.authorizationUrl));
+      const forged = await callback(`/oauth/mcp/callback?state=forged&code=${back.searchParams.get('code')}`);
+      expect(forged.statusCode).toBe(400);
+      expect(forged.body).toContain('expired or was already used');
+      // Token-free, but still loopback-only: another Host is refused before the route runs.
+      expect((await t.app.inject({ method: 'GET', url: back.pathname + back.search, headers: { host: 'evil.example' } })).statusCode).toBe(421);
+      const done = await callback(back.pathname + back.search);
+      expect(done.statusCode, done.body).toBe(200);
+      expect(done.body).toContain('Signed in to Remote design');
+      expect(done.body).not.toContain(back.searchParams.get('code')!);
+      // Single use: the same answer again is refused.
+      expect((await callback(back.pathname + back.search)).statusCode).toBe(400);
+      // A refusal at the authorization server is reported, not an error page.
+      expect((await callback('/oauth/mcp/callback?error=access_denied&state=x')).body).toContain('access_denied');
+
+      const listed = await t.api('GET', '/api/mcp');
+      const view = listed.body.find((m: { id: string }) => m.id === id);
+      expect(view).toMatchObject({ oauth: { signedIn: true }, health: { ok: true, serverName: 'oauth-fixture' } });
+      expect(view.oauth.expiresAt).toBeTruthy();
+      const call = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'mcp.remote_design.whoami', input: {} });
+      expect(call.body.result).toMatchObject({ ok: true, stdout: 'signed in as the operator' });
+
+      // The tokens appear nowhere: not in responses, not in plain text in the database.
+      const everything = JSON.stringify([created.body, start.body, done.body, listed.body, call.body]);
+      t.services.db.pragma('wal_checkpoint(FULL)');
+      const db = readFileSync(path.join(t.dataDir, 'acc.db'));
+      expect(remote.issued.length).toBeGreaterThanOrEqual(2);
+      for (const secret of remote.issued) {
+        expect(everything).not.toContain(secret);
+        expect(db.includes(Buffer.from(secret))).toBe(false);
+        expect(redact(`seen ${secret}`)).not.toContain(secret);
+      }
+
+      // Signing out forgets the sign-in; the tools stop until the operator signs in again.
+      const out = await t.api('POST', `/api/mcp/${id}/oauth/sign-out`, {});
+      expect(out.body).toMatchObject({ oauth: { signedIn: false }, health: { ok: false } });
+      expect(t.services.toolStore.mcpOAuth(id)).toBeNull();
+      expect((await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'mcp.remote_design.whoami', input: {} })).body.result?.ok ?? false).toBe(false);
+      expect((await t.api('DELETE', `/api/mcp/${id}`)).status).toBe(200);
+    } finally {
+      await remote.close();
+    }
   }, 60_000);
 });
 

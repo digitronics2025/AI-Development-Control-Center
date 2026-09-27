@@ -1,5 +1,7 @@
-import { McpGateway, type McpServerConfig } from '@acc/mcp';
-import { mcpServerInputSchema, type McpServerInput, type McpServerView, type PermissionLevel } from '@acc/shared';
+import { randomBytes } from 'node:crypto';
+import { finishMcpSignIn, McpGateway, McpOAuthProvider, McpSignInRequired, startMcpSignIn, type McpOAuthState, type McpOAuthStore, type McpServerConfig } from '@acc/mcp';
+import { redact, registerSecretValues } from '@acc/security';
+import { DEFAULT_PORT, mcpServerInputSchema, type McpServerInput, type McpServerView, type PermissionLevel } from '@acc/shared';
 import { failure, missing, type ToolOperation, type ToolProvider } from '@acc/tools';
 import { z } from 'zod';
 import type { Bus } from '../bus.js';
@@ -24,6 +26,11 @@ function keptSchema(schema: Record<string, unknown> | undefined): Record<string,
   return json.length <= 16 * 1024 ? (JSON.parse(json) as Record<string, unknown>) : null;
 }
 
+/** Where an authorization server sends the browser back; loopback only, so it reaches this machine's orchestrator. */
+export const MCP_OAUTH_CALLBACK = '/oauth/mcp/callback';
+const SIGN_IN_TTL_MS = 10 * 60_000;
+const MAX_PENDING_SIGN_INS = 20;
+
 function slug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'server';
 }
@@ -38,22 +45,68 @@ function slug(name: string): string {
  */
 export class McpService {
   readonly gateway = new McpGateway();
+  /** Sign-ins the operator started: single-use state → server, for ten minutes. In memory: a restart asks again. */
+  private readonly pending = new Map<string, { serverId: string; redirectUrl: string; expiresAt: number }>();
 
   constructor(
     private readonly store: ToolStore,
     private readonly bus: Bus,
     private readonly tools: ToolService,
     private readonly credentials: CredentialBroker,
+    /** The port this orchestrator is reached on, for the callback address of background calls. */
+    private port: number = DEFAULT_PORT,
   ) {}
 
+  /** The port the HTTP server actually listens on (known only after listen). */
+  setListenPort(port: number): void {
+    this.port = port;
+  }
+
+  private view(s: McpServerRecord): McpServerView {
+    if (s.auth !== 'oauth') return { ...s, oauth: null };
+    const o = this.store.mcpOAuth(s.id);
+    return { ...s, oauth: { signedIn: Boolean(o?.signedInAt), signedInAt: o?.signedInAt ?? null, expiresAt: o?.expiresAt ?? null } };
+  }
+
   list(): McpServerView[] {
-    return this.store.listMcpServers();
+    return this.store.listMcpServers().map((s) => this.view(s));
   }
 
   get(id: string): McpServerView {
     const s = this.store.mcpServer(id);
     if (!s) throw new McpError('MCP server not found', 'NOT_FOUND');
-    return s;
+    return this.view(s);
+  }
+
+  static redirectUrl(port: number): string {
+    return `http://127.0.0.1:${port}${MCP_OAUTH_CALLBACK}`;
+  }
+
+  /** One server's sign-in, sealed with the broker's key and bound to the server, so it opens as nothing else. */
+  private oauthStore(serverId: string): McpOAuthStore {
+    const binding = `mcp-oauth:${serverId}`;
+    return {
+      load: async () => {
+        const row = this.store.mcpOAuth(serverId);
+        if (!row) return null;
+        const state = JSON.parse(await this.credentials.openValue(row, binding)) as McpOAuthState;
+        if (state.tokens) registerSecretValues([state.tokens.access_token, ...(state.tokens.refresh_token ? [state.tokens.refresh_token] : [])]);
+        return state;
+      },
+      save: async (state: McpOAuthState) => {
+        // Never shown or logged: the redactor masks the tokens wherever they might surface.
+        if (state.tokens) registerSecretValues([state.tokens.access_token, ...(state.tokens.refresh_token ? [state.tokens.refresh_token] : [])]);
+        const sealed = await this.credentials.sealValue(JSON.stringify(state), binding);
+        const savedAt = state.tokens ? (state.savedAt ?? now()) : null;
+        const expiresIn = state.tokens?.expires_in;
+        const expiresAt = savedAt && typeof expiresIn === 'number' && Number.isFinite(expiresIn) ? new Date(Date.parse(savedAt) + expiresIn * 1000).toISOString() : null;
+        this.store.upsertMcpOAuth({ serverId, ...sealed, signedInAt: savedAt, expiresAt, updatedAt: now() });
+      },
+    };
+  }
+
+  private oauthProvider(s: McpServerRecord, options: { interactive: boolean; redirectUrl?: string; state?: string }): McpOAuthProvider {
+    return new McpOAuthProvider(this.oauthStore(s.id), { redirectUrl: options.redirectUrl ?? McpService.redirectUrl(this.port), interactive: options.interactive, state: options.state, scope: s.oauthScope ?? undefined });
   }
 
   private async config(s: McpServerRecord, repositoryId: string | null = null): Promise<McpServerConfig> {
@@ -68,7 +121,65 @@ export class McpService {
       env: s.transport === 'stdio' ? env : undefined,
       headers: s.transport === 'http' ? env : undefined,
       timeoutMs: s.timeoutMs,
+      ...(s.transport === 'http' && s.auth === 'oauth' ? { oauth: this.oauthProvider(s, { interactive: false }) } : {}),
     };
+  }
+
+  /**
+   * Start signing in to an OAuth server: the address the operator opens, or `authorized` when the saved
+   * sign-in still works. `port` is the one the operator reached this orchestrator on.
+   */
+  async startSignIn(id: string, port: number): Promise<{ authorized: true; server: McpServerView } | { authorized: false; authorizationUrl: string }> {
+    const s = this.store.mcpServer(id);
+    if (!s) throw new McpError('MCP server not found', 'NOT_FOUND');
+    if (s.auth !== 'oauth' || s.transport !== 'http' || !s.url) throw new McpError(`${s.name} does not sign in with OAuth`, 'INVALID');
+    const redirectUrl = McpService.redirectUrl(port);
+    const store = this.oauthStore(id);
+    // A client registered for another callback address (another port) is registered again.
+    const saved = await store.load();
+    const registered = saved?.client && 'redirect_uris' in saved.client ? (saved.client.redirect_uris as string[]) : null;
+    if (saved && registered && !registered.includes(redirectUrl)) await store.save({ ...saved, client: undefined });
+    const state = randomBytes(24).toString('base64url');
+    let result;
+    try {
+      result = await startMcpSignIn(s.url, this.oauthProvider(s, { interactive: true, redirectUrl, state }), s.oauthScope ?? undefined);
+    } catch (error) {
+      throw new McpError(`Could not start signing in to ${s.name}: ${redact((error as Error).message).slice(0, 300)}`, 'INVALID');
+    }
+    if (result.authorized) return { authorized: true, server: await this.check(id) };
+    for (const [key, p] of this.pending) if (p.expiresAt < Date.now()) this.pending.delete(key);
+    while (this.pending.size >= MAX_PENDING_SIGN_INS) this.pending.delete(this.pending.keys().next().value!);
+    this.pending.set(state, { serverId: id, redirectUrl, expiresAt: Date.now() + SIGN_IN_TTL_MS });
+    return { authorized: false, authorizationUrl: result.authorizationUrl };
+  }
+
+  /** The callback: the state must be one this orchestrator issued, unused and unexpired; then the code becomes sealed tokens. */
+  async finishSignIn(state: string, code: string): Promise<McpServerView> {
+    const pending = this.pending.get(state);
+    this.pending.delete(state);
+    if (!pending || pending.expiresAt < Date.now()) throw new McpError('This sign-in link has expired or was already used; start signing in again from Tools → MCP servers', 'INVALID');
+    const s = this.store.mcpServer(pending.serverId);
+    if (!s || s.auth !== 'oauth' || !s.url) throw new McpError('That MCP server no longer signs in with OAuth', 'INVALID');
+    try {
+      await finishMcpSignIn(s.url, this.oauthProvider(s, { interactive: true, redirectUrl: pending.redirectUrl }), code, s.oauthScope ?? undefined);
+    } catch (error) {
+      throw new McpError(`Signing in to ${s.name} failed: ${redact((error as Error).message).slice(0, 300)}`, 'INVALID');
+    }
+    await this.gateway.disconnect(s.id);
+    return this.check(s.id);
+  }
+
+  /** A refused or cancelled sign-in at the authorization server: forget the state. */
+  cancelSignIn(state: string): void {
+    this.pending.delete(state);
+  }
+
+  /** Forget the sign-in (tokens and client registration); the server's tools stop until the operator signs in again. */
+  async signOut(id: string): Promise<McpServerView> {
+    this.get(id);
+    this.store.deleteMcpOAuth(id);
+    await this.gateway.disconnect(id);
+    return this.check(id);
   }
 
   private publish(id: string): McpServerView {
@@ -81,17 +192,19 @@ export class McpService {
     const input = mcpServerInputSchema.parse(raw);
     if (this.store.listMcpServers().some((s) => s.name.toLowerCase() === input.name.toLowerCase())) throw new McpError(`An MCP server named "${input.name}" exists`, 'DUPLICATE');
     const ts = now();
-    const rec: McpServerRecord = { id: newId(), name: input.name, transport: input.transport, command: input.command ?? null, args: input.args, url: input.url ?? null, envCredentials: input.envCredentials, enabled: input.enabled, permissionLevel: input.permissionLevel as PermissionLevel, allowedTools: input.allowedTools, timeoutMs: input.timeoutMs, health: null, createdAt: ts, updatedAt: ts };
+    const rec: McpServerRecord = { id: newId(), name: input.name, transport: input.transport, command: input.command ?? null, args: input.args, url: input.url ?? null, envCredentials: input.envCredentials, enabled: input.enabled, permissionLevel: input.permissionLevel as PermissionLevel, allowedTools: input.allowedTools, timeoutMs: input.timeoutMs, auth: input.auth, oauthScope: input.oauthScope || null, health: null, createdAt: ts, updatedAt: ts };
     this.store.upsertMcpServer(rec);
     if (rec.enabled) await this.check(rec.id);
     return this.publish(rec.id);
   }
 
   async update(id: string, raw: Partial<McpServerInput>): Promise<McpServerView> {
-    const current = this.get(id);
+    const { oauth: _status, ...current } = this.get(id);
     const input = mcpServerInputSchema.parse({ ...current, ...raw });
-    const rec: McpServerRecord = { ...current, ...input, command: input.command ?? null, url: input.url ?? null, permissionLevel: input.permissionLevel as PermissionLevel, updatedAt: now() };
+    const rec: McpServerRecord = { ...current, ...input, command: input.command ?? null, url: input.url ?? null, permissionLevel: input.permissionLevel as PermissionLevel, oauthScope: input.oauthScope || null, updatedAt: now() };
     this.store.upsertMcpServer(rec);
+    // A sign-in belongs to one server address: another URL, or no OAuth any more, forgets it.
+    if (current.auth === 'oauth' && (rec.auth !== 'oauth' || rec.url !== current.url)) this.store.deleteMcpOAuth(id);
     await this.gateway.disconnect(id);
     if (rec.enabled) await this.check(id);
     else this.tools.unregisterProvider(`mcp:${id}`);
@@ -106,11 +219,18 @@ export class McpService {
     this.bus.publish({ type: 'mcpServer.deleted', serverId: id });
   }
 
+  /** An OAuth server nobody signed in to: never contacted in the background (no client registration, no discovery). */
+  private notSignedIn(s: McpServerRecord): boolean {
+    return s.auth === 'oauth' && !this.store.mcpOAuth(s.id)?.signedInAt;
+  }
+
   /** Connect, discover tools, store health and (re)register the provider. */
   async check(id: string): Promise<McpServerView> {
     const s = this.store.mcpServer(id);
     if (!s) throw new McpError('MCP server not found', 'NOT_FOUND');
-    const health = await this.gateway.check(await this.config(s));
+    const health = this.notSignedIn(s)
+      ? { ok: false, serverName: null, serverVersion: null, tools: [], error: new McpSignInRequired(s.name).message, checkedAt: now(), durationMs: 0 }
+      : await this.gateway.check(await this.config(s));
     const tools = health.tools.filter((t) => !s.allowedTools || s.allowedTools.includes(t.name));
     this.store.upsertMcpServer({ ...s, health: { ok: health.ok, serverName: health.serverName, serverVersion: health.serverVersion, error: health.error, checkedAt: health.checkedAt, tools: tools.map((t) => ({ name: t.name, description: t.description, readOnlyHint: t.readOnlyHint, destructiveHint: t.destructiveHint, inputSchema: keptSchema(t.inputSchema) })) }, updatedAt: now() });
     if (health.ok && s.enabled) this.tools.registerProvider(this.provider({ ...s, health: this.get(id).health }), 'mcp');
@@ -140,6 +260,7 @@ export class McpService {
         run: async (input, ctx) => {
           const current = this.store.mcpServer(s.id);
           if (!current?.enabled) return failure('UNAVAILABLE', `MCP server ${s.name} is disabled`);
+          if (this.notSignedIn(current)) return failure('AUTH_REQUIRED', `${new McpSignInRequired(s.name).message}. This is an operator decision.`);
           try {
             const r = await this.gateway.callTool(await this.config(current), t.name, input as Record<string, unknown>, ctx.signal);
             // Pictures the server returned are shown to the model and kept with the task.
@@ -154,6 +275,7 @@ export class McpService {
               ...(r.ok ? {} : { error: { code: 'FAILED' as const, message: r.text.slice(0, 500) } }),
             };
           } catch (error) {
+            if (error instanceof McpSignInRequired) return failure('AUTH_REQUIRED', `${error.message}. This is an operator decision.`);
             return failure('FAILED', `${s.name}.${t.name} failed: ${(error as Error).message}`);
           }
         },

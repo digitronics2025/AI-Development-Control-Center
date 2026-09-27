@@ -9,6 +9,7 @@ import { Bus } from './bus.js';
 import { Chairman } from './chairman/chairman.js';
 import { ChairmanChat } from './chairman/chat.js';
 import { Watchdog } from './chairman/watchdog.js';
+import { DEFAULT_PORT } from '@acc/shared';
 import type { OrchestratorConfig } from './config.js';
 import { migrate, openDatabase, type Db } from './db/database.js';
 import { BaselineChecks } from './engine/baseline-checks.js';
@@ -157,7 +158,7 @@ export function createServices(
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });
   const spend = new MediaSpendGate(db, usage.media, { stopping: () => usage.budgets.stoppingMediaBudgets() }, () => settings.get().media);
   const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv });
-  const mcp = new McpService(toolStore, bus, tools, credentials);
+  const mcp = new McpService(toolStore, bus, tools, credentials, config.port || DEFAULT_PORT);
   const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'));
   const bridge = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', 'acc-mcp.js');
   const skills = new SkillCatalog(agents);

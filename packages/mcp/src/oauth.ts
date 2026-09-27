@@ -23,9 +23,10 @@ export interface McpOAuthState {
   discovery?: OAuthDiscoveryState;
 }
 
+/** Where one server's sign-in lives (the orchestrator seals it in the broker, so reads and writes may be async). */
 export interface McpOAuthStore {
-  load(): McpOAuthState | null;
-  save(state: McpOAuthState): void;
+  load(): McpOAuthState | null | Promise<McpOAuthState | null>;
+  save(state: McpOAuthState): void | Promise<void>;
 }
 
 export interface McpOAuthOptions {
@@ -54,8 +55,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
     private readonly options: McpOAuthOptions & { interactive: boolean },
   ) {}
 
-  private update(patch: Partial<McpOAuthState>): void {
-    this.store.save({ ...(this.store.load() ?? {}), ...patch });
+  private async update(patch: Partial<McpOAuthState>): Promise<void> {
+    await this.store.save({ ...((await this.store.load()) ?? {}), ...patch });
   }
 
   get redirectUrl(): string {
@@ -77,20 +78,20 @@ export class McpOAuthProvider implements OAuthClientProvider {
     return this.options.state ?? '';
   }
 
-  clientInformation(): OAuthClientInformationMixed | undefined {
-    return this.store.load()?.client;
+  async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+    return (await this.store.load())?.client;
   }
 
-  saveClientInformation(client: OAuthClientInformationMixed): void {
-    this.update({ client });
+  async saveClientInformation(client: OAuthClientInformationMixed): Promise<void> {
+    await this.update({ client });
   }
 
-  tokens(): OAuthTokens | undefined {
-    return this.store.load()?.tokens;
+  async tokens(): Promise<OAuthTokens | undefined> {
+    return (await this.store.load())?.tokens;
   }
 
-  saveTokens(tokens: OAuthTokens): void {
-    this.update({ tokens, savedAt: new Date().toISOString(), codeVerifier: undefined });
+  async saveTokens(tokens: OAuthTokens): Promise<void> {
+    await this.update({ tokens, savedAt: new Date().toISOString(), codeVerifier: undefined });
   }
 
   redirectToAuthorization(url: URL): void {
@@ -98,27 +99,27 @@ export class McpOAuthProvider implements OAuthClientProvider {
     if (this.options.interactive) this.authorizationUrl = url;
   }
 
-  saveCodeVerifier(codeVerifier: string): void {
+  async saveCodeVerifier(codeVerifier: string): Promise<void> {
     // A background refresh that fell through to a new authorization must not replace a sign-in in progress.
-    if (this.options.interactive) this.update({ codeVerifier });
+    if (this.options.interactive) await this.update({ codeVerifier });
   }
 
-  codeVerifier(): string {
-    const verifier = this.store.load()?.codeVerifier;
+  async codeVerifier(): Promise<string> {
+    const verifier = (await this.store.load())?.codeVerifier;
     if (!verifier) throw new Error('No sign-in is in progress for this server; start it again');
     return verifier;
   }
 
-  saveDiscoveryState(discovery: OAuthDiscoveryState): void {
-    this.update({ discovery });
+  async saveDiscoveryState(discovery: OAuthDiscoveryState): Promise<void> {
+    await this.update({ discovery });
   }
 
-  discoveryState(): OAuthDiscoveryState | undefined {
-    return this.store.load()?.discovery;
+  async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
+    return (await this.store.load())?.discovery;
   }
 
-  invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
-    const current = this.store.load() ?? {};
+  async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): Promise<void> {
+    const current = (await this.store.load()) ?? {};
     if (scope === 'all') return this.store.save({});
     if (scope === 'client') return this.store.save({ ...current, client: undefined });
     if (scope === 'tokens') return this.store.save({ ...current, tokens: undefined, savedAt: undefined });

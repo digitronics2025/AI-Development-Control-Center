@@ -244,9 +244,11 @@ second ([learning.md](learning.md#design)).
 
 ## Not yet
 
-- Higgsfield, Canva, Figma remote and other OAuth-only MCP servers cannot be
-  registered in the gateway (no OAuth): generate in your own session and
-  attach the files to the task (up to 10).
+- Higgsfield, Canva, Figma remote and other OAuth-only MCP servers can now
+  be registered and signed in to ([mcp.md](mcp.md#oauth)), but a paid
+  generation server among them is not budget-gated (see Operator setup), so
+  the design stages do not use one. Generate in your own session and attach
+  the files to the task (up to 10), or use the `media.*` tools.
 - Whether `claude -p` shows a local PNG to the model when the designer reads
   it has not been observed; the Control Center browser's screenshots do
   reach the model (MCP image blocks, three per call).

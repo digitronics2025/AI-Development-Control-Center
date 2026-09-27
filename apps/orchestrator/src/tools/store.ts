@@ -49,8 +49,19 @@ export interface CredentialRecord {
   lastUsedAt: string | null;
 }
 
-export interface McpServerRecord extends Omit<McpServerView, 'health'> {
+export interface McpServerRecord extends Omit<McpServerView, 'health' | 'oauth'> {
   health: McpServerView['health'];
+}
+
+/** One server's sealed OAuth sign-in (migration 21); the times are plain so status needs no key. */
+export interface McpOAuthRecord {
+  serverId: string;
+  ciphertext: string;
+  iv: string;
+  tag: string;
+  signedInAt: string | null;
+  expiresAt: string | null;
+  updatedAt: string;
 }
 
 export interface TaskProcessRecord extends TaskProcess {
@@ -157,6 +168,8 @@ const toMcp = (r: Row): McpServerRecord => ({
   permissionLevel: r.permission_level,
   allowedTools: parse(r.allowed_tools, null),
   timeoutMs: r.timeout_ms,
+  auth: r.auth === 'oauth' ? 'oauth' : 'none',
+  oauthScope: r.oauth_scope ?? null,
   health: parse(r.health, null),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -431,17 +444,38 @@ export class ToolStore {
   upsertMcpServer(s: McpServerRecord): void {
     this.db
       .prepare(
-        `INSERT INTO mcp_servers (id, name, transport, command, args, url, env_credentials, enabled, permission_level, allowed_tools, timeout_ms, health, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO mcp_servers (id, name, transport, command, args, url, env_credentials, enabled, permission_level, allowed_tools, timeout_ms, auth, oauth_scope, health, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, transport = excluded.transport, command = excluded.command, args = excluded.args, url = excluded.url,
            env_credentials = excluded.env_credentials, enabled = excluded.enabled, permission_level = excluded.permission_level, allowed_tools = excluded.allowed_tools,
-           timeout_ms = excluded.timeout_ms, health = excluded.health, updated_at = excluded.updated_at`,
+           timeout_ms = excluded.timeout_ms, auth = excluded.auth, oauth_scope = excluded.oauth_scope, health = excluded.health, updated_at = excluded.updated_at`,
       )
-      .run(s.id, s.name, s.transport, s.command, json(s.args), s.url, json(s.envCredentials), s.enabled ? 1 : 0, s.permissionLevel, s.allowedTools ? json(s.allowedTools) : null, s.timeoutMs, s.health ? json(s.health) : null, s.createdAt, s.updatedAt);
+      .run(s.id, s.name, s.transport, s.command, json(s.args), s.url, json(s.envCredentials), s.enabled ? 1 : 0, s.permissionLevel, s.allowedTools ? json(s.allowedTools) : null, s.timeoutMs, s.auth, s.oauthScope, s.health ? json(s.health) : null, s.createdAt, s.updatedAt);
   }
 
   deleteMcpServer(id: string): void {
-    this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM mcp_oauth WHERE server_id = ?').run(id);
+      this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id);
+    })();
+  }
+
+  mcpOAuth(serverId: string): McpOAuthRecord | null {
+    const r = this.db.prepare('SELECT * FROM mcp_oauth WHERE server_id = ?').get(serverId) as Row | undefined;
+    return r ? { serverId: r.server_id, ciphertext: r.ciphertext, iv: r.iv, tag: r.tag, signedInAt: r.signed_in_at, expiresAt: r.expires_at, updatedAt: r.updated_at } : null;
+  }
+
+  upsertMcpOAuth(o: McpOAuthRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO mcp_oauth (server_id, ciphertext, iv, tag, signed_in_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(server_id) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, tag = excluded.tag, signed_in_at = excluded.signed_in_at, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+      )
+      .run(o.serverId, o.ciphertext, o.iv, o.tag, o.signedInAt, o.expiresAt, o.updatedAt);
+  }
+
+  deleteMcpOAuth(serverId: string): void {
+    this.db.prepare('DELETE FROM mcp_oauth WHERE server_id = ?').run(serverId);
   }
 
   // ----- credentials ---------------------------------------------------------------------------

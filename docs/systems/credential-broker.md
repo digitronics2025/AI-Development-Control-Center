@@ -290,7 +290,11 @@ DPAPI-protected key and a caller-chosen purpose binding (AAD), so a sealed value
 cannot be opened for another purpose. The remote execution node stores its
 private key this way (AAD `remote-node-identity:<nodeId>`); see
 [remote-node.md](remote-node.md#identity-and-pairing). So does the MyVault bridge
-identity (AAD `vault-bridge-identity:<publicKey>`).
+identity (AAD `vault-bridge-identity:<publicKey>`), and each MCP server's OAuth
+sign-in: client registration and tokens, one JSON value in `mcp_oauth`
+(migration 21, AAD `mcp-oauth:<server id>`; [mcp.md](mcp.md#oauth)). These are
+not credentials: they are never listed, never reachable by name from a tool,
+and their tokens are registered with the redactor when loaded or saved.
 
 ## Verified
 

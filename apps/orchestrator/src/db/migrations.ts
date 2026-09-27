@@ -1321,4 +1321,25 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_media_usage_created ON media_usage_events(created_at);
     `,
   },
+  {
+    // OAuth sign-in for HTTP MCP servers (docs/systems/mcp.md#oauth). The
+    // sign-in (client registration, tokens, a verifier in progress) is one
+    // JSON value sealed with the broker's key and bound to the server id; the
+    // two times are kept beside it so status needs no decryption. Additive only.
+    version: 21,
+    name: 'mcp oauth',
+    sql: `
+      ALTER TABLE mcp_servers ADD COLUMN auth TEXT NOT NULL DEFAULT 'none';
+      ALTER TABLE mcp_servers ADD COLUMN oauth_scope TEXT;
+      CREATE TABLE mcp_oauth (
+        server_id TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+        ciphertext TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        signed_in_at TEXT,
+        expires_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

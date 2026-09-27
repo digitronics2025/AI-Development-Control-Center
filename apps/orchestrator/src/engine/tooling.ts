@@ -272,7 +272,9 @@ export class EngineTooling {
     const level = opts.level !== undefined ? (Math.min(opts.level, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
     const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}), ...(def.toolProfile ? { profile: def.toolProfile } : {}) });
     // A design stage never reaches an outside MCP tool (ToolScope.designSession): it could bill past the spend gate.
-    if (def.role === 'designer' || def.toolProfile === 'frontend-design') scope.designSession = true;
+    // Judged on the stage as it runs and as the workflow declares it, so a specialist on a design stage keeps it.
+    const declared = task.workflow.stages.find((s) => s.key === def.key);
+    if ([def, declared].some((d) => d && (d.role === 'designer' || d.toolProfile === 'frontend-design'))) scope.designSession = true;
     const { sessionId: _s, escalated: _e, repositories: _r, ...rest } = scope;
     const base = opts.root ? { ...rest, roots: [opts.root], protectedPaths: [] } : { ...rest, ...(scope.repositories ? { repositories: scope.repositories } : {}) };
     const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000);

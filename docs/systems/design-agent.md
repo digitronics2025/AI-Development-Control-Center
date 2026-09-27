@@ -94,6 +94,12 @@ Build run in a fix cycle counts as a fix attempt (`buildFinalReport` in
 Plan: [DESIGNER_ROUTING_PLAN.md](../plans/DESIGNER_ROUTING_PLAN.md). Full
 Autopilot brings the design specialist in only for user-interface work:
 
+- **Implement → Designer** for the plan's frontend work: Implement's adaptive
+  team lists the specialist `frontend → designer` (tool profile
+  `frontend-design`, Autopilot build instructions). A plan whose work is all
+  frontend runs the one agent as the designer; frontend and backend units side
+  by side each run in their own role; on the stage's own agent and Level 2
+  either way ([stage-teams.md](stage-teams.md#specialists)).
 - **Visual critique** (`critique`, visual critic, Level 1) after the App
   check, with `when: ui-changed`: it runs only when the task's own changes
   touch UI files ([ui-paths.ts](../../packages/shared/src/ui-paths.ts)), and

@@ -238,6 +238,29 @@ function readHint(file: PackFile | undefined, omitted: OmittedFile, source: { fo
  * needs — the investigator gets repository facts, the reviewer gets the diff
  * and test results — instead of the whole repository in every prompt.
  */
+/**
+ * The adaptive stages a planner may split, one line each (the simulated planner reads the line's start), with the
+ * specialists each one sends labelled units to and the rule for labelling them (DESIGNER_ROUTING_PLAN §6). Generated
+ * here, so an operator-edited planner template with the placeholder is always current.
+ */
+export function teamStagesText(stages: StageDefinition[]): string {
+  const adaptive = stages.filter((s) => s.kind === 'agent' && s.team?.mode === 'adaptive' && s.role !== 'fixer');
+  const lines = adaptive.map((s) => {
+    const line = `- \`${s.key}\` (${s.name}): up to ${s.team!.maxWorkers} workers${s.permissionLevel >= 2 ? ', each changing only the paths its unit owns' : ', read-only'}`;
+    const specialists = s.team!.specialists ?? [];
+    if (!specialists.length) return line;
+    const routes = specialists.map((x) => `\`${x.specialty}\` → ${ROLE_LABEL[x.role]} (${x.description})`).join('; ');
+    return `${line}. Specialties: ${routes}; any other unit → ${ROLE_LABEL[s.role]}`;
+  });
+  if (adaptive.some((s) => s.team!.specialists?.length)) {
+    lines.push(
+      '',
+      'Specialties: set a unit\'s `specialty` to the listed name when its work is what that specialty covers, and leave it out otherwise. When any part of the work belongs to a listed specialty, end the plan with the block for that stage even if it holds a single unit: the specialist then does that work (a whole task of one specialty runs as that specialist). Never split work only to route it; parts that depend on each other stay one unit.',
+    );
+  }
+  return lines.join('\n');
+}
+
 export class ContextBuilder {
   /** Current Chairman strategy guidance for a task, set once the Chairman exists. */
   guidance: (taskId: string) => string | null = () => null;
@@ -727,10 +750,7 @@ export class ContextBuilder {
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
-      team_stages: task.workflow.stages
-        .filter((s) => s.kind === 'agent' && s.team?.mode === 'adaptive' && s.role !== 'fixer')
-        .map((s) => `- \`${s.key}\` (${s.name}): up to ${s.team!.maxWorkers} workers${s.permissionLevel >= 2 ? ', each changing only the paths its unit owns' : ', read-only'}`)
-        .join('\n'),
+      team_stages: teamStagesText(task.workflow.stages),
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workspace ? agentWorkdir(task, repo) : workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);

@@ -57,6 +57,19 @@ function teamIssues(stage: StageDefinition): Array<{ field: string; message: str
     if (stage.verdict) out.push({ field: 'team.mode', message: 'A review team is a fixed team of reviewers' });
   }
   if (team.judge && team.mode !== 'variants') out.push({ field: 'team.judge', message: 'Only variants have a judge' });
+  if (team.specialists?.length) {
+    // A specialist is told other things and shown other tools, never given more: only where the plan's units write
+    // code at Level 2, so a routed specialist can never reach a Level 3 (paid) tool (DESIGNER_ROUTING_PLAN §6).
+    if (team.mode !== 'adaptive') out.push({ field: 'team.specialists', message: "Only an adaptive team sends the plan's work units to specialists" });
+    else if (stage.role === 'fixer') out.push({ field: 'team.specialists', message: 'A Fix splits its own work: it takes no specialists' });
+    else if (!isWriteRole(stage.role) || stage.permissionLevel !== 2) out.push({ field: 'team.specialists', message: 'Specialists take work that changes files: only a Level 2 stage that writes code has them' });
+    const seen = new Set<string>();
+    team.specialists.forEach((s, i) => {
+      if (!isWriteRole(s.role)) out.push({ field: `team.specialists.${i}.role`, message: 'A specialist writes code: choose a role that changes files (designer, implementer)' });
+      if (seen.has(s.specialty)) out.push({ field: `team.specialists.${i}.specialty`, message: `Specialty "${s.specialty}" is listed twice` });
+      seen.add(s.specialty);
+    });
+  }
   return out;
 }
 

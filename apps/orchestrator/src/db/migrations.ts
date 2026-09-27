@@ -1353,4 +1353,17 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE task_stages ADD COLUMN condition_digest TEXT;
     `,
   },
+  {
+    // Specialists (docs/plans/DESIGNER_ROUTING_PLAN.md §6): the role a stage or
+    // a Stage Team work unit actually ran as when a specialist did the plan's
+    // labelled work, and the unit's label. Every existing row reads NULL: the
+    // stage's own role, as before. Additive only.
+    version: 23,
+    name: 'specialist routing',
+    sql: `
+      ALTER TABLE task_stages ADD COLUMN routed_role TEXT;
+      ALTER TABLE stage_work_units ADD COLUMN role TEXT;
+      ALTER TABLE stage_work_units ADD COLUMN specialty TEXT;
+    `,
+  },
 ];

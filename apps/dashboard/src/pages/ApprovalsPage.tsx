@@ -18,9 +18,9 @@ import {
   cn,
   useFeedback,
 } from '@acc/ui';
-import type { Approval } from '@acc/shared';
+import { ROLE_LABEL, readableWorkUnits, type Approval, type WorkflowProfile } from '@acc/shared';
 import { errorMessage } from '../api/client';
-import { useApprovals, useArtifactContent, useResolveApproval, useTaskArtifacts } from '../api/hooks';
+import { useApprovals, useArtifactContent, useResolveApproval, useTask, useTaskArtifacts } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection } from '../app/runtime';
 import { Markdown } from '../components/markdown';
@@ -44,13 +44,23 @@ function approveLabel(a: Approval): string {
   }
 }
 
+/** Who does a labelled work unit, as the plan review names it: the stage's specialist for that label, if any. */
+function specialistOf(workflow: WorkflowProfile | undefined) {
+  return (stage: string, specialty: string | null) => {
+    const found = specialty ? workflow?.stages.find((s) => s.key === stage)?.team?.specialists?.find((x) => x.specialty === specialty) : undefined;
+    return found ? ROLE_LABEL[found.role].toLowerCase() : null;
+  };
+}
+
 function PlanPreview({ taskId }: { taskId: string }) {
   const artifacts = useTaskArtifacts(taskId);
+  const task = useTask(taskId);
   const plan = artifacts.data?.filter((a) => a.type === 'plan').at(-1);
   const content = useArtifactContent(plan?.id ?? null);
   if (artifacts.isLoading || content.isLoading) return <Skeleton className="h-32" />;
   if (!content.data) return <p className="text-body text-fg-secondary">The plan artifact is not available.</p>;
-  return <Markdown>{content.data.content}</Markdown>;
+  // The work-unit block is shown as a list a person can approve, not as JSON (DESIGNER_ROUTING_PLAN §6).
+  return <Markdown>{readableWorkUnits(content.data.content, specialistOf(task.data?.workflow))}</Markdown>;
 }
 
 function ApprovalCard({ approval, highlighted }: { approval: Approval; highlighted: boolean }) {

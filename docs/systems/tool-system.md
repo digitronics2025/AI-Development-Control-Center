@@ -75,7 +75,8 @@ the level: a recursive delete is Level 5, a read-only shell script Level 1) →
 stage's profile but within its level — recorded in `capability_escalations`
 and as a `CAPABILITY_ESCALATED` event), needs approval, or deny; before it, a
 design stage's session (`designSession`: the designer role or the
-`frontend-design` profile, set by `openAgentSession`) is denied every outside
+`frontend-design` profile, of the stage as it runs or as the workflow declares
+it, so a specialist on a design stage keeps it; set by `openAgentSession`) is denied every outside
 MCP tool at any level (`DESIGN_MCP_REFUSAL`: they declare no cost, so the
 spend gate cannot see them) and is not shown them →
 4b. spend gate, for an operation with `estimateCost` (paid media): paid
@@ -292,7 +293,8 @@ parallel; the two apply in either order. Migration 7 adds the MyVault link,
 trusted-origin and credential-event tables ([credential-broker.md](credential-broker.md));
 migration 20 `media_usage_events`, the spend gate's ledger; migration 21
 `mcp_oauth` and `mcp_servers.auth`/`oauth_scope` ([mcp.md](mcp.md#oauth));
-migration 22 `task_stages.condition_digest` ([workflow-engine.md](workflow-engine.md#profiles)).
+migration 22 `task_stages.condition_digest` ([workflow-engine.md](workflow-engine.md#profiles));
+migration 23 the specialist role of a stage or work unit ([stage-teams.md](stage-teams.md#specialists)).
 
 Secrets an agent needs but must not see go through `credential.generate`
 (sealed in the orchestrator, returns metadata only) and are used by reference,

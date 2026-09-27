@@ -205,5 +205,6 @@ Review 0.9 min.
 
 ## Ledger
 
-- [ ] Phase 1 — classifier, `when`, skipStage, gate, report, review-by-role, YAML, money guard, cloud guard, learning, dashboard, docs
-- [ ] Phase 2 — specialists, planner, Stage Teams routing, single-agent route, migration 22, dashboard, docs
+- [x] Phase 1 — classifier, `when`, skipStage, gate, report, review-by-role, YAML, money guard, cloud guard, learning, dashboard, docs (4c2a44d, 1d7f5ec; typecheck, lint, docs guard, unit and integration tests, Playwright matrix both themes green; one browser test from the SEC-1 work, `ERR_BLOCKED_BY_CLIENT`, failed here and in CI before this change — fixed below)
+- [x] Phase 2 — specialists, planner, Stage Teams routing, single-agent route, migration 23, dashboard, docs (full suite 2 035/2 036, the one failure the pre-existing guard bug below; shared, Stage Team, routing, browser and security tests green after its fix; Playwright matrix both themes)
+- [x] Found on the way: the browser guard (SEC-1) refused any page whose URL path named a data-folder file word on another server (`/octokit/auth-token.js`), failing CI on main since PR #7; a web request is now judged by its destination (`browserRequestReachesSelf`), with a test for every self-address spelling

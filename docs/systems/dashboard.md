@@ -314,15 +314,22 @@ single agent, fixed team (2–4 worker rows: key, focus, agent/model/effort,
 "Primary reviewer" only on verdict stages, exactly one), adaptive team, or
 competing variants (2–4 variant rows: key, approach, agent/model/effort, no
 primary reviewer, plus a **Judge** picker that defaults to the stage's agent),
-plus maximum workers; server validation issues show per field; built-ins show
-it read-only. A fixed team's or variants' row names its workers' agents ("Codex + Claude
+plus maximum workers; an adaptive team's **Specialists** (set in the workflow
+file) are listed read-only and kept while the team stays adaptive; server
+validation issues show per field; built-ins show it read-only. A fixed team's or variants' row names its workers' agents ("Codex + Claude
 Code"; a worker without a pin counts as the stage's agent); variants read "3
 competing variants". Task page: the timeline shows "Team 2/3 running" / "Team of 3 ·
 judging" (a variants judge running) / "Team of 3 · done"
 ([team.ts](../../apps/dashboard/src/pages/task/team.ts)); Execution has a
-**Stage Team** panel (units, agent, status, live duration, errors, reused,
-Integration / Split the fix / Judge rows); Logs label a worker's execution "Stage ·
-Unit". Realtime `workUnit` messages upsert into `TaskDetail.workUnits`
+**Stage Team** panel (units, agent, "as the Designer" and the specialty for a
+routed unit, status, live duration, errors, reused, Integration / Split the fix /
+Judge rows); a stage a specialist ran reads "<agent> · Designer" in the timeline,
+and a team's line adds its routed workers ("Team of 2 · done · 1 as Designer");
+plan review shows an `acc-work-units` block as a list — title, goal, owned paths
+and who does each unit, read as the orchestrator reads it (`normalizeManifest`),
+Markdown in titles and goals shown literally; a specialist is promised ("by the
+designer") only when every unit is its work, else "frontend work: the designer
+when it runs as its own unit" (`readableWorkUnits`); Logs label a worker's execution "Stage · Unit". Realtime `workUnit` messages upsert into `TaskDetail.workUnits`
 ([sync.ts](../../apps/dashboard/src/api/sync.ts)). Repository Commands: a
 **Parallel-safe** checkbox for lint/typecheck/test/build/e2e. Usage task page:
 team stages get per-unit sub-rows, and the stage row reads "team of N" (workers

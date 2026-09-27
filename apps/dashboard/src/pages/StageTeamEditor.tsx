@@ -1,7 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { useId } from 'react';
 import { Button, Field, IconButton, Input, Select, Switch } from '@acc/ui';
-import { MAX_TEAM_WORKERS, type StageDefinition, type StageTeam, type StageTeamWorker, type WorkflowIssue } from '@acc/shared';
+import { MAX_TEAM_WORKERS, ROLE_LABEL, type StageDefinition, type StageTeam, type StageTeamWorker, type WorkflowIssue } from '@acc/shared';
 import { AssignmentPicker } from '../components/assignment-picker';
 
 type ExecutionMode = 'single' | StageTeam['mode'];
@@ -55,13 +55,15 @@ export function StageTeamEditor({
   const setMode = (next: ExecutionMode) => {
     if (next === 'single') return onChange(undefined);
     const maxWorkers = team?.maxWorkers ?? 3;
-    if (next === 'adaptive') return onChange({ mode: 'adaptive', maxWorkers });
+    // Specialists belong to an adaptive team: kept while it stays adaptive, dropped with it otherwise.
+    if (next === 'adaptive') return onChange({ mode: 'adaptive', maxWorkers, ...(team?.specialists?.length ? { specialists: team.specialists } : {}) });
     // Variants have no primary reviewer; a fixed review team starts with one.
     const kept = next === 'variants' ? workers.map((w) => ({ ...w, primary: false })) : workers;
     const start = kept.length ? kept : [newWorker([], next === 'fixed' && stage.verdict)];
     const list = start.length >= 2 ? start : [...start, newWorker(start, false)];
     onChange(next === 'variants' ? { mode: 'variants', maxWorkers, workers: list, ...(team?.judge ? { judge: team.judge } : {}) } : { mode: 'fixed', maxWorkers, workers: list });
   };
+  const specialistsError = first((f) => f === 'team.specialists' || f.startsWith('team.specialists.'));
   const setWorkers = (next: StageTeamWorker[]) => team && onChange({ ...team, workers: next });
   const setWorker = (index: number, patch: Partial<StageTeamWorker>) => setWorkers(workers.map((w, i) => (i === index ? { ...w, ...patch } : w)));
 
@@ -82,6 +84,27 @@ export function StageTeamEditor({
           </Field>
         ) : null}
       </div>
+
+      {team?.mode === 'adaptive' && team.specialists?.length ? (
+        // Read-only here: specialists are set in the workflow file (docs/systems/stage-teams.md).
+        <div className="flex flex-col gap-1">
+          <span className="text-body font-semibold text-fg">Specialists</span>
+          <ul className="flex flex-col gap-1 text-small text-fg-secondary">
+            {team.specialists.map((s) => (
+              <li key={s.specialty}>
+                <span className="font-mono text-fg">{s.specialty}</span> → {ROLE_LABEL[s.role]}: {s.description}
+              </li>
+            ))}
+          </ul>
+          {specialistsError ? (
+            <p role="alert" className="text-small text-danger">
+              {specialistsError}
+            </p>
+          ) : (
+            <p className="text-small text-fg-secondary">Units the plan labels with a specialty run as that role on this stage's agent; the rest run as the stage's own role.</p>
+          )}
+        </div>
+      ) : null}
 
       {team?.mode === 'fixed' || team?.mode === 'variants' ? (
         <div className="flex flex-col gap-3" role="group" aria-labelledby={`${id}-workers`}>

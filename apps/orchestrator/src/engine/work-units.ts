@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { COMMAND_KINDS, MANIFEST_FENCE, MAX_MANIFEST_CHARS, workUnitManifestSchema, type WorkUnitManifest } from '@acc/shared';
+import { manifestBlockPattern, MAX_MANIFEST_CHARS, normalizeManifest, workUnitManifestSchema, type WorkUnitManifest } from '@acc/shared';
 
 /**
  * The execution manifest a plan (or a decomposition run) carries for a
@@ -10,11 +10,9 @@ import { COMMAND_KINDS, MANIFEST_FENCE, MAX_MANIFEST_CHARS, workUnitManifestSche
 
 export type ManifestRead = { ok: true; manifest: WorkUnitManifest; hash: string } | { ok: false; reason: string };
 
-const FENCE = new RegExp('```' + MANIFEST_FENCE + '[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n```', 'g');
-
 /** The last manifest block in `text` meant for stage `stageKey`. */
 export function readManifest(text: string, stageKey: string): ManifestRead {
-  const blocks = [...text.matchAll(FENCE)].map((m) => m[1]!);
+  const blocks = [...text.matchAll(manifestBlockPattern())].map((m) => m[1]!);
   if (!blocks.length) return { ok: false, reason: 'the plan has no work-unit manifest' };
   let lastReason = 'the plan has no work-unit manifest';
   for (const block of blocks.reverse()) {
@@ -29,7 +27,7 @@ export function readManifest(text: string, stageKey: string): ManifestRead {
       lastReason = 'the work-unit manifest is not valid JSON';
       continue;
     }
-    const parsed = workUnitManifestSchema.safeParse(normalize(raw));
+    const parsed = workUnitManifestSchema.safeParse(normalizeManifest(raw));
     if (!parsed.success) {
       lastReason = `the work-unit manifest is not valid: ${parsed.error.issues[0]?.message ?? 'invalid'}`;
       continue;
@@ -41,32 +39,6 @@ export function readManifest(text: string, stageKey: string): ManifestRead {
     return { ok: true, manifest: parsed.data, hash: manifestHash(parsed.data) };
   }
   return { ok: false, reason: lastReason };
-}
-
-/**
- * Forgive what real planners write without changing what a manifest means
- * (seen in a live run: `api_discount` keys, `node --test …` as checks): a key
- * is folded to a slug, and a check that is not a known check kind is dropped —
- * checks are a hint to the worker and are never run. Everything else is
- * validated as written.
- */
-function normalize(raw: unknown): unknown {
-  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { units?: unknown }).units)) return raw;
-  const slug = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') : v);
-  const kinds = new Set<string>(COMMAND_KINDS);
-  return {
-    ...(raw as object),
-    units: ((raw as { units: unknown[] }).units).map((u) => {
-      if (!u || typeof u !== 'object') return u;
-      const unit = u as Record<string, unknown>;
-      return {
-        ...unit,
-        key: slug(unit.key),
-        ...(Array.isArray(unit.dependsOn) ? { dependsOn: unit.dependsOn.map(slug) } : {}),
-        ...(Array.isArray(unit.checks) ? { checks: unit.checks.filter((c) => typeof c === 'string' && kinds.has(c)) } : {}),
-      };
-    }),
-  };
 }
 
 /** A stable fingerprint of anything JSON: object keys sorted, so equal content hashes equal. */

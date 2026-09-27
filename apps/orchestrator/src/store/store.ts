@@ -264,6 +264,7 @@ const toStage = (r: Row): StageInstance => ({
   finishedAt: r.finished_at,
   createdAt: r.created_at,
   conditionDigest: r.condition_digest ?? null,
+  routedRole: r.routed_role ?? null,
 });
 
 const toExecution = (r: Row): Execution => ({
@@ -307,6 +308,8 @@ const toWorkUnit = (r: Row): StageWorkUnit => ({
   agentId: r.agent_id,
   model: r.model,
   effort: r.effort,
+  role: r.role ?? null,
+  specialty: r.specialty ?? null,
   attempt: r.attempt,
   reusedFrom: r.reused_from,
   summary: r.summary,
@@ -539,6 +542,7 @@ const STAGE_COLUMNS: Partial<Record<keyof StageInstance, string>> = {
   startedAt: 'started_at',
   finishedAt: 'finished_at',
   conditionDigest: 'condition_digest',
+  routedRole: 'routed_role',
 };
 
 export class Store {
@@ -1237,13 +1241,13 @@ export class Store {
       .prepare(
         `INSERT INTO stage_work_units (id, task_id, stage_id, stage_key, unit_key, kind, title, focus, status, ordinal, dependencies_json, path_scope_json,
            is_primary, manifest_hash, base_commit, result_commit, agent_id, model, effort, attempt, reused_from, summary, error_class, error_message,
-           started_at, finished_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           started_at, finished_at, created_at, role, specialty)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         u.id, u.taskId, u.stageId, u.stageKey, u.unitKey, u.kind, u.title, u.focus, u.status, u.ordinal, json(u.dependencies), json(u.pathScope),
         u.primary ? 1 : 0, u.manifestHash, u.baseCommit, u.resultCommit, u.agentId, u.model, u.effort, u.attempt, u.reusedFrom, u.summary, u.errorClass, u.errorMessage,
-        u.startedAt, u.finishedAt, u.createdAt,
+        u.startedAt, u.finishedAt, u.createdAt, u.role ?? null, u.specialty ?? null,
       );
     return this.getWorkUnit(u.id)!;
   }

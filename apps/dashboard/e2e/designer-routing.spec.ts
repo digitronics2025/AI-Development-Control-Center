@@ -26,7 +26,7 @@ function fixtureRepo(): string {
 }
 
 async function waitForTask(page: Page, id: string): Promise<{ status: string }> {
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < 600; i++) {
     const task = await api<{ status: string }>(page, 'GET', `/api/tasks/${id}`);
     if (['COMPLETED', 'FAILED', 'WAITING_FOR_USER'].includes(task.status)) return task;
     await page.waitForTimeout(250);
@@ -36,6 +36,9 @@ async function waitForTask(page: Page, id: string): Promise<{ status: string }> 
 
 let backendTask = '';
 let uiTask = '';
+let routedTask = '';
+let teamTask = '';
+let reviewTask = '';
 
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage();
@@ -45,6 +48,21 @@ test.beforeAll(async ({ browser }) => {
   expect((await waitForTask(page, backendTask)).status).toBe('COMPLETED');
   uiTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Restyle the card. [sim:ui]' })).id;
   expect((await waitForTask(page, uiTask)).status).toBe('COMPLETED');
+  // Phase 2: a plan that is all frontend work runs Implement as the designer; a team sends its frontend unit there.
+  routedTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Restyle the badge. [sim:plan-frontend]' })).id;
+  expect((await waitForTask(page, routedTask)).status).toBe('COMPLETED');
+  teamTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Two parts. [sim:team] [sim:team-frontend]' })).id;
+  expect((await waitForTask(page, teamTask)).status).toBe('COMPLETED');
+  // Left waiting for its plan review for the whole file; cancelled at the end.
+  reviewTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'discuss', description: 'Restyle the header. [sim:plan-frontend]' })).id;
+  expect((await waitForTask(page, reviewTask)).status).toBe('WAITING_FOR_USER');
+  await page.close();
+});
+
+test.afterAll(async ({ browser }) => {
+  const page = await browser.newPage();
+  await page.goto('/');
+  await api(page, 'POST', `/api/tasks/${reviewTask}/cancel`);
   await page.close();
 });
 
@@ -81,6 +99,32 @@ for (const theme of ['dark', 'light'] as const) {
       await page.goto('/workflows/full-autopilot');
       await page.getByRole('button', { name: /Visual critique/ }).first().click();
       await expect(page.getByText('Runs only when user-interface files change')).toBeVisible();
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('a stage a specialist ran names it, and so does each routed work unit', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/tasks/${routedTask}`);
+      const implement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
+      await expect(implement).toContainText('· Designer');
+      await expectNoAxeViolations(page, testInfo);
+      await page.goto(`/tasks/${teamTask}`);
+      const teamImplement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
+      await expect(teamImplement).toContainText('Team of 2 · done · 1 as Designer');
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('plan review shows the work units as a list naming who does each one', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto('/approvals');
+      const card = page.getByRole('article').filter({ hasText: reviewTask });
+      await expect(card.getByText('Work units for implement:')).toBeVisible();
+      await expect(card.getByText(/by the designer/)).toBeVisible();
+      await expect(card).not.toContainText('acc-work-units');
       await expectNoAxeViolations(page, testInfo);
       expect(errors).toEqual([]);
     });

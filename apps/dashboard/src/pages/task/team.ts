@@ -1,4 +1,4 @@
-import type { StageWorkUnit, TaskDetail } from '@acc/shared';
+import { ROLE_LABEL, type StageWorkUnit, type TaskDetail } from '@acc/shared';
 
 /** Work units of one stage instance, in their planned order. */
 export function unitsOfStage(task: TaskDetail, stageId: string): StageWorkUnit[] {
@@ -7,10 +7,20 @@ export function unitsOfStage(task: TaskDetail, stageId: string): StageWorkUnit[]
 
 /**
  * The compact team line of the Stage Timeline (docs/plans/STAGE_TEAMS_PLAN.md
- * §3.13): "Team 2/3 running", "Team of 3 · done", "Team of 3 · 1 failed".
+ * §3.13): "Team 2/3 running", "Team of 3 · done", "Team of 3 · 1 failed", and
+ * the workers a specialist ran ("· 1 as Designer", DESIGNER_ROUTING_PLAN §6).
  * Counts only the workers; the integration, split and judge runs are not team members.
  */
 export function teamSummary(units: readonly StageWorkUnit[]): string | null {
+  const state = teamState(units);
+  if (!state) return null;
+  const byRole = new Map<string, number>();
+  for (const u of units) if (u.kind === 'worker' && u.role) byRole.set(u.role, (byRole.get(u.role) ?? 0) + 1);
+  const routed = [...byRole].map(([role, n]) => `${n} as ${ROLE_LABEL[role as keyof typeof ROLE_LABEL] ?? role}`).join(', ');
+  return routed ? `${state} · ${routed}` : state;
+}
+
+function teamState(units: readonly StageWorkUnit[]): string | null {
   const workers = units.filter((u) => u.kind === 'worker');
   if (!workers.length) return null;
   const total = workers.length;

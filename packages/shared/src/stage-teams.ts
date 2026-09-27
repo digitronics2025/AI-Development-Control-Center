@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { COMMAND_KINDS } from './constants.js';
-import { slugSchema } from './schemas.js';
+import { COMMAND_KINDS, type Role } from './constants.js';
+import { slugSchema, type StageDefinition, type StageSpecialist } from './schemas.js';
 
 /**
  * Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md): the execution manifest a
@@ -15,6 +15,37 @@ export const MAX_MANIFEST_UNITS = 6;
 export const MAX_MANIFEST_CHARS = 20_000;
 /** The fenced block a plan carries its manifest in: ```acc-work-units … ``` */
 export const MANIFEST_FENCE = 'acc-work-units';
+/** Every manifest block in a text, its JSON in group 1 (a new RegExp per use: it is global). */
+export const manifestBlockPattern = (): RegExp => new RegExp('```' + MANIFEST_FENCE + '[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n```', 'g');
+
+/**
+ * Forgive what real planners write without changing what a manifest means
+ * (seen in a live run: `api_discount` keys, `node --test …` as checks): a key,
+ * its dependencies and a specialty label are folded to slugs, and a check that
+ * is not a known check kind is dropped — checks are a hint to the worker and
+ * are never run. Everything else is validated as written. The orchestrator and
+ * plan review read a block the same way.
+ */
+export function normalizeManifest(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { units?: unknown }).units)) return raw;
+  const slug = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') : v);
+  const kinds = new Set<string>(COMMAND_KINDS);
+  return {
+    ...(raw as object),
+    units: (raw as { units: unknown[] }).units.map((u) => {
+      if (!u || typeof u !== 'object') return u;
+      const unit = u as Record<string, unknown>;
+      return {
+        ...unit,
+        key: slug(unit.key),
+        // A specialty is matched as a slug (`Frontend` is `frontend`): DESIGNER_ROUTING_PLAN §6.
+        ...(typeof unit.specialty === 'string' ? { specialty: slug(unit.specialty) } : {}),
+        ...(Array.isArray(unit.dependsOn) ? { dependsOn: unit.dependsOn.map(slug) } : {}),
+        ...(Array.isArray(unit.checks) ? { checks: unit.checks.filter((c) => typeof c === 'string' && kinds.has(c)) } : {}),
+      };
+    }),
+  };
+}
 
 /**
  * A repository-relative path or folder a unit owns: forward slashes, no
@@ -36,7 +67,10 @@ export const workUnitManifestUnitSchema = z.object({
   key: slugSchema.max(40),
   title: z.string().trim().min(1).max(80),
   goal: z.string().trim().min(1).max(2000),
-  /** A hint for later routing (frontend, backend…); it never chooses an agent today. */
+  /**
+   * The specialist that does this unit, when the stage lists specialists (`team.specialists`, DESIGNER_ROUTING_PLAN §6):
+   * it chooses the worker's role, instructions and tools, never its agent. Matched as a slug (`normalizeSpecialty`).
+   */
   specialty: z.string().trim().max(40).optional(),
   dependsOn: z.array(slugSchema).max(MAX_MANIFEST_UNITS).default([]),
   pathPrefixes: z.array(pathPrefixSchema).min(1).max(20),
@@ -80,6 +114,77 @@ function hasDependencyCycle(units: ReadonlyArray<{ key: string; dependsOn: reado
     return false;
   };
   return units.some((u) => visit(u.key));
+}
+
+/** A planner's label as a specialty key: `Frontend`, ` front end ` → `frontend`, `front-end`; empty → null. */
+export function normalizeSpecialty(label: string | null | undefined): string | null {
+  const slug = (label ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || null;
+}
+
+/**
+ * The stage as a specialist runs it: the specialist's role, instructions and tool profile; the stage's key, level,
+ * timeout, retries, transitions and agent pin. Built field by field, never by spreading the stage, so a team, a
+ * verdict or the stage's own instructions never leak into it.
+ */
+export function routedStage(stage: StageDefinition, specialist: StageSpecialist): StageDefinition {
+  return {
+    key: stage.key,
+    name: stage.name,
+    role: specialist.role,
+    kind: stage.kind,
+    agentId: stage.agentId,
+    model: stage.model,
+    effort: stage.effort,
+    permissionLevel: stage.permissionLevel,
+    timeoutSec: stage.timeoutSec,
+    retry: stage.retry,
+    requiresApproval: stage.requiresApproval,
+    next: stage.next,
+    onFail: stage.onFail,
+    verdict: false,
+    optional: false,
+    description: stage.description,
+    instructions: specialist.instructions,
+    toolProfile: specialist.toolProfile ?? stage.toolProfile,
+  };
+}
+
+/** Text safe to place in Markdown as it is: `**`, `_`, backticks, brackets and the rest shown, not read. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, (c) => `\\${c}`);
+}
+
+/**
+ * A plan shown to a person (plan review): each `acc-work-units` block becomes a short list — each unit's title,
+ * goal, who does it and the paths it owns — instead of raw JSON, read exactly as the orchestrator reads it
+ * (`normalizeManifest`). A block it cannot read is left as written. `roleOf` names the specialist for a label
+ * (`frontend` → "designer"), or null for the stage's own role. A specialist is promised only when every unit has
+ * it (the whole stage runs as that specialist); a mixed plan names the specialist conditionally, since such units
+ * reach it only when they run as their own unit (DESIGNER_ROUTING_PLAN §6).
+ */
+export function readableWorkUnits(plan: string, roleOf: (stage: string, specialty: string | null) => string | null): string {
+  return plan.replace(manifestBlockPattern(), (block, body: string) => {
+    if (body.length > MAX_MANIFEST_CHARS) return block;
+    let parsed: ReturnType<typeof workUnitManifestSchema.safeParse>;
+    try {
+      parsed = workUnitManifestSchema.safeParse(normalizeManifest(JSON.parse(body)));
+    } catch {
+      return block;
+    }
+    if (!parsed.success) return block;
+    const m = parsed.data;
+    const who = m.units.map((u) => ({ specialty: normalizeSpecialty(u.specialty), role: roleOf(m.stage, normalizeSpecialty(u.specialty)) }));
+    const whole = who[0]?.role && who.every((w) => w.specialty === who[0]!.specialty) ? who[0].role : null;
+    const lines = m.units.flatMap((u, i) => {
+      const w = who[i]!;
+      const by = whole ? ` — by the ${whole}` : w.role ? ` — ${w.specialty} work: the ${w.role} when it runs as its own unit` : '';
+      const after = u.dependsOn.length ? `, after ${u.dependsOn.map((d) => `\`${d}\``).join(', ')}` : '';
+      const goal = u.goal.length > 240 ? `${u.goal.slice(0, 239)}…` : u.goal;
+      return [`- **${escapeMarkdown(u.title)}**${by}${after} (${u.pathPrefixes.map((p) => `\`${p}\``).join(', ')})`, `  ${escapeMarkdown(goal)}`];
+    });
+    return [`**Work units for ${m.stage}:**`, '', ...lines].join('\n');
+  });
 }
 
 const trimSlash = (p: string) => p.replace(/\/+$/, '');
@@ -164,6 +269,10 @@ export interface StageWorkUnit {
   agentId: string | null;
   model: string | null;
   effort: string | null;
+  /** The specialist role the unit ran as (DESIGNER_ROUTING_PLAN §6); null = the stage's own role. */
+  role?: Role | null;
+  /** The plan's label for the unit, normalised; kept whether or not a specialist matched it. */
+  specialty?: string | null;
   attempt: number;
   /** The earlier unit whose proven result this one reused. */
   reusedFrom: string | null;

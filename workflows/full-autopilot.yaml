@@ -45,6 +45,22 @@ stages:
     team:
       mode: adaptive
       maxWorkers: 3
+      # The plan's frontend units go to the designer, on the stage's own agent and level: a whole frontend task runs as
+      # the designer, frontend and backend units side by side each go to their own role (DESIGNER_ROUTING_PLAN §6).
+      specialists:
+        - specialty: frontend
+          description: Pages, layout, styling, UI components and images
+          role: designer
+          toolProfile: frontend-design
+          instructions: >-
+            Build mode inside Full Autopilot, for the plan's frontend work. There is no art direction and no Assets
+            stage: the plan above is the implementation plan, and the repository's design standard and the look around
+            the change bind; with no standard, match the surrounding code and do not propose one. Build every component
+            state, in both themes and at every width the repository supports, and keep behaviour and tests passing. In
+            a work unit change only the paths you own: tests or design memory outside them are described in your report,
+            not written. A missing asset: reuse an existing file or leave a sized placeholder and list it under Known
+            limitations; never write BLOCKED ON OPERATOR for an asset, a brand choice or a budget. Never call media
+            generation or any outside (mcp) tool.
   - key: test
     name: Test
     role: tester

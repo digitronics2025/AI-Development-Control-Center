@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
 import { redact } from '@acc/security';
@@ -314,6 +314,49 @@ export class ContextBuilder {
       .join('\n');
   }
 
+  /** Screenshots and images kept with the task, newest first, by path: an agent opens them with its file-reading tool. */
+  private screenshots(task: TaskRecord): string {
+    const recs = this.store
+      .listArtifacts(task.id)
+      .filter((a) => a.type === 'screenshot' || a.type === 'image' || a.type === 'video')
+      .slice(-30)
+      .reverse();
+    return recs.map((a) => `- ${a.name} (${a.type}${a.stageKey ? `, stage ${a.stageKey}` : ''}, ${Math.max(1, Math.round(a.size / 1024))} KB): ${this.artifacts.absolutePath(a)}`).join('\n');
+  }
+
+  /**
+   * The repository's design standard and design memory (docs/systems/design-agent.md):
+   * named by path and size so the agent reads them in full, with a short
+   * `design/brief.md` inline. Nothing here is required; a repository without
+   * any gets "(none)".
+   */
+  private async designContext(workdir: string): Promise<string> {
+    const lines: string[] = [];
+    const size = async (rel: string) => (await stat(path.join(workdir, rel)).catch(() => null))?.size ?? null;
+    const known: Array<[string, string]> = [
+      ['design.md', "the repository's design standard: read it in full before designing"],
+      ['DESIGN.md', "the repository's design standard: read it in full before designing"],
+      ['docs/design.md', "the repository's design standard: read it in full before designing"],
+      ['tailwind.config.ts', 'the Tailwind theme (colours, type, spacing)'],
+      ['tailwind.config.js', 'the Tailwind theme (colours, type, spacing)'],
+    ];
+    for (const [rel, what] of known) {
+      const s = await size(rel);
+      if (s !== null) lines.push(`- ${rel} (${Math.max(1, Math.round(s / 1024))} KB): ${what}`);
+    }
+    const files = await readdir(path.join(workdir, 'design'), { withFileTypes: true }).catch(() => []);
+    const entries = files.filter((f) => f.isFile()).map((f) => f.name).sort().slice(0, 30);
+    for (const name of entries) {
+      const s = await size(`design/${name}`);
+      lines.push(`- design/${name}${s !== null ? ` (${Math.max(1, Math.round(s / 1024))} KB)` : ''}: design memory`);
+    }
+    if (entries.includes('brief.md')) {
+      const brief = await readFile(path.join(workdir, 'design', 'brief.md'), 'utf8').catch(() => '');
+      if (brief.trim()) lines.push('', '### design/brief.md', '', redact(brief.length > 8000 ? `${brief.slice(0, 8000)}\n\n[truncated]` : brief).trim());
+    }
+    return lines.join('\n');
+  }
+
   private async attachments(task: TaskRecord): Promise<string> {
     const parts: string[] = [];
     for (const att of task.attachments) {
@@ -396,6 +439,8 @@ export class ContextBuilder {
       changed_files: changedFiles,
       directives: this.directives(task, def, stage),
       attachments: await this.attachments(task),
+      screenshots: this.screenshots(task),
+      design_context: await this.designContext(workspace ? agentWorkdir(task, repo) : workdir),
       previous_attempt: this.previousAttempt(task, def, stage),
       verification_commands: workspace
         ? workspace.commands

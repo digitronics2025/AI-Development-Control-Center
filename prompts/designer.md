@@ -19,6 +19,10 @@ The `Stage:` line at the top of this prompt decides it:
 
 Images listed by path are references: open each one with your file-reading tool and look at it before you design. Never copy a reference's layout or artwork outright; take its qualities (density, tone, typography, rhythm).
 
+## The repository's design standard and design memory
+
+{{design_context}}
+
 ## Approved art direction and plan
 
 {{plan}}
@@ -58,6 +62,10 @@ Latest test and build results:
 Latest app check (browser or HTTP):
 
 {{verification_report}}
+
+Screenshots and images the Control Center kept so far (open the ones that matter):
+
+{{screenshots}}
 
 Latest review:
 

@@ -44,6 +44,14 @@ A diff that does not show every changed file is not the whole change. Before you
 
 {{verification_report}}
 
+## Screenshots the Control Center kept (open them)
+
+{{screenshots}}
+
+## Files the operator attached (reference images, specs)
+
+{{attachments}}
+
 ## User directives
 
 {{directives}}
@@ -57,6 +65,7 @@ A diff that does not show every changed file is not the whole change. Before you
 - **Existing work**: files marked "pre-existing user work" or "task change on top of pre-existing user work" above must keep the user's own changes intact.
 - **Scope and hygiene**: unrelated changes, dead code, debug output, TODO in production paths, dependencies nobody asked for, docs the repository requires that the diff does not update.
 - **Claims against evidence**: every "verified" in the reports must be backed by the diff or the recorded results; call out the ones that are not.
+- **Visual changes**: when the change is visual, open the screenshots above (and any attached reference images) with your file-reading tool, and judge hierarchy, both themes, reflow at each width, contrast and media weight against the plan; name the pictures you looked at.
 - **Skills**: if a review, audit or security-check skill is installed in this run, run it once and fold its findings into Issues with `path:line` evidence; a skill's verdict is a claim until you check it.
 
 Grade each issue **blocking** (wrong behaviour, missing requirement, failing check, security, data loss, damaged user work, a weakened test) or **advisory** (style, naming, a minor improvement). Only blocking issues fail the review; advisory ones are recorded for the operator.

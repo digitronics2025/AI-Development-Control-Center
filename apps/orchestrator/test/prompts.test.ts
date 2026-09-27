@@ -1,11 +1,12 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
+import { git } from '@acc/git';
 import { PROMPT_PLACEHOLDERS, placeholdersIn, unknownPlaceholders } from '@acc/shared';
 import { RUN_CONTEXT, renderTemplate } from '../src/engine/context.js';
 import { SKILLS_PROMPT_SECTION } from '../src/engine/tooling.js';
-import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 const PROMPTS_DIR = path.join(ROOT, 'prompts');
 const templates = Object.fromEntries(readdirSync(PROMPTS_DIR).map((f) => [f.replace(/\.md$/, ''), readFileSync(path.join(PROMPTS_DIR, f), 'utf8')]));
@@ -54,7 +55,10 @@ describe('built-in prompt templates', () => {
       expect(templates[role], role).toContain('{{test_results}}');
       expect(templates[role], role).toContain('{{review}}');
     }
-    for (const role of ['investigator', 'planner', 'implementer', 'designer']) expect(templates[role], role).toContain('{{attachments}}');
+    for (const role of ['investigator', 'planner', 'implementer', 'designer', 'reviewer', 'verifier']) expect(templates[role], role).toContain('{{attachments}}');
+    // Pictures are evidence for visual work: the designer, reviewer and verifier see what the Control Center captured.
+    for (const role of ['designer', 'reviewer', 'verifier']) expect(templates[role], role).toContain('{{screenshots}}');
+    expect(templates.designer).toContain('{{design_context}}');
     for (const role of ['implementer', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_commands}}');
     for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{implementation_report}}');
     for (const role of ['reviewer', 'verifier', 'fixer', 'designer']) expect(templates[role], role).toContain('{{verification_report}}');
@@ -104,6 +108,33 @@ describe('rendered stage prompts', () => {
     expect(rec, `prompt artifact of ${stageKey} run ${run}`).toBeDefined();
     return readFileSync(path.isAbsolute(rec!.path) ? rec!.path : path.join(t.dataDir, rec!.path), 'utf8');
   };
+
+  it("give the designer the repository's design standard and the reviewer the screenshots kept so far", async () => {
+    const repoPath = await makeRepo({ files: { 'design.md': '# Design standard\n\nSemantic tokens only.\n' } });
+    mkdirSync(path.join(repoPath, 'design'), { recursive: true });
+    writeFileSync(path.join(repoPath, 'design', 'brief.md'), 'Audience: shoppers in Casablanca. Brand words: calm, precise, warm.\n');
+    writeFileSync(path.join(repoPath, 'design', 'tokens.css'), ':root { --color-accent: #0a7; }\n');
+    for (const args of [['add', '.'], ['commit', '-m', 'design memory']]) expect((await git(repoPath, args)).code).toBe(0);
+    t.services.workflows.save('design-context', {
+      name: 'Design context',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Design review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, repoPath), 'Restyle the landing page [sim:slow]', { workflowId: 'design-context' });
+    await waitFor(() => t.services.store.latestStage(id, 'build'), (s) => s?.status === 'RUNNING', 30_000);
+    // A capture made while the designer works (as the browser tools keep them).
+    await t.services.artifacts.write(id, { name: 'landing-phone-dark.png', type: 'screenshot', content: Buffer.from('89504e470d0a1a0a', 'hex'), stageKey: 'build' });
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const design = promptOf(id, 'build');
+    expect(design).toMatch(/- design\.md \(1 KB\): the repository's design standard: read it in full before designing/);
+    expect(design).toContain('- design/tokens.css (1 KB): design memory');
+    expect(design).toContain('### design/brief.md\n\nAudience: shoppers in Casablanca. Brand words: calm, precise, warm.');
+    const review = promptOf(id, 'review');
+    expect(review).toMatch(/- landing-phone-dark\.png \(screenshot, stage build, 1 KB\): .+landing-phone-dark\.png/);
+  }, 90_000);
 
   it('are saved for every agent stage under the role name', async () => {
     const repoPath = await makeRepo();

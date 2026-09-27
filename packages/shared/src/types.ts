@@ -527,6 +527,12 @@ export interface Repository {
   updatedAt: Iso;
 }
 
+/** Creating always makes the local repository; the GitHub half can fail on its own and says so. */
+export interface NewRepositoryResult {
+  repository: Repository;
+  github: { ok: true; summary: string } | { ok: false; message: string } | null;
+}
+
 export interface ModelDescriptor {
   agentId: string;
   modelId: string;

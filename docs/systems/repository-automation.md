@@ -99,6 +99,30 @@ Add repository dialog's **Download from GitHub** option calls it.
 
 Not a remote operation (like adding a folder, it names paths on this PC).
 
+## Create new
+
+`POST /api/repositories/new` `{ name, parentFolder?, github?, visibility?, description? }`
+→ 201 `NewRepositoryResult { repository, github }`. The dialog's **Create new**
+option calls it.
+
+1. **Always local** (`RepositoryService.createNew`): a new folder `name` in
+   `parentFolder` (default as for a clone), `git init -b main`, a README
+   (`# name` + description) and a commit "Initial commit" using the
+   operator's Git identity, then `add`. An existing folder is `DUPLICATE`;
+   any failure removes the folder (`CREATE_FAILED`, 500 — a missing Git
+   name/email says how to set it).
+2. **GitHub, if asked**: the route calls `github.repo_create` through
+   `ToolService.invoke` (origin `operator`, `preApproved` — the click is the
+   decision; recorded like any tool call). Private is Level 3; **public is
+   Level 5**, so an agent can never publish a repository without typed
+   approval. It runs
+   `gh repo create <name> --private|--public --source . --remote origin --push`
+   in the new folder, under the account `gh` is signed in to.
+3. A GitHub failure never undoes step 1: the answer has
+   `github: { ok: false, message }`, the repository shows **No upstream**, and
+   the dialog says it was created on this computer only. `github: null` when
+   not asked.
+
 ## Background sync
 
 Per repository, four at a time:

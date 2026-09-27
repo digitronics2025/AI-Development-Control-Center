@@ -1,8 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { cloneRepository, failureText, isGitRepository, repositoryStatus, topLevel } from '@acc/git';
+import { cloneRepository, failureText, git, isGitRepository, repositoryStatus, topLevel } from '@acc/git';
 import { isCloneFolderName, parseCloneUrl, repositoryRuntimeSchema, type CloneRepositoryInput, type Repository, type RepositoryCommand, type RepositoryRuntime, type RepositoryStatus, type UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { SettingsService } from './settings.js';
@@ -11,7 +11,7 @@ import { newId, now, type RepositoryRecord, type Store } from '../store/store.js
 export class RepositoryError extends Error {
   constructor(
     message: string,
-    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'INVALID_URL' | 'DUPLICATE' | 'IN_USE' | 'CLONE_FAILED',
+    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'INVALID_URL' | 'DUPLICATE' | 'IN_USE' | 'CLONE_FAILED' | 'CREATE_FAILED',
   ) {
     super(message);
   }
@@ -254,6 +254,39 @@ export class RepositoryService {
       throw new RepositoryError(`Could not download ${parsed.url}: ${reason}`, 'CLONE_FAILED');
     }
     return this.add(destination, input.name);
+  }
+
+  /**
+   * Start a brand-new repository on this computer: a new folder, `git init`
+   * on `main`, and a first commit holding a README (so it has a branch that
+   * can be uploaded). Then it is registered like `add`. The folder must not
+   * exist; on any failure the folder is removed. Creating it on GitHub as
+   * well is a separate tool call (`github.repo_create`) made by the route.
+   */
+  async createNew(input: { name: string; parentFolder?: string; description?: string }): Promise<Repository> {
+    if (!isCloneFolderName(input.name)) throw new RepositoryError(`"${input.name}" is not a usable folder name`, 'INVALID_PATH');
+    const parent = path.resolve((input.parentFolder?.trim() || this.defaultCloneParent()).replace(/^"|"$/g, ''));
+    if (!existsSync(parent) || !statSync(parent).isDirectory()) throw new RepositoryError(`"${parent}" is not an existing folder`, 'INVALID_PATH');
+    const destination = path.join(parent, input.name);
+    if (existsSync(destination)) throw new RepositoryError(`${destination} already exists. Choose another name, or add that folder instead.`, 'DUPLICATE');
+    await mkdir(destination);
+    try {
+      const readme = `# ${input.name}\n${input.description?.trim() ? `\n${input.description.trim()}\n` : ''}`;
+      await writeFile(path.join(destination, 'README.md'), readme, 'utf8');
+      for (const args of [['init', '-b', 'main'], ['add', '--', 'README.md'], ['commit', '-m', 'Initial commit']]) {
+        const result = await git(destination, args);
+        if (result.code !== 0) {
+          const reason = failureText(`${result.stderr}\n${result.stdout}`).split('\n').slice(-3).join(' ').slice(0, 500);
+          const hint = args[0] === 'commit' && /user\.(name|email)|identity/i.test(reason) ? ' Set your Git name and email first (git config --global user.name / user.email).' : '';
+          throw new RepositoryError(`Could not create the repository (git ${args[0]}): ${reason}${hint}`, 'CREATE_FAILED');
+        }
+      }
+    } catch (error) {
+      // The folder did not exist before, so everything in it is ours.
+      await rm(destination, { recursive: true, force: true }).catch(() => undefined);
+      throw error instanceof RepositoryError ? error : new RepositoryError(`Could not create the repository: ${(error as Error).message}`, 'CREATE_FAILED');
+    }
+    return this.add(destination);
   }
 
   async update(id: string, patch: UpdateRepositoryInput): Promise<Repository> {

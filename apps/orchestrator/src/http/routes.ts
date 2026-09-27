@@ -12,6 +12,7 @@ import {
   chairmanActionBodySchema,
   chairmanMessageBodySchema,
   cloneRepositorySchema,
+  newRepositorySchema,
   createRepositorySchema,
   createTaskSchema,
   directiveSchema,
@@ -27,6 +28,7 @@ import {
   API_BILLING_CONFIRMATION,
   updateTaskSchema,
   unknownPlaceholders,
+  type NewRepositoryResult,
   type ServiceHealth,
   type TaskChanges,
   type TaskStatus,
@@ -41,6 +43,7 @@ import { taskWorkdir } from '../engine/workdir.js';
 import { AgentNotFoundError } from '../services/agents.js';
 import { toArtifactView } from '../services/artifacts.js';
 import { RepositoryError } from '../services/repositories.js';
+import { operatorScope } from './tool-routes.js';
 import { WorkflowError } from '../services/workflows.js';
 import { SOURCE_CONTROL_HTTP_STATUS, SourceControlError } from '../source-control/errors.js';
 import { CredentialError } from '../tools/credentials.js';
@@ -69,7 +72,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof RepositoryError) {
-      const status = { NOT_FOUND: 404, INVALID_PATH: 400, INVALID_URL: 400, DUPLICATE: 409, IN_USE: 409, CLONE_FAILED: 502 }[error.code];
+      const status = { NOT_FOUND: 404, INVALID_PATH: 400, INVALID_URL: 400, DUPLICATE: 409, IN_USE: 409, CLONE_FAILED: 502, CREATE_FAILED: 500 }[error.code];
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof WorkflowError) {
@@ -474,6 +477,32 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return reply.code(201).send(await s.repositories.clone(cloneRepositorySchema.parse(request.body)));
   });
   app.get('/api/repositories/clone-defaults', async () => ({ parentFolder: s.repositories.defaultCloneParent() }));
+  /**
+   * Start a brand-new repository: always on this computer; with `github`, also
+   * on GitHub through the tool layer (`github.repo_create`, the operator's own
+   * click is the approval). The local repository stays even if GitHub fails,
+   * and the answer says which half worked.
+   */
+  app.post('/api/repositories/new', async (request, reply) => {
+    const body = newRepositorySchema.parse(request.body);
+    let repository = await s.repositories.createNew(body);
+    let github: NewRepositoryResult['github'] = null;
+    if (body.github) {
+      const scope = { ...operatorScope(s, repository.id), sessionId: null, escalated: new Set<string>() };
+      const outcome = await s.tools.invoke({
+        capability: 'github.repo_create',
+        input: { name: body.name, visibility: body.visibility, description: body.description },
+        origin: 'operator',
+        scope,
+        preApproved: true,
+        timeoutMs: 240_000,
+      });
+      github = outcome.result.ok ? { ok: true, summary: outcome.result.summary } : { ok: false, message: outcome.result.error?.message ?? outcome.result.summary };
+      if (outcome.result.ok) repository = await s.repositories.refresh(repository.id);
+    }
+    const result: NewRepositoryResult = { repository, github };
+    return reply.code(201).send(result);
+  });
   app.get('/api/repositories/:id', async (request) => s.repositories.get(idParam.parse(request.params).id, true));
   app.patch('/api/repositories/:id', async (request) => {
     const patch = updateRepositorySchema.parse(request.body);

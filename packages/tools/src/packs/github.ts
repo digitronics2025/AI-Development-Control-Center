@@ -129,6 +129,30 @@ export function githubProvider(): ToolProvider {
           gh(ctx, ['pr', 'create', '--title', i.title, '--body', i.body, ...(i.base ? ['--base', i.base] : []), ...(i.head ? ['--head', i.head] : []), ...(i.draft ? ['--draft'] : [])], (t) => `Opened ${String(t).trim().split('\n').pop()}`, 120_000),
       }),
       operation({
+        id: 'github.repo_create',
+        title: 'Create a GitHub repository',
+        description:
+          'Create a new repository on GitHub under the signed-in account from this local repository: it becomes `origin` and the current branch is pushed. The local repository needs at least one commit and no `origin` yet.',
+        input: z.object({
+          name: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/, 'Letters, digits, dot, dash and underscore').refine((n) => n !== '.' && n !== '..' && !n.startsWith('-'), 'Not a usable name'),
+          visibility: z.enum(['private', 'public']).default('private'),
+          description: z.string().max(350).default(''),
+        }),
+        level: 3,
+        // Public publishes the code to everyone: Level 5, so an agent never does it without a person's typed approval.
+        classify: (i) =>
+          i.visibility === 'public'
+            ? { level: 5, risk: 'elevated', reasons: [`Publishes ${i.name} as a public GitHub repository`], effects: ['network'] }
+            : { reasons: [`Creates the private GitHub repository ${i.name}`], effects: ['network'] },
+        run: (i, ctx) =>
+          gh(
+            ctx,
+            ['repo', 'create', i.name, `--${i.visibility}`, ...(i.description ? ['--description', i.description] : []), '--source', '.', '--remote', 'origin', '--push'],
+            (t) => `Created ${String(t).trim().split('\n').find((l) => l.includes('github.com')) ?? i.name}`,
+            180_000,
+          ),
+      }),
+      operation({
         id: 'github.issue_create',
         title: 'Open an issue',
         description: 'Create an issue.',

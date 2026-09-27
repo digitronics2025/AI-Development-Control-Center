@@ -18,6 +18,8 @@ import type {
   Directive,
   Execution,
   LogLine,
+  NewRepositoryInput,
+  NewRepositoryResult,
   OverviewCounts,
   Page,
   PromptTemplate,
@@ -402,6 +404,7 @@ export function useRepositoryMutations() {
   return {
     add: useMutation({ mutationFn: (input: { path: string; name?: string }) => api.post<Repository>('/api/repositories', input), onSuccess: refresh }),
     clone: useMutation({ mutationFn: (input: CloneRepositoryInput) => api.post<Repository>('/api/repositories/clone', input), onSuccess: refresh }),
+    create: useMutation({ mutationFn: (input: NewRepositoryInput) => api.post<NewRepositoryResult>('/api/repositories/new', input), onSuccess: refresh }),
     update: useMutation({
       mutationFn: ({ id, patch }: { id: string; patch: UpdateRepositoryInput }) => api.patch<Repository>(`/api/repositories/${id}`, patch),
       onSuccess: (repo) => {

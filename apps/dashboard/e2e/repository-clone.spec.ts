@@ -37,9 +37,29 @@ for (const theme of ['light', 'dark'] as const) {
     await setTheme(page, theme);
     await page.getByRole('button', { name: 'Add repository' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Add repository' });
-    await dialog.getByRole('radio', { name: 'Download from GitHub' }).click();
+    await dialog.getByRole('radio', { name: 'From GitHub' }).click();
     await dialog.getByLabel('Repository address').fill('owner/my-app');
     await expect(dialog.getByText(/Will be saved in .*my-app/)).toBeVisible();
+    await expectNoAxeViolations(page, testInfo);
+  });
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`the Create new form is accessible and checks the name (${theme})`, async ({ page }, testInfo) => {
+    await page.goto('/repositories');
+    await setTheme(page, theme);
+    await page.getByRole('button', { name: 'Add repository' }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Add repository' });
+    await dialog.getByRole('radio', { name: 'Create new' }).click();
+    await expect(dialog.getByRole('checkbox', { name: /Also create it on GitHub/ })).toBeChecked();
+    await expect(dialog.getByRole('radio', { name: 'Private' })).toBeChecked();
+    await dialog.getByLabel('Name', { exact: true }).fill('has space');
+    await dialog.getByRole('button', { name: 'Create repository' }).click();
+    await expect(dialog.getByText(/Use letters, digits, dot, dash and underscore only/)).toBeVisible();
+    await dialog.getByLabel('Name', { exact: true }).fill('my-app');
+    await expect(dialog.getByText(/Will be created in .*my-app/)).toBeVisible();
+    await dialog.getByRole('checkbox', { name: /Also create it on GitHub/ }).uncheck();
+    await expect(dialog.getByRole('radio', { name: 'Private' })).toHaveCount(0);
     await expectNoAxeViolations(page, testInfo);
   });
 }
@@ -49,7 +69,7 @@ test('downloads an online-only repository and adds it', async ({ page }) => {
   await page.goto('/repositories');
   await page.getByRole('button', { name: 'Add repository' }).first().click();
   const dialog = page.getByRole('dialog', { name: 'Add repository' });
-  await dialog.getByRole('radio', { name: 'Download from GitHub' }).click();
+  await dialog.getByRole('radio', { name: 'From GitHub' }).click();
   await dialog.getByLabel('Repository address').fill('ext::sh -c id');
   await dialog.getByRole('button', { name: 'Download and add' }).click();
   await expect(dialog.getByText(/Enter a GitHub "owner\/name"/)).toBeVisible();

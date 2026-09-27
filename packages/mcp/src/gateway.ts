@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { redact } from '@acc/security';
+import { guardedFetch, McpSignInRequired, UnauthorizedError, type McpOAuthProvider } from './oauth.js';
 
 /**
  * MCP gateway (V2 plan §29): the Control Center as a client of other MCP
@@ -23,6 +24,8 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   cwd?: string | null;
   timeoutMs?: number;
+  /** `http` servers that sign in with OAuth: the provider over the sealed sign-in (oauth.ts). */
+  oauth?: McpOAuthProvider;
 }
 
 export interface McpToolInfo {
@@ -65,7 +68,17 @@ interface Pooled {
 const IDLE_MS = 5 * 60_000;
 
 function fingerprint(config: McpServerConfig): string {
-  return JSON.stringify([config.transport, config.command, config.args, config.url, Object.keys(config.env ?? {}).sort(), Object.keys(config.headers ?? {}).sort()]);
+  return JSON.stringify([config.transport, config.command, config.args, config.url, Object.keys(config.env ?? {}).sort(), Object.keys(config.headers ?? {}).sort(), Boolean(config.oauth)]);
+}
+
+/** An OAuth server that refuses the saved sign-in (and could not refresh it) needs the operator, not a retry. */
+async function signedIn<T>(config: McpServerConfig, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (config.oauth && error instanceof UnauthorizedError) throw new McpSignInRequired(config.name);
+    throw error;
+  }
 }
 
 export class McpGateway {
@@ -94,8 +107,11 @@ export class McpGateway {
       return { client, lastUsed: Date.now(), key: fingerprint(config), close: () => client.close() };
     }
     if (!config.url) throw new Error('An HTTP MCP server needs a URL');
-    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers ?? {} } });
-    await client.connect(transport, { timeout });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), {
+      requestInit: { headers: config.headers ?? {} },
+      ...(config.oauth ? { authProvider: config.oauth, fetch: guardedFetch } : {}),
+    });
+    await signedIn(config, () => client.connect(transport, { timeout }));
     return { client, lastUsed: Date.now(), key: fingerprint(config), close: () => client.close() };
   }
 
@@ -127,7 +143,7 @@ export class McpGateway {
     const tools: McpToolInfo[] = [];
     let cursor: string | undefined;
     do {
-      const page = await c.client.listTools(cursor ? { cursor } : {}, { timeout: config.timeoutMs ?? 30_000 });
+      const page = await signedIn(config, () => c.client.listTools(cursor ? { cursor } : {}, { timeout: config.timeoutMs ?? 30_000 }));
       for (const t of page.tools) {
         tools.push({
           name: t.name,
@@ -158,7 +174,7 @@ export class McpGateway {
 
   async callTool(config: McpServerConfig, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
     const c = await this.connection(config);
-    const result = await c.client.callTool({ name, arguments: args }, undefined, { timeout: config.timeoutMs ?? 120_000, signal });
+    const result = await signedIn(config, () => c.client.callTool({ name, arguments: args }, undefined, { timeout: config.timeoutMs ?? 120_000, signal }));
     c.lastUsed = Date.now();
     const content = (result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }> | undefined) ?? [];
     const text = redact(content.map((part) => (part.type === 'text' ? (part.text ?? '') : `[${part.type}${part.mimeType ? ` ${part.mimeType}` : ''}]`)).join('\n'));

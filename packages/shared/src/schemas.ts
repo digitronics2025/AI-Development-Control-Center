@@ -86,12 +86,16 @@ export type StageTeamWorker = z.infer<typeof stageTeamWorkerSchema>;
  * Optional Stage Team of an agent stage (docs/plans/STAGE_TEAMS_PLAN.md §3.2).
  * fixed: the configured workers run side by side (read-only stages);
  * adaptive: work units come from the plan's execution manifest, and the stage
- * runs as one agent whenever they cannot run safely in parallel.
+ * runs as one agent whenever they cannot run safely in parallel;
+ * variants: each listed worker does the whole stage its own way, a judge picks
+ * one, and only that one is kept (docs/plans/stage-team-variants.md).
  */
 export const stageTeamSchema = z.object({
-  mode: z.enum(['fixed', 'adaptive']),
+  mode: z.enum(['fixed', 'adaptive', 'variants']),
   maxWorkers: z.number().int().min(2).max(MAX_TEAM_WORKERS).default(3),
   workers: z.array(stageTeamWorkerSchema).max(MAX_TEAM_WORKERS).optional(),
+  /** Variants only: who judges them (else the stage's own agent, model and effort). */
+  judge: z.object({ agentId: agentIdSchema.optional(), model: modelIdSchema.optional(), effort: effortSchema.optional() }).optional(),
 });
 export type StageTeam = z.infer<typeof stageTeamSchema>;
 

@@ -30,7 +30,7 @@ import { costWithGaps, unpricedNote } from './common';
  * pass (engine/stage-team.ts), and the ledger's bucket for rows with no unit (usage/queries.ts). The
  * ledger's `workUnits` carry no kind, so the key is all there is; the task page counts the same workers.
  */
-const NOT_TEAM_MEMBERS = new Set(['decompose', 'integration', 'lead']);
+const NOT_TEAM_MEMBERS = new Set(['decompose', 'integration', 'lead', 'judge']);
 
 /** A Stage Team's members ran side by side, so they read as a team, never as attempts of each other. */
 function runLabel(f: UsageStageCost): string {

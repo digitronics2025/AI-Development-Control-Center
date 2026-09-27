@@ -383,8 +383,8 @@ export function WorkflowsPage() {
               {draft.stages.map((s, index) => {
                 const stageIssues = issuesFor(issues, index);
                 const stageAgent = s.agentId ?? settings.data?.roleDefaults[s.role]?.agentId;
-                // A fixed team runs on its workers' agents (a worker without a pin uses the stage's); an adaptive team's workers all use the stage's.
-                const teamAgents = s.kind === 'agent' && s.team?.mode === 'fixed' && s.team.workers?.length ? [...new Set(s.team.workers.map((w) => w.agentId ?? stageAgent))] : null;
+                // A fixed team or variants run on their workers' agents (a worker without a pin uses the stage's); an adaptive team's workers all use the stage's.
+                const teamAgents = s.kind === 'agent' && (s.team?.mode === 'fixed' || s.team?.mode === 'variants') && s.team.workers?.length ? [...new Set(s.team.workers.map((w) => w.agentId ?? stageAgent))] : null;
                 const agent =
                   s.kind !== 'agent'
                     ? 'System'

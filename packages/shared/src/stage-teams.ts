@@ -136,7 +136,7 @@ export const WORK_UNIT_STATUSES = ['QUEUED', 'RUNNING', 'SUCCESS', 'FAILED', 'CA
 export type WorkUnitStatus = (typeof WORK_UNIT_STATUSES)[number];
 
 /** worker: one unit of the team; decomposer: the read-only run that splits a Fix; integration: the lead's consistency pass. */
-export const WORK_UNIT_KINDS = ['worker', 'decomposer', 'integration'] as const;
+export const WORK_UNIT_KINDS = ['worker', 'decomposer', 'integration', 'judge'] as const;
 export type WorkUnitKind = (typeof WORK_UNIT_KINDS)[number];
 
 /** One persisted unit of a Stage Team run (table `stage_work_units`). */

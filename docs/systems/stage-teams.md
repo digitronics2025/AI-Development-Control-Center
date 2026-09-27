@@ -28,6 +28,7 @@ validated by `teamIssues` in [workflow.ts](../../packages/shared/src/workflow.ts
 |---|---|
 | `mode: fixed` | the listed `workers` (2–4) run side by side. Level 1 stages only — fixed workers own no paths. A verdict stage names exactly one `primary` reviewer |
 | `mode: adaptive` | work units come from the plan's manifest (or, for a `fixer`, a decomposition run). No worker list, no verdict stages |
+| `mode: variants` | the listed `workers` (2–4, each an approach) each do the **whole** stage; a judge keeps one ([Variants](#variants)). Level 1–3 work stages, never a verdict stage or a judge-class role, no `primary`; optional `judge` pin (`agentId`/`model`/`effort`, else the stage's) |
 | `maxWorkers` | 2–4 per stage; also capped machine-wide by Settings → `execution.teamWorkerLimit` (default 3, a semaphore across every task) |
 
 Never on non-agent stages or at Level 4/5. Absent `team` = the stage exactly
@@ -44,6 +45,38 @@ adaptive Fix (max 2). **Full Autopilot**
 (max 3, two attempts so a crashed worker's siblings are reused), fixed review
 (primary correctness + risk), adaptive Fix (max 2); Test, App check, Verify, Git
 checkpoint, staging and Release unchanged. Other built-ins have no teams.
+
+## Variants
+
+[stage-team-variants.md](../plans/stage-team-variants.md). At Level 1 the
+variants run side by side in the task's tree (read-only). At Level 2–3 each
+runs in its own child checkout of the wave base, exactly as a write unit
+does, but owning the whole repository: no `SCOPE_VIOLATION`, because only one
+variant is ever integrated. Each is told it is one of N competing variants,
+its approach, and to do the complete work (`variantSection`).
+
+A failed variant is one approach fewer, not a failed stage; the stage fails
+only when every variant failed. A lone finished variant is kept without a
+judge. Otherwise one **judge** unit (kind `judge`, key `judge`) runs read-only
+at Level 1 in the task's tree, which no variant touched. It gets the stage
+context with `Role: judge`, and each finished variant's approach, agent,
+changed files, diff against its base (40 KB each, 100 KB in all, redacted)
+and report (12 KB). It must end with `WINNER: <key>` (`parseWinner`: the last
+such line); naming no finished variant fails the stage (`UNKNOWN`). Prompt
+`<role prompt>-judge.md`, answer `<role report>-judge.md`.
+
+Then only the winner is integrated (`integrate` with that one unit,
+byte-exact against its wave base; no integration pass) or, at Level 1,
+becomes the stage's result. The role's report is the winner's report plus
+"Variant kept", the variants it was kept over, and the judge's reasons. The
+others stay `SUCCESS` with "Not chosen:" in their summary, their reports as
+unit artifacts and their results as hidden refs. The stage summary reads "N
+variants (k failed); kept X: …", and the completion event's `team` data
+carries `variants: { chosen, finished, judgeMs }`.
+
+Not yet: a running app per variant, so a judge could open each build in a
+browser (the App runtime starts one app per task worktree). Specialty routing
+is deferred until per-worker outcome data exists (the plan's gate).
 
 ## Manifest
 

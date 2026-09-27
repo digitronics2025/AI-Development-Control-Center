@@ -107,6 +107,33 @@ describe('validateWorkflow', () => {
     expect(validateWorkflow(wf({ toolProfile: 'frontend-design' }, 'tests')).issues).toContainEqual(expect.objectContaining({ field: 'toolProfile', message: 'Only agent stages take instructions, a tool profile or skills' }));
   });
 
+  it('accepts variants on work stages, with a worker per approach and an optional judge, and names each refusal', () => {
+    const variants = (extra: Partial<StageDefinitionInput> = {}, team: Record<string, unknown> = {}) => ({
+      id: 'v',
+      name: 'V',
+      stages: [
+        stage({
+          key: 'build',
+          role: 'designer',
+          next: 'complete',
+          permissionLevel: 2,
+          team: { mode: 'variants', workers: [{ key: 'bold', focus: 'Bold take' }, { key: 'calm', focus: 'Calm take', agentId: 'codex' }], judge: { agentId: 'claude', effort: 'high' }, ...team } as never,
+          ...extra,
+        }),
+      ],
+    });
+    const ok = validateWorkflow(variants());
+    expect(ok.issues).toEqual([]);
+    expect(ok.profile?.stages[0]?.team).toMatchObject({ mode: 'variants', judge: { agentId: 'claude', effort: 'high' } });
+    expect(validateWorkflow(variants({ permissionLevel: 1 })).issues).toEqual([]);
+    const issue = (wf: unknown) => validateWorkflow(wf).issues.map((i) => i.message);
+    expect(issue(variants({}, { workers: [{ key: 'solo', focus: 'Only one' }] }))).toContain('Variants need 2 to 4 workers, one per approach');
+    expect(issue(variants({ role: 'visual-critic', permissionLevel: 1 }))).toContain('Variants are competing attempts at the work; a review is a fixed team of reviewers');
+    expect(issue(variants({}, { workers: [{ key: 'a', focus: 'A', primary: true }, { key: 'b', focus: 'B' }] }))).toContain('Only a review (verdict) team has a primary reviewer');
+    expect(issue(variants({ permissionLevel: 4 }))).toContain('Staging and production stages never run as a team');
+    expect(issue({ id: 'a', name: 'A', stages: [stage({ key: 'impl', next: 'complete', permissionLevel: 2, team: { mode: 'adaptive', judge: { agentId: 'claude' } } as never })] })).toContain('Only variants have a judge');
+  });
+
   it('rejects onFail on a stage without a verdict', () => {
     const bad = { ...normal, stages: normal.stages.map((s) => (s.key === 'implement' ? { ...s, onFail: 'fix' } : s)) };
     expect(validateWorkflow(bad).issues).toContainEqual(expect.objectContaining({ stageIndex: 1, field: 'onFail' }));

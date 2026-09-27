@@ -116,6 +116,11 @@ const STOPPED: readonly StageStatus[] = ['CANCELLED', 'PAUSED', 'INTERRUPTED'];
 /** A stage run that ended without finishing, for whatever reason; what it integrated may already be in the task. */
 const UNFINISHED: readonly StageStatus[] = [...STOPPED, 'FAILED'];
 const DECOMPOSE_FOCUS = 'Read-only: split the failures into independent repairs';
+const JUDGE_FOCUS = 'Read-only: compare the variants and keep one';
+/** What a judge is shown of each variant: its report, and (write stages) its diff, within these. */
+const MAX_JUDGE_REPORT = 12_000;
+const MAX_JUDGE_DIFF = 40_000;
+const MAX_JUDGE_DIFF_TOTAL = 100_000;
 
 /** A write wave that ran: its units, and the base they started from. */
 interface WriteWave {
@@ -183,6 +188,8 @@ export class StageTeamRunner {
     const startedMs = Date.now();
     if (def.permissionLevel >= 4) return this.fallback(task, def, stage, 'staging and production stages never run as a team');
     const write = def.permissionLevel >= 2;
+    // Variants: every worker does the whole stage its own way; a judge keeps one (docs/plans/stage-team-variants.md).
+    const variants = team.mode === 'variants';
     if (write) {
       if (isMultiRepository(this.d.store, task)) return this.fallback(task, def, stage, 'a team that changes files across several repositories is not supported yet');
       if (!task.git.isolated || !task.git.worktreePath) return this.fallback(task, def, stage, 'the task does not run in an isolated worktree, so parallel writers cannot be kept apart');
@@ -191,7 +198,7 @@ export class StageTeamRunner {
 
     let planned: PlannedUnit[];
     let fingerprint: unknown;
-    if (team.mode === 'fixed') {
+    if (team.mode === 'fixed' || variants) {
       planned = (team.workers ?? []).map((w) => ({
         key: w.key,
         title: clipTitle(w.focus),
@@ -203,7 +210,7 @@ export class StageTeamRunner {
         primary: w.primary,
         ...this.assignment(task, def, stage, w),
       }));
-      if (planned.length < 2) return this.fallback(task, def, stage, 'a fixed team needs at least two workers');
+      if (planned.length < 2) return this.fallback(task, def, stage, variants ? 'variants need at least two workers' : 'a fixed team needs at least two workers');
       fingerprint = { stage: def.key, team };
     } else {
       const manifest = await this.manifestFor(task, def, stage, repo, control);
@@ -265,7 +272,9 @@ export class StageTeamRunner {
     this.d.publisher.event(
       task.id,
       'STAGE_TEAM',
-      `${def.name} runs as a team of ${planned.length} (${write ? 'each in its own checkout' : 'read-only, side by side'}, at most ${cap} at once): ${planned.map((p) => p.title).join(', ')}`,
+      variants
+        ? `${def.name} runs as ${planned.length} competing variants (${write ? 'each in its own checkout' : 'read-only, side by side'}, at most ${cap} at once); a judge keeps one: ${planned.map((p) => p.title).join(', ')}`
+        : `${def.name} runs as a team of ${planned.length} (${write ? 'each in its own checkout' : 'read-only, side by side'}, at most ${cap} at once): ${planned.map((p) => p.title).join(', ')}`,
       { mode: team.mode, units: planned.map((p) => p.key), maxWorkers: cap, write },
       stage.id,
     );
@@ -276,6 +285,8 @@ export class StageTeamRunner {
     let wave = 0;
     let coverage: PromptCoverage = { required: [], all: [] };
     let pending = [...planned];
+    // Variants are integrated only after the judge: each result remembers the base it started from.
+    const variantBases = new Map<string, { base: WaveBase; wave: number }>();
     while (pending.length) {
       if (control.stopReason) return this.stopAll(stage, rows, control.stopReason);
       const ready = pending.filter((p) => p.dependsOn.every((dep) => done.has(dep)));
@@ -293,11 +304,11 @@ export class StageTeamRunner {
       }
       coverage = built.coverage;
       const others = (p: PlannedUnit) => planned.filter((o) => o.key !== p.key);
-      // The last wave of a write team also reserves the lead's integration pass that follows it.
+      // The last wave of a write team also reserves the lead's integration pass (variants: the judge) that follows it.
       const reserve = write && batch.length === pending.length ? 1 : 0;
       const waveResults = write
-        ? await this.writeWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, wave, reserve)
-        : await this.readWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier);
+        ? await this.writeWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, wave, reserve, variants)
+        : await this.readWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, variants);
       if ('outcome' in waveResults) return waveResults.outcome;
       if ('kind' in waveResults) return this.parkAtLimit(task, def, stage, rows, pending, results, waveResults.message);
       results.push(...waveResults.results);
@@ -313,12 +324,15 @@ export class StageTeamRunner {
         return { kind: 'needs_operator', stageId: stage.id, questions };
       }
       const failed = waveResults.results.filter((r) => r.failure);
-      if (failed.length) {
+      // A failed variant is one approach fewer, not a failed stage: the judge decides once every variant ran.
+      if (failed.length && !variants) {
         this.markRemaining(rows, pending, 'SKIPPED', 'An earlier work unit failed');
         await this.writeAggregate(task, def, stage, results);
         return this.failTeam(stage, failed, waveResults.results.length, write);
       }
-      if (waveResults.base) {
+      if (variants) {
+        if (waveResults.base) for (const r of waveResults.results) variantBases.set(r.planned.key, { base: waveResults.base, wave });
+      } else if (waveResults.base) {
         const integration = await this.integrate(task, def, stage, waveResults.results, wave, waveResults.base);
         if (integration.kind === 'failed') {
           this.markRemaining(rows, pending, 'SKIPPED', 'The team could not integrate an earlier wave');
@@ -334,6 +348,8 @@ export class StageTeamRunner {
       this.markRemaining(rows, pending, 'SKIPPED', 'Its dependencies did not finish');
       return this.d.runners.failStage(stage, 'UNKNOWN', `${def.name}: ${pending.length} work unit(s) could not start because their dependencies did not finish`);
     }
+
+    if (variants) return this.finishVariants(task, def, stage, repo, control, rows, results, variantBases, write, startedMs);
 
     // Several writers' patches can each be right and still not fit together: one short lead pass reconciles them.
     let lead: LeadReport | null = null;
@@ -395,6 +411,209 @@ export class StageTeamRunner {
       integrated: integratedUnits,
     };
     return this.d.runners.completeAgentStage(task, def, stage, this.stageSummary(results, lead), verdict, teamData.wallMs, { team: teamData }, failedBy);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Variants (docs/plans/stage-team-variants.md)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every variant ran: keep one. A lone survivor wins as it is; otherwise a
+   * read-only judge compares them. Only the winner reaches the task (write) or
+   * becomes the stage's report (read); the others stay as their units' reports
+   * and hidden refs, marked not chosen.
+   */
+  private async finishVariants(
+    task: TaskRecord,
+    def: StageDefinition,
+    stage: StageInstance,
+    repo: RepositoryRecord,
+    control: RunControl,
+    rows: Map<string, StageWorkUnit>,
+    results: UnitResult[],
+    bases: Map<string, { base: WaveBase; wave: number }>,
+    write: boolean,
+    startedMs: number,
+  ): Promise<StageOutcome> {
+    const candidates = results.filter((r) => !r.failure);
+    const failed = results.filter((r) => r.failure);
+    if (!candidates.length) {
+      await this.writeAggregate(task, def, stage, results);
+      return this.failTeam(stage, failed, results.length, write);
+    }
+    let winner: UnitResult;
+    let judge: LeadReport | null = null;
+    if (candidates.length === 1) {
+      winner = candidates[0]!;
+      this.d.publisher.event(task.id, 'STAGE_TEAM', `${def.name}: only ${winner.planned.title} finished, so it is kept without judging`, { winner: winner.planned.key, failed: failed.map((f) => f.planned.key) }, stage.id);
+    } else {
+      const judged = await this.judgeVariants(task, def, stage, repo, control, candidates, bases, write);
+      if (judged.kind === 'stopped') return { kind: 'stopped', stageId: stage.id, reason: judged.reason };
+      if (judged.kind === 'limit') return this.parkAtLimit(task, def, stage, rows, [], results, judged.message);
+      if (judged.kind === 'failed') {
+        await this.writeAggregate(task, def, stage, results);
+        return this.d.runners.failStage(stage, judged.errorClass, `Judge: ${judged.message}`);
+      }
+      winner = judged.winner;
+      judge = judged.lead;
+    }
+    if (write) {
+      const at = bases.get(winner.planned.key);
+      const integration = at ? await this.integrate(task, def, stage, [winner], at.wave, at.base) : { kind: 'failed' as const, message: `${winner.planned.title} has no recorded starting point` };
+      if (integration.kind === 'failed') {
+        await this.writeAggregate(task, def, stage, results);
+        return this.d.runners.failStage(stage, 'UNKNOWN', integration.message);
+      }
+    }
+    for (const r of candidates) {
+      if (r === winner) continue;
+      const row = this.d.store.getWorkUnit(r.unit.id);
+      this.publish(this.d.store.updateWorkUnit(r.unit.id, { summary: clipText(`Not chosen: ${row?.summary ?? 'done'}`, MAX_STAGE_SUMMARY) }));
+    }
+    await this.writeVariantAggregate(task, def, stage, winner, judge, results);
+    const time = this.agentTime(task, stage);
+    const teamData = {
+      workers: results.length,
+      reused: results.filter((r) => r.unit.status === 'REUSED').length,
+      wallMs: Date.now() - startedMs,
+      agentMs: time.worker ?? 0,
+      decomposeMs: null,
+      integrationMs: null,
+      integrated: write && winner.changes.length ? 1 : 0,
+      variants: { chosen: winner.planned.key, finished: candidates.length, judgeMs: time.judge ?? null },
+    };
+    const summary = clipText(
+      `${results.length} variants${failed.length ? ` (${failed.length} failed)` : ''}; kept ${winner.planned.title}: ${clipText(this.d.store.getWorkUnit(winner.unit.id)?.summary ?? summarize(winner.output ?? '') ?? 'done', MAX_UNIT_SUMMARY)}`,
+      MAX_STAGE_SUMMARY,
+    );
+    return this.d.runners.completeAgentStage(task, def, stage, summary, null, teamData.wallMs, { team: teamData });
+  }
+
+  /** One read-only (Level 1) judge run over the finished variants; it must name one of them. */
+  private async judgeVariants(
+    task: TaskRecord,
+    def: StageDefinition,
+    stage: StageInstance,
+    repo: RepositoryRecord,
+    control: RunControl,
+    candidates: UnitResult[],
+    bases: Map<string, { base: WaveBase; wave: number }>,
+    write: boolean,
+  ): Promise<{ kind: 'ok'; winner: UnitResult; lead: LeadReport } | Exclude<AgentRun, { kind: 'ok' }> | LimitHit> {
+    let built;
+    try {
+      built = await this.d.context.build(this.task(task.id), def, stage);
+    } catch (error) {
+      return { kind: 'failed', errorClass: 'CONTEXT_FAILURE', message: `Context could not be built: ${(error as Error).message}` };
+    }
+    const pin = def.team?.judge ?? {};
+    const unit = this.d.store.insertWorkUnit({
+      ...this.blankUnit(task, def, stage, 'judge', 'judge', 'Judge', JUDGE_FOCUS),
+      ...this.assignment(task, def, stage, pin),
+      ordinal: candidates.length + 1,
+      dependencies: candidates.map((r) => r.planned.key),
+    });
+    this.publish(unit);
+    const limit = this.limitFor(task, def, 1);
+    if (limit) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', errorMessage: 'Not started: the task reached its agent run limit', finishedAt: now() }));
+      return { kind: 'limit', message: limit };
+    }
+    const parent = task.git.worktreePath;
+    const sections: string[] = [];
+    let diffBudget = MAX_JUDGE_DIFF_TOTAL;
+    for (const r of candidates) {
+      const report = r.output ?? '';
+      sections.push(`### Variant \`${r.planned.key}\`: ${r.planned.title}`, '', `- Approach: ${r.planned.focus}`, `- Agent: ${this.agentName(r.unit.agentId)}${r.unit.model ? ` (${r.unit.model})` : ''}`);
+      if (write) {
+        sections.push(`- Changed files (${r.changes.length}): ${r.changes.slice(0, 50).map((c) => c.path).join(', ') || 'none'}${r.changes.length > 50 ? ', …' : ''}`);
+        const at = bases.get(r.planned.key);
+        const result = this.d.store.getWorkUnit(r.unit.id)?.resultCommit;
+        if (parent && at && result && r.changes.length && diffBudget > 0) {
+          const diff = await git(parent, ['diff', '--no-color', '--no-ext-diff', '--stat', '--patch', at.base.commit, result]).then((d) => (d.code === 0 ? redact(d.stdout) : '')).catch(() => '');
+          const shown = diff.slice(0, Math.min(MAX_JUDGE_DIFF, diffBudget));
+          diffBudget -= shown.length;
+          if (shown) sections.push('', '```diff', shown, diff.length > shown.length ? `[diff truncated: ${diff.length - shown.length} more characters]` : '', '```');
+        }
+      }
+      sections.push('', 'Its report:', '', report.length > MAX_JUDGE_REPORT ? `${report.slice(0, MAX_JUDGE_REPORT)}\n[report truncated]` : report || '(no report)', '');
+    }
+    const prompt = [
+      built.prompt.replace(/^Role: [\w-]+$/m, 'Role: judge'),
+      '',
+      '## Judge the variants (from the orchestrator)',
+      '',
+      `The Control Center ran this stage as ${candidates.length} competing variants, each doing the whole stage its own way${write ? ' in its own checkout' : ''}. Only the one you choose is kept${write ? ' and written into the task' : ' as the stage\'s result'}; the others are discarded.`,
+      '',
+      'Do not change any file. Compare the variants against the request, the plan, the repository\'s rules and design standard, and what each one verified. Weigh correctness and completeness first, then quality and fit; a variant that skipped checks or broke a rule loses to one that did not. Open the screenshots listed above when the variants kept any.',
+      '',
+      ...sections,
+      'End with your reasons in a few lines, then exactly one line `WINNER: <key>` naming one of the variants above by its key.',
+    ].join('\n');
+    await this.savePrompt(task, def, stage, `${this.promptBase(def)}-judge.md`, prompt);
+    const release = await this.slots.acquire(() => control.stopReason !== null);
+    if (!release) {
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'CANCELLED', finishedAt: now() }));
+      return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
+    }
+    this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'RUNNING', startedAt: now() }));
+    let run: AgentRun;
+    try {
+      run = await this.d.runners.launchAgent(task, def, stage, repo, control, { prompt, agentId: unit.agentId!, model: unit.model, effort: unit.effort, cwd: agentWorkdir(task, repo), permissionLevel: 1, workUnit: { id: unit.id, key: unit.unitKey, title: unit.title } });
+    } finally {
+      release();
+    }
+    if (run.kind !== 'ok') {
+      this.settleRow(unit, run);
+      this.unitEvent(task, stage, unit, run.kind === 'stopped' ? 'stopped' : `failed: ${redact(run.message).slice(0, 200)}`, run.kind === 'failed' ? { errorClass: run.errorClass } : {});
+      return run;
+    }
+    await this.d.artifacts.write(task.id, { name: `${this.artifactBase(def)}-judge.md`, type: 'stage-output', content: run.output, stageId: stage.id, stageKey: def.key });
+    const named = parseWinner(run.output);
+    const winner = candidates.find((r) => r.planned.key === named);
+    if (!winner) {
+      const message = named ? `named "${named}", which is not one of the finished variants (${candidates.map((r) => r.planned.key).join(', ')})` : 'did not end with a "WINNER: <key>" line';
+      this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'FAILED', errorClass: 'UNKNOWN', errorMessage: message, finishedAt: now() }));
+      return { kind: 'failed', errorClass: 'UNKNOWN', message: `the judge ${message}` };
+    }
+    this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'SUCCESS', summary: clipText(`Chose ${winner.planned.title}: ${summarize(run.output) ?? ''}`, MAX_STAGE_SUMMARY), finishedAt: now() }));
+    this.unitEvent(task, stage, unit, `chose ${winner.planned.title}`, { winner: winner.planned.key });
+    return { kind: 'ok', winner, lead: { output: run.output, agentId: unit.agentId } };
+  }
+
+  /** The stage's report: the kept variant's own report, with the judge's reasons and the others named. */
+  private async writeVariantAggregate(task: TaskRecord, def: StageDefinition, stage: StageInstance, winner: UnitResult, judge: LeadReport | null, results: UnitResult[]): Promise<void> {
+    const others = results.filter((r) => r !== winner).map((r) => `${r.planned.title}${r.failure ? ' (failed)' : ''}`);
+    const report = winner.output ?? '';
+    const parts = [
+      report.length > MAX_WORKER_IN_AGGREGATE ? `${report.slice(0, MAX_WORKER_IN_AGGREGATE)}\n\n[truncated — the full report is ${this.artifactBase(def)}-${winner.planned.key}.md]` : report,
+      '',
+      `## Variant kept: ${winner.planned.title} (${this.agentName(winner.unit.agentId)})`,
+      '',
+      `Kept over: ${others.join(', ') || 'none'}. Their reports are ${results.filter((r) => r !== winner).map((r) => `${this.artifactBase(def)}-${r.planned.key}.md`).join(', ') || 'none'}.`,
+    ];
+    if (judge) parts.push('', `### Judge (${this.agentName(judge.agentId)})`, '', judge.output);
+    const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };
+    await this.d.artifacts.write(task.id, { name: artifact.name, type: artifact.type, content: parts.join('\n'), stageId: stage.id, stageKey: def.key });
+  }
+
+  /** What a variant is told: the whole stage, its own approach, and that only one variant is kept. */
+  private variantSection(def: StageDefinition, p: PlannedUnit, others: PlannedUnit[], write: boolean): string {
+    const lines = ['', '', '## Your variant (Stage Team, from the orchestrator)', ''];
+    lines.push(`The Control Center runs this stage as ${others.length + 1} competing variants: each does the whole stage its own way, and a judge keeps only one. Do the complete work, not a part of it.`, '');
+    lines.push(`- Unit: ${p.title} (key: ${p.key})`, `- Your approach: ${p.focus}`);
+    if (others.length) lines.push(`- Other variants: ${others.map((o) => o.title).join('; ')}`);
+    if (write) {
+      lines.push(
+        '',
+        'Rules:',
+        '- This working directory is your own checkout of the whole repository; the Control Center writes the chosen variant into the task. Do not commit, push, reset or create branches.',
+        '- Installed dependencies are shared with the task: do not install, add or remove packages. If your variant needs a new dependency, say so in your report.',
+        '- Run the checks for what you changed and report them plainly: the judge weighs what you verified.',
+      );
+    }
+    lines.push('- Never start other agents or sub-agents.', `- Write your ${ROLE_LABEL[def.role].toLowerCase()} report for your variant.`);
+    return lines.join('\n');
   }
 
   // ---------------------------------------------------------------------------
@@ -548,6 +767,7 @@ export class StageTeamRunner {
     others: (p: PlannedUnit) => PlannedUnit[],
     hash: string,
     earlier: StageWorkUnit[],
+    variants = false,
   ): Promise<{ results: UnitResult[]; base: null } | LimitHit> {
     const cwd = agentWorkdir(task, repo);
     // Reuse is decided first: only the units that must run count against the task's limits.
@@ -559,7 +779,7 @@ export class StageTeamRunner {
         const unit = rows.get(p.key)!;
         const output = reused[i];
         if (output !== null && output !== undefined) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output, changes: [], failure: null, stopped: null, questions: [] };
-        const prompt = basePrompt + this.unitSection(def, p, others(p), false);
+        const prompt = basePrompt + (variants ? this.variantSection(def, p, others(p), false) : this.unitSection(def, p, others(p), false));
         const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false, `${this.promptBase(def)}-${p.key}.md`);
         return this.settle(task, def, stage, unit, p, run, []);
       }),
@@ -587,6 +807,7 @@ export class StageTeamRunner {
     earlier: StageWorkUnit[],
     wave: number,
     reserve: number,
+    variants = false,
   ): Promise<WriteWave | { outcome: StageOutcome } | LimitHit> {
     const parent = task.git.worktreePath!;
     let base: WaveBase;
@@ -623,13 +844,14 @@ export class StageTeamRunner {
         }
         try {
           // The worker never needs the task's folder or the operator's checkout: every spelling of either names its own checkout.
-          const prompt = rewritePaths(basePrompt, [parent, repo.path], dir) + this.unitSection(def, p, others(p), true);
+          const prompt = rewritePaths(basePrompt, [parent, repo.path], dir) + (variants ? this.variantSection(def, p, others(p), true) : this.unitSection(def, p, others(p), true));
           const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, dir, true, `${this.promptBase(def)}-${p.key}.md`);
           if (run.kind !== 'ok') return this.settle(task, def, stage, unit, p, run, []);
           // Capture everything the worker left — new, deleted, binary files included — as a hidden commit, then check its paths.
           const result = await captureResult(dir, `${this.refPrefix(task)}${stage.id}/${p.key}`, `${task.id}: ${def.name} · ${p.title}`);
           const changes = await changedPathsBetween(parent, base.commit, result.commit);
-          const outside = changes.filter((c) => !pathInScope(c.path, p.pathScope));
+          // A variant owns the whole repository: only one variant is ever integrated.
+          const outside = variants ? [] : changes.filter((c) => !pathInScope(c.path, p.pathScope));
           this.d.store.updateWorkUnit(unit.id, { resultCommit: result.commit });
           if (outside.length) {
             const names = outside.slice(0, 10).map((c) => c.path).join(', ') + (outside.length > 10 ? ', …' : '');
@@ -1310,4 +1532,10 @@ function unlinkDependencies(links: string[]): void {
       /* already gone */
     }
   }
+}
+
+/** The last `WINNER: <key>` line of a judge's answer (bold, backticks or a list marker allowed). */
+export function parseWinner(output: string): string | null {
+  const all = [...output.matchAll(/^[\s>*+-]*\**WINNER:?\**:?\s*`?([a-z0-9][a-z0-9-]*)`?\s*\**\s*$/gim)];
+  return all.length ? all.at(-1)![1]!.toLowerCase() : null;
 }

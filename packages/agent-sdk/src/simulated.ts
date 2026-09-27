@@ -49,9 +49,13 @@ import type {
  *   [sim:team-overlap]       ...both claiming shared/
  *   [sim:team-out-of-scope]  the beta worker also changes sim-output.md, outside the paths it owns
  *   [sim:fail-unit-once:<key>] the Stage Team worker of that unit crashes on its first run
+ *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
+ *   [sim:judge-none]         ...or names none
  *
  * A Stage Team worker (its prompt names `- Unit: … (key: k)` and `- Paths you own: p/`)
  * writes p/sim-k.md instead of sim-output.md; role `decomposer` answers with a manifest.
+ * A variant (`- Your approach:`) writes sim-output.md with its key on the line and
+ * variant-k.md; role `judge` answers `WINNER: <key>`.
  *
  * Usage: every finished or crashed run reports deterministic token counts
  * derived from the prompt and output sizes. The simulated `claude` also
@@ -312,9 +316,11 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           const owned = /^- Paths you own: (.+)$/m.exec(input.prompt)?.[1]?.split(', ')[0];
           const unitFile = unitKey && owned ? (owned.endsWith('/') ? `${owned}sim-${unitKey}.md` : owned) : null;
           if (unitFile) await mkdir(path.dirname(path.join(input.cwd, unitFile)), { recursive: true });
-          const files = unitFile ? [unitFile, ...(has('team-out-of-scope') && unitKey === 'beta' ? [out] : [])] : folders.length ? folders.map((folder) => `${folder}/${out}`) : [out];
+          // A competing variant changes the shared file its own way, plus a file only it writes.
+          const variant = unitKey && /^- Your approach: /m.test(input.prompt) ? unitKey : null;
+          const files = unitFile ? [unitFile, ...(has('team-out-of-scope') && unitKey === 'beta' ? [out] : [])] : folders.length ? folders.map((folder) => `${folder}/${out}`) : variant ? [out, `variant-${variant}.md`] : [out];
           for (const rel of files) {
-            await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change${variant ? ` by variant ${variant}` : ''} at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
           }
           if (has('big-diff') && role === 'implementer') {
@@ -329,6 +335,12 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             role === 'designer'
               ? `## Summary\n\nSimulated designer run: restyled sim-output.md.\n\n## Design decisions\n\n- Kept the existing tokens.\n\n## Changes\n\n- Updated sim-output.md\n\n## Visual verification\n\nNot run (simulated).`
               : `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          break;
+        }
+        case 'judge': {
+          const keys = [...input.prompt.matchAll(/^### Variant `([a-z0-9-]+)`/gm)].map((m) => m[1]!);
+          const pick = has('judge-last') ? keys.at(-1) : keys[0];
+          output = has('judge-none') || !pick ? '## Summary\n\nCompared the variants; none is clearly better.' : `## Summary\n\nKept ${pick}: complete and verified.\n\nWINNER: ${pick}`;
           break;
         }
         case 'visual-critic': {

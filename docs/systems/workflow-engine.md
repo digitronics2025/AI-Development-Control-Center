@@ -36,6 +36,9 @@ resolvable transitions and `requires` keys, every stage reachable, reaches `comp
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
 `maxFixCycles`. Each task stores a snapshot of its profile.
 
+A stage's `team` may be fixed, adaptive or `variants` (competing attempts, a
+read-only judge keeps one; [stage-teams.md](stage-teams.md#variants)).
+
 Frontend Design ([design-agent.md](design-agent.md)) runs a designer role
 twice: Assets at Level 3 with approval on every attempt (the only stage a
 Level 3 generation server can run in) and Build at Level 2, which every

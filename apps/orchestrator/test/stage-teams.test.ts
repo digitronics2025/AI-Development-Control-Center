@@ -6,7 +6,7 @@ import { SimulatedAgentAdapter } from '@acc/agent-sdk';
 import { git } from '@acc/git';
 import type { Execution, StageWorkUnit, WorkflowProfileInput } from '@acc/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clipTitle } from '../src/engine/stage-team.js';
+import { clipTitle, parseWinner } from '../src/engine/stage-team.js';
 import { newId, now } from '../src/store/store.js';
 import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
@@ -297,6 +297,83 @@ describe('Stage Teams', () => {
     expect(byKey.beta!.baseCommit).not.toBe(byKey.alpha!.baseCommit);
     const integrated = t!.services.store.listEvents(id, { limit: 1000 }).filter((e) => e.type === 'STAGE_TEAM' && /integrated/.test(e.message));
     expect(integrated.length).toBe(2);
+  }, 60_000);
+
+  it('runs competing variants each in its own checkout and integrates only the one the judge keeps', async () => {
+    const VARIANTS: WorkflowProfileInput = {
+      id: 'variants',
+      name: 'Variants',
+      stages: [
+        {
+          key: 'build',
+          name: 'Build',
+          role: 'designer',
+          permissionLevel: 2,
+          next: 'complete',
+          team: { mode: 'variants', maxWorkers: 3, workers: [{ key: 'bold', focus: 'Bold take' }, { key: 'calm', focus: 'Calm take' }, { key: 'dense', focus: 'Dense take' }], judge: { agentId: 'claude' } },
+        },
+      ],
+    };
+    const { repoId } = await setup([VARIANTS]);
+    // The judge keeps the last variant listed; the first one crashes, which costs an approach, not the stage.
+    const id = await createTask(t!, repoId, 'Restyle the page [sim:judge-last] [sim:fail-unit-once:bold]', { workflowId: 'variants', supervised: false });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const build = units(id, 'build');
+    expect(build.map((u) => [u.unitKey, u.kind, u.status])).toEqual([
+      ['bold', 'worker', 'FAILED'],
+      ['calm', 'worker', 'SUCCESS'],
+      ['dense', 'worker', 'SUCCESS'],
+      ['judge', 'judge', 'SUCCESS'],
+    ]);
+    expect(build.find((u) => u.unitKey === 'calm')!.summary).toMatch(/^Not chosen: /);
+    expect(build.find((u) => u.unitKey === 'judge')!.summary).toMatch(/^Chose Dense take/);
+    // Only the winner's files reached the task (its branch): its line in the shared file, its own file, nothing of calm's.
+    const repoPath = t!.services.store.getRepository(repoId)!.path;
+    const shown = await sh(repoPath, ['show', `${task.git.taskBranch}:sim-output.md`]);
+    expect(shown.out).toMatch(/^- designer change by variant dense at /);
+    expect((await sh(repoPath, ['show', `${task.git.taskBranch}:variant-dense.md`])).code).toBe(0);
+    expect((await sh(repoPath, ['show', `${task.git.taskBranch}:variant-calm.md`])).code).not.toBe(0);
+    // The judge ran read-only (Level 1) and saw each finished variant's diff, and only those.
+    const judgePrompt = t!.services.store.listArtifacts(id).find((a) => a.name === 'design-prompt-judge.md');
+    expect(judgePrompt).toBeDefined();
+    const judgeText = readFileSync(path.isAbsolute(judgePrompt!.path) ? judgePrompt!.path : path.join(t!.dataDir, judgePrompt!.path), 'utf8');
+    expect(judgeText).toMatch(/^Role: judge$/m);
+    expect(judgeText).toContain('### Variant `calm`: Calm take');
+    expect(judgeText).toContain('+- designer change by variant dense at');
+    expect(judgeText).not.toContain('### Variant `bold`');
+    // It ran in the task's own folder, which no variant touched, never in a variant's checkout.
+    const judgeRun = agentExecs(id).find((e) => e.workUnitId === build.find((u) => u.unitKey === 'judge')!.id);
+    expect(judgeRun?.cwd).toBeTruthy();
+    expect(judgeRun!.cwd).not.toContain('team-worktrees');
+    const report = await t!.services.artifacts.latestText(id, 'implementation-report');
+    expect(report).toContain('## Variant kept: Dense take');
+    expect(report).toContain('Kept over: Bold take (failed), Calm take');
+    const stage = t!.services.store.latestStage(id, 'build')!;
+    expect(stage.summary).toMatch(/^3 variants \(1 failed\); kept Dense take/);
+  }, 60_000);
+
+  it('keeps the judged read-only variant as the stage report, and fails the stage when the judge names none', async () => {
+    const READ: WorkflowProfileInput = {
+      id: 'read-variants',
+      name: 'Read variants',
+      stages: [{ key: 'direction', name: 'Art direction', role: 'art-director', permissionLevel: 1, next: 'complete', team: { mode: 'variants', maxWorkers: 2, workers: [{ key: 'warm', focus: 'Warm palette' }, { key: 'cool', focus: 'Cool palette' }] } }],
+    };
+    const { repoId } = await setup([READ]);
+    const id = await createTask(t!, repoId, 'Pick a direction', { workflowId: 'read-variants', supervised: false });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const plan = await t!.services.artifacts.latestText(id, 'plan');
+    expect(plan).toContain('## Variant kept: Warm palette');
+    expect(plan).toContain('## Media budget');
+    const none = await createTask(t!, repoId, 'Pick again [sim:judge-none]', { workflowId: 'read-variants', supervised: false });
+    const failed = await waitForStatus(t!, none, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(failed.status).toBe('FAILED');
+    expect(failed.blocker?.message ?? t!.services.store.latestStage(none, 'direction')?.errorMessage).toMatch(/the judge did not end with a "WINNER: <key>" line/);
+    expect(parseWinner('Reasons.\n\n**WINNER:** `calm`')).toBe('calm');
+    expect(parseWinner('WINNER: a\nWINNER: b')).toBe('b');
+    expect(parseWinner('then WINNER: b')).toBeNull();
+    expect(parseWinner('no winner here')).toBeNull();
   }, 60_000);
 
   it('never runs more workers at once than the stage allows', async () => {

@@ -227,7 +227,7 @@ export class RepositoryService {
 
   /** Where a clone goes when the request names no folder: the first discovery root, else the home folder. */
   defaultCloneParent(): string {
-    return this.settings.get().repositoryAutomation.roots[0] ?? os.homedir();
+    return path.resolve(this.settings.get().repositoryAutomation.roots[0] ?? os.homedir());
   }
 
   /**

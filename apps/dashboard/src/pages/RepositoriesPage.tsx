@@ -112,7 +112,8 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
   const { toast } = useFeedback();
   const navigate = useNavigate();
   const parsed = parseCloneUrl(url);
-  const cloneParent = parentFolder.trim() || defaults.data?.parentFolder || '';
+  // Without its trailing separator, so the preview never shows a doubled one.
+  const cloneParent = (parentFolder.trim() || defaults.data?.parentFolder || '').replace(/[\\/]+$/, '');
   const done = (repo: Repository, verb: string) => {
     toast(`${repo.name} ${verb}`);
     onOpenChange(false);

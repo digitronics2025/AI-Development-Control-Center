@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readdir, rmdir } from 'node:fs/promises';
-import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, diffSince, headCommit, isGitRepository, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
+import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, git, headCommit, isGitRepository, patchBetween, patchSince, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot, type PatchResult } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMPLETE,
@@ -35,7 +35,7 @@ import type { RepositoryService } from '../services/repositories.js';
 import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
 import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
-import { newId, now, type Store, type TaskRecord } from '../store/store.js';
+import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
 import type { BaselineChecks } from './baseline-checks.js';
 import { buildFinalReport, latestOperatorItems } from './report.js';
@@ -1461,30 +1461,21 @@ export class TaskEngine {
     const workdir = taskWorkdir(task, repo);
     let files: ChangedFile[] | null = null;
     if (multi) {
-      // One patch for the whole task: every repository's diff, paths under its folder.
       files = [];
-      const parts: string[] = [];
       for (const unit of units) {
         const unitBaseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
         if (!unitBaseline) continue;
         try {
           files.push(...(await changesSince(unit.workdir, unitBaseline)).map((f) => ({ ...f, path: inFolder(unit.folder, f.path), repositoryId: unit.repo.id })));
-          const { diff, truncated } = await diffSince(unit.workdir, unitBaseline, { maxBytes: 5_000_000, prefix: unit.folder });
-          if (diff) parts.push(truncated ? `${diff}\n[truncated]` : diff);
         } catch (error) {
-          this.publisher.event(task.id, 'FILE_CHANGED', `${unit.repo.name}: final diff could not be captured: ${(error as Error).message}`);
+          this.publisher.event(task.id, 'FILE_CHANGED', `${unit.repo.name}: final changes could not be read: ${(error as Error).message}`);
         }
       }
-      await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: parts.map((d) => (d.endsWith('\n') ? d : `${d}\n`)).join('') });
     } else if (baseline) {
       try {
         files = await changesSince(workdir, baseline);
-        const { diff, truncated } = await diffSince(workdir, baseline, { maxBytes: 5_000_000 });
-        // Git's own trailing newline is lost when its output is read line by line; without it `git apply` calls the patch corrupt.
-        const content = truncated ? `${diff}\n[truncated]` : diff;
-        await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: content && !content.endsWith('\n') ? `${content}\n` : content });
       } catch (error) {
-        this.publisher.event(task.id, 'FILE_CHANGED', `Final diff could not be captured: ${(error as Error).message}`);
+        this.publisher.event(task.id, 'FILE_CHANGED', `Final changes could not be read: ${(error as Error).message}`);
       }
     }
     const stages = this.d.store.listStages(task.id);
@@ -1508,6 +1499,8 @@ export class TaskEngine {
       if (Object.keys(git).length) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, ...git } });
       task = this.task(task.id);
     }
+    // After the final commit, so the patch is what the task branch holds (a formatting hook included).
+    await this.writePatch(task, repo, multi);
     const testRuns = this.d.store.listTestRuns(task.id);
     gateLimitations = [...gateLimitations, ...optionalFailures(this.d.store.listEvents(task.id, { limit: 5000 }), stages)];
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
@@ -1550,6 +1543,31 @@ export class TaskEngine {
       finalStatus: report.finalStatus,
     });
     this.supervisor?.onTerminal(task.id);
+  }
+
+  /**
+   * git-diff.patch: one patch for the whole task, every repository's paths
+   * under its folder in a task across repositories (docs/systems/git.md#applicable-patches).
+   * An isolated repository whose worktree is gone is diffed commit to commit
+   * (baseline → task branch); otherwise its working tree against the baseline.
+   */
+  private async writePatch(task: TaskRecord, repo: RepositoryRecord, multi: boolean): Promise<void> {
+    const units = multi ? taskRepositories(this.d.store, task) : [{ repo, folder: null, git: task.git, workdir: taskWorkdir(task, repo) }];
+    const parts: Buffer[] = [];
+    for (const unit of units) {
+      const baseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
+      if (!baseline) continue;
+      try {
+        const options = { maxBytes: 5_000_000, prefix: unit.folder, redactText: redact };
+        // An isolated repository whose worktree is gone — or left behind broken by a failed removal — is read from its branch.
+        const intact = unit.git.worktreePath ? existsSync(path.join(unit.git.worktreePath, '.git')) : !unit.git.isolated;
+        const tip = unit.git.isolated && !intact ? await branchTip(unit.repo.path, unit.git) : null;
+        parts.push(patchArtifactPart(tip ? await patchBetween(unit.repo.path, baseline.head, tip, options) : await patchSince(unit.workdir, baseline, options)));
+      } catch (error) {
+        this.publisher.event(task.id, 'FILE_CHANGED', `${multi ? `${unit.repo.name}: f` : 'F'}inal diff could not be captured: ${redact((error as Error).message)}`);
+      }
+    }
+    if (parts.length || !multi) await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: Buffer.concat(parts) });
   }
 
   // ===========================================================================
@@ -1627,6 +1645,26 @@ export function optionalFailures(events: Array<{ type: string; data?: Record<str
     if (limitation && latest?.id === e.stageId && !out.includes(limitation)) out.push(limitation);
   }
   return out;
+}
+
+/**
+ * One repository's share of git-diff.patch: Git's bytes, already redacted
+ * (the artifact service writes a Buffer as it is), newline-terminated, and a
+ * note naming the files it does not carry (their names are redacted too).
+ */
+function patchArtifactPart({ patch, dropped }: PatchResult): Buffer {
+  const newline = patch.length > 0 && patch[patch.length - 1] !== 0x0a;
+  const note = dropped.length ? `[not included in git-diff.patch: ${dropped.length} file(s) — past the size limit, not diffable, or with content the repository cannot supply: ${dropped.slice(0, 20).join(', ')}${dropped.length > 20 ? ', …' : ''}]\n` : '';
+  return Buffer.concat([patch, Buffer.from(`${newline ? '\n' : ''}${note}`, 'utf8')]);
+}
+
+/** The commit an isolated repository's task branch points at, or its last recorded commit. */
+async function branchTip(repoPath: string, gitRecord: TaskRecord['git']): Promise<string | null> {
+  if (gitRecord.taskBranch) {
+    const r = await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${gitRecord.taskBranch}^{commit}`]);
+    if (r.code === 0 && r.stdout.trim()) return r.stdout.trim();
+  }
+  return gitRecord.commits.at(-1) ?? gitRecord.baselineCommit ?? null;
 }
 
 export function deriveTitle(description: string): string {

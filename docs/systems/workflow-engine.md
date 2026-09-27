@@ -106,13 +106,27 @@ They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
 
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
-task record. A non-empty `git-diff.patch` ends in exactly one newline (an
-empty one is an empty file): `git()` reads Git's output line by line and loses
-its final newline, and without it `git apply` calls the patch corrupt. The
-patch still does not apply when a file committed with CRLF endings changed
-(the same line reading drops each `\r`), when a binary file changed
-(`diffSince` passes no `--binary`, so Git prints only "Binary files … differ"),
-or when it was cut at 5,000,000 characters and marked `[truncated]`. Both carry **Where the time went**
+task record. `git-diff.patch` ([git.md](git.md#applicable-patches)) is
+written after the final commit: an isolated repository is diffed commit to
+commit (baseline → task branch), so it is exactly what the branch holds even
+when a pre-commit hook rewrote a file; an in-place task's working tree is
+diffed against the baseline. It is Git's own bytes, so `git apply` takes it
+back — reversed out of the task's checkout or forward onto the baseline —
+including changes to CRLF-committed files. Binary files, and any file that is
+not plain UTF-8 text, carry only their full object ids ("Binary files …
+differ"), resolved from the task's own repository; no binary content ever
+enters the artifact. A file holding secret-shaped content (its text, a
+binary file's content in any common encoding, a private key, or a file named
+like secret material such as `.env`) is replaced by a `[withheld from
+git-diff.patch: …]` line and the rest still applies. A multi-repository patch
+puts each repository's paths under its folder (a rename shows as a deletion
+plus an addition); its text applies from the folder holding the
+repositories, and with a binary change each repository applies its share from
+there with `git --git-dir=<folder>/.git --work-tree=. apply
+--include='<folder>/*' git-diff.patch`. Files past 5,000,000 bytes per
+repository, files Git cannot diff and binary files whose content the
+repository cannot supply are left out whole and named on a `[not included in
+git-diff.patch: …]` line. Both carry **Where the time went**
 ([time-breakdown.ts](../../apps/orchestrator/src/engine/time-breakdown.ts),
 also `GET /api/tasks/:id/time`, measured up to now for a running task): every
 millisecond from creation to the end in exactly one bucket, by precedence
@@ -375,4 +389,4 @@ The final report's Tests line counts commands, not tests
 row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
 ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

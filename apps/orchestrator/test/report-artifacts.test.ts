@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
@@ -34,6 +34,39 @@ describe('git-diff.patch', () => {
     expect(check.code, check.stderr).toBe(0);
     expect(patch.endsWith('\n')).toBe(true);
     expect(patch.endsWith('\n\n')).toBe(false);
+  });
+
+  it('keeps CRLF lines byte-exact, carries binary files by object id, and withholds a file holding a secret', async () => {
+    // Assembled at runtime: no credential-shaped literal in the repository (AGENTS.md).
+    const secret = ['ghp', '_', 'A1b2C3d4'.repeat(5)].join('');
+    const repoPath = await makeRepo({ files: { 'sim-output.md': '# Output\n' } });
+    await git(repoPath, ['config', 'core.autocrlf', 'false']);
+    writeFileSync(path.join(repoPath, 'run.bat'), 'echo one\r\necho two\r\n');
+    writeFileSync(path.join(repoPath, 'logo.bin'), Buffer.from([0, 1, 2, 3, 0, 255, 13, 10]));
+    await git(repoPath, ['add', 'run.bat', 'logo.bin']);
+    await git(repoPath, ['commit', '-m', 'CRLF and binary files']);
+    // Work already in the checkout when the task starts is part of the patch too.
+    writeFileSync(path.join(repoPath, 'run.bat'), 'echo one\r\necho three\r\n');
+    writeFileSync(path.join(repoPath, 'logo.bin'), Buffer.from([0, 1, 2, 4, 0, 255, 13, 10, 7]));
+    writeFileSync(path.join(repoPath, 'added.bin'), Buffer.from([0, 0, 9, 200]));
+    writeFileSync(path.join(repoPath, 'notes.txt'), `deploy token ${secret}\n`);
+    const id = await createTask(t, await addRepo(t, repoPath, IN_PLACE), 'Add a line to the output file');
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status).toBe('COMPLETED');
+
+    const file = path.join(t.dataDir, 'tasks', id, 'git-diff.patch');
+    const patch = readFileSync(file, 'latin1');
+    expect(patch).toContain('+echo three\r\n');
+    expect(patch).toContain('diff --git a/added.bin b/added.bin');
+    // Binary files carry only their object ids: `git apply` takes them from the repository, and no payload (or secret in one) is in the artifact.
+    expect(patch).toContain('Binary files a/logo.bin and b/logo.bin differ');
+    expect(patch).not.toContain('GIT binary patch');
+    expect(patch).not.toContain(secret);
+    // The file holding the secret is left out with a note, so the rest of the patch still applies.
+    expect(patch).toContain('[withheld from git-diff.patch: notes.txt held secret-shaped content]');
+    const check = await git(repoPath, ['apply', '--check', '-R', file]);
+    expect(check.code, check.stderr).toBe(0);
+    expect(patch.endsWith('\n')).toBe(true);
   });
 });
 

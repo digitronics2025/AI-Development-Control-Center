@@ -221,12 +221,12 @@ function note(acc: Accumulator, risk: CommandRisk, level: PermissionLevel, reaso
  * names one of them is Level 5 — agents are refused, a person must confirm — so
  * an agent running as the operator cannot read the token and drive the API.
  */
+/** The key files' bare names: common words in other servers' paths too (`/octokit/auth-token.js`). */
+const KEY_FILE_WORDS: readonly RegExp[] = [/\bauth-token\b/i, /\bprivileged-key\b/i, /\bcredential-key(?:\.dpapi)?\b/i];
 const SELF_DEFAULTS = [
   /AIDevControlCenter/i,
   /[\\/]ai-control-center[\\/]/i,
-  /\bauth-token\b/i,
-  /\bprivileged-key\b/i,
-  /\bcredential-key(?:\.dpapi)?\b/i,
+  ...KEY_FILE_WORDS,
   /\b(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):4317\b/i,
 ];
 const DEFAULT_PORT = 4317;
@@ -311,7 +311,7 @@ export function urlIsSelfAddress(url: string | URL): boolean {
 }
 
 /** The listen address in any spelling Node's URL parser accepts: normalised first, then compared. */
-function namesSelfAddress(text: string): boolean {
+function namesSelfAddress(text: string, patterns: readonly RegExp[] = selfReferences): boolean {
   // Most text has no URL at all: skip the scan for one.
   for (const match of /:[\\/]{2}/.test(text) ? text.matchAll(URL_IN_TEXT) : []) {
     let url: URL;
@@ -321,7 +321,7 @@ function namesSelfAddress(text: string): boolean {
       continue;
     }
     if (urlIsSelfAddress(url)) return true;
-    if (selfReferences.some((r) => r.test(url.href))) return true;
+    if (patterns.some((r) => r.test(url.href))) return true;
   }
   for (const match of text.matchAll(HOST_PORT_IN_TEXT)) {
     let hostname: string;
@@ -444,6 +444,19 @@ function namesSelf(text: string): boolean {
  */
 export function referencesSelf(text: string): boolean {
   return namesSelf(text) || overridesHostToSelf(text);
+}
+
+/**
+ * `referencesSelf` for a web address a page requests: the listen address in
+ * any spelling, an address written inside it (an open redirect's `?to=` target),
+ * the data folder and the rest — but not the key files' bare names, which on
+ * another server are ordinary path words (`/octokit/auth-token.js`) and reach
+ * nothing of ours. A local file or other scheme is judged by `referencesSelf`.
+ */
+export function webUrlReferencesSelf(url: URL): boolean {
+  if (urlIsSelfAddress(url)) return true;
+  const patterns = selfReferences.filter((r) => !KEY_FILE_WORDS.includes(r));
+  return patterns.some((r) => r.test(url.href)) || namesSelfAddress(url.href, patterns);
 }
 
 /**

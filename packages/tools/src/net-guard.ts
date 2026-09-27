@@ -1,4 +1,4 @@
-import { isLoopbackHostname, referencesSelf, urlIsSelfAddress } from '@acc/security';
+import { isLoopbackHostname, referencesSelf, urlIsSelfAddress, webUrlReferencesSelf } from '@acc/security';
 import type { BrowserContext } from 'playwright-core';
 
 /**
@@ -106,10 +106,23 @@ export async function readCapped(res: Response, max = MAX_RESPONSE_BYTES): Promi
 }
 
 /**
+ * Whether a page's request would reach the Control Center itself. A web
+ * request (http, https, ws, wss) is refused when it goes to the listen address
+ * in any spelling (SEC-1), or names that address or the data folder inside it
+ * (an open redirect's target: Playwright never routes a redirect hop, so the
+ * first URL is the only one judged). A path that merely names one of the key
+ * files' words on another server (`/octokit/auth-token.js`) loads. Any other
+ * scheme (`file:` and the rest) is judged by its whole text.
+ */
+export function browserRequestReachesSelf(url: URL): boolean {
+  return /^(?:https?|wss?):$/.test(url.protocol) ? webUrlReferencesSelf(url) : referencesSelf(url.href);
+}
+
+/**
  * Pages a tool drives never load the Control Center itself: its dashboard
  * page carries the local token (audit F-02). Applied to every browser context
  * the tools create.
  */
 export async function guardBrowserContext(context: BrowserContext): Promise<void> {
-  await context.route((url) => referencesSelf(url.href), (route) => route.abort('blockedbyclient'));
+  await context.route((url) => browserRequestReachesSelf(url), (route) => route.abort('blockedbyclient'));
 }

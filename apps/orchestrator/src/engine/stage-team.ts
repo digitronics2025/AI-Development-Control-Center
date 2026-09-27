@@ -822,7 +822,7 @@ export class StageTeamRunner {
     const prepared = await Promise.all(
       batch.map(async (p) => {
         const unit = this.d.store.updateWorkUnit(rows.get(p.key)!.id, { baseCommit: base.commit });
-        return { p, unit, reused: await this.reusedResult(parent, unit, hash, earlier, base, interrupted) };
+        return { p, unit, reused: await this.reusedResult(parent, unit, hash, earlier, base, interrupted, variants) };
       }),
     );
     const limit = this.limitFor(task, def, prepared.filter((x) => !x.reused).length + reserve);
@@ -1148,14 +1148,15 @@ export class StageTeamRunner {
    * one, which stopped after integrating it: the task's files still hold its
    * result at every path it changed, so it is reused as is and nothing is
    * written again. (A unit that changed nothing has no result to find there
-   * and runs again on the new files.)
+   * and runs again on the new files.) A variant owns the whole repository, so
+   * it has no paths to stay within.
    */
-  private async reusedResult(parent: string, unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[], base: WaveBase, interrupted: string | null): Promise<{ output: string; changes: PathChange[]; alreadyIntegrated: boolean } | null> {
+  private async reusedResult(parent: string, unit: StageWorkUnit, hash: string, earlier: StageWorkUnit[], base: WaveBase, interrupted: string | null, variants = false): Promise<{ output: string; changes: PathChange[]; alreadyIntegrated: boolean } | null> {
     for (const prev of this.candidates(unit, hash, earlier)) {
       if (!prev.baseCommit || !prev.resultCommit) continue;
       try {
         const changes = await changedPathsBetween(parent, prev.baseCommit, prev.resultCommit);
-        if (changes.some((c) => !pathInScope(c.path, unit.pathScope))) continue;
+        if (!variants && changes.some((c) => !pathInScope(c.path, unit.pathScope))) continue;
         const sameBase = (await treeOf(parent, prev.baseCommit)) === base.tree;
         if (!sameBase) {
           if (prev.stageId !== interrupted || !changes.length) continue;

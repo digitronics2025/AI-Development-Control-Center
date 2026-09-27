@@ -114,12 +114,16 @@ export function readManifestEntries(manifestRel: string, json: string): Map<stri
   return out;
 }
 
-/** The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff. */
+/**
+ * The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff.
+ * `untouched`: pre-existing user work the task never touched — context, not part of the change under review, so never required.
+ */
 function coverageOf(
   packed: ReturnType<typeof packDiff>,
   files: PackFile[],
   hint: (file: PackFile | undefined, omitted: OmittedFile) => string,
   named: Map<string, ManifestEntry> = new Map(),
+  untouched: ReadonlySet<string> = new Set(),
 ): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const total = new Set([...files.map((f) => f.path), ...packed.shown, ...packed.omitted.map((o) => o.path)]).size;
@@ -128,7 +132,7 @@ function coverageOf(
   const unseen: OmittedFile[] = packed.shown
     .filter((p) => MEDIA_FILE.test(p) && !packed.omitted.some((o) => o.path === p) && new RegExp(`^Binary files .* b/${escape(p)} differ$`, 'm').test(packed.text))
     .map((p) => ({ path: p, additions: byPath.get(p)?.additions ?? null, deletions: byPath.get(p)?.deletions ?? null, reason: 'binary' as const }));
-  const omitted = [...packed.omitted, ...unseen];
+  const omitted = [...packed.omitted, ...unseen].filter((o) => !untouched.has(o.path));
   if (!omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
   // Generated media an asset manifest names (the manifest itself is text, in the diff) needs no line under Files reviewed.
   const media = omitted.filter((o) => named.has(o.path));
@@ -380,8 +384,7 @@ export class ContextBuilder {
       const packed = packDiff(raws.join(''), files, MAX_DIFF_CHARS);
       // Pre-existing user work the task never touched is context, not part of the change under review.
       const untouched = new Set(files.filter((f) => f.origin === 'preexisting').map((f) => f.path));
-      packed.omitted = packed.omitted.filter((o) => !untouched.has(o.path));
-      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false), named), changedFiles, all };
+      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false), named, untouched), changedFiles, all };
     } catch {
       // Packing itself failed: fall back to the bounded raw diff and require every file (§5).
       return { diff: clip(raws.join(''), MAX_DIFF_CHARS), changedFiles, coverage: UNKNOWN_COVERAGE, required: all, all };

@@ -58,17 +58,22 @@ export function completionGate(input: GateInput): GateResult {
       });
     }
   }
-  // Each kind of verdict (review: reviewer or visual critic; verify: verifier) must have passed since the last change.
+  // Each judge role with a verdict stage (review: reviewer, visual critic; verify: verifier) must have passed since the last
+  // change, role by role: a critique's PASS is not the code review's. Its latest verdict run decides, whichever of that
+  // role's verdict stages it was (a re-review after a fix stands for the review before it); an advisory run blocks nothing.
+  const verdictDefs = workflow.stages.filter((s) => judgeKind(s.role) && s.kind === 'agent' && s.verdict);
+  const verdictKeys = new Set(verdictDefs.map((s) => s.key));
   for (const kind of ['review', 'verify'] as const) {
-    const def = has((s) => judgeKind(s.role) === kind && s.kind === 'agent' && s.verdict);
-    if (!def) continue;
-    const last = lastOf(stages, (s) => judgeKind(s.role) === kind && s.status === 'SUCCESS');
-    if (!last || last.verdict !== 'PASS' || !after(last)) {
-      failures.push({
-        code: kind,
-        message: `${def.name} has not passed${last && last.verdict === 'PASS' ? ' since the last change' : ''}.`,
-        remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: def.key } }],
-      });
+    for (const role of new Set(verdictDefs.filter((s) => judgeKind(s.role) === kind).map((s) => s.role))) {
+      const last = lastOf(stages, (s) => s.role === role && verdictKeys.has(s.stageKey) && s.status === 'SUCCESS');
+      const def = verdictDefs.find((s) => s.key === last?.stageKey) ?? verdictDefs.find((s) => s.role === role)!;
+      if (!last || last.verdict !== 'PASS' || !after(last)) {
+        failures.push({
+          code: kind,
+          message: `${def.name} has not passed${last && last.verdict === 'PASS' ? ' since the last change' : ''}.`,
+          remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: def.key } }],
+        });
+      }
     }
   }
 

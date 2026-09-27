@@ -445,6 +445,65 @@ describe('completion gate', () => {
     const early = completionGate({ ...base, stages: [stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' }), stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 })] });
     expect(early.failures.map((f) => f.code)).toEqual(['review']);
   });
+
+  it('requires each judge role with a verdict to have passed, and never blocks on an advisory judge', () => {
+    n = 0;
+    const def = (key: string, role: StageInstance['role'], permissionLevel: 1 | 2 | 3, extra: Partial<WorkflowProfile['stages'][number]> = {}) =>
+      ({ key, name: key, role, kind: 'agent', permissionLevel, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...extra }) as WorkflowProfile['stages'][number];
+    // Frontend Design's shape: a visual critique and then a code review, both with a verdict.
+    const design: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'critique-and-review',
+      stages: [
+        def('build', 'designer', 2, { next: 'critique' }),
+        def('critique', 'visual-critic', 1, { name: 'Visual critique', verdict: true, next: 'review', onFail: 'build' }),
+        def('review', 'reviewer', 1, { name: 'Code review', verdict: true, onFail: 'build' }),
+      ],
+    };
+    const base = { workflow: design, testRuns: [], activeDirectives: [], taskFiles: ['a.ts'], configuredKinds: new Set<never>() };
+    const build = stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 });
+    const critique = stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'PASS' });
+    const review = stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' });
+    expect(completionGate({ ...base, stages: [build, critique, review] }).pass).toBe(true);
+    // The critique passing is not the code review passing: a failed or missing review blocks, with the remedy at the review.
+    const toReview = [expect.objectContaining({ code: 'review', message: 'Code review has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'review' } }] })];
+    const reviewFailed = stage({ stageKey: 'review', role: 'reviewer', status: 'FAILED', verdict: null });
+    expect(completionGate({ ...base, stages: [build, critique, reviewFailed] }).failures).toEqual(toReview);
+    expect(completionGate({ ...base, stages: [build, critique] }).failures).toEqual(toReview);
+    // Nor does a code review pass stand for a critique that failed.
+    const critiqueFailed = stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' });
+    expect(completionGate({ ...base, stages: [build, critiqueFailed, stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' })] }).failures).toEqual([
+      expect.objectContaining({ code: 'review', message: 'Visual critique has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'critique' } }] }),
+    ]);
+    // An advisory critic (no verdict) that recorded a FAIL after the verdict review passed blocks nothing.
+    const advisory: WorkflowProfile = { ...design, stages: [def('build', 'designer', 2, { next: 'review' }), def('review', 'reviewer', 1, { name: 'Code review', verdict: true, next: 'critique' }), def('critique', 'visual-critic', 1)] };
+    n = 0;
+    const later = [stage({ stageKey: 'build', role: 'designer', permissionLevel: 2 }), stage({ stageKey: 'review', role: 'reviewer', verdict: 'PASS' }), stage({ stageKey: 'critique', role: 'visual-critic', verdict: 'FAIL' })];
+    expect(completionGate({ ...base, workflow: advisory, stages: later }).pass).toBe(true);
+    // A re-review reached only after a fix stands for the review before it (as on main): its PASS clears the earlier FAIL.
+    const rereview: WorkflowProfile = {
+      ...WORKFLOW,
+      id: 'review-fix-rereview',
+      stages: [
+        def('implement', 'implementer', 2, { next: 'review' }),
+        def('review', 'reviewer', 1, { name: 'Review', verdict: true, onFail: 'fix' }),
+        def('fix', 'fixer', 2, { next: 'rereview' }),
+        def('rereview', 'reviewer', 1, { name: 'Re-review', verdict: true, onFail: 'fix' }),
+      ],
+    };
+    n = 0;
+    const fixed = [
+      stage({ stageKey: 'implement', role: 'implementer', permissionLevel: 2 }),
+      stage({ stageKey: 'review', role: 'reviewer', verdict: 'FAIL' }),
+      stage({ stageKey: 'fix', role: 'fixer', permissionLevel: 2 }),
+      stage({ stageKey: 'rereview', role: 'reviewer', verdict: 'PASS' }),
+    ];
+    expect(completionGate({ ...base, workflow: rereview, stages: fixed }).pass).toBe(true);
+    const refailed = [...fixed.slice(0, 3), stage({ stageKey: 'rereview', role: 'reviewer', verdict: 'FAIL' })];
+    expect(completionGate({ ...base, workflow: rereview, stages: refailed }).failures).toEqual([
+      expect.objectContaining({ code: 'review', message: 'Re-review has not passed.', remedy: [{ type: 'RETURN_TO_STAGE', params: { stageKey: 'rereview' } }] }),
+    ]);
+  });
 });
 
 /** A migrated, empty database with one task, for the Chairman's own tables. */

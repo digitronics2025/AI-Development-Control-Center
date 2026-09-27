@@ -201,6 +201,29 @@ describe('generated media in review coverage', () => {
     expect(refused.blocker!.message).toContain('public/generated/hero-2.png');
     expect(refused.blocker!.message).not.toContain('hero-1.png');
   }, 90_000);
+
+  it('never requires a picture that was already in your folder and the task did not touch', async () => {
+    t.services.workflows.save('plain-review', {
+      name: 'Plain review',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'implement', name: 'Implement', role: 'implementer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+    const repoPath = await makeRepo();
+    // Your own untracked mockup, there before the task started: context, not part of the change under review.
+    writeFileSync(path.join(repoPath, 'mockup.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+    const id = await createTask(t, await addRepo(t, repoPath), 'Add a greeting [sim:review-miss-coverage]', { workflowId: 'plain-review', supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const prompt = reviewPrompt(id);
+    expect(prompt).toMatch(/^- mockup\.png \(untracked, [^)]*pre-existing user work\)$/m);
+    expect(prompt).not.toMatch(/^- mockup\.png \([^)]*\) → /m);
+    // One review execution: a PASS that names no file was not asked again.
+    const review = t.services.store.latestStage(id, 'review')!;
+    expect(t.services.store.listExecutions(id).filter((e) => e.stageId === review.id)).toHaveLength(1);
+  });
 });
 
 describe('image attachments', () => {

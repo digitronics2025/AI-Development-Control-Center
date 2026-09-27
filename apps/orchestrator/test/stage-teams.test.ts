@@ -353,6 +353,51 @@ describe('Stage Teams', () => {
     expect(stage.summary).toMatch(/^3 variants \(1 failed\); kept Dense take/);
   }, 60_000);
 
+  it('reuses every write variant when the stage is retried after its judge failed, and runs only the judge again', async () => {
+    const RETRIED: WorkflowProfileInput = {
+      id: 'variants-retry',
+      name: 'Variants retry',
+      stages: [
+        {
+          key: 'build',
+          name: 'Build',
+          role: 'designer',
+          permissionLevel: 2,
+          next: 'complete',
+          retry: { maxAttempts: 2 },
+          team: { mode: 'variants', maxWorkers: 2, workers: [{ key: 'bold', focus: 'Bold take' }, { key: 'calm', focus: 'Calm take' }] },
+        },
+      ],
+    };
+    const { repoId } = await setup([RETRIED]);
+    // The judge names no winner on either attempt: the second attempt must not redo the variants to find that out.
+    const id = await createTask(t!, repoId, 'Restyle the page [sim:judge-none]', { workflowId: 'variants-retry', supervised: false });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    expect(task.status).toBe('FAILED');
+    const build = units(id, 'build');
+    expect(build.map((u) => [u.unitKey, u.status])).toEqual([
+      ['bold', 'SUCCESS'],
+      ['calm', 'SUCCESS'],
+      ['judge', 'FAILED'],
+      ['bold', 'REUSED'],
+      ['calm', 'REUSED'],
+      ['judge', 'FAILED'],
+    ]);
+    expect(build.filter((u) => u.kind === 'worker').map((u) => u.attempt)).toEqual([1, 1, 2, 2]);
+    // A variant owns the whole repository, so its change outside any path scope does not stop its reuse.
+    expect(build[3]!.reusedFrom).toBe(build[0]!.id);
+    expect(build[3]!.resultCommit).toBe(build[0]!.resultCommit);
+    expect(build[4]!.resultCommit).toBe(build[1]!.resultCommit);
+    // Each variant ran once; the judge twice.
+    const runsOf = (key: string) => agentExecs(id).filter((e) => build.some((u) => u.id === e.workUnitId && u.unitKey === key)).length;
+    expect([runsOf('bold'), runsOf('calm'), runsOf('judge')]).toEqual([1, 1, 2]);
+    // The retried judge still saw each reused variant's diff.
+    const judgePrompts = t!.services.store.listArtifacts(id).filter((a) => a.name.startsWith('design-prompt-judge'));
+    const lastJudge = readFileSync(path.isAbsolute(judgePrompts.at(-1)!.path) ? judgePrompts.at(-1)!.path : path.join(t!.dataDir, judgePrompts.at(-1)!.path), 'utf8');
+    expect(lastJudge).toContain('+- designer change by variant bold at');
+    expect(lastJudge).toContain('+- designer change by variant calm at');
+  }, 60_000);
+
   it('keeps the judged read-only variant as the stage report, and fails the stage when the judge names none', async () => {
     const READ: WorkflowProfileInput = {
       id: 'read-variants',

@@ -97,6 +97,8 @@ handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
 | `media.video.encode` / `media.video.poster` | 2 (FFmpeg) | WebM (VP9) + MP4 (H.264, `+faststart`), no audio unless asked, `<video>` snippet; a poster frame |
 | `media.job.fetch` / `media.job.cancel` | 2 | Saves a finished job's files; cancels a queued job |
 | `media.image.generate`, `.edit`, `.upscale`, `.remove_background`, `.vectorize`, `media.video.generate` | 3 (paid) | fal queue API; results saved as `<folder>/<name>-N.<ext>` |
+| `design.contrast_matrix` | 1, read-only | WCAG 2 contrast of colour roles per theme: a stylesheet's custom properties (light `:root`; dark `prefers-color-scheme: dark`, `.dark`, `[data-theme=dark]`; `var()` followed) or given colours; foreground roles (`fg`, `text`, `on-…`) and UI boundaries (`border`, `ring`, `focus`, 3:1) paired with background roles (`bg`, `surface`, `canvas`…) or named pairs; hex, `rgb()`, `hsl()`, `oklch()`; translucent layers painted first; AA and AAA per pair ([design.ts](../../packages/tools/src/packs/design.ts)) |
+| `design.lint_tokens` | 1, read-only | Colours written as literals (hex, `rgb()`/`hsl()`/`oklch()`…), Tailwind default-palette classes and pixel font sizes in stylesheets, outside token/theme/variables files, `tailwind.config` and custom-property definitions; anchors and id selectors are not colours; never follows links; `allow` for deliberate literals |
 
 **Files.** Every path is confined to the task's roots and never touches the
 user's own uncommitted work (`protectedCheck`). A file's type comes from its

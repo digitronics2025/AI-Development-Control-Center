@@ -20,7 +20,7 @@ export interface CapabilityProfile {
 const CORE = ['fs.*', 'git.status', 'git.diff', 'git.log', 'git.show', 'git.branch_list', 'environment.*', 'checkpoint.list', 'tools.*'];
 const INSPECT = ['network.*', 'windows.processes', 'windows.port_owner', 'windows.system_info', 'windows.services', 'process.list', 'process.logs', 'http.*', 'web.*'];
 /** Looking at pages without changing them: open, look, read logs, close. */
-const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'browser.accessibility', 'browser.visual_matrix', 'browser.render_html', 'media.image.view', 'media.video.frames'];
+const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'browser.accessibility', 'browser.visual_matrix', 'browser.render_html', 'media.image.view', 'media.video.frames', 'design.contrast_matrix', 'design.lint_tokens'];
 const DEVELOP = ['shell.*', 'process.*', 'terminal.*', 'node.*', 'checkpoint.*', 'git.*', 'editor.*'];
 
 export const PROFILES: Record<ProfileId, CapabilityProfile> = {
@@ -47,7 +47,7 @@ export const PROFILES: Record<ProfileId, CapabilityProfile> = {
     title: 'Frontend design',
     description: 'Media (view, fetch, optimise, generate through the spend gate), browser checks at every width and theme, and app verification (docs/systems/design-agent.md).',
     // The design tools first: a list over the cap keeps the front. No outside generation server: only media.* calls pass the spend gate.
-    include: ['media.*', 'browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['media.*', 'browser.*', 'design.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
   },
   'cloudflare-worker': {
     id: 'cloudflare-worker',

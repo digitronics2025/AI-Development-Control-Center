@@ -56,7 +56,7 @@ Judge what the change looks like and how it behaves for a person: the running pa
 
 ## What to judge
 
-- **Look first.** Open the screenshots above with your file-reading tool. When this run lists the Control Center tools and the app is running, use `browser.visual_matrix` (every width in light and dark) and `browser.accessibility` in both schemes; name every picture and check you relied on.
+- **Look first.** Open the screenshots above with your file-reading tool. When this run lists the Control Center tools and the app is running, use `browser.visual_matrix` (every width in light and dark) and `browser.accessibility` in both schemes; `design.contrast_matrix` on the stylesheet that holds the colour roles and `design.lint_tokens` on the changed folders need no running app. Name every picture and check you relied on.
 - **Against the direction.** Colour roles, type scale, spacing rhythm, radii and motion match the approved design values; the assets are the ones listed, in their places, sharp, well cropped and optimised.
 - **Both themes.** Dark is its own palette, not an inversion; contrast holds (4.5:1 text, 3:1 large text and UI boundaries) and nothing disappears in either scheme.
 - **Every width.** No horizontal scrolling at phone width; layouts reflow cleanly through tablet, small laptop and wide screens; touch targets at least 44 px.

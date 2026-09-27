@@ -19,7 +19,7 @@ import {
   type Column,
   type SegmentOption,
 } from '@acc/ui';
-import { isCloneFolderName, parseCloneUrl, type Repository, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
+import { isCloneFolderName, parseCloneUrl, type Repository, type RepositoryDownloadSkip, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useCloneDefaults, useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
@@ -60,6 +60,13 @@ export function RemoteState({ repo, sync }: { repo: Repository; sync?: Repositor
   return <StatusChip size="compact" visual={{ label: 'Up to date', tone: 'success', icon: CheckCircle2 }} />;
 }
 
+const SKIP_LABEL: Record<RepositoryDownloadSkip, string> = {
+  archived: 'archived',
+  fork: 'a fork',
+  'too-large': 'too large',
+  'folder-taken': 'a folder with that name is already used',
+};
+
 /** The one quiet line above the list: what automation does and what its last run changed. */
 function AutomationSummary({ status, settings }: { status: RepositoryAutomationStatus | undefined; settings: Settings | undefined }) {
   if (!settings || !status) return null;
@@ -76,8 +83,8 @@ function AutomationSummary({ status, settings }: { status: RepositoryAutomationS
   const changes: string[] = [];
   if (run?.discovery?.added.length) changes.push(plural(run.discovery.added.length, 'new repository', 'new repositories'));
   if (run?.downloads?.downloaded.length) changes.push(`downloaded ${run.downloads.downloaded.map((d) => d.name).join(', ')} from GitHub`);
-  // Named with the short reason, so a skipped repository is never a mystery.
-  if (run?.downloads?.skipped.length) changes.push(`not downloaded from GitHub: ${run.downloads.skipped.map((s) => `${s.remote.replace(/^github\.com\//, '')} (${s.reason.split(/[:,]/)[0]})`).join('; ')}`);
+  // Named with a short label (the full reason is in the run report), so a skipped repository is never a mystery.
+  if (run?.downloads?.skipped.length) changes.push(`not downloaded from GitHub: ${run.downloads.skipped.map((s) => `${s.remote.replace(/^github\.com\//, '')} (${SKIP_LABEL[s.kind]})`).join('; ')}`);
   if (run?.downloads?.errors.length) changes.push(`GitHub could not be checked for ${run.downloads.errors.map((e) => e.subject).join(', ')}`);
   if (run?.sync?.['fast-forwarded']) changes.push(`${plural(run.sync['fast-forwarded'], 'repository', 'repositories')} updated`);
   if (run?.sync?.failed) changes.push(`${plural(run.sync.failed, 'repository', 'repositories')} could not be reached`);

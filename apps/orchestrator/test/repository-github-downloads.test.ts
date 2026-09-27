@@ -112,7 +112,7 @@ describe('GitHub downloads in repository automation', () => {
     const result = await t.services.repositoryAutomation.run('manual');
 
     expect(result.downloads!.downloaded.map((d) => d.remote).sort()).toEqual(['github.com/acme-org/org-tool', 'github.com/tester/new-app']);
-    expect(result.downloads!.skipped.map((s) => s.remote).sort()).toEqual(['github.com/tester/copy', 'github.com/tester/huge', 'github.com/tester/old']);
+    expect(result.downloads!.skipped.map((s) => [s.remote, s.kind]).sort()).toEqual([['github.com/tester/copy', 'fork'], ['github.com/tester/huge', 'too-large'], ['github.com/tester/old', 'archived']]);
     expect(result.downloads!.skipped.find((s) => s.remote.endsWith('huge'))!.reason).toMatch(/600 MB, over the 500 MB limit/);
     expect(result.downloads!.errors).toEqual([]);
     expect(existsSync(path.join(root, 'new-app', 'README.md'))).toBe(true);
@@ -156,7 +156,7 @@ describe('GitHub downloads in repository automation', () => {
     await automation({ githubAccounts: ['tester'] });
     const result = await t.services.repositoryAutomation.run('manual');
     expect(result.downloads!.downloaded).toEqual([]);
-    expect(result.downloads!.skipped[0]!.reason).toMatch(/already exists and is a different folder/);
+    expect(result.downloads!.skipped).toEqual([{ remote: 'github.com/tester/clash-app', kind: 'folder-taken', reason: expect.stringMatching(/already exists and is not this repository/) }]);
   });
 
   it('does nothing with no watched account', async () => {

@@ -241,15 +241,15 @@ export class RepositoryAutomation {
       if (known.has(identity) || this.d.repositories.isRemoteIgnored(identity)) continue;
       const remote = `github.com/${row.nameWithOwner}`;
       if (row.isArchived) {
-        report.skipped.push({ remote, reason: 'Archived on GitHub' });
+        report.skipped.push({ remote, kind: 'archived', reason: 'Archived on GitHub' });
         continue;
       }
       if (row.isFork) {
-        report.skipped.push({ remote, reason: 'A fork of someone else’s repository' });
+        report.skipped.push({ remote, kind: 'fork', reason: 'A fork of someone else’s repository' });
         continue;
       }
       if (row.diskUsage > maxKb) {
-        report.skipped.push({ remote, reason: `${Math.round(row.diskUsage / 1024)} MB, over the ${settings.githubMaxSizeMb} MB limit: download it yourself from Add repository` });
+        report.skipped.push({ remote, kind: 'too-large', reason: `${Math.round(row.diskUsage / 1024)} MB, over the ${settings.githubMaxSizeMb} MB limit: download it yourself from Add repository` });
         continue;
       }
       const destination = path.join(parent, row.name);
@@ -260,7 +260,13 @@ export class RepositoryAutomation {
         report.downloaded.push({ id: repo.id, name: repo.name, path: repo.path, remote });
       } catch (error) {
         if (error instanceof RepositoryError && error.code === 'DUPLICATE') {
-          report.skipped.push({ remote, reason: `${destination} already exists and is a different folder` });
+          // Say what the folder holds: often the same project under its old address (moved on GitHub), or a namesake from another account.
+          const holds = (await this.d.repositories.remoteIdentities(destination))[0];
+          report.skipped.push({
+            remote,
+            kind: 'folder-taken',
+            reason: holds ? `The folder ${destination} already holds ${holds}` : `The folder ${destination} already exists and is not this repository`,
+          });
           continue;
         }
         report.errors.push({ subject: remote, message: (error as Error).message.slice(0, 500) });

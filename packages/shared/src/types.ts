@@ -484,12 +484,14 @@ export interface RepositoryDiscoveryReport {
   errors: Array<{ path: string; message: string }>;
 }
 
+export type RepositoryDownloadSkip = 'archived' | 'fork' | 'too-large' | 'folder-taken';
+
 /** New repositories downloaded from the watched GitHub accounts in one run. */
 export interface RepositoryDownloadReport {
   accounts: string[];
   downloaded: Array<{ id: string; name: string; path: string; remote: string }>;
-  /** Missing on this computer but left alone, with the reason (too large, archived, fork, folder taken). */
-  skipped: Array<{ remote: string; reason: string }>;
+  /** Missing on this computer but left alone: `kind` for a short label, `reason` in full. */
+  skipped: Array<{ remote: string; kind: RepositoryDownloadSkip; reason: string }>;
   errors: Array<{ subject: string; message: string }>;
 }
 

@@ -78,8 +78,13 @@ when `discover` is on and `githubAccounts` is not empty:
    `host/owner/name` (`normalizeRemote`) equals `github.com/<nameWithOwner>`,
    so a renamed folder still counts. Remote URLs are read as configured
    (`git config --get-regexp`), not after `insteadOf` rewriting.
-3. Skipped with a reason: archived, forks, larger than `githubMaxSizeMb`
-   (`diskUsage`), or the destination folder exists and is something else.
+3. Skipped with a `kind` and a full `reason`: `archived`, `fork`,
+   `too-large` (over `githubMaxSizeMb`, from `diskUsage`), or
+   `folder-taken` — the destination folder exists; the reason names the
+   remote it holds. Seen live 2026-09-27: a repository moved from the
+   personal account to an organisation (local copy still on the old,
+   redirecting address), and two same-named repositories on two accounts.
+   Nothing is overwritten in either case.
    Silently skipped: `ignoredRemotes`, and a destination in `ignoredPaths`.
 4. The rest are cloned with `RepositoryService.clone(…, { unattended: true })`
    into `defaultCloneParent()` (first discovery root, else home) —

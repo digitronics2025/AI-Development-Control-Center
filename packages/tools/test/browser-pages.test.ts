@@ -350,7 +350,10 @@ describe.skipIf(!browser)('design checks (real Chromium)', () => {
     expect(r.evidence?.some((e) => e.startsWith('dark: '))).toBe(true);
     const plain = await call('verify.web', { url: base, paths: ['/other'] });
     expect(plain.ok, plain.summary).toBe(true);
-    expect(plain.summary).toBe('Verified 1 page(s) at desktop, phone widths');
+    // Named as a person would list them (the App check and the task page read it).
+    expect(plain.summary).toBe('Verified 1 page(s) at desktop and phone widths');
+    const three = await call('verify.web', { url: base, paths: ['/other'], viewports: ['phone', 'tablet', 'desktop'], colorSchemes: ['light', 'dark'] });
+    expect(three.summary).toBe('Verified 1 page(s) at phone, tablet and desktop widths in light and dark');
   }, 90_000);
 
   it('returns one contact sheet per colour scheme, with overflow and errors for every view', async () => {

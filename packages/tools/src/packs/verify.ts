@@ -24,6 +24,9 @@ export const webVerifyInput = z.object({
 });
 export type WebVerifyInput = z.infer<typeof webVerifyInput>;
 
+/** "desktop and phone", "phone, tablet and desktop": how a summary names a few items. */
+const listed = (items: readonly string[]) => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
+
 export async function verifyWeb(input: WebVerifyInput, ctx: OperationContext): Promise<OperationResult> {
   const evidence: string[] = [];
   const artifacts: Array<{ id: string; name: string }> = [];
@@ -75,7 +78,7 @@ export async function verifyWeb(input: WebVerifyInput, ctx: OperationContext): P
       ok: problems.length === 0,
       summary: problems.length
         ? `Verification found ${problems.length} problem(s): ${problems[0]}`
-        : `Verified ${input.paths.length} page(s) at ${input.mode === 'browser' ? input.viewports.join(', ') : 'HTTP'}${input.mode === 'browser' ? ` widths${input.colorSchemes ? ` in ${input.colorSchemes.join(' and ')}` : ''}` : ''}`,
+        : `Verified ${input.paths.length} page(s) at ${input.mode === 'browser' ? listed(input.viewports) : 'HTTP'}${input.mode === 'browser' ? ` widths${input.colorSchemes ? ` in ${listed(input.colorSchemes)}` : ''}` : ''}`,
       output: { problems, pages },
       evidence,
       artifacts,

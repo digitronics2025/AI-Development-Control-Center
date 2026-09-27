@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resetSharedRedactor } from '@acc/security';
 import { addRepo, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from '../../orchestrator/test/helpers.js';
-import { httpJson, startCloud, type Cloud } from './harness.js';
+import { httpBytes, httpJson, startCloud, type Cloud } from './harness.js';
 
 /**
  * Artifacts and historical logs (CLOUD_CONTROL_PLAN Phase 8): the sync policy,
@@ -51,8 +51,9 @@ describe('artifact and log uploads', () => {
       expect(m?.r2_key ?? null).toBeNull();
     }
     // Downloaded bytes match the recorded hash, and the planted secret is not in them.
-    const download = await fetch(`${cloud.url}/api/cloud/artifacts/${nodeId}/${request.id}`, { headers: { 'cf-access-jwt-assertion': await cloud.signer.token() } });
-    const bytes = Buffer.from(await download.arrayBuffer());
+    // No keep-alive: the local dev proxy resets a reused socket now and then (see httpJson).
+    const download = await httpBytes(`${cloud.url}/api/cloud/artifacts/${nodeId}/${request.id}`, { 'cf-access-jwt-assertion': await cloud.signer.token() });
+    const bytes = download.bytes;
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(download.headers.get('x-acc-sha256'));
     expect(bytes.toString('utf8')).toContain('Ship the fix');
     expect(bytes.toString('utf8')).not.toContain(SECRET);

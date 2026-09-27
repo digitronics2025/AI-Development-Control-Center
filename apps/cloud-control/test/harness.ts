@@ -89,6 +89,24 @@ export function httpJson(base: string, method: string, pathname: string, body?: 
   });
 }
 
+/** A GET's raw bytes over node:http with no keep-alive, for downloads whose hash is checked (as httpJson). */
+export function httpBytes(url: string, headers: Record<string, string> = {}): Promise<{ status: number; bytes: Buffer; headers: Headers }> {
+  const target = new URL(url);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: target.hostname, port: target.port, path: target.pathname + target.search, method: 'GET', agent: false, headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (c: Buffer) => chunks.push(c));
+      response.on('end', () => {
+        const h = new Headers();
+        for (const [k, v] of Object.entries(response.headers)) if (typeof v === 'string') h.set(k, v);
+        resolve({ status: response.statusCode ?? 0, bytes: Buffer.concat(chunks), headers: h });
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 export interface Cloud {
   url: string;
   port: number;

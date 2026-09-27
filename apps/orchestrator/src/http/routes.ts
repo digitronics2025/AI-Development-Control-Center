@@ -522,7 +522,7 @@ export function registerRoutes(app: FastifyInstance, s: AppServices): void {
     return engine.release.checkSetup(body.release ? { ...repo, release: body.release } : repo);
   });
   app.delete('/api/repositories/:id', async (request, reply) => {
-    s.repositories.remove(idParam.parse(request.params).id);
+    await s.repositories.remove(idParam.parse(request.params).id);
     return reply.code(204).send();
   });
 

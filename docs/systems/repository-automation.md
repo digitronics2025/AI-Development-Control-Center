@@ -29,6 +29,9 @@ sync** downloads new commits into every registered repository. Code:
 | `ignoredPaths` | `[]` | Never registered automatically (≤ 1000) |
 | `sync` | `true` | Background sync; downloads only |
 | `intervalMinutes` | `15` | Time between runs, measured from the end of the last (5–1440) |
+| `githubAccounts` | `[]` | GitHub users/organisations whose missing repositories are downloaded (needs `discover`; empty = off) |
+| `githubMaxSizeMb` | `500` | Larger GitHub repositories are skipped, not downloaded |
+| `ignoredRemotes` | `[]` | `host/owner/name` never downloaded (≤ 1000) |
 
 ## Schedule
 
@@ -58,9 +61,39 @@ Paths compare through `pathKey` (resolved, trailing separator removed,
 lowercased on Windows); `add` uses the same check, so a case variant is a
 `DUPLICATE`.
 
-Discovery only sees disk. A repository that exists only online (for
-example one just created on GitHub) is never found by it — see *Download
-from GitHub* below.
+The disk walk only sees disk; repositories that exist only on GitHub come
+from *GitHub downloads* below (or by hand: *Download from GitHub*).
+
+## GitHub downloads
+
+`RepositoryAutomation.downloadFromGitHub`, in the same run right after the
+disk walk (so a copy already on disk is registered, not downloaded again),
+when `discover` is on and `githubAccounts` is not empty:
+
+1. Each account is listed through `github.repo_list` (`ToolService.invoke`,
+   origin `engine`, Level 1): `gh repo list <owner> --json …`, under the
+   account `gh` is signed in to. An account that fails is reported in
+   `errors`; the others still run.
+2. "Already here" = some registered repository has a remote whose
+   `host/owner/name` (`normalizeRemote`) equals `github.com/<nameWithOwner>`,
+   so a renamed folder still counts. Remote URLs are read as configured
+   (`git config --get-regexp`), not after `insteadOf` rewriting.
+3. Skipped with a reason: archived, forks, larger than `githubMaxSizeMb`
+   (`diskUsage`), or the destination folder exists and is something else.
+   Silently skipped: `ignoredRemotes`, and a destination in `ignoredPaths`.
+4. The rest are cloned with `RepositoryService.clone(…, { unattended: true })`
+   into `defaultCloneParent()` (first discovery root, else home) —
+   `UNATTENDED_REMOTE_ENV`, so a private repository without a saved sign-in
+   fails instead of opening a window — and registered.
+
+**Removed stays removed:** `RepositoryService.remove` records the removed
+repository's remote identities in `ignoredRemotes` (and its path in
+`ignoredPaths`); adding it again by hand clears both. Settings →
+Repositories lists them with **Allow again**.
+
+The run's `downloads` report (`RepositoryDownloadReport`: accounts,
+downloaded, skipped, errors) feeds the Repositories summary line, which
+names what was downloaded and what was not, with the reason.
 
 **Ignore list.** Removing a repository appends its path to `ignoredPaths`;
 adding it again by hand removes it. Settings → Repositories shows the list

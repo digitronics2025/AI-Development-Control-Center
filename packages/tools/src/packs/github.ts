@@ -129,6 +129,15 @@ export function githubProvider(): ToolProvider {
           gh(ctx, ['pr', 'create', '--title', i.title, '--body', i.body, ...(i.base ? ['--base', i.base] : []), ...(i.head ? ['--head', i.head] : []), ...(i.draft ? ['--draft'] : [])], (t) => `Opened ${String(t).trim().split('\n').pop()}`, 120_000),
       }),
       operation({
+        id: 'github.repo_list',
+        title: 'List an account’s repositories',
+        description: 'Repositories of a GitHub user or organisation that the signed-in account can see: name, address, size, archived, fork, empty.',
+        input: z.object({ owner: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/), limit: z.number().int().min(1).max(1000).default(1000) }),
+        level: 1,
+        run: (i, ctx) =>
+          gh(ctx, ['repo', 'list', i.owner, '--limit', String(i.limit), '--json', 'name,nameWithOwner,url,isArchived,isFork,isEmpty,diskUsage'], (json) => `${Array.isArray(json) ? json.length : 0} repositories of ${i.owner}`),
+      }),
+      operation({
         id: 'github.repo_create',
         title: 'Create a GitHub repository',
         description:

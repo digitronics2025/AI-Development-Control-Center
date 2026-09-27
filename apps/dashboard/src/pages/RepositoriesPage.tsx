@@ -63,17 +63,22 @@ export function RemoteState({ repo, sync }: { repo: Repository; sync?: Repositor
 /** The one quiet line above the list: what automation does and what its last run changed. */
 function AutomationSummary({ status, settings }: { status: RepositoryAutomationStatus | undefined; settings: Settings | undefined }) {
   if (!settings || !status) return null;
-  const { discover, sync, intervalMinutes } = settings.repositoryAutomation;
+  const { discover, sync, intervalMinutes, githubAccounts } = settings.repositoryAutomation;
   const settingsLink = (
     <Link to="/settings/repositories" className="text-fg underline">
       Settings → Repositories
     </Link>
   );
   if (!discover && !sync) return <p className="text-small text-fg-secondary">Automatic updates are off. Turn them on in {settingsLink}.</p>;
-  const what = [discover ? 'new repositories are added' : null, sync ? 'new commits are downloaded' : null].filter(Boolean).join(' and ');
+  const fromGitHub = discover && githubAccounts.length ? ` (also downloaded from GitHub: ${githubAccounts.join(', ')})` : '';
+  const what = [discover ? `new repositories are added${fromGitHub}` : null, sync ? 'new commits are downloaded' : null].filter(Boolean).join(' and ');
   const run = status.lastRun;
   const changes: string[] = [];
   if (run?.discovery?.added.length) changes.push(plural(run.discovery.added.length, 'new repository', 'new repositories'));
+  if (run?.downloads?.downloaded.length) changes.push(`downloaded ${run.downloads.downloaded.map((d) => d.name).join(', ')} from GitHub`);
+  // Named with the short reason, so a skipped repository is never a mystery.
+  if (run?.downloads?.skipped.length) changes.push(`not downloaded from GitHub: ${run.downloads.skipped.map((s) => `${s.remote.replace(/^github\.com\//, '')} (${s.reason.split(/[:,]/)[0]})`).join('; ')}`);
+  if (run?.downloads?.errors.length) changes.push(`GitHub could not be checked for ${run.downloads.errors.map((e) => e.subject).join(', ')}`);
   if (run?.sync?.['fast-forwarded']) changes.push(`${plural(run.sync['fast-forwarded'], 'repository', 'repositories')} updated`);
   if (run?.sync?.failed) changes.push(`${plural(run.sync.failed, 'repository', 'repositories')} could not be reached`);
   if (run?.sync?.['remote-gone']) changes.push(`${plural(run.sync['remote-gone'], 'repository', 'repositories')} whose online copy was deleted`);

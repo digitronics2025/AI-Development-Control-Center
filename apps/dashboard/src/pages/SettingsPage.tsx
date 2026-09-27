@@ -135,6 +135,38 @@ function FolderListField({ value, onChange }: { value: string[]; onChange: (valu
   );
 }
 
+const GITHUB_ACCOUNT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const MAX_ACCOUNTS = 20;
+
+/** One GitHub user or organisation per line; invalid text keeps the last valid list. */
+function GitHubAccountsField({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) {
+  const joined = value.join('\n');
+  const [text, setText] = useState(joined);
+  useEffect(() => setText((current) => (folderLines(current).join('\n') === joined ? current : joined)), [joined]);
+  const lines = folderLines(text);
+  const invalid = lines.find((l) => !GITHUB_ACCOUNT.test(l));
+  return (
+    <Field
+      label="GitHub accounts"
+      helper="One GitHub user or organisation per line. Their repositories that are not on this computer are downloaded into the first search folder (or your user folder). Leave empty to turn this off."
+      error={invalid ? `"${invalid}" is not a GitHub user or organisation name.` : lines.length > MAX_ACCOUNTS ? `Use at most ${MAX_ACCOUNTS} accounts.` : null}
+    >
+      <Textarea
+        value={text}
+        rows={2}
+        className="font-mono text-code"
+        spellCheck={false}
+        placeholder="your-github-name"
+        onChange={(e) => {
+          setText(e.target.value);
+          const next = folderLines(e.target.value);
+          if (next.length <= MAX_ACCOUNTS && next.every((l) => GITHUB_ACCOUNT.test(l))) onChange(next);
+        }}
+      />
+    </Field>
+  );
+}
+
 function PromptTemplates() {
   const prompts = usePrompts();
   const mutations = usePromptMutations();
@@ -401,6 +433,17 @@ export function SettingsPage() {
             <FolderListField value={draft.repositoryAutomation.roots} onChange={(v) => setAutomation('roots', v)} />
             <LimitField label="Folder depth" helper="How many folder levels below each search folder are looked at." min={1} max={4} value={draft.repositoryAutomation.maxDepth} onChange={(v) => setAutomation('maxDepth', v)} />
           </div>
+          <div className="flex flex-col gap-3 py-3">
+            <GitHubAccountsField value={draft.repositoryAutomation.githubAccounts} onChange={(v) => setAutomation('githubAccounts', v)} />
+            <LimitField
+              label="Largest download (MB)"
+              helper="Bigger repositories are listed on the Repositories page instead of downloaded. Archived repositories and forks are never downloaded."
+              min={1}
+              max={100000}
+              value={draft.repositoryAutomation.githubMaxSizeMb}
+              onChange={(v) => setAutomation('githubMaxSizeMb', v)}
+            />
+          </div>
           <Row
             title="Download new commits automatically"
             description="Fetches every repository and fast-forwards a branch that is only behind, has no uncommitted changes and no unfinished task. It never uploads, merges or rebases: use Sync in Source Control to upload."
@@ -426,6 +469,18 @@ export function SettingsPage() {
             ) : (
               <p className="text-small text-fg-secondary">None. Removing a repository adds it here, so it is not found again.</p>
             )}
+            {draft.repositoryAutomation.ignoredRemotes.length ? (
+              <ul className="flex flex-col gap-1" aria-label="Never downloaded from GitHub">
+                {draft.repositoryAutomation.ignoredRemotes.map((r) => (
+                  <li key={r} className="flex items-center justify-between gap-3">
+                    <code className="min-w-0 font-mono text-code text-fg wrap-anywhere">{r}</code>
+                    <Button size="compact" variant="ghost" onClick={() => setAutomation('ignoredRemotes', draft.repositoryAutomation.ignoredRemotes.filter((x) => x !== r))}>
+                      Allow again
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         </div>
       </Panel>

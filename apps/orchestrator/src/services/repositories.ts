@@ -5,6 +5,7 @@ import path from 'node:path';
 import { cloneRepository, failureText, git, isGitRepository, repositoryStatus, topLevel } from '@acc/git';
 import { isCloneFolderName, parseCloneUrl, repositoryRuntimeSchema, type CloneRepositoryInput, type Repository, type RepositoryCommand, type RepositoryRuntime, type RepositoryStatus, type UpdateRepositoryInput } from '@acc/shared';
 import type { Bus } from '../bus.js';
+import { normalizeRemote } from '../remote/fingerprint.js';
 import type { SettingsService } from './settings.js';
 import { newId, now, type RepositoryRecord, type Store } from '../store/store.js';
 
@@ -220,6 +221,7 @@ export class RepositoryService {
     };
     this.store.insertRepository(rec);
     this.setIgnored(root, false);
+    await this.unignoreRemotes(root);
     const view = await this.toView(rec, true);
     this.bus.publish({ type: 'repository', repository: view });
     return view;
@@ -235,7 +237,7 @@ export class RepositoryService {
    * created on GitHub) into a new folder, then register it like `add`. The
    * folder must not exist; if the clone fails, whatever it left is removed.
    */
-  async clone(input: CloneRepositoryInput): Promise<Repository> {
+  async clone(input: CloneRepositoryInput, options: { unattended?: boolean } = {}): Promise<Repository> {
     const parsed = parseCloneUrl(input.url);
     if (!parsed) {
       throw new RepositoryError('Enter a GitHub "owner/name", or an https://, ssh:// or git@ address without a password in it.', 'INVALID_URL');
@@ -246,7 +248,7 @@ export class RepositoryService {
     if (!existsSync(parent) || !statSync(parent).isDirectory()) throw new RepositoryError(`"${parent}" is not an existing folder`, 'INVALID_PATH');
     const destination = path.join(parent, folderName);
     if (existsSync(destination)) throw new RepositoryError(`${destination} already exists. Choose another folder name, or add that folder instead.`, 'DUPLICATE');
-    const result = await cloneRepository(parsed.url, destination);
+    const result = await cloneRepository(parsed.url, destination, options);
     if (result.code !== 0) {
       // The folder did not exist before, so anything there now is the failed clone's.
       await rm(destination, { recursive: true, force: true }).catch(() => undefined);
@@ -315,16 +317,54 @@ export class RepositoryService {
     return view;
   }
 
-  remove(id: string): void {
+  async remove(id: string): Promise<void> {
     const rec = this.record(id);
     if (this.store.countTasksForRepository(id) > 0) {
       throw new RepositoryError('This repository has task history. Tasks keep a reference to it, so it cannot be removed.', 'IN_USE');
     }
+    // Read before deleting: the remotes are how GitHub downloads recognise it later.
+    const remotes = await this.remoteIdentities(rec.path);
     this.store.deleteRepository(id);
     this.statusCache.delete(id);
-    // Removing is a decision: automatic discovery must not bring the repository back.
+    // Removing is a decision: neither discovery nor GitHub downloads may bring the repository back.
     this.setIgnored(rec.path, true);
+    this.ignoreRemotes(remotes);
     this.bus.publish({ type: 'repository.deleted', repositoryId: id });
+  }
+
+  /** `host/owner/name` of every remote of the repository at `root` (empty when unreadable or none). */
+  async remoteIdentities(root: string): Promise<string[]> {
+    if (!existsSync(root)) return [];
+    // The URLs as configured: `git remote -v` shows them after `insteadOf` rewriting.
+    const result = await git(root, ['config', '--get-regexp', '^remote\\..*\\.(push)?url$']).catch(() => null);
+    if (!result || result.code !== 0) return [];
+    const ids = result.stdout
+      .split('\n')
+      .map((line) => line.split(/\s+/)[1])
+      .filter((url): url is string => Boolean(url))
+      .map((url) => normalizeRemote(url)?.identity)
+      .filter((id): id is string => Boolean(id));
+    return [...new Set(ids)];
+  }
+
+  isRemoteIgnored(identity: string): boolean {
+    return this.settings.get().repositoryAutomation.ignoredRemotes.includes(identity.toLowerCase());
+  }
+
+  /** Adding a repository again (by hand or by download) takes its remotes off the ignore list. */
+  private async unignoreRemotes(root: string): Promise<void> {
+    const automation = this.settings.get().repositoryAutomation;
+    if (!automation.ignoredRemotes.length) return;
+    const ids = new Set(await this.remoteIdentities(root));
+    if (!automation.ignoredRemotes.some((i) => ids.has(i))) return;
+    this.settings.update({ repositoryAutomation: { ...automation, ignoredRemotes: automation.ignoredRemotes.filter((i) => !ids.has(i)) } });
+  }
+
+  private ignoreRemotes(identities: string[]): void {
+    const automation = this.settings.get().repositoryAutomation;
+    const fresh = identities.map((i) => i.toLowerCase()).filter((i) => !automation.ignoredRemotes.includes(i));
+    if (!fresh.length) return;
+    this.settings.update({ repositoryAutomation: { ...automation, ignoredRemotes: [...automation.ignoredRemotes, ...fresh].slice(-1000) } });
   }
 
   /** Whether automatic discovery skips `folder`. Paths compare case-insensitively on Windows. */

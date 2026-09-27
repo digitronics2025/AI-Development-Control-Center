@@ -224,6 +224,16 @@ or it proposed the standard in this task, it writes the approved direction,
 its design values and lasting decisions to `design/brief.md`, so the next
 design task starts from them.
 
+Review coverage knows generated media (`coverageOf` and `readManifestEntries`
+in [context.ts](../../apps/orchestrator/src/engine/context.ts)). An added or
+changed image or video counts as a file the diff did not show. When a changed
+`manifest.json` names it (entries in an array or under `assets`/`files`, with
+`path` relative to the repository or the manifest's folder), and its bytes
+match the entry's SHA-256 when one is given, reviewers see its size, weight
+and use and need not list it under Files reviewed. A picture no manifest
+names, or whose bytes differ from the manifest, must be viewed and named like
+any other unseen file.
+
 The learning loop reads design friction — a visual critique failing twice,
 the same axe rule in two checks, paid media near its budget — and proposes a
 repository-scoped `design-system` skill after one such task, written after a

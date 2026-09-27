@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -49,6 +50,9 @@ import type {
  *   [sim:team-overlap]       ...both claiming shared/
  *   [sim:team-out-of-scope]  the beta worker also changes sim-output.md, outside the paths it owns
  *   [sim:fail-unit-once:<key>] the Stage Team worker of that unit crashes on its first run
+ *   [sim:assets]             the designer also writes two PNGs in public/generated/ and a manifest.json naming both (with SHA-256)
+ *   [sim:assets-unnamed]     ...plus an extra PNG the manifest does not name
+ *   [sim:assets-bad-hash]    ...with a manifest whose SHA-256 for hero-2.png is wrong
  *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
  *   [sim:judge-none]         ...or names none
  *
@@ -322,6 +326,21 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           for (const rel of files) {
             await appendFile(path.join(input.cwd, rel), `${out.endsWith('.ts') ? '//' : '-'} ${role} change${variant ? ` by variant ${variant}` : ''} at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${rel}`);
+          }
+          if (has('assets') && role === 'designer') {
+            const dir = path.join(input.cwd, 'public', 'generated');
+            await mkdir(dir, { recursive: true });
+            const png = (seed: number) => Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000100000000908020000', 'hex'), Buffer.from([seed, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82, 0x00, 0xff, 0x10])]);
+            const assets = [
+              { name: 'hero-1.png', data: png(1), usedIn: 'the hero' },
+              { name: 'hero-2.png', data: png(2), usedIn: 'the feature cards' },
+            ];
+            const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+            for (const a of assets) await writeFile(path.join(dir, a.name), a.data);
+            if (has('assets-unnamed')) await writeFile(path.join(dir, 'extra.png'), png(3));
+            const entries = assets.map((a) => ({ path: `public/generated/${a.name}`, sha256: has('assets-bad-hash') && a.name === 'hero-2.png' ? '0'.repeat(64) : sha(a.data), bytes: a.data.length, width: 16, height: 9, model: 'fal-ai/flux/dev', usedIn: a.usedIn }));
+            await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify({ assets: entries }, null, 2)}\n`);
+            files.push(...assets.map((a) => `public/generated/${a.name}`), 'public/generated/manifest.json', ...(has('assets-unnamed') ? ['public/generated/extra.png'] : []));
           }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {

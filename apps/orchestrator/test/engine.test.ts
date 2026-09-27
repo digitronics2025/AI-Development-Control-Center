@@ -154,6 +154,55 @@ describe('designer stage', () => {
   });
 });
 
+describe('generated media in review coverage', () => {
+  const design = () =>
+    t.services.workflows.save('asset-review', {
+      name: 'Asset review',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'build', name: 'Build', role: 'designer', permissionLevel: 2, next: 'review' },
+        { key: 'review', name: 'Review', role: 'reviewer', permissionLevel: 1, verdict: true, next: 'complete' },
+      ],
+    });
+  const reviewPrompt = (id: string) => {
+    const rec = t.services.store.listArtifacts(id).filter((a) => a.name === 'review-prompt.md').at(-1)!;
+    return readFileSync(path.isAbsolute(rec.path) ? rec.path : path.join(t.dataDir, rec.path), 'utf8');
+  };
+
+  it('names the media an asset manifest describes, and a PASS need not list them', async () => {
+    design();
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Make hero images [sim:assets] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(task.status, task.blocker?.message).toBe('COMPLETED');
+    const prompt = reviewPrompt(id);
+    expect(prompt).toContain('Generated media named by an asset manifest');
+    expect(prompt).toMatch(/^- public\/generated\/hero-1\.png \(16×9, 1 KB, used in the hero; public\/generated\/manifest\.json\) → view: media\.image\.view/m);
+    expect(prompt).not.toMatch(/^- public\/generated\/hero-1\.png \([^)]*\) → read: /m);
+    // One review execution: the PASS was not asked again.
+    const review = t.services.store.latestStage(id, 'review')!;
+    expect(t.services.store.listExecutions(id).filter((e) => e.stageId === review.id)).toHaveLength(1);
+  });
+
+  it('still requires a picture the manifest does not name, or whose bytes it does not describe', async () => {
+    design();
+    const repoId = await addRepo(t, await makeRepo());
+    const unnamed = await createTask(t, repoId, 'Make hero images [sim:assets] [sim:assets-unnamed] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const failed = await waitForStatus(t, unnamed, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(failed.status).toBe('FAILED');
+    expect(failed.blocker).toMatchObject({ errorClass: 'REVIEW_INCOMPLETE' });
+    expect(failed.blocker!.message).toContain('public/generated/extra.png');
+    expect(failed.blocker!.message).not.toContain('hero-1.png');
+    expect(reviewPrompt(unnamed)).toMatch(/^- public\/generated\/extra\.png \([^)]*\) → view: media\.image\.view .*no asset manifest names it$/m);
+
+    const other = await addRepo(t, await makeRepo());
+    const badHash = await createTask(t, other, 'Make hero images [sim:assets] [sim:assets-bad-hash] [sim:review-miss-coverage]', { workflowId: 'asset-review', supervised: false });
+    const refused = await waitForStatus(t, badHash, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+    expect(refused.status).toBe('FAILED');
+    expect(refused.blocker!.message).toContain('public/generated/hero-2.png');
+    expect(refused.blocker!.message).not.toContain('hero-1.png');
+  }, 90_000);
+});
+
 describe('image attachments', () => {
   it('go on the command line to an agent that takes pictures, and only to it', async () => {
     t.services.workflows.save('image-refs', {

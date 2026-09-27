@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, withoutPartialTail, type GitSnapshot, type OmittedFile, type PackFile } from '@acc/git';
@@ -45,20 +46,94 @@ function clip(text: string, max = MAX_SECTION_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}\n\n[truncated ${text.length - max} characters]` : text;
 }
 
+/** Image and video files: a diff can only say "Binary files differ" about them. */
+const MEDIA_FILE = /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|mp4|webm|mov)$/i;
+
+/** A generated asset as its manifest names it (docs/systems/design-agent.md): what a reviewer is told instead of a diff. */
+export interface ManifestEntry {
+  manifest: string;
+  bytes: number | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  usedIn: string | null;
+  sha256: string | null;
+}
+
+/**
+ * The files an asset manifest names, by repository path: an array of entries,
+ * or `{ assets | files: [...] }`, each with a `path` relative to the
+ * repository root or to the manifest's folder.
+ */
+export function readManifestEntries(manifestRel: string, json: string): Map<string, ManifestEntry> {
+  const out = new Map<string, ManifestEntry>();
+  let data: unknown;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return out;
+  }
+  const list = Array.isArray(data) ? data : data && typeof data === 'object' ? ((data as Record<string, unknown>).assets ?? (data as Record<string, unknown>).files) : null;
+  if (!Array.isArray(list)) return out;
+  const dir = path.posix.dirname(manifestRel.split(path.sep).join('/'));
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  for (const raw of list.slice(0, 500)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const e = raw as Record<string, unknown>;
+    if (typeof e.path !== 'string' || !e.path || e.path.includes('\0')) continue;
+    const entry: ManifestEntry = {
+      manifest: manifestRel,
+      bytes: num(e.bytes ?? e.size),
+      width: num(e.width ?? (e.dimensions as Record<string, unknown> | undefined)?.width),
+      height: num(e.height ?? (e.dimensions as Record<string, unknown> | undefined)?.height),
+      duration: num(e.duration),
+      usedIn: typeof (e.usedIn ?? e.used ?? e.where) === 'string' ? String(e.usedIn ?? e.used ?? e.where).slice(0, 120) : null,
+      sha256: typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(e.sha256) ? e.sha256.toLowerCase() : null,
+    };
+    const clean = e.path.replace(/\\/g, '/').replace(/^\.\//, '');
+    for (const candidate of [path.posix.normalize(clean), path.posix.normalize(path.posix.join(dir, clean))]) if (!candidate.startsWith('..')) out.set(candidate, entry);
+  }
+  return out;
+}
+
 /** The `{{diff_coverage}}` block and the paths a verdict must name, from a packed diff. */
-function coverageOf(packed: ReturnType<typeof packDiff>, files: PackFile[], hint: (file: PackFile | undefined, omitted: OmittedFile) => string): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
+function coverageOf(
+  packed: ReturnType<typeof packDiff>,
+  files: PackFile[],
+  hint: (file: PackFile | undefined, omitted: OmittedFile) => string,
+  named: Map<string, ManifestEntry> = new Map(),
+): Pick<CollectedDiff, 'diff' | 'coverage' | 'required'> {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const total = new Set([...files.map((f) => f.path), ...packed.shown, ...packed.omitted.map((o) => o.path)]).size;
-  if (!packed.omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
-  const lines = [
-    `Diff shows ${total - packed.omitted.length} of ${total} changed files in full.`,
-    '',
-    'Not shown — read each from disk before your verdict and name it under `## Files reviewed`:',
-    ...packed.omitted.map((o) => `- ${o.path} (${diffLineStats(o)}, ${o.reason}) → read: ${hint(byPath.get(o.path), o)}`),
-  ];
+  // An added or changed image or video is "shown" only as "Binary files … differ": nobody saw it. It counts as not shown.
+  const escape = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const unseen: OmittedFile[] = packed.shown
+    .filter((p) => MEDIA_FILE.test(p) && !packed.omitted.some((o) => o.path === p) && new RegExp(`^Binary files .* b/${escape(p)} differ$`, 'm').test(packed.text))
+    .map((p) => ({ path: p, additions: byPath.get(p)?.additions ?? null, deletions: byPath.get(p)?.deletions ?? null, reason: 'binary' as const }));
+  const omitted = [...packed.omitted, ...unseen];
+  if (!omitted.length) return { diff: packed.text, coverage: total ? `Diff shows all ${total} changed file${total === 1 ? '' : 's'}.` : '', required: [] };
+  // Generated media an asset manifest names (the manifest itself is text, in the diff) needs no line under Files reviewed.
+  const media = omitted.filter((o) => named.has(o.path));
+  const read = omitted.filter((o) => !named.has(o.path));
+  const lines = [`Diff shows ${total - omitted.length} of ${total} changed files in full.`];
+  if (read.length) {
+    lines.push(
+      '',
+      'Not shown — read each from disk before your verdict and name it under `## Files reviewed`:',
+      ...read.map((o) => `- ${o.path} (${diffLineStats(o)}, ${o.reason}) → ${MEDIA_FILE.test(o.path) ? `view: media.image.view (media.video.frames for video), or open it with your file-reading tool; no asset manifest names it` : `read: ${hint(byPath.get(o.path), o)}`}`),
+    );
+  }
+  if (media.length) {
+    lines.push('', 'Generated media named by an asset manifest — open the ones that matter; they need no line under `## Files reviewed`:');
+    for (const o of media) {
+      const e = named.get(o.path)!;
+      const facts = [e.width && e.height ? `${e.width}×${e.height}` : null, e.duration ? `${e.duration} s` : null, e.bytes ? `${Math.max(1, Math.round(e.bytes / 1024))} KB` : null, e.usedIn ? `used in ${e.usedIn}` : null].filter(Boolean).join(', ');
+      lines.push(`- ${o.path} (${facts || 'binary'}; ${e.manifest}) → view: media.image.view (media.video.frames for video)`);
+    }
+  }
   // Written after packing, so this note is never clipped away with the diff.
-  const trailer = `\n[${packed.omitted.length} changed file${packed.omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
-  return { diff: packed.text + trailer, coverage: lines.join('\n'), required: packed.omitted.map((o) => o.path) };
+  const trailer = `\n[${omitted.length} changed file${omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
+  return { diff: packed.text + trailer, coverage: lines.join('\n'), required: read.map((o) => o.path) };
 }
 
 /** Fill `{{name}}` placeholders; an unknown or empty one renders as "(none)" so a prompt never fails for want of a value. */
@@ -219,6 +294,8 @@ export class ContextBuilder {
     const files: Array<PackFile & { origin: string }> = [];
     const raws: string[] = [];
     const bases = new Map<string, { folder: string | null; base: string | null }>();
+    // Media files a changed asset manifest names, when their bytes are the ones it describes (by SHA-256 when it gives one).
+    const named = new Map<string, ManifestEntry>();
     let failed = false;
     for (const src of sources) {
       const prefix = (p: string) => (src.folder ? `${src.folder}/${p}` : p);
@@ -227,6 +304,20 @@ export class ContextBuilder {
         for (const f of changed) {
           files.push({ path: prefix(f.path), additions: f.additions, deletions: f.deletions, status: f.status, origin: f.origin });
           bases.set(prefix(f.path), { folder: src.folder, base: src.snapshot.head });
+        }
+        for (const f of changed.filter((c) => c.status !== 'deleted' && path.posix.basename(c.path) === 'manifest.json')) {
+          const manifest = this.confined(src.workdir, f.path);
+          const json = manifest ? await readFile(manifest, 'utf8').catch(() => '') : '';
+          for (const [rel, entry] of readManifestEntries(f.path, json.length <= 1024 * 1024 ? json : '')) {
+            if (!MEDIA_FILE.test(rel) || !changed.some((c) => c.path === rel && c.status !== 'deleted')) continue;
+            if (entry.sha256) {
+              const abs = this.confined(src.workdir, rel);
+              const size = abs ? ((await stat(abs).catch(() => null))?.size ?? Infinity) : Infinity;
+              const actual = abs && size <= 64 * 1024 * 1024 ? createHash('sha256').update(await readFile(abs)).digest('hex') : null;
+              if (actual !== entry.sha256) continue;
+            }
+            named.set(prefix(rel), { ...entry, manifest: prefix(entry.manifest) });
+          }
         }
         const { diff: raw, truncated } = await diffSince(src.workdir, src.snapshot, { maxBytes: MAX_DIFF_CHARS * 4, prefix: src.folder });
         const complete = withoutPartialTail(redact(raw), truncated);
@@ -247,7 +338,7 @@ export class ContextBuilder {
       // Pre-existing user work the task never touched is context, not part of the change under review.
       const untouched = new Set(files.filter((f) => f.origin === 'preexisting').map((f) => f.path));
       packed.omitted = packed.omitted.filter((o) => !untouched.has(o.path));
-      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false)), changedFiles, all };
+      return { ...coverageOf(packed, files, (f, o) => readHint(f, o, bases.get(o.path), false), named), changedFiles, all };
     } catch {
       // Packing itself failed: fall back to the bounded raw diff and require every file (§5).
       return { diff: clip(raws.join(''), MAX_DIFF_CHARS), changedFiles, coverage: UNKNOWN_COVERAGE, required: all, all };
@@ -331,6 +422,15 @@ export class ContextBuilder {
    * `design/brief.md` inline. Nothing here is required; a repository without
    * any gets "(none)".
    */
+  /** A path inside `workdir` after following links, else null. */
+  private confined(workdir: string, rel: string): string | null {
+    try {
+      return resolveInside([workdir], workdir, rel);
+    } catch {
+      return null;
+    }
+  }
+
   private async designContext(workdir: string): Promise<string> {
     const lines: string[] = [];
     // Inside the repository after following links: a `design` link to a folder elsewhere reads as absent.

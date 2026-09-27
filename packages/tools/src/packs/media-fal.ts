@@ -188,26 +188,33 @@ interface Delivery {
   artifacts: Array<{ id: string; name: string }>;
 }
 
-/** Download a completed job's files into `<folder>/<name>-N.<ext>`; masters up to 50 MB are also kept as task artifacts. */
+/**
+ * Download a completed job's files into `<folder>/<name>-N.<ext>`; masters up to 50 MB are also kept as task artifacts.
+ * Never throws: a dropped connection or a failed write part way is a failure that lists what was saved.
+ */
 async function deliver(ctx: OperationContext, fal: Fal, job: Job, folder: string, name: string): Promise<Delivery | OperationResult> {
-  const r = await restRequest(ctx, job.responseUrl, { headers: headers(fal), maxBytes: 2 * 1024 * 1024 });
-  if (!r.ok) return falFailure(r, 'reading the result');
-  const loopback = fal.base !== QUEUE;
-  const urls = resultFiles(r.json, loopback);
-  if (!urls.length) return failure('FAILED', 'The job finished without an image or video to download');
   const files: SavedMedia[] = [];
-  const artifacts: Array<{ id: string; name: string }> = [];
-  for (const [i, url] of urls.entries()) {
-    const saved = await downloadResult(ctx, url, `${folder.replace(/\/+$/, '')}/${name}-${i + 1}`, { allowLoopback: loopback });
-    if (isFailure(saved)) return { ...saved, summary: `${saved.summary} (result ${i + 1} of ${urls.length}; ${files.length} saved before it)`, filesChanged: files.map((f) => f.path) };
-    files.push(saved);
-    if (ctx.artifacts && saved.bytes <= 50 * 1024 * 1024) {
-      const content = await readFile(resolveInside(ctx.roots, ctx.cwd, saved.path));
-      artifacts.push(await ctx.artifacts.write({ name: saved.path.split('/').pop()!, type: isVideo(saved.kind) ? 'video' : 'image', content, mime: saved.mime }));
+  try {
+    const r = await restRequest(ctx, job.responseUrl, { headers: headers(fal), maxBytes: 2 * 1024 * 1024 });
+    if (!r.ok) return falFailure(r, 'reading the result');
+    const loopback = fal.base !== QUEUE;
+    const urls = resultFiles(r.json, loopback);
+    if (!urls.length) return failure('FAILED', 'The job finished without an image or video to download');
+    const artifacts: Array<{ id: string; name: string }> = [];
+    for (const [i, url] of urls.entries()) {
+      const saved = await downloadResult(ctx, url, `${folder.replace(/\/+$/, '')}/${name}-${i + 1}`, { allowLoopback: loopback });
+      if (isFailure(saved)) return { ...saved, summary: `${saved.summary} (result ${i + 1} of ${urls.length}; ${files.length} saved before it)`, filesChanged: files.map((f) => f.path) };
+      files.push(saved);
+      if (ctx.artifacts && saved.bytes <= 50 * 1024 * 1024) {
+        const content = await readFile(resolveInside(ctx.roots, ctx.cwd, saved.path));
+        artifacts.push(await ctx.artifacts.write({ name: saved.path.split('/').pop()!, type: isVideo(saved.kind) ? 'video' : 'image', content, mime: saved.mime }));
+      }
     }
+    const seed = typeof r.json?.seed === 'number' ? r.json.seed : null;
+    return { files, seed, artifacts };
+  } catch (error) {
+    return failure('FAILED', `Saving the result failed (${(error as Error).message}); ${files.length} file${files.length === 1 ? '' : 's'} saved before it stopped.`, { filesChanged: files.map((f) => f.path) });
   }
-  const seed = typeof r.json?.seed === 'number' ? r.json.seed : null;
-  return { files, seed, artifacts };
 }
 
 function delivered(d: Delivery, job: Job, cost: CostEstimate | null): OperationResult {
@@ -232,23 +239,41 @@ function pending(job: Job, s: Status, cost: CostEstimate | null): OperationResul
   };
 }
 
+/**
+ * A failure after the job was submitted (billed): it carries the job id, which
+ * the spend gate records as charged, and says to poll or fetch it, never to submit again.
+ */
+function submitted(job: Job, r: OperationResult, state: 'UNKNOWN' | 'COMPLETED'): OperationResult {
+  const jobId = encodeJob(job);
+  const next = state === 'COMPLETED' ? 'it finished, so save it with media.job.fetch (under another name if some files were saved)' : 'poll media.job.status with this jobId, then media.job.fetch';
+  return { ...r, summary: `${r.summary} The job was submitted (${jobId}): ${next}; do not submit again.`, output: { status: state, jobId, model: job.model }, networkTargets: [new URL(job.statusUrl).host] };
+}
+
+/** A status read that threw (a dropped connection, a timeout): the job itself is not known to have failed. */
+const unanswered = (error: unknown) => failure('UNAVAILABLE', `fal did not answer the status request (${(error as Error).message}).`);
+
 /** Submit, wait up to `waitSec` for the result, and download it; otherwise hand back the job id. */
 async function generate(ctx: OperationContext, input: { model: string; credential: string; path: string; name: string; waitSec: number }, body: Record<string, unknown>, cost: CostEstimate | null): Promise<OperationResult> {
   const fal = await account(ctx, input.credential);
   if (isFailure(fal)) return fal;
   const job = await submit(ctx, fal, input.model, body);
   if (isFailure(job)) return job;
-  const deadline = Date.now() + Math.min(input.waitSec * 1000, Math.max(0, ctx.timeoutMs - 15_000));
-  let s = await status(ctx, fal, job);
-  while (!isFailure(s) && s.state !== 'COMPLETED' && Date.now() + POLL_MS < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    s = await status(ctx, fal, job);
+  // Billed from here on: whatever goes wrong, the job id goes back.
+  try {
+    const deadline = Date.now() + Math.min(input.waitSec * 1000, Math.max(0, ctx.timeoutMs - 15_000));
+    let s = await status(ctx, fal, job);
+    while (!isFailure(s) && s.state !== 'COMPLETED' && Date.now() + POLL_MS < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      s = await status(ctx, fal, job);
+    }
+    if (isFailure(s)) return submitted(job, s, 'UNKNOWN');
+    if (s.state !== 'COMPLETED') return pending(job, s, cost);
+    const d = await deliver(ctx, fal, job, input.path, input.name);
+    if (isFailure(d)) return submitted(job, d, 'COMPLETED');
+    return delivered(d, job, cost);
+  } catch (error) {
+    return submitted(job, unanswered(error), 'UNKNOWN');
   }
-  if (isFailure(s)) return { ...s, summary: `${s.summary} The job was submitted: ${encodeJob(job)}`, output: { status: 'UNKNOWN', jobId: encodeJob(job) } };
-  if (s.state !== 'COMPLETED') return pending(job, s, cost);
-  const d = await deliver(ctx, fal, job, input.path, input.name);
-  if (isFailure(d)) return { ...d, output: { status: 'COMPLETED', jobId: encodeJob(job) } };
-  return delivered(d, job, cost);
 }
 
 /** A repository image as a data URL for a model's `image_url`. */
@@ -424,12 +449,16 @@ export function falMediaProvider(): ToolProvider {
           if (isFailure(fal)) return fal;
           const job = decodeJob(input.jobId, fal.base);
           if (!job) return failure('INVALID_INPUT', 'Not a job id returned by a media tool');
-          const s = await status(ctx, fal, job);
-          if (isFailure(s)) return s;
-          if (s.state !== 'COMPLETED') return pending(job, s, null);
-          const d = await deliver(ctx, fal, job, input.path, input.name);
-          if (isFailure(d)) return d;
-          return delivered(d, job, null);
+          try {
+            const s = await status(ctx, fal, job);
+            if (isFailure(s)) return s;
+            if (s.state !== 'COMPLETED') return pending(job, s, null);
+            const d = await deliver(ctx, fal, job, input.path, input.name);
+            if (isFailure(d)) return submitted(job, d, 'COMPLETED');
+            return delivered(d, job, null);
+          } catch (error) {
+            return submitted(job, unanswered(error), 'UNKNOWN');
+          }
         },
       }),
       operation({

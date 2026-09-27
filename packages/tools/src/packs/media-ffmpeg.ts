@@ -15,7 +15,9 @@ import { MAX_MODEL_IMAGE_BYTES, mediaPath } from './media.js';
  * a fixed template: argv only (no shell), numbers and choices validated by the
  * schema, and every path confined to the repository and passed with the
  * `file:` protocol so a file name can never be read as an option or another
- * protocol; inputs are limited to local files.
+ * protocol; inputs are limited to local files. A path with `%` is refused:
+ * FFmpeg's image reader and writer read it as a sequence pattern (`x%d` is
+ * x1, `%%` is `%`), so the file touched would not be the one checked.
  */
 
 const nameField = z
@@ -40,6 +42,28 @@ function tool(ctx: OperationContext): Tool | OperationResult {
 }
 
 const file = (abs: string) => `file:${abs}`;
+/** Writes a JPEG to exactly this name: the image muxer otherwise expands `%d` in it. */
+const single = ['-update', '1'];
+
+/**
+ * A path FFmpeg will open as named. `-pattern_type none` cannot do this for
+ * inputs: it is an option of the image-sequence reader alone, and FFmpeg
+ * refuses it when another reader (PNG, WebP, AVIF, video) opens the file.
+ */
+function literal<T extends { abs: string; rel: string }>(p: T): T | OperationResult {
+  if (!p.abs.includes('%')) return p;
+  return failure('INVALID_INPUT', `${p.rel.includes('%') ? p.rel : p.abs} has "%" in its path, which FFmpeg reads as an image-sequence pattern (x%d is x1), so it would use another file: rename it or choose another folder`);
+}
+
+async function source(ctx: OperationContext, requested: string) {
+  const src = await readMedia(ctx, requested);
+  return isFailure(src) ? src : literal(src);
+}
+
+function target(ctx: OperationContext, requested: string, overwrite: boolean) {
+  const dest = destination(ctx, requested, overwrite);
+  return isFailure(dest) ? dest : literal(dest);
+}
 
 async function ffmpeg(ctx: OperationContext, t: Tool, args: string[]): Promise<OperationResult | null> {
   const out = await run(t.ffmpeg, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file', ...args], { cwd: ctx.cwd, env: credentialFreeEnv(ctx.env), timeoutMs: Math.max(30_000, ctx.timeoutMs - 5_000) });
@@ -116,7 +140,7 @@ export function ffmpegProvider(): ToolProvider {
         run: async (input, ctx) => {
           const t = tool(ctx);
           if (isFailure(t)) return t;
-          const src = await readMedia(ctx, input.image);
+          const src = await source(ctx, input.image);
           if (isFailure(src)) return src;
           if (isVideo(src.kind) || src.kind === 'svg') return failure('INVALID_INPUT', `${src.rel} is ${src.kind}: optimise raster images here (media.svg.optimize for SVG, media.video.encode for video)`);
           const info = describe(src.rel, src.buf, src.kind);
@@ -137,7 +161,7 @@ export function ffmpegProvider(): ToolProvider {
               continue;
             }
             for (const w of widths) {
-              const dest = destination(ctx, name(`-${w}.${format === 'jpeg' ? 'jpg' : format}`), input.overwrite);
+              const dest = target(ctx, name(`-${w}.${format === 'jpeg' ? 'jpg' : format}`), input.overwrite);
               if (isFailure(dest)) return dest;
               await mkdir(path.dirname(dest.abs), { recursive: true });
               const scale = ['-vf', `scale=${w}:-2:flags=lanczos`];
@@ -145,7 +169,7 @@ export function ffmpegProvider(): ToolProvider {
                 format === 'webp'
                   ? ['-c:v', 'libwebp', '-quality', String(input.quality), '-compression_level', '6']
                   : format === 'jpeg'
-                    ? ['-c:v', 'mjpeg', '-q:v', String(Math.max(2, Math.round(31 - (input.quality / 100) * 29))), '-pix_fmt', 'yuvj420p']
+                    ? ['-c:v', 'mjpeg', '-q:v', String(Math.max(2, Math.round(31 - (input.quality / 100) * 29))), '-pix_fmt', 'yuvj420p', ...single]
                     : avif === 'libaom-av1'
                       ? ['-c:v', 'libaom-av1', '-still-picture', '1', '-crf', String(Math.round(63 - (input.quality / 100) * 45)), '-cpu-used', '6', '-pix_fmt', 'yuv420p']
                       : ['-c:v', 'libsvtav1', '-crf', String(Math.round(63 - (input.quality / 100) * 45)), '-preset', '8', '-pix_fmt', 'yuv420p'];
@@ -197,7 +221,7 @@ export function ffmpegProvider(): ToolProvider {
         run: async (input, ctx) => {
           const t = tool(ctx);
           if (isFailure(t)) return t;
-          const src = await readMedia(ctx, input.video);
+          const src = await source(ctx, input.video);
           if (isFailure(src)) return src;
           if (!isVideo(src.kind)) return failure('INVALID_INPUT', `${src.rel} is not a video`);
           const name = outputs(src.rel, input.outDir, input.name);
@@ -205,7 +229,7 @@ export function ffmpegProvider(): ToolProvider {
           const audio = input.keepAudio ? ['-c:a', 'libopus', '-b:a', '96k'] : ['-an'];
           const files: SavedMedia[] = [];
           for (const format of input.formats) {
-            const dest = destination(ctx, name(`.${format}`), input.overwrite);
+            const dest = target(ctx, name(`.${format}`), input.overwrite);
             if (isFailure(dest)) return dest;
             if (path.resolve(dest.abs) === path.resolve(src.abs)) return failure('INVALID_INPUT', `The output would replace the source ${src.rel}: pass another name or outDir`);
             await mkdir(path.dirname(dest.abs), { recursive: true });
@@ -240,13 +264,13 @@ export function ffmpegProvider(): ToolProvider {
         run: async (input, ctx) => {
           const t = tool(ctx);
           if (isFailure(t)) return t;
-          const src = await readMedia(ctx, input.video);
+          const src = await source(ctx, input.video);
           if (isFailure(src)) return src;
           if (!isVideo(src.kind)) return failure('INVALID_INPUT', `${src.rel} is not a video`);
-          const dest = destination(ctx, outputs(src.rel, input.outDir, input.name)(`-poster.${input.format === 'jpeg' ? 'jpg' : 'webp'}`), input.overwrite);
+          const dest = target(ctx, outputs(src.rel, input.outDir, input.name)(`-poster.${input.format === 'jpeg' ? 'jpg' : 'webp'}`), input.overwrite);
           if (isFailure(dest)) return dest;
           await mkdir(path.dirname(dest.abs), { recursive: true });
-          const codec = input.format === 'jpeg' ? ['-q:v', '3'] : ['-c:v', 'libwebp', '-quality', '80'];
+          const codec = input.format === 'jpeg' ? ['-q:v', '3', ...single] : ['-c:v', 'libwebp', '-quality', '80'];
           const failed = await ffmpeg(ctx, t, ['-y', '-ss', String(input.atSec), '-i', file(src.abs), '-frames:v', '1', ...codec, file(dest.abs)]);
           if (failed) return failed;
           const s = await saved(dest);
@@ -265,7 +289,7 @@ export function ffmpegProvider(): ToolProvider {
         run: async (input, ctx) => {
           const t = tool(ctx);
           if (isFailure(t)) return t;
-          const src = await readMedia(ctx, input.video);
+          const src = await source(ctx, input.video);
           if (isFailure(src)) return src;
           if (!isVideo(src.kind)) return failure('INVALID_INPUT', `${src.rel} is not a video: use media.image.view`);
           const facts = await probe(ctx, t, src.abs);
@@ -276,7 +300,7 @@ export function ffmpegProvider(): ToolProvider {
             const perRow = Math.min(4, input.count);
             const rows = Math.ceil(input.count / perRow);
             const fps = Math.max(0.01, input.count / duration);
-            const failed = await ffmpeg(ctx, t, ['-y', '-i', file(src.abs), '-vf', `fps=${fps.toFixed(4)},scale=480:-2,tile=${perRow}x${rows}`, '-frames:v', '1', '-q:v', '4', file(sheet)]);
+            const failed = await ffmpeg(ctx, t, ['-y', '-i', file(src.abs), '-vf', `fps=${fps.toFixed(4)},scale=480:-2,tile=${perRow}x${rows}`, '-frames:v', '1', '-q:v', '4', ...single, file(sheet)]);
             if (failed) return failed;
             const data = await readFile(sheet);
             if (data.length > MAX_MODEL_IMAGE_BYTES) return failure('FAILED', 'The contact sheet is too large to show; ask for fewer frames');

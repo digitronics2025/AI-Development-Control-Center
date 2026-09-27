@@ -259,6 +259,8 @@ describe('fal generation (a stand-in queue)', () => {
   let submitStatus = 200;
   let result: unknown = null;
   let jobUrls: 'own' | 'foreign' = 'own';
+  /** A connection the queue drops after the submission was accepted: while the status or the result is read. */
+  let drop: 'none' | 'status' | 'result' = 'none';
 
   beforeAll(async () => {
     fal = http.createServer((req, res) => {
@@ -267,6 +269,7 @@ describe('fal generation (a stand-in queue)', () => {
       req.on('end', () => {
         const body = raw ? JSON.parse(raw) : null;
         seen.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, body });
+        if ((drop === 'status' && req.url!.endsWith('/status')) || (drop === 'result' && req.method === 'GET' && /\/requests\/[\w-]+$/.test(req.url!))) return req.socket.destroy();
         const json = (status: number, payload: unknown) => {
           res.writeHead(status, { 'content-type': 'application/json' });
           res.end(JSON.stringify(payload));
@@ -308,6 +311,7 @@ describe('fal generation (a stand-in queue)', () => {
     state = 'COMPLETED';
     submitStatus = 200;
     jobUrls = 'own';
+    drop = 'none';
   };
 
   it('submits once with the key, waits, and saves every result into the repository by its real type', async () => {
@@ -373,6 +377,43 @@ describe('fal generation (a stand-in queue)', () => {
     const invalid = await call('media.image.generate', { prompt: 'x', path: 'public/generated', name: 'bad' }, falCtx());
     expect(invalid.error?.code).toBe('INVALID_INPUT');
     expect(invalid.summary).toContain('body.prompt: field required');
+  });
+
+  it('keeps the job id when following a billed job fails, so it is polled and fetched, never submitted again', async () => {
+    reset();
+    result = { images: [{ url: `${falBase}/files/d.png` }, { url: `${falBase}/files/e.png` }] };
+    const jobOf = (r: OperationResult) => (r.output as { jobId: string }).jobId;
+    // The queue accepts the submission, then the connection drops while the status is read.
+    drop = 'status';
+    const lost = await call('media.image.generate', { prompt: 'x', path: 'public/generated', name: 'dropped' }, falCtx());
+    expect(lost.ok).toBe(false);
+    expect(lost.output).toMatchObject({ status: 'UNKNOWN', jobId: expect.stringMatching(/^fal:/), model: 'fal-ai/flux/dev' });
+    expect(lost.summary).toMatch(/submitted[\s\S]*poll media\.job\.status[\s\S]*do not submit again/);
+    const jobId = jobOf(lost);
+    // media.job.fetch keeps it too when the status read fails.
+    const fetchLost = await call('media.job.fetch', { jobId, path: 'public/generated', name: 'dropped' }, falCtx());
+    expect(fetchLost.output).toMatchObject({ status: 'UNKNOWN', jobId });
+    expect(fetchLost.summary).toMatch(/do not submit again/);
+    // ...or while the finished result is read, by the paid call and by media.job.fetch.
+    drop = 'result';
+    const unread = await call('media.image.generate', { prompt: 'x', path: 'public/generated', name: 'unread' }, falCtx());
+    expect(unread.ok).toBe(false);
+    expect(unread.output).toMatchObject({ status: 'COMPLETED', jobId: expect.stringMatching(/^fal:/) });
+    expect(unread.summary).toMatch(/media\.job\.fetch[\s\S]*do not submit again/);
+    const fetchUnread = await call('media.job.fetch', { jobId, path: 'public/generated', name: 'dropped' }, falCtx());
+    expect(fetchUnread.output).toMatchObject({ status: 'COMPLETED', jobId });
+    // Each paid call submitted exactly once, whatever failed after it.
+    expect(seen.filter((s) => s.method === 'POST')).toHaveLength(2);
+    // A write that fails part way says what was saved (so a retry picks another name) and keeps the job id.
+    drop = 'none';
+    const partial = await call('media.job.fetch', { jobId, path: 'public/generated', name: 'dropped' }, falCtx({ artifacts: { write: async () => Promise.reject(new Error('artifact store is full')) } }));
+    expect(partial.ok).toBe(false);
+    expect(partial.summary).toMatch(/artifact store is full[\s\S]*1 file saved/);
+    expect(partial.filesChanged).toEqual(['public/generated/dropped-1.png']);
+    expect(partial.output).toMatchObject({ status: 'COMPLETED', jobId });
+    const retried = await call('media.job.fetch', { jobId, path: 'public/generated', name: 'dropped-again' }, falCtx());
+    expect(retried.ok, retried.summary).toBe(true);
+    expect(seen.filter((s) => s.method === 'POST')).toHaveLength(2);
   });
 
   it('reads only a media credential, and sends the key only to the queue it came from', async () => {
@@ -488,4 +529,35 @@ describe('FFmpeg media tools', () => {
     expect((await call('media.video.encode', { video: 'public/video/loop.mp4', formats: ['mp4'], outDir: 'public/video', name: 'loop' }, ctx(repo))).summary).toMatch(/replace the source/);
     expect((await call('media.video.encode', { video: 'public/dot.png' }, ctx(repo))).summary).toMatch(/not a video/);
   }, 180_000);
+
+  it.skipIf(needs())('refuses "%" in any path it hands FFmpeg, which would read x%d as x1 and write past the path checks', async () => {
+    // A protected, existing poster in public/x1: 'public/x%d' names another folder, but FFmpeg would expand it to x1.
+    mkdirSync(path.join(repo, 'public', 'x1'), { recursive: true });
+    const mine = path.join(repo, 'public', 'x1', 'clip-poster.jpg');
+    writeFileSync(mine, 'my own poster');
+    const guarded = ctx(repo, { protectedPaths: ['public/x1'] });
+    expect((await call('media.video.poster', { video: 'media src/clip.mp4', outDir: 'public/x1' }, guarded)).error?.code).toBe('PROTECTED_PATH');
+    const poster = await call('media.video.poster', { video: 'media src/clip.mp4', outDir: 'public/x%d' }, guarded);
+    expect(poster.error?.code).toBe('INVALID_INPUT');
+    expect(poster.summary).toMatch(/public\/x%d\/clip-poster\.jpg has "%" in its path[\s\S]*image-sequence pattern/);
+    expect(readFileSync(mine, 'utf8')).toBe('my own poster');
+    // The same for the other tools and for a source whose folder has "%" (outputs default to it; FFmpeg would read seq1/ instead).
+    const jpeg = await call('media.asset.optimize', { image: 'media src/Hero Shot.png', widths: [64], formats: ['jpeg'], outDir: 'public/q%d' }, ctx(repo));
+    expect(jpeg.summary).toMatch(/image-sequence pattern/);
+    expect((await call('media.video.encode', { video: 'media src/clip.mp4', formats: ['webm'], outDir: 'public/v%d' }, ctx(repo))).summary).toMatch(/image-sequence pattern/);
+    mkdirSync(path.join(repo, 'seq%d'), { recursive: true });
+    writeFileSync(path.join(repo, 'seq%d', 'shot.png'), readFileSync(path.join(repo, 'media src', 'Hero Shot.png')));
+    writeFileSync(path.join(repo, 'seq%d', 'clip.mp4'), readFileSync(path.join(repo, 'media src', 'clip.mp4')));
+    const input = await call('media.asset.optimize', { image: 'seq%d/shot.png', widths: [64], formats: ['jpeg'], outDir: 'public/img' }, ctx(repo));
+    expect(input.error?.code).toBe('INVALID_INPUT');
+    expect(input.summary).toMatch(/seq%d\/shot\.png has "%"/);
+    expect((await call('media.video.poster', { video: 'seq%d/clip.mp4' }, ctx(repo))).summary).toMatch(/seq%d\/clip\.mp4 has "%"/);
+    expect((await call('media.video.frames', { video: 'seq%d/clip.mp4' }, ctx(repo))).summary).toMatch(/image-sequence pattern/);
+    // Nothing was written or created for a refused path.
+    for (const p of ['public/x%d', 'public/q%d', 'public/q1', 'public/v%d', 'public/img/shot-64.jpg', 'seq%d/clip-poster.jpg', 'seq1']) expect(existsSync(path.join(repo, p)), p).toBe(false);
+    // The contact sheet is written to the operator's temporary folder exactly as named, even when that has a "%".
+    const frames = await call('media.video.frames', { video: 'media src/clip.mp4', count: 2 }, ctx(repo, { tempDir: path.join(temp, 'scratch%d') }));
+    expect(frames.ok, frames.summary).toBe(true);
+    expect(existsSync(path.join(temp, 'scratch1'))).toBe(false);
+  }, 120_000);
 });

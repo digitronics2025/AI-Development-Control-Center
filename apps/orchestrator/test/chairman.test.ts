@@ -628,8 +628,15 @@ describe('watchdog (plan §16)', () => {
     expect(acted[0]).toContain('Watchdog:');
     const first = await waitFor(() => t.services.store.listStages(id)[0]!, (s) => s.status === 'FAILED', 10_000);
     expect(first.errorClass).toBe('TIMEOUT');
-    // Dead process: the recorded pid no longer exists on two consecutive checks.
-    const exec = await waitFor(() => t.services.store.listExecutions(id).find((e) => e.status === 'running'), (e) => Boolean(e), 20_000);
+    // Dead process: the recorded pid no longer exists on two consecutive checks. The retry's row is
+    // 'running' before its launch finishes, and the launch then writes the adapter's pid (null here)
+    // and registers the stop handle; its stage turns RUNNING in that same step (launchAgent), so wait
+    // for that or the pid below is overwritten and the watchdog has nothing to stop.
+    const exec = await waitFor(
+      () => t.services.store.listExecutions(id).find((e) => e.status === 'running' && Boolean(e.stageId) && t.services.store.getStage(e.stageId!)?.status === 'RUNNING'),
+      (e) => Boolean(e),
+      20_000,
+    );
     t.services.store.updateExecution(exec!.id, { pid: 999_999 });
     const { Watchdog } = await import('../src/chairman/watchdog.js');
     const dog = new Watchdog(t.services.engine, t.services.store, t.services.views, t.services.settings, t.services.chairman, () => false);

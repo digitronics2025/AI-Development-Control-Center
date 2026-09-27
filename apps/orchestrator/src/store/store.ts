@@ -263,6 +263,7 @@ const toStage = (r: Row): StageInstance => ({
   startedAt: r.started_at,
   finishedAt: r.finished_at,
   createdAt: r.created_at,
+  conditionDigest: r.condition_digest ?? null,
 });
 
 const toExecution = (r: Row): Execution => ({
@@ -537,6 +538,7 @@ const STAGE_COLUMNS: Partial<Record<keyof StageInstance, string>> = {
   errorMessage: 'error_message',
   startedAt: 'started_at',
   finishedAt: 'finished_at',
+  conditionDigest: 'condition_digest',
 };
 
 export class Store {
@@ -896,8 +898,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO task_stages (id, task_id, stage_key, name, role, kind, status, agent_id, model, effort, permission_level, attempt, cycle,
-           verdict, summary, error_class, error_message, started_at, finished_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           verdict, summary, error_class, error_message, started_at, finished_at, created_at, condition_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         stage.id,
@@ -920,6 +922,7 @@ export class Store {
         stage.startedAt,
         stage.finishedAt,
         stage.createdAt,
+        stage.conditionDigest ?? null,
       );
   }
 

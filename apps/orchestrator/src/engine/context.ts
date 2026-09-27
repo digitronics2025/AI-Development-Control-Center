@@ -10,6 +10,7 @@ import {
   DEFAULT_VERIFY_COMMAND_KINDS,
   PLACEHOLDER_PATTERN,
   ROLE_LABEL,
+  judgeKind,
   type ArtifactType,
   type CommandKind,
   type PromptPlaceholder,
@@ -269,6 +270,28 @@ export class ContextBuilder {
 
   private async latest(taskId: string, type: ArtifactType): Promise<string> {
     return (await this.artifacts.latestText(taskId, type, MAX_SECTION_CHARS)) ?? '';
+  }
+
+  /**
+   * `{{review}}` for a reviewing judge is its own role's previous review: a code reviewer never reads the visual
+   * critique as "its previous review" (nor the other way round), since both write reviews
+   * (docs/plans/DESIGNER_ROUTING_PLAN.md §5). Every other role reads the latest review, which is the one that
+   * sent the task to it.
+   */
+  private async reviewFor(task: TaskRecord, def: StageDefinition): Promise<string> {
+    if (judgeKind(def.role) !== 'review') return this.latest(task.id, 'review');
+    const roleOf = new Map(task.workflow.stages.map((s) => [s.key, s.role]));
+    const rec = this.store
+      .listArtifacts(task.id)
+      .filter((a) => a.type === 'review' && a.stageKey !== null && roleOf.get(a.stageKey) === def.role)
+      .at(-1);
+    if (!rec) return '';
+    try {
+      const { content, truncated } = await this.artifacts.read(rec, MAX_SECTION_CHARS);
+      return truncated ? `${content}\n\n[truncated]` : content;
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -679,7 +702,7 @@ export class ContextBuilder {
       investigation: await this.artifactsOf(task.id, ['investigation']),
       plan: await this.latest(task.id, 'plan'),
       implementation_report: await this.artifactsOf(task.id, ['implementation-report', 'fix-report'], 20_000),
-      review: await this.latest(task.id, 'review'),
+      review: await this.reviewFor(task, def),
       test_results: this.testResults(task),
       verification_report: await this.latest(task.id, 'browser-report'),
       // The packer owns the diff's budget; clipping it here would cut away its own note (§3.A).

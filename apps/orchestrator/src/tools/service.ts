@@ -66,7 +66,17 @@ export interface ToolScope {
    * denied, never escalated. Credentials are the pinned ones or none.
    */
   readOnly?: ReadOnlyScope;
+  /**
+   * A design stage's session (the designer role, or the frontend-design profile): outside MCP tools are refused at
+   * every level. They declare no cost, so the spend gate could not see what a generation server bills
+   * (docs/plans/DESIGNER_ROUTING_PLAN.md §5); paid media goes through the spend-gated `media.*` tools only.
+   */
+  designSession?: boolean;
 }
+
+/** Why a design stage may not call an outside MCP tool: shown to the agent and in the escalation log. */
+export const DESIGN_MCP_REFUSAL =
+  'Design stages cannot call outside MCP tools: they declare no cost, so the spend gate cannot check what they bill. Use the Control Center media.* tools, or report it as an operator decision.';
 
 export interface ReadOnlyScope {
   allow: ReadonlySet<string>;
@@ -496,6 +506,12 @@ export class ToolService {
       return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);
     }
 
+    // A design stage never reaches an outside MCP server, whatever its level or profile (see ToolScope.designSession).
+    if (req.origin === 'agent' && scope.designSession && provider.id.startsWith('mcp:')) {
+      this.escalate(scope, req.capability, 'denied', DESIGN_MCP_REFUSAL, risk.level);
+      return refuse('denied', 'DENIED', DESIGN_MCP_REFUSAL, 'deny', risk);
+    }
+
     // 4. Policy.
     const inProfile = profileIncludes(PROFILES[scope.profile], req.capability) || scope.escalated.has(req.capability);
     let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
@@ -735,6 +751,7 @@ export class ToolService {
       }
       if (session.kind === 'agent' && NATIVE_OVERLAP.test(cap.id)) continue;
       const route = this.router.route({ capability: cap.id, detection: (id) => this.health.get(id) });
+      if (scope.designSession && route.ok && route.route.provider.id.startsWith('mcp:')) continue;
       // Providers never checked yet count as available: the first call detects them.
       const offering = this.registry.offering(cap.id).filter((r) => !r.provider.platforms || r.provider.platforms.includes(process.platform));
       const unchecked = !route.ok && route.code === 'NOT_INSTALLED' && offering.some((r) => !this.health.get(r.provider.id));
@@ -759,7 +776,15 @@ export class ToolService {
           ? route.ok || this.registry.offering(c.id).some((r) => !this.health.get(r.provider.id))
             ? 'available — call it with acc_call_capability'
             : `unavailable (${route.ok ? '' : route.reason})`
-          : !route.ok ? `unavailable (${route.reason})` : c.level > scope.stageLevel ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}` : c.level > ceiling ? 'needs approval' : 'available — call it with acc_call_capability';
+          : !route.ok
+            ? `unavailable (${route.reason})`
+            : scope.designSession && route.route.provider.id.startsWith('mcp:')
+              ? 'refused in design stages (an outside tool declares no cost)'
+              : c.level > scope.stageLevel
+                ? `needs Level ${c.level}; this stage is Level ${scope.stageLevel}`
+                : c.level > ceiling
+                  ? 'needs approval'
+                  : 'available — call it with acc_call_capability';
         // An outside server's tools take untyped input here: name their parameters so a call can be written.
         const schema = route.ok ? route.route.operation.inputJsonSchema : undefined;
         const params = schema ? ` Input: ${inputSummary(schema)}.` : '';

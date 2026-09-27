@@ -5,7 +5,10 @@ sources:
   - prompts/art-director.md
   - prompts/visual-critic.md
   - workflows/frontend-design.yaml
+  - workflows/full-autopilot.yaml
   - packages/shared/src/constants.ts
+  - packages/shared/src/ui-paths.ts
+  - apps/orchestrator/src/engine/task-changes.ts
   - apps/orchestrator/src/chairman/gate.ts
   - apps/orchestrator/src/chairman/policy.ts
   - apps/orchestrator/src/engine/runners.ts
@@ -85,6 +88,30 @@ gate ("tests have not run since the last change"), the report's Changed
 section, and "undo last change"; in a supervised task's completion report a
 Build run in a fix cycle counts as a fix attempt (`buildFinalReport` in
 [report.ts](../../apps/orchestrator/src/engine/report.ts)).
+
+## In Full Autopilot
+
+Plan: [DESIGNER_ROUTING_PLAN.md](../plans/DESIGNER_ROUTING_PLAN.md). Full
+Autopilot brings the design specialist in only for user-interface work:
+
+- **Visual critique** (`critique`, visual critic, Level 1) after the App
+  check, with `when: ui-changed`: it runs only when the task's own changes
+  touch UI files ([ui-paths.ts](../../packages/shared/src/ui-paths.ts)), and
+  the completion gate then requires its PASS; otherwise it is skipped and not
+  required ([workflow-engine.md](workflow-engine.md#profiles)). A PASS stands
+  while the UI files are unchanged. Its stage instructions replace the art
+  direction: judge against the repository's standard and the look before the
+  change, block only regressions this change introduced, never on a look not
+  seen (no running app: judge the changed files with `design.lint_tokens` and
+  `design.contrast_matrix`), never NEEDS OPERATOR, always `CAUSE: code`.
+- **Design fix** (`design-fix`, designer on Claude, Level 2): the critique's
+  `onFail`; fixes only what the critique marks blocking, never generates, and
+  a missing asset becomes a placeholder, not a question. Then Test again.
+- No design skill is loaded on these stages: Autopilot runs on every
+  repository, whose own standard binds.
+- Backend tasks: the critique is one Git file check, no agent run, no
+  approval. For both themes and all widths in the critique's screenshots, set
+  Repositories → App runtime → Themes "Light and dark" and Widths "All five".
 
 ## Media tools
 
@@ -199,10 +226,13 @@ the task budget raised, a price estimate changed, or a media budget loosened
    balance: the balance is the hard cap behind the estimates.
    - Do not route generation through an outside MCP server (fal's own, or
      Replicate's): its tools declare no cost estimate, so the spend gate
-     cannot see them. The `frontend-design` profile lists none and the
-     designer is told never to call one; a Level 3 stage with auto-approval
-     could still enable a registered one by escalation, so do not register
-     a paid generation server at all while this workflow runs unattended.
+     cannot see them. A design stage (the designer role or the
+     `frontend-design` profile) is refused every outside MCP tool at any level
+     in `ToolService.invoke` (`designSession`,
+     [tool-system.md](tool-system.md)), and does not see them listed. Other
+     stages can still reach a registered server by escalation within their
+     level (Level 2 by default), so do not register a paid generation server
+     at all while tasks run unattended.
 2. **Media tools on the machine.** ffmpeg on PATH (optimising video, poster
    frames).
 3. **The target repository.**
@@ -255,7 +285,9 @@ never required.
 The learning loop reads design friction — a visual critique failing twice,
 the same axe rule in two checks, paid media near its budget — and proposes a
 repository-scoped `design-system` skill after one such task, written after a
-second ([learning.md](learning.md#design)).
+second ([learning.md](learning.md#design)). In a task whose write stages were
+not all designers (Full Autopilot) only the critique's failures count, and an
+axe rule must fail in two stage runs: one critique's two themes are one finding.
 
 ## Guardrails
 

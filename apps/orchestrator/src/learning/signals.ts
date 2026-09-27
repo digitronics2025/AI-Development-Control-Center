@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { redact } from '@acc/security';
-import { formatUsd, isJudgeRole, type ChairmanStrategyRun, type LearningSignal, type LearningSignalKind, type StageInstance, type ToolExecution } from '@acc/shared';
+import { formatUsd, isJudgeRole, isWriteRole, type ChairmanStrategyRun, type LearningSignal, type LearningSignalKind, type StageInstance, type ToolExecution } from '@acc/shared';
 import type { TaskRecord } from '../store/store.js';
 
 /**
@@ -112,20 +112,25 @@ export function collectSignals(input: SignalInputs): LearningSignal[] {
     add('fix_loops', source, `${rounds} fix rounds before the ${source === 'tests' ? 'tests passed' : 'review passed'}`, rounds, input.stages.filter((s) => s.role === 'fixer' || (s.role === 'designer' && s.cycle > 0)).map((s) => s.stageKey));
   }
 
-  // Design work judged failing more than once in one judge stage (a visual critique, or a review of a designer's work).
-  const designed = input.stages.some((s) => s.role === 'designer' && s.kind === 'agent');
+  // Design work judged failing more than once in one judge stage: a visual critique, or a review of work only a
+  // designer did (Frontend Design). In Full Autopilot a design fix may run among implementer and fixer work, so a
+  // code review failing there is not design friction (DESIGNER_ROUTING_PLAN §5).
+  const writers = input.stages.filter((s) => isWriteRole(s.role) && s.kind === 'agent');
+  const designOnly = writers.length > 0 && writers.every((s) => s.role === 'designer');
   const judged = new Map<string, StageInstance[]>();
-  for (const s of input.stages.filter((s) => s.verdict === 'FAIL' && isJudgeRole(s.role) && (s.role === 'visual-critic' || designed))) judged.set(s.stageKey, [...(judged.get(s.stageKey) ?? []), s]);
+  for (const s of input.stages.filter((s) => s.verdict === 'FAIL' && isJudgeRole(s.role) && (s.role === 'visual-critic' || designOnly))) judged.set(s.stageKey, [...(judged.get(s.stageKey) ?? []), s]);
   for (const [stageKey, fails] of judged) {
     if (fails.length < 2) continue;
     add('design_critique', stageKey, `${fails[0]!.name} failed the design ${fails.length} times`, fails.length, [stageKey]);
   }
 
-  // The same accessibility rule failing in more than one check (a width, a theme, or a later round).
+  // The same accessibility rule failing in more than one check (a width, a theme, or a later round). Outside a design
+  // workflow (a critique in Full Autopilot looks in both themes once per pass) it must fail in two stage runs: a rule
+  // the repository already broke is not friction the task met twice (DESIGNER_ROUTING_PLAN §5).
   const rules = new Map<string, ToolExecution[]>();
   for (const c of calls.filter((c) => c.capability === 'browser.accessibility')) for (const id of axeRulesOf(c.summary)) rules.set(id, [...(rules.get(id) ?? []), c]);
   for (const [id, list] of rules) {
-    if (list.length < 2) continue;
+    if (list.length < 2 || (!designOnly && new Set(list.map((c) => c.stageId ?? '')).size < 2)) continue;
     add('a11y_rule', id, `The accessibility rule ${id} failed in ${list.length} checks`, list.length, list.map((c) => stageName(input.stages, c.stageId)));
   }
 

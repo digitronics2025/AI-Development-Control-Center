@@ -129,6 +129,15 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
         if (stage.requiresApproval && kept?.requiresApproval !== true) return deny(`Removing the approval step from "${stage.name}" can only be done on this machine.`);
         // A lower level can drop a stage under the auto-approve line, which skips its approval just the same.
         if (kept && typeof kept.permissionLevel === 'number' && kept.permissionLevel < stage.permissionLevel) return deny(`Lowering the permission level of "${stage.name}" can only be done on this machine.`);
+        // A verdict is what the completion gate requires a judge to pass: turning it off removes that judge from the gate.
+        if (stage.verdict && kept && kept.verdict === false) return deny(`Making "${stage.name}" advisory can only be done on this machine.`);
+      }
+      // A condition lets a judge be skipped and not required by the completion gate (DESIGNER_ROUTING_PLAN §5): added or
+      // changed here only. Removing one (the stage then always runs) is tightening and stays allowed.
+      for (const n of next) {
+        if (n.when === undefined || n.when === null) continue;
+        const before = current.stages.find((s) => s.key === n.key);
+        if (before?.when !== n.when) return deny(`Making "${typeof n.name === 'string' ? n.name : String(n.key)}" run only on a condition can only be done on this machine.`);
       }
       return allow;
     }

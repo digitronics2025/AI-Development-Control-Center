@@ -203,9 +203,10 @@ describe('learning loop', () => {
 
   it('proposes a design-system skill for the repository from design friction, and writes it after a second task', async () => {
     const repoId = await addRepo(t, await makeRepo());
-    // The same axe rule in both themes, and a paid call the task budget refused.
+    // The same axe rule in two rounds of checks (outside a design workflow, one run's two themes are one finding), and a
+    // paid call the task budget refused.
     const calls = (): Array<Partial<ToolExecution>> => [
-      ...['light', 'dark'].map((scheme) => ({ capability: 'browser.accessibility', providerId: 'playwright', errorCode: 'FAILED', summary: `2 accessibility violation(s) (${scheme}): color-contrast at p.faint, button-name at button` })),
+      ...['light', 'dark'].map((scheme, round) => ({ stageId: `round-${round}`, capability: 'browser.accessibility', providerId: 'playwright', errorCode: 'FAILED', summary: `2 accessibility violation(s) (${scheme}): color-contrast at p.faint, button-name at button` })),
       { capability: 'media.image.generate', providerId: 'fal', errorCode: 'DENIED', summary: "This call (estimated $0.40) would take the task's media spend to $5.20, over its $5.00 budget (Settings → Media)." },
     ];
     const first = await finishedTask(repoId, '[sim:learning-none] Restyle the header', { calls: calls() });

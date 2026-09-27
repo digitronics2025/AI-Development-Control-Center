@@ -642,6 +642,8 @@ Investigate
 → Plan
 → Implement
 → Tests
+→ App check
+→ Visual critique (only when user-interface files changed; a failure goes to a Level 2 design fix)
 → Review
 → Fix
 → Tests
@@ -649,10 +651,13 @@ Investigate
 → Git checks
 → optional staging
 → smoke test
+→ optional release
 → completion report
 ```
 
-Production actions remain approval-gated.
+Production actions remain approval-gated. The design specialist is brought in
+only for user-interface work and never spends on media here
+([docs/plans/DESIGNER_ROUTING_PLAN.md](docs/plans/DESIGNER_ROUTING_PLAN.md)).
 
 ---
 

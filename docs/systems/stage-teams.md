@@ -43,8 +43,9 @@ adaptive Fix (max 2). **Full Autopilot**
 ([full-autopilot.yaml](../../workflows/full-autopilot.yaml)) — fixed investigation
 (one worker on the stage's agent, one pinned to Claude Code), adaptive Implement
 (max 3, two attempts so a crashed worker's siblings are reused), fixed review
-(primary correctness + risk), adaptive Fix (max 2); Test, App check, Verify, Git
-checkpoint, staging and Release unchanged. **Frontend Design**
+(primary correctness + risk), adaptive Fix (max 2); Test, App check, the
+conditional Visual critique and Design fix ([design-agent.md](design-agent.md#in-full-autopilot)),
+Verify, Git checkpoint, staging and Release run as one agent or as system stages. **Frontend Design**
 ([frontend-design.yaml](../../workflows/frontend-design.yaml)) — fixed Design
 brief (three Claude Code workers, bold, calm and contrarian directions, each
 drawing a style tile). Other built-ins have no teams, and none uses variants.

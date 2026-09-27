@@ -89,13 +89,21 @@ becomes "Answer the question" (the question, "Your answer", **Answer and
 continue**); the task resumes on its own ([task-actions.tsx](../../apps/dashboard/src/components/task-actions.tsx),
 [dialogs.tsx](../../apps/dashboard/src/pages/task/dialogs.tsx)).
 
+The stage timeline and rail ([status.tsx](../../packages/ui/src/components/status.tsx))
+show a SKIPPED stage as skipped, not done: the skip icon, a visible
+"Skipped" with its reason as the title, no agent, no duration, a neutral rail
+segment, and it is not counted in "×runs"; an agent stage that passed with no
+agent (a reused critique PASS) reads "Reused".
+
 Home (System Health marks a signed-in agent whose last run reported it
 cannot run now — `capacityBlock`, [usage.md](usage.md#capacity)), Tasks, New Task (execution policy, isolated worktree; **Also work in** adds linked repositories — local only, the worktree switch then locked on — [multi-repository-tasks.md](multi-repository-tasks.md); typing `/` in the description opens the skill picker — [SlashTextarea](../../packages/ui/src/components/slash-textarea.tsx), `useSkills`, design.md §8.3 — and a line under the field names the skills the text requests; the Directive box on Task Detail has the same picker via `useSkillPicker`), Task Detail
 (Overview/Activity/Changes/Tests/Artifacts/Logs/Execution + inspector), Source Control (Changes/History, see
 [source-control.md](source-control.md)), Approvals, Workflows (stage-sequence editor with inline
 validation; an agent stage also takes **Stage instructions**, a **Tool profile**
 — "From the repository" by default — and **Skills**, comma-separated and kept
-as typed; changing **Runs as** drops the fields the new kind does not take,
+as typed; a visual critique (or a stage that has one) shows **Runs** — Always,
+or "Runs only when user-interface files change" (`when`); changing **Runs as**
+drops the fields the new kind does not take (`when` included),
 `withStageKind`, so a hidden field never blocks saving — [workflow-engine.md](workflow-engine.md#profiles)), Agents, Repositories (+ detail; a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md); the
 Commands panel ends with **Run only affected unit tests**, see

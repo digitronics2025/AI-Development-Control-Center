@@ -9,8 +9,10 @@ import {
   ERROR_CLASS_LABEL,
   PERMISSION_LEVEL_INFO,
   ROLE_LABEL,
+  STAGE_CONDITION_SKIP,
   TERMINAL_TASK_STATUSES,
   createTaskSchema,
+  stageConditionHolds,
   isReadOnlyWorkflow,
   type CommandKind,
   type CreateTaskInput,
@@ -46,6 +48,7 @@ import { skipsForLackOfCommands, StageRunners, type RedirectPlan, type RunContro
 import type { SupervisorHooks } from './supervision.js';
 import type { EngineTooling } from './tooling.js';
 import { inFolder, isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
+import { conditionFacts, taskChanges, uiDigest } from './task-changes.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import { ReleaseService, type Probe } from '../release/service.js';
@@ -936,18 +939,37 @@ export class TaskEngine {
       // A stage whose prerequisite did not succeed has nothing to act on: skipped before any approval is asked.
       const unmet = this.unmetRequirement(task, def);
       if (unmet) {
-        const skipped = this.createStageInstance(task, def);
-        this.publisher.updateStage(skipped.id, { status: 'SKIPPED', summary: `Skipped: ${unmet}`, finishedAt: now() });
-        this.publisher.event(taskId, 'STAGE_SKIPPED', `${def.name} skipped: ${unmet}`, { requires: def.requires }, skipped.id);
+        const skipped = this.skipStage(task, def, `Skipped: ${unmet}`, `${def.name} skipped: ${unmet}`, { requires: def.requires });
         if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
         continue;
+      }
+      // A stage that runs only on a condition (a visual critique when user-interface files changed) is judged on the
+      // task's own changes, read exactly as the completion gate reads them (DESIGNER_ROUTING_PLAN §5). When it holds
+      // and those files are as the stage's last PASS saw them, that PASS stands, as an unchanged check's does.
+      let conditionDigest: string | null = null;
+      if (def.when) {
+        const changes = await taskChanges(this.d.store, task).catch(() => null);
+        // After a wait everything is looked at again: a stop or a drain asked for meanwhile is honoured first.
+        if (control.stopReason || this.draining) continue;
+        const facts = conditionFacts(changes);
+        if (!stageConditionHolds(def.when, facts)) {
+          const reason = STAGE_CONDITION_SKIP[def.when];
+          const skipped = this.skipStage(task, def, `Skipped: ${reason}`, `${def.name} skipped: ${reason}`, { when: def.when, uiChanged: facts.uiChanged });
+          if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
+          continue;
+        }
+        conditionDigest = await uiDigest(changes).catch(() => null);
+        const earlier = conditionDigest ? this.reusableConditionPass(task, def, conditionDigest) : null;
+        if (earlier) {
+          const reused = this.reuseConditionPass(task, def, earlier, conditionDigest!);
+          if (!(await this.handleOutcome(taskId, def, reused, { kind: 'success', stageId: reused.id }, control))) return;
+          continue;
+        }
       }
       // A release with nothing to do (none set up, nothing committed) is skipped before any approval is asked (RELEASE_STAGE_PLAN §3.5).
       const releaseSkip = def.kind === 'release' ? this.release.skipReason(task, repo) : null;
       if (releaseSkip) {
-        const skipped = this.createStageInstance(task, def);
-        this.publisher.updateStage(skipped.id, { status: 'SKIPPED', summary: releaseSkip, finishedAt: now() });
-        this.publisher.event(taskId, 'STAGE_SKIPPED', `${def.name} skipped: ${releaseSkip}`, {}, skipped.id);
+        const skipped = this.skipStage(task, def, releaseSkip, `${def.name} skipped: ${releaseSkip}`, {});
         if (!(await this.handleOutcome(taskId, def, skipped, { kind: 'skipped', stageId: skipped.id }, control))) return;
         continue;
       }
@@ -985,6 +1007,7 @@ export class TaskEngine {
         // its rollbacks, which run outside a stage, take the lock themselves (CheckpointService.restore).
         if (this.supervises(task) && !(await this.supervisor!.beforeStage(this.task(taskId), def, control))) return this.afterHook(taskId, control);
         stage = this.createStageInstance(this.task(taskId), def);
+        if (conditionDigest) stage = this.publisher.updateStage(stage.id, { conditionDigest });
         switch (def.kind) {
           case 'agent':
             outcome = await this.stages.runAgent(this.task(taskId), def, stage, repo, control);
@@ -1025,6 +1048,98 @@ export class TaskEngine {
       return last && last.status !== 'SKIPPED' ? `${name} did not succeed` : `${name} did not run`;
     }
     return null;
+  }
+
+  /**
+   * Record `def` as skipped before it started: nothing ran, so no agent is named and nothing "started" (the
+   * timeline would otherwise credit an agent with a stage it never ran). A row parked on an approval is closed instead.
+   */
+  private skipStage(task: TaskRecord, def: StageDefinition, summary: string, message: string, data: Record<string, unknown>): StageInstance {
+    const previous = this.d.store.listStages(task.id).filter((s) => s.stageKey === def.key);
+    const parked = previous.at(-1);
+    let stage: StageInstance;
+    if (parked?.status === 'WAITING_APPROVAL') {
+      stage = this.publisher.updateStage(parked.id, { status: 'SKIPPED', summary, agentId: null, model: null, effort: null, startedAt: now(), finishedAt: now() });
+    } else {
+      const at = now();
+      stage = {
+        id: newId(),
+        taskId: task.id,
+        stageKey: def.key,
+        name: def.name,
+        role: def.role,
+        kind: def.kind,
+        status: 'SKIPPED',
+        agentId: null,
+        model: null,
+        effort: null,
+        permissionLevel: def.permissionLevel,
+        attempt: previous.length + 1,
+        cycle: task.fixCycles,
+        verdict: null,
+        summary,
+        errorClass: null,
+        errorMessage: null,
+        startedAt: at,
+        finishedAt: at,
+        createdAt: at,
+      };
+      this.d.store.insertStage(stage);
+      this.publisher.stage(stage);
+    }
+    this.publisher.updateTask(task.id, { currentStageId: stage.id, currentStageKey: def.key });
+    this.publisher.event(task.id, 'STAGE_SKIPPED', message, { stageKey: def.key, ...data }, stage.id);
+    return stage;
+  }
+
+  /**
+   * The last verdict of a conditional stage, when it was a PASS over exactly these user-interface files and no
+   * directive came after it (a directive may change what is judged). A FAIL since then is never looked past.
+   */
+  private reusableConditionPass(task: TaskRecord, def: StageDefinition, digest: string): StageInstance | null {
+    const last = this.d.store
+      .listStages(task.id)
+      .filter((s) => s.stageKey === def.key && s.status === 'SUCCESS' && s.verdict !== null)
+      .at(-1);
+    if (!last || last.verdict !== 'PASS' || last.conditionDigest !== digest) return null;
+    if (this.d.store.listDirectives(task.id).some((d) => d.createdAt > last.createdAt)) return null;
+    return last;
+  }
+
+  /** A PASS that stands: recorded as this pass's own verdict, after the last change, so the completion gate counts it. */
+  private reuseConditionPass(task: TaskRecord, def: StageDefinition, earlier: StageInstance, digest: string): StageInstance {
+    const previous = this.d.store.listStages(task.id).filter((s) => s.stageKey === def.key);
+    const at = now();
+    const summary = `Reused: no user-interface file changed since ${def.name} passed at ${(earlier.finishedAt ?? earlier.createdAt).slice(11, 19)}`;
+    const stage: StageInstance = {
+      id: newId(),
+      taskId: task.id,
+      stageKey: def.key,
+      name: def.name,
+      role: def.role,
+      kind: def.kind,
+      status: 'SUCCESS',
+      agentId: null,
+      model: null,
+      effort: null,
+      permissionLevel: def.permissionLevel,
+      attempt: previous.length + 1,
+      cycle: task.fixCycles,
+      verdict: 'PASS',
+      summary,
+      errorClass: null,
+      errorMessage: null,
+      startedAt: at,
+      finishedAt: at,
+      createdAt: at,
+      conditionDigest: digest,
+    };
+    this.d.store.insertStage(stage);
+    this.publisher.stage(stage);
+    this.publisher.updateTask(task.id, { currentStageId: stage.id, currentStageKey: def.key });
+    this.publisher.event(task.id, 'REVIEW_PASSED', `${def.name} passed (reused: no user-interface file changed since it passed)`, { verdict: 'PASS', reusedFrom: earlier.id }, stage.id);
+    this.publisher.event(task.id, 'STAGE_COMPLETED', `${def.name} completed`, { durationMs: 0, reusedFrom: earlier.id }, stage.id);
+    return stage;
   }
 
   /** A hook returned "stop": honour a pending stop request, else the hook parked the task itself. */

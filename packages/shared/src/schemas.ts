@@ -7,6 +7,7 @@ import {
   DEFAULT_AUTO_APPROVE_LEVEL,
   DEFAULT_MAX_FIX_CYCLES,
   ROLES,
+  STAGE_CONDITIONS,
   STAGE_KINDS,
   TASK_MODES,
   THEMES,
@@ -129,6 +130,11 @@ export const stageDefinitionSchema = z.object({
    * otherwise it is skipped (Smoke after a Staging deploy that did not run).
    */
   requires: z.array(slugSchema).max(10).optional(),
+  /**
+   * Run this stage only when the condition holds; otherwise it is skipped and the completion gate does not require it
+   * (docs/plans/DESIGNER_ROUTING_PLAN.md §5). Allowed only on a visual critique (workflow.ts).
+   */
+  when: z.enum(STAGE_CONDITIONS).optional(),
   description: z.string().max(300).optional(),
   /** Run this agent stage as a bounded team of workers (docs/plans/STAGE_TEAMS_PLAN.md); absent = one agent, as always. */
   team: stageTeamSchema.optional(),

@@ -1,4 +1,4 @@
-import { isWriteRole, judgeKind, type ChairmanActionInput, type CommandKind, type Directive, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
+import { isWriteRole, judgeKind, stageConditionHolds, type ChairmanActionInput, type CommandKind, type Directive, type StageConditionFacts, type StageInstance, type TestRun, type WorkflowProfile } from '@acc/shared';
 import { matchesAny } from './rules.js';
 
 /**
@@ -18,6 +18,11 @@ export interface GateInput {
   configuredKinds: ReadonlySet<CommandKind>;
   /** Kinds the operator waived for this task (AUTOPILOT_GATES_PLAN §3.C): never required, whatever a directive says. */
   waivedKinds?: ReadonlySet<CommandKind>;
+  /**
+   * What a stage's `when` is judged on, read from the task's own changes exactly as the engine reads them
+   * (engine/task-changes.ts). Absent = unknown: every conditional judge is required.
+   */
+  conditionFacts?: StageConditionFacts;
 }
 
 export interface GateFailure {
@@ -63,8 +68,13 @@ export function completionGate(input: GateInput): GateResult {
   // role's verdict stages it was (a re-review after a fix stands for the review before it); an advisory run blocks nothing.
   const verdictDefs = workflow.stages.filter((s) => judgeKind(s.role) && s.kind === 'agent' && s.verdict);
   const verdictKeys = new Set(verdictDefs.map((s) => s.key));
+  // A judge whose every verdict stage runs only on a condition that does not hold (a visual critique when no
+  // user-interface file changed) was never needed: the engine skipped it on the same facts. Unknown facts hold.
+  const facts = input.conditionFacts ?? { uiChanged: null };
+  const needed = (role: string) => verdictDefs.some((s) => s.role === role && stageConditionHolds(s.when, facts));
   for (const kind of ['review', 'verify'] as const) {
     for (const role of new Set(verdictDefs.filter((s) => judgeKind(s.role) === kind).map((s) => s.role))) {
+      if (!needed(role)) continue;
       const last = lastOf(stages, (s) => s.role === role && verdictKeys.has(s.stageKey) && s.status === 'SUCCESS');
       const def = verdictDefs.find((s) => s.key === last?.stageKey) ?? verdictDefs.find((s) => s.role === role)!;
       if (!last || last.verdict !== 'PASS' || !after(last)) {

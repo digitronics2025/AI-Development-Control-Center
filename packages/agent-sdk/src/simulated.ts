@@ -346,6 +346,15 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify({ assets: entries }, null, 2)}\n`);
             files.push(...assets.map((a) => `public/generated/${a.name}`), 'public/generated/manifest.json', ...(has('assets-unnamed') ? ['public/generated/extra.png'] : []));
           }
+          // A user-interface change (docs/plans/DESIGNER_ROUTING_PLAN.md): [sim:ui] makes the implementer and the
+          // designer also touch a component; [sim:ui-in-fix] makes the fixer do it, so a UI change can appear only after a fix.
+          if (!unitFile && ((has('ui') && role !== 'fixer') || (has('ui-in-fix') && role === 'fixer'))) {
+            const ui = folders.length ? `${folders[0]}/src/components/SimOutput.tsx` : 'src/components/SimOutput.tsx';
+            await mkdir(path.dirname(path.join(input.cwd, ui)), { recursive: true });
+            await appendFile(path.join(input.cwd, ui), `// ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            emit(`[file] update ${ui}`);
+            files.push(ui);
+          }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {
               const name = folders.length ? `${folders[0]}/${file}` : file;

@@ -6,6 +6,9 @@
 # fix run as Stage Teams (docs/systems/stage-teams.md): two investigators and two
 # reviewers side by side, and implementation or fixes split into parallel workers
 # only when the work divides into independent parts — otherwise one agent, as before.
+# A visual critique runs only when the task's own changes touch user-interface
+# files (backend tasks skip it at no cost), and its failures go to a Level 2
+# design fix that can never pay for media (docs/plans/DESIGNER_ROUTING_PLAN.md).
 id: full-autopilot
 name: Full Autopilot
 description: Full implementation, review and verification loop
@@ -61,8 +64,49 @@ stages:
     # Skipped when the repository has no runtime configured.
     permissionLevel: 2
     timeoutSec: 900
-    next: review
+    next: critique
     onFail: fix
+  - key: critique
+    name: Visual critique
+    # Judge class: only when user-interface files changed (the completion gate then needs its PASS too); a PASS stands
+    # while those files are unchanged. Its failures go to the design fix, never to the paid Assets method.
+    role: visual-critic
+    permissionLevel: 1
+    verdict: true
+    when: ui-changed
+    retry: { maxAttempts: 2 }
+    next: review
+    onFail: design-fix
+    toolProfile: frontend-design
+    instructions: >-
+      This workflow has no art direction: the plan above is the implementation plan. Judge only against the
+      repository's written design standard and the look before this change. Blocking means a regression this change
+      introduced: contrast below AA on a changed element, a removed component state, a layout that breaks at a width
+      or theme the repository already supports, a hard-coded value where the standard defines one, an inaccessible
+      control it added. Never block for a look you could not see, missing screenshots, a stopped app, a theme or
+      width the repository does not support, taste, or problems in code this change did not touch (those are
+      advisory). Use the App check screenshots above; do not try to start the app. When nothing ran, write "Look not
+      seen: no running app" under What I looked at and judge the changed files with design.lint_tokens and
+      design.contrast_matrix. When the changed files hold no user-facing change, say so and pass. Put anything you
+      could not verify under Advisory, never NEEDS OPERATOR. With a FAIL, write CAUSE: code.
+  - key: design-fix
+    name: Design fix
+    # The designer, at Level 2: it cannot call a paid generation tool, so a failed critique never spends.
+    role: designer
+    agentId: claude
+    permissionLevel: 2
+    timeoutSec: 3600
+    retry: { maxAttempts: 2 }
+    next: test
+    toolProfile: frontend-design
+    instructions: >-
+      Fix mode inside Full Autopilot. There is no art direction and no Assets stage. The repository's design standard
+      and the look before this change bind; with no standard, match the surrounding code and do not propose one.
+      Change only what the visual critique above marks blocking, in the files it names, and keep every behaviour and
+      test passing. A missing asset: reuse an existing file or leave a sized placeholder and list it under Known
+      limitations; never write BLOCKED ON OPERATOR for an asset, a brand choice or a budget. Never call media
+      generation or any outside (mcp) tool. Look at the result in both themes when the app can run, and report what
+      you saw.
   - key: review
     name: Review
     role: reviewer

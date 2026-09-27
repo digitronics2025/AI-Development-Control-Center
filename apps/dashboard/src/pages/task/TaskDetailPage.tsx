@@ -57,7 +57,8 @@ function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefin
   const onPath = new Set(happy.map((s) => s.key));
   const latest = new Map(task.stages.map((s) => [s.stageKey, s]));
   const runs = new Map<string, number>();
-  for (const s of task.stages) runs.set(s.stageKey, (runs.get(s.stageKey) ?? 0) + 1);
+  // A skipped stage did not run: it is not counted as a run.
+  for (const s of task.stages) if (s.status !== 'SKIPPED') runs.set(s.stageKey, (runs.get(s.stageKey) ?? 0) + 1);
   const ordered = [];
   for (const def of happy) {
     ordered.push(def);

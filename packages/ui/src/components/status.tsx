@@ -1,4 +1,4 @@
-import { Check, Circle, X } from 'lucide-react';
+import { Check, Circle, SkipForward, X } from 'lucide-react';
 import {
   PERMISSION_LEVEL_INFO,
   type PermissionLevel,
@@ -68,8 +68,10 @@ export interface RailStage {
   verdict?: 'PASS' | 'FAIL' | null;
 }
 
-function railState(stage: RailStage): 'done' | 'current' | 'failed' | 'waiting' | 'future' {
-  if (stage.status === 'SUCCESS' || stage.status === 'SKIPPED') return stage.verdict === 'FAIL' ? 'failed' : 'done';
+function railState(stage: RailStage): 'done' | 'skipped' | 'current' | 'failed' | 'waiting' | 'future' {
+  // Skipped is finished but not done: nothing ran (a condition that did not hold, a stage with nothing to act on).
+  if (stage.status === 'SKIPPED') return 'skipped';
+  if (stage.status === 'SUCCESS') return stage.verdict === 'FAIL' ? 'failed' : 'done';
   if (stage.status === 'RUNNING' || stage.status === 'STARTING') return 'current';
   if (stage.status === 'FAILED' || stage.status === 'CANCELLED') return 'failed';
   if (stage.status === 'PENDING' || stage.status === 'READY') return 'future';
@@ -81,7 +83,7 @@ function railState(stage: RailStage): 'done' | 'current' | 'failed' | 'waiting' 
  * not a decorative donut. Each segment has a text alternative.
  */
 export function StageRail({ stages, currentKey, className }: { stages: RailStage[]; currentKey?: string | null; className?: string }) {
-  const done = stages.filter((s) => railState(s) === 'done').length;
+  const done = stages.filter((s) => railState(s) === 'done' || railState(s) === 'skipped').length;
   const current = stages.find((s) => s.key === currentKey);
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', className)}>
@@ -94,6 +96,7 @@ export function StageRail({ stages, currentKey, className }: { stages: RailStage
               className={cn(
                 'h-full flex-1 rounded-full',
                 state === 'done' && 'bg-success',
+                state === 'skipped' && 'bg-border-strong',
                 state === 'current' && 'animate-activity bg-accent',
                 state === 'failed' && 'bg-danger',
                 state === 'waiting' && 'bg-warning',
@@ -122,6 +125,7 @@ export interface TimelineStage {
 
 function TimelineIcon({ state }: { state: ReturnType<typeof railState> }) {
   if (state === 'done') return <Check size={14} aria-hidden className="text-success" />;
+  if (state === 'skipped') return <SkipForward size={12} aria-hidden className="text-fg-tertiary" />;
   if (state === 'failed') return <X size={14} aria-hidden className="text-danger" />;
   if (state === 'current') return <ActivityDot />;
   if (state === 'waiting') return <Circle size={10} aria-hidden className="fill-warning text-warning" />;
@@ -179,12 +183,20 @@ export function StageTimeline({ stages, now = Date.now(), orientation }: { stage
                 {stage.def.name}
                 {stage.runs > 1 ? <span className="ml-1 text-small font-normal text-fg-secondary">×{stage.runs}</span> : null}
               </span>
-              <span className="truncate text-small text-fg-secondary" title={stage.def.kind === 'agent' ? (stage.agentName ?? undefined) : undefined}>
-                <span className="sr-only">{label}. </span>
-                {stage.def.kind === 'agent' ? (stage.agentName ?? '—') : 'System'}
-              </span>
+              {state === 'skipped' ? (
+                // Nothing ran: say so, with the reason, and credit no agent (docs/systems/dashboard.md).
+                <span className="truncate text-small text-fg-secondary" title={inst?.summary ?? undefined}>
+                  Skipped
+                  {inst?.summary ? <span className="sr-only">. {inst.summary}</span> : null}
+                </span>
+              ) : (
+                <span className="truncate text-small text-fg-secondary" title={stage.def.kind === 'agent' ? (stage.agentName ?? undefined) : undefined}>
+                  <span className="sr-only">{label}. </span>
+                  {stage.def.kind !== 'agent' ? 'System' : inst?.status === 'SUCCESS' && !inst.agentId ? 'Reused' : (stage.agentName ?? '—')}
+                </span>
+              )}
               {stage.team ? <span className="truncate text-small text-fg-secondary">{stage.team}</span> : null}
-              {duration !== null && state !== 'future' ? <span className="tabular text-small text-fg-secondary">{formatDuration(duration)}</span> : null}
+              {duration !== null && state !== 'future' && state !== 'skipped' ? <span className="tabular text-small text-fg-secondary">{formatDuration(duration)}</span> : null}
               {failedReason ? <span className="line-clamp-2 text-small text-danger">{failedReason}</span> : null}
             </div>
           </li>

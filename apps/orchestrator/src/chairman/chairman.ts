@@ -1,5 +1,5 @@
-import { inFolder, taskRepositories } from '../engine/task-repositories.js';
-import { changesSince, committableTree } from '@acc/git';
+import { taskRepositories } from '../engine/task-repositories.js';
+import { committableTree } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   STRATEGY_OUTCOME_LABEL,
@@ -22,6 +22,7 @@ import type { ContextBuilder } from '../engine/context.js';
 import type { TaskEngine } from '../engine/engine.js';
 import { trackCancel, waivedKinds, type RunControl, type StageOutcome } from '../engine/runners.js';
 import type { SupervisorHooks } from '../engine/supervision.js';
+import { conditionFacts, taskChanges } from '../engine/task-changes.js';
 import type { TaskViews } from '../engine/views.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ArtifactService } from '../services/artifacts.js';
@@ -642,19 +643,10 @@ export class Chairman implements SupervisorHooks {
 
   async gate(task: TaskRecord): Promise<GateResult> {
     const units = taskRepositories(this.d.store, task);
-    let taskFiles: string[] | null = null;
-    for (const unit of units) {
-      const baseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
-      if (!baseline) continue;
-      try {
-        const files = (await changesSince(unit.workdir, baseline)).filter((f) => f.origin !== 'preexisting').map((f) => inFolder(units.length > 1 ? unit.folder : null, f.path));
-        taskFiles = [...(taskFiles ?? []), ...files];
-      } catch {
-        // A repository that cannot be read makes the whole list unknown, never a partial one.
-        taskFiles = null;
-        break;
-      }
-    }
+    // The same reading of the task's own changes the engine judges a stage's `when` on (task-changes.ts): a repository
+    // that cannot be read makes the whole list unknown, never a partial one.
+    const changes = await taskChanges(this.d.store, task);
+    const taskFiles = changes && changes.baselines > 0 ? changes.files.map((f) => f.label) : null;
     return completionGate({
       workflow: task.workflow,
       stages: this.d.store.listStages(task.id),
@@ -664,6 +656,7 @@ export class Chairman implements SupervisorHooks {
       // Across repositories a check kind is available when any of them configures it.
       configuredKinds: new Set(units.flatMap((u) => u.repo.commands).filter((c) => c.enabled).map((c) => c.kind)),
       waivedKinds: waivedKinds(this.d.store, task.id),
+      conditionFacts: conditionFacts(changes),
     });
   }
 

@@ -79,7 +79,9 @@ Full Autopilot runs `app-check → critique → review`: the Visual critique
 (visual critic, Level 1, `when: ui-changed`) goes on FAIL to **Design fix**
 (designer on Claude, Level 2, then back to Test), so a backend task never runs
 or waits for it and a failed critique never pays for media
-([design-agent.md](design-agent.md#in-full-autopilot)).
+([design-agent.md](design-agent.md#in-full-autopilot)). Its Implement sends the
+plan's frontend work to the designer on the stage's own agent and level
+(`team.specialists`, [stage-teams.md](stage-teams.md#specialists)).
 
 A `verify` stage (the **App check** after the tests stage in Full Autopilot and
 Frontend Design) starts the app

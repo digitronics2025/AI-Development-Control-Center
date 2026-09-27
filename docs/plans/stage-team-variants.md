@@ -2,7 +2,7 @@
 title: Stage Team variants — competing attempts, one judged winner; specialty routing gated
 source: docs/plans/frontend-design-agent.md step 35 (conversation 2026-09-27)
 created: 2026-09-27
-status: in-progress
+status: done
 ---
 
 # Stage Team variants — competing attempts, one judged winner; specialty routing gated
@@ -99,7 +99,7 @@ From [STAGE_TEAMS_PLAN.md](STAGE_TEAMS_PLAN.md), verbatim:
 
 - [x] T1. Adversarial review of this plan's diff — done when: every finding is fixed or in the Ledger — check: `git diff --stat` reviewed hunk by hunk
 - [x] T3. Lint, typecheck and the affected suites green — done when: all exit 0 — check: `pnpm lint && pnpm typecheck && pnpm vitest run packages/shared apps/orchestrator/test/stage-teams.test.ts apps/orchestrator/test/usage-teams.test.ts`
-- [ ] T5. Committed path-scoped and pushed — done when: nothing of this work is uncommitted and the push succeeded — check: `git status --short && git log origin/claude/design-agent-media-generation-p6wtd7..HEAD --oneline`
+- [x] T5. Committed path-scoped and pushed — done when: nothing of this work is uncommitted and the push succeeded — check: `git status --short && git log origin/claude/design-agent-media-generation-p6wtd7..HEAD --oneline`
 - [x] T6. Live check — done when: confirmed there is no deploy on push for this repository (ci.yml only; deploy-cloud is manual) — check: `manual: .github/workflows lists no deploy on push`
 
 ## Ledger

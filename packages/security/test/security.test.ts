@@ -70,6 +70,50 @@ describe('Redactor', () => {
     expect(r.redact('headers: { Authorization: `Bearer ${token}` }')).toBe('headers: { Authorization: `Bearer ${token}` }');
   });
 
+  it('masks the whole of a key=value secret that contains "&"; only a URL query secret stops at the next parameter', () => {
+    for (const secret of [fake('P&ss', 'w0rd123'), fake('ab&', 'cdefgh'), fake('abcdefg', '&hijklmn')]) {
+      expect(r.redact(`DB_PASSWORD=${secret}`), secret).toBe(`DB_PASSWORD=${REDACTED}`);
+    }
+    expect(r.redact(`DB_PASSWORD="${fake('Tr0ub4', '&dor3xyz')}"`)).toBe(`DB_PASSWORD="${REDACTED}"`);
+    const param = fake('q1w2e3', 'r4t5y6');
+    expect(r.redact(`https://api.example.com/x?size=large&api_key=${param}&page=2#top`)).toBe(`https://api.example.com/x?size=large&api_key=${REDACTED}&page=2#top`);
+    expect(r.redact(`curl -d "grant_type=client_credentials&client_secret=${param}&scope=read"`)).toBe(`curl -d "grant_type=client_credentials&client_secret=${REDACTED}&scope=read"`);
+  });
+
+  it('keeps a design value readable only when the design token is the whole value', () => {
+    for (const text of [
+      'accentToken: #3355ff;',
+      'accentToken: "rgb(51 85 255)"',
+      'accentToken: color-mix(in oklch, var(--accent) 40%, white)',
+      'surfaceToken: var(--surface-2, #ffffff)',
+      'motionToken: 250ms',
+      'spacingToken: "0.875rem"',
+      'Use token --color-accent-strong: #3355ff',
+    ]) {
+      expect(r.redact(text), text).toBe(text);
+    }
+    for (const [prefix, secret] of [
+      ['password=', fake('#Face', '-2024Secret')],
+      ['password: ', fake('#Bad', '!Pass99')],
+      ['password=', fake('#abc123', '!zzzz')],
+      ['DB_PASSWORD=', fake('2024%', 'SummerPass')],
+      ['curl -d client_secret=', fake('9%2B', 'aB3dE5fG7hJ9kL')],
+      ['api_key=', fake('1s-', '9f8e7d6c5b4a3210')],
+      ['surfaceToken = ', fake('var(--x)', 'Secr3tValue')],
+      ['accentToken: ', fake('rgb(', 'Secr3t)Value')],
+    ]) {
+      expect(r.redact(`${prefix}${secret}`), secret).toBe(`${prefix}${REDACTED}`);
+    }
+    // A Bearer value that only starts like a CSS custom property is still a credential.
+    expect(r.redact(`Bearer ${fake('--Zm9vYmFy', '.YmF6cXV4')}`)).toBe(`Bearer ${REDACTED}`);
+  });
+
+  it('masks both halves of a fal-style "Key id:secret" Authorization value', () => {
+    const key = fake('0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d', ':', 'deadbeef', 'cafebabe', '0123456789abcdef');
+    expect(r.redact(`Authorization: Key ${key}`)).toBe(`Authorization: Key ${REDACTED}`);
+    expect(r.redact(`curl -H "Authorization: Key ${key}" https://queue.fal.run/x`)).toBe(`curl -H "Authorization: Key ${REDACTED}" https://queue.fal.run/x`);
+  });
+
   it('redacts URL credentials but keeps the host', () => {
     expect(r.redact('https://user:s3cretpass@github.com/x.git')).toBe(`https://${REDACTED}@github.com/x.git`);
   });

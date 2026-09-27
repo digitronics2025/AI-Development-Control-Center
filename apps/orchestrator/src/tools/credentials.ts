@@ -660,6 +660,9 @@ export class CredentialBroker {
     if (!r || !this.inScope(r, repositoryId)) return null;
     // A caller that names a kind (the media tools: `media`) never receives a credential of another kind.
     if (opts.kind && r.kind !== opts.kind) return null;
+    // A media key opens only for a caller that asks for kind media (the media tools, behind the spend gate): a
+    // kind-less read (http.request, a secret put, an MCP server's variables) could spend it with no reservation.
+    if (r.kind === 'media' && opts.kind !== 'media') return null;
     // A credential kept for the orchestrator's own use (an http token) is read only by it, or deployed by a production secret put.
     const reserved = r.kind === 'http' && this.reservedForOrchestrator().has(r.name.toLowerCase());
     if (reserved && !opts.reserved) return null;

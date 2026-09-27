@@ -140,9 +140,23 @@ describe('credential broker', () => {
     const media = await t.api('POST', '/api/credentials', { name: 'fal', kind: 'media', value });
     expect(media.status).toBe(201);
     expect(media.body).toMatchObject({ kind: 'media', envVar: null });
-    // Read by name for one call (the media tools); never an environment variable of any child.
-    expect(await t.services.credentials.value('fal', repoId)).toBe(value);
+    // Read by name for one call by the media tools only (kind media); never an environment variable of any child.
+    expect(await t.services.credentials.value('fal', repoId)).toBeNull();
     expect(Object.values(await t.services.credentials.envFor(['media', 'http', 'other'], repoId))).not.toContain(value);
+    // An MCP server's variable mapping reads without a kind, so it cannot carry a paid key past the spend gate either.
+    expect(await t.services.credentials.envForMapping({ FAL_KEY: 'fal' }, repoId)).toEqual({});
+    // Nor can http.request, from the operator or from an agent session: the key is never sent.
+    seen = 'untouched';
+    const operator = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'http.request', input: { method: 'POST', url, json: {}, auth: { credential: 'fal', scheme: 'header', header: 'authorization' } } });
+    expect(operator.body.result.error.code).toBe('AUTH_REQUIRED');
+    for (const profile of ['analysis', 'frontend-design'] as const) {
+      const session = t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel: 1, autoApproveUpToLevel: 3, mode: 'autopilot', profile, protectedPaths: [] }, 'agent');
+      const agent = await t.api('POST', '/api/tool-session/call', { capability: 'http.request', input: { url, auth: { credential: 'fal', scheme: 'Bearer' } } }, sessionHeaders(session.token));
+      expect(agent.body.ok, profile).toBe(false);
+      expect(agent.body.text, profile).toMatch(/FAILED \(AUTH_REQUIRED\)/);
+      t.services.tools.closeSession(session.id);
+    }
+    expect(seen).toBe('untouched');
     expect((await t.api('POST', '/api/credentials', { name: 'fal-env', kind: 'media', envVar: 'FAL_KEY', value })).body).toMatchObject({ error: { code: 'INVALID' } });
     // A billing variable would stand in for the agent CLIs' own billing selection.
     for (const envVar of ['OPENAI_API_KEY', 'gemini_api_key', 'ANTHROPIC_API_KEY']) {

@@ -28,6 +28,9 @@ interface Rule {
 const SECRET_KEY_NAME =
   '(?:[A-Za-z0-9_.-]*?(?:api[_-]?key|apikey|secret|token|passwd|password|pwd|private[_-]?key|client[_-]?secret|access[_-]?key|auth|cookie|session[_-]?id|credential)s?)';
 
+/** Where an assignment's value ends: a design value is skipped only when nothing follows it in the value. */
+const VALUE_END = `(?=[\\s"',;}{]|$)`;
+
 const RULES: Rule[] = [
   // Provider keys with recognisable prefixes.
   { name: 'anthropic', pattern: /\bsk-ant-[A-Za-z0-9_-]{10,}/g, replace: REDACTED, blocking: true },
@@ -40,17 +43,19 @@ const RULES: Rule[] = [
   { name: 'stripe', pattern: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, replace: REDACTED, blocking: true },
   { name: 'npm', pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replace: REDACTED, blocking: true },
   { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replace: REDACTED },
-  // An Authorization header's value is a credential whatever it looks like (any scheme, any case, all lowercase).
+  // An Authorization header's value is a credential whatever it looks like (any scheme, any case, all lowercase),
+  // `:` included: a fal key is `Key <id>:<secret>`.
   {
     name: 'authorization',
-    pattern: /\b(authorization\s*[:=]\s*["'`]?\s*(?:(?:bearer|basic|token|digest|key)\s+)?)(?!--)[A-Za-z0-9._~+/=-]{8,}/gi,
+    pattern: /\b(authorization\s*[:=]\s*["'`]?\s*(?:(?:bearer|basic|token|digest|key)\s+)?)(?!--[a-z0-9]+(?:-[a-z0-9]+)*(?![A-Za-z0-9._~+/=:-]))[A-Za-z0-9._~+/=:-]{8,}/gi,
     replace: `$1${REDACTED}`,
   },
-  // Bearer/Basic/Token values elsewhere, in any case. Two design spellings stay readable (docs/systems/design-agent.md):
-  // a CSS custom property ("token --color-accent") and plain hyphenated words ("Basic typography-scale").
+  // Bearer/Basic/Token values elsewhere, in any case. Two design spellings stay readable (docs/systems/design-agent.md)
+  // when they are the whole value: a CSS custom property ("token --color-accent") and plain hyphenated words
+  // ("Basic typography-scale").
   {
     name: 'bearer',
-    pattern: /\b(bearer|basic|token)\s+(?!--)(?![a-z]+(?:-[a-z]+)+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{12,}/gi,
+    pattern: /\b(bearer|basic|token)\s+(?!--[a-z0-9]+(?:-[a-z0-9]+)*(?![A-Za-z0-9._~+/=-]))(?![a-z]+(?:-[a-z]+)+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{12,}/gi,
     replace: `$1 ${REDACTED}`,
   },
   // Signed URLs (S3, GCS, Azure SAS, CloudFront): only the signature and session parameters are masked, so the
@@ -62,13 +67,19 @@ const RULES: Rule[] = [
   },
   // URLs with embedded credentials: https://user:pass@host
   { name: 'url-credentials', pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@/]+@/gi, replace: `$1${REDACTED}@`, blocking: true },
-  // key=value / key: value / "key": "value" where the key names a secret. The value stops at `&` (the next
-  // URL parameter is not part of it), and design values are not secrets: a colour (#3355ff, rgb(), oklch()),
-  // a CSS variable (var(--x)) or a length (16px, 1.25rem) after a name such as `accentToken`.
+  // A URL query parameter that names a secret: the value ends at the next parameter, so the rest of the URL stays readable.
+  {
+    name: 'query-secret',
+    pattern: new RegExp(`([?&]${SECRET_KEY_NAME}=)[^&#\\s"'<>]+`, 'gi'),
+    replace: `$1${REDACTED}`,
+  },
+  // key=value / key: value / "key": "value" where the key names a secret. `&` is part of the value (a password
+  // may hold one). A design value after a name such as `accentToken` is not a secret when it is the whole value:
+  // a colour (#3355ff, rgb(), oklch()), a CSS variable (var(--x)) or a length (16px, 1.25rem).
   {
     name: 'assignment',
     pattern: new RegExp(
-      `(${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)(?!\\[REDACTED\\])(?!#[0-9A-Fa-f]{3,8}\\b)(?!var\\(--)(?!(?:rgba?|hsla?|oklch|oklab|color-mix)\\()(?!\\d+(?:\\.\\d+)?(?:px|rem|em|%|ms|s|vh|vw|deg)\\b)([^\\s"',;}{&]{6,})`,
+      `(${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)(?!\\[REDACTED\\])(?!#[0-9A-Fa-f]{3,8}${VALUE_END})(?!(?:(?:rgba?|hsla?|oklch|oklab|color-mix)\\(|var\\(--)(?:[^()"';{}\\r\\n]|\\([^()"';{}\\r\\n]*\\))*\\)${VALUE_END})(?!\\d+(?:\\.\\d+)?(?:px|rem|em|%|ms|s|vh|vw|deg)${VALUE_END})([^\\s"',;}{]{6,})`,
       'gi',
     ),
     replace: `$1${REDACTED}`,

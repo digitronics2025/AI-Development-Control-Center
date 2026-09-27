@@ -29,6 +29,8 @@ export const skillQuerySchema = z.object({ repositoryId: z.string().min(1).max(2
 const NAME = '[A-Za-z0-9][A-Za-z0-9._:-]*';
 /** `/name` at the start of the text or after whitespace or an opening bracket. */
 const TOKEN = new RegExp(`(?:^|(?<=[\\s(\\[]))\\/(${NAME})`, 'g');
+/** The same rule for a caller that only asks whether a text names any skill (global: use it with `matchAll`). */
+export const SKILL_TOKEN = TOKEN;
 
 /** Sentence punctuation that may follow a name without being part of it. */
 function trimName(raw: string): string {

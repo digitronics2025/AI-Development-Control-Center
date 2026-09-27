@@ -498,7 +498,7 @@ describe('G. restart guard', () => {
     await s.close();
   }, 60_000);
 
-  it('drains before the first stage when the drain arrives while the worktree is prepared', async () => {
+  it('drains before the first stage that waits for the install when the drain arrives while it runs', async () => {
     t = await createTestApp();
     const s = await serverWithShutdown(t);
     // Hold the worktree's preparation (a real install takes minutes) until the drain is in.
@@ -510,14 +510,15 @@ describe('G. restart guard', () => {
       return prepare(...args);
     };
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Drained early');
-    await waitFor(() => t!.services.store.listEvents(id, { limit: 100 }).some((e) => e.type === 'WORKTREE_CREATED'), (v) => v, 20_000, 'the worktree');
+    // The read-only stages run beside the install; Implement waits for it.
+    await waitFor(() => t!.services.store.listStages(id), (st) => st.some((x) => x.stageKey === 'plan' && x.status === 'SUCCESS'), 20_000, 'the read-only stages');
     expect((await s.post({ mode: 'drain' })).status).toBe(202);
     release();
     await waitFor(() => s.calls.length, (n) => n === 1, 20_000, 'the drained shutdown');
     const task = t.services.store.getTask(id)!;
     expect(task.status).toBe('INTERRUPTED');
-    expect(t.services.store.listStages(id)).toEqual([]);
-    expect(task.blocker?.message).toContain('Investigate runs when the orchestrator is back');
+    expect(t.services.store.listStages(id).map((x) => x.stageKey)).toEqual(['investigate', 'plan']);
+    expect(task.blocker?.message).toContain('Implement runs when the orchestrator is back');
     await s.close();
   }, 60_000);
 

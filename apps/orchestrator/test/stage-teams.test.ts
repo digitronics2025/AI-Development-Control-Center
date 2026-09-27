@@ -635,4 +635,124 @@ describe('parallel-safe checks', () => {
     expect(types.status).toBe('cancelled');
     expect(types.durationMs!).toBeLessThan(15_000);
   }, 90_000);
+
+  /** A dependency that is declared but not installed (and no lockfile): LINT_LOCALDEP fails "Cannot find module", which an install repairs. */
+  async function localDepRepo(files: Record<string, string> = {}) {
+    const repoPath = await makeRepo({ files: { ...files, 'package.json': JSON.stringify({ name: 'fixture', private: true, dependencies: { localdep: 'file:./localdep' } }, null, 2) } });
+    mkdirSync(path.join(repoPath, 'localdep'));
+    writeFileSync(path.join(repoPath, 'localdep', 'package.json'), JSON.stringify({ name: 'localdep', version: '1.0.0', main: 'index.js' }));
+    writeFileSync(path.join(repoPath, 'localdep', 'index.js'), 'module.exports = 1;\n');
+    await git(repoPath, ['add', '.']);
+    await git(repoPath, ['commit', '-m', 'add local dependency']);
+    return repoPath;
+  }
+  const LINT_LOCALDEP = `node -e "require('localdep'); console.log('1 passed')"`;
+  /**
+   * Stands in for `run-p build:*` in a repository that declares npm-run-all under its package name: until
+   * node_modules exists the bin is "not recognized", which an install repairs; once it exists, the plan
+   * sees an undeclared tool and has no repair for it.
+   */
+  const RUN_P = [
+    "if (!require('fs').existsSync('node_modules')) {",
+    `  console.log("'run-p' is not recognized as an internal or external command,");`,
+    '  process.exit(1);',
+    '}',
+    "console.log('1 passed');",
+  ].join('\n');
+
+  it('puts off a repair until the rest of the batch is done, so an install never runs under a running check', async () => {
+    t = await createTestApp();
+    const repoPath = await localDepRepo();
+    const repoId = await addRepo(t!, repoPath, {
+      commands: [
+        { id: 'lint', name: 'lint', command: LINT_LOCALDEP, kind: 'lint', enabled: true, timeoutSec: 120, parallelSafe: true },
+        { id: 'types', name: 'types', command: sleepy(4000), kind: 'typecheck', enabled: true, timeoutSec: 60, parallelSafe: true },
+      ],
+      preexistingFailures: 'block',
+    });
+    const id = await createTask(t!, repoId, 'Parallel checks with a repair', { supervised: false, workflowId: 'quick-change' });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 240_000);
+    expect(task.status).toBe('COMPLETED');
+    const cmds = t!.services.store.listExecutions(id).filter((e) => e.kind === 'command');
+    const types = cmds.find((e) => e.command.includes('4000'))!;
+    const lint = cmds.filter((e) => e.command.includes('localdep'));
+    const installs = cmds.filter((e) => /^npm (ci|install)\b/.test(e.command));
+    // The first lint run failed beside types, which ran to its end: a repairable failure cancels nothing.
+    expect(lint[0]!.status).toBe('failed');
+    expect(overlaps(lint[0]!, types)).toBe(true);
+    expect(types.status).toBe('succeeded');
+    // Every repair started only once types had finished, then lint ran again, alone, and passed.
+    expect(installs.length).toBeGreaterThan(0);
+    for (const install of installs) expect(new Date(install.startedAt).getTime()).toBeGreaterThanOrEqual(new Date(types.finishedAt!).getTime());
+    expect(lint.at(-1)!.status).toBe('succeeded');
+    expect(new Date(lint.at(-1)!.startedAt).getTime()).toBeGreaterThanOrEqual(new Date(installs.at(-1)!.finishedAt!).getTime());
+    expect(t!.services.toolStore.listRecovery(id).map((r) => `${r.category}:${r.strategy}:${r.status}`)).toEqual(['missing_dependency:install_dependencies:failed', 'missing_dependency:install_dependencies_unfrozen:succeeded']);
+    const runs = t!.services.store.listTestRuns(id).filter((r) => r.name === 'lint' || r.name === 'types');
+    expect(runs.map((r) => [r.name, r.status])).toEqual([
+      ['lint', 'passed'],
+      ['types', 'passed'],
+    ]);
+    expect(runs[0]!.summary).toMatch(/after repair/);
+    expect(events(id).some((e) => e.type === 'TEST_STARTED' && e.data?.deferredRepair === 'install_dependencies')).toBe(true);
+  }, 300_000);
+
+  it("runs a later put-off check once more before repairing it, since an earlier one's repair may have fixed it", async () => {
+    t = await createTestApp();
+    const repoPath = await localDepRepo({ 'run-p.js': RUN_P });
+    const types = `node -e "require('localdep'); console.log('2 passed')"`;
+    const repoId = await addRepo(t!, repoPath, {
+      commands: [
+        { id: 'lint', name: 'lint', command: LINT_LOCALDEP, kind: 'lint', enabled: true, timeoutSec: 120, parallelSafe: true },
+        // Needs the same install: it would still plan one of its own (a second install).
+        { id: 'types', name: 'types', command: types, kind: 'typecheck', enabled: true, timeoutSec: 120, parallelSafe: true },
+        // After the install, no repair is planned for it any more (the tool is not declared): it would fail on its stale output.
+        { id: 'bins', name: 'bins', command: 'node run-p.js', kind: 'typecheck', enabled: true, timeoutSec: 60, parallelSafe: true },
+      ],
+      preexistingFailures: 'block',
+    });
+    const id = await createTask(t!, repoId, 'Three checks put off for one install', { supervised: false, workflowId: 'quick-change' });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 240_000);
+    const cmds = t!.services.store.listExecutions(id).filter((e) => e.kind === 'command');
+    const installs = cmds.filter((e) => /^npm (ci|install)\b/.test(e.command));
+    // All three were put off for an install in the batch; lint's install then made the others pass on their next run.
+    expect(events(id).filter((e) => e.type === 'TEST_STARTED' && e.data?.deferredRepair === 'install_dependencies')).toHaveLength(3);
+    for (const line of [types, 'node run-p.js']) {
+      const runs = cmds.filter((e) => e.command === line);
+      expect(runs.map((e) => e.status), line).toEqual(['failed', 'succeeded']);
+      expect(new Date(runs[1]!.startedAt).getTime()).toBeGreaterThanOrEqual(new Date(installs.at(-1)!.finishedAt!).getTime());
+    }
+    // Only lint repaired anything.
+    expect(t!.services.toolStore.listRecovery(id).map((r) => `${r.command}:${r.strategy}:${r.status}`)).toEqual([`${LINT_LOCALDEP}:install_dependencies:failed`, `${LINT_LOCALDEP}:install_dependencies_unfrozen:succeeded`]);
+    expect(t!.services.store.listTestRuns(id).filter((r) => ['lint', 'types', 'bins'].includes(r.name)).map((r) => [r.name, r.status])).toEqual([
+      ['lint', 'passed'],
+      ['types', 'passed'],
+      ['bins', 'passed'],
+    ]);
+    expect(task.status).toBe('COMPLETED');
+  }, 300_000);
+
+  it('runs a put-off check once more when nothing calls for its repair any more', async () => {
+    t = await createTestApp();
+    const repoPath = await makeRepo({ files: { 'run-p.js': RUN_P } });
+    const repoId = await addRepo(t!, repoPath, {
+      commands: [
+        { id: 'bins', name: 'bins', command: 'node run-p.js', kind: 'typecheck', enabled: true, timeoutSec: 60, parallelSafe: true },
+        // A sibling that creates node_modules (a generator, say) after bins has failed for want of it.
+        { id: 'gen', name: 'gen', command: `node -e "setTimeout(() => { require('fs').mkdirSync('node_modules', { recursive: true }); console.log('1 passed'); }, 1500)"`, kind: 'lint', enabled: true, timeoutSec: 60, parallelSafe: true },
+      ],
+      preexistingFailures: 'block',
+    });
+    const id = await createTask(t!, repoId, 'A repair no longer called for', { supervised: false, workflowId: 'quick-change' });
+    const task = await waitForStatus(t!, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 120_000);
+    const bins = t!.services.store.listExecutions(id).filter((e) => e.kind === 'command' && e.command === 'node run-p.js');
+    expect(events(id).some((e) => e.type === 'TEST_STARTED' && e.data?.deferredRepair === 'install_dependencies')).toBe(true);
+    // Not failed on its stale output: run again, and it passes; nothing was installed.
+    expect(bins.map((e) => e.status)).toEqual(['failed', 'succeeded']);
+    expect(t!.services.toolStore.listRecovery(id)).toEqual([]);
+    expect(t!.services.store.listTestRuns(id).map((r) => [r.name, r.status])).toEqual([
+      ['bins', 'passed'],
+      ['gen', 'passed'],
+    ]);
+    expect(task.status).toBe('COMPLETED');
+  }, 120_000);
 });

@@ -253,6 +253,8 @@ export function createServices(
       await baselines.sweep(store.listRepositories()).catch(() => 0);
       // Stage Team checkouts a restart cut short are partial: removed, never integrated (STAGE_TEAMS_PLAN §3.12).
       await engine.team.sweep(store.listRepositories()).catch(() => 0);
+      // Finished worktrees a stop left in <data>/trash (their work is on the task branch): only that folder, in the background.
+      void tooling.emptyTrash();
       await chairman.onStartup();
       chat.recoverPending();
       ask.recoverPending();

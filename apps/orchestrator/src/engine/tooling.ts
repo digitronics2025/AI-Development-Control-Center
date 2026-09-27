@@ -1,9 +1,10 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, headCommit, isGitRepository, removeWorktree, repositoryStatus, taskBranchName } from '@acc/git';
+import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, status, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
-import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
+import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, SKILL_TOKEN, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun } from '@acc/shared';
 import {
   assessVerification,
   classifyFailure,
@@ -37,6 +38,43 @@ import { agentWorkdir, taskRepositories } from './task-repositories.js';
 import { taskWorkdir } from './workdir.js';
 
 const LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
+
+/**
+ * Written into node_modules only after a lockfile install succeeded. A folder
+ * without it — an install a restart or a shutdown cut short — is installed again.
+ */
+export const INSTALL_MARKER = '.acc-install-complete';
+
+/**
+ * npm's hidden lockfile: `npm ci` empties node_modules first (the marker with
+ * it) and writes this last, only when the install finished. So it proves a
+ * repair's `npm ci`, or an agent's, completed where the marker cannot.
+ */
+const NPM_INSTALL_COMPLETE = '.package-lock.json';
+
+/** Whether a worktree's dependencies were installed to the end (`prepareWorktree`). */
+function installComplete(cwd: string, pm: ReturnType<typeof packageManager>): boolean {
+  const modules = path.join(cwd, 'node_modules');
+  return existsSync(path.join(modules, INSTALL_MARKER)) || (pm === 'npm' && existsSync(path.join(modules, NPM_INSTALL_COMPLETE)));
+}
+
+/** Told to a read-only stage that starts while the worktree's dependencies are still installing. */
+export const INSTALLING_PROMPT_SECTION = [
+  '## Dependencies',
+  '',
+  "The worktree's dependencies are still being installed while this read-only stage runs, so node_modules may be incomplete.",
+  'Do not run or draw conclusions from project scripts, builds or tests here: the Control Center finishes the install before any stage that runs code.',
+].join('\n');
+
+/**
+ * Whether a text holds a `/name` token that is not a path segment — the rule
+ * `requestedSkills` applies before it looks a name up — so only such a text is
+ * worth listing the skills catalog for.
+ */
+function mentionsSkillToken(text: string): boolean {
+  for (const match of text.matchAll(SKILL_TOKEN)) if (text[(match.index ?? 0) + match[0].length] !== '/') return true;
+  return false;
+}
 
 /** How the operator's own skills and outside tools behave inside a Control Center run (docs/systems/agents.md). */
 export const SKILLS_PROMPT_SECTION = [
@@ -81,6 +119,13 @@ export interface EngineToolingDeps {
 export class EngineTooling {
   private publisher: Publisher | null = null;
   private listenUrl: string | null = null;
+  /** Worktree dependency installs running beside read-only stages, per task (`startInstall`). */
+  private readonly installs = new Map<string, { done: Promise<void>; controller: AbortController }>();
+  /** Worktrees already told they have no lockfile: every loop of a task checks its install again. */
+  private readonly noLockfileAnnounced = new Set<string>();
+  /** The trash sweep in flight, and whether another was asked for meanwhile (`emptyTrash`). */
+  private trashSweep: Promise<number> | null = null;
+  private trashAgain = false;
 
   constructor(private readonly d: EngineToolingDeps) {}
 
@@ -326,6 +371,7 @@ export class EngineTooling {
     parts.push(SKILLS_PROMPT_SECTION);
     const requested = await this.requestedSkillsSection(task, def, repo);
     if (requested) parts.push(requested);
+    if (def.permissionLevel <= 1 && this.installs.has(task.id)) parts.push(INSTALLING_PROMPT_SECTION);
     if (['investigator', 'planner', 'implementer'].includes(def.role)) {
       const env = await this.d.artifacts.latestText(task.id, 'environment', 20_000);
       if (env) parts.push(`## Environment (collected by the Control Center)\n\n${env.replace(/^# Environment\s*/, '').trim()}`);
@@ -347,7 +393,8 @@ export class EngineTooling {
       .filter((d) => d.state === 'active' && d.kind !== 'routing' && (d.scope === 'CURRENT_TASK' || d.appliedStageKey === def.key))
       .map((d) => d.text);
     const text = [task.description, ...directives].join('\n');
-    if (!this.d.skills || !text.includes('/')) return '';
+    // Listing the catalog is a cold CLI call: only a text that names a `/skill` pays for it, never one with file paths only.
+    if (!this.d.skills || !mentionsSkillToken(text)) return '';
     const catalog = await this.d.skills.list(repo.path).catch(() => null);
     if (!catalog) return '';
     const byName = new Map(catalog.skills.map((s) => [s.name, s]));
@@ -443,16 +490,79 @@ export class EngineTooling {
   /**
    * A fresh worktree has no dependencies installed; install them once from the
    * lockfile. Without a lockfile an install would write one into the task's
-   * changes, so it is left to the test stage's repair instead.
+   * changes, so it is left to the test stage's repair instead. Done means the
+   * marker (or npm's own proof), not "node_modules exists": a restart can
+   * leave a half-filled folder.
    */
-  async prepareWorktree(task: TaskRecord, repo: RepositoryRecord, cwd: string = taskWorkdir(task, repo)): Promise<void> {
-    if (!packageManager(cwd) || existsSync(path.join(cwd, 'node_modules'))) return;
+  async prepareWorktree(task: TaskRecord, repo: RepositoryRecord, cwd: string = taskWorkdir(task, repo), signal?: AbortSignal): Promise<void> {
+    const marker = path.join(cwd, 'node_modules', INSTALL_MARKER);
+    const pm = packageManager(cwd);
+    if (!pm || installComplete(cwd, pm)) return;
     if (!LOCKFILES.some((f) => existsSync(path.join(cwd, f)))) {
-      this.event(task.id, 'TOOL_CALL', 'No lockfile in the worktree: dependencies are installed when a check needs them', {});
+      const key = `${task.id}|${cwd}`;
+      if (!this.noLockfileAnnounced.has(key)) {
+        this.noLockfileAnnounced.add(key);
+        this.event(task.id, 'TOOL_CALL', 'No lockfile in the worktree: dependencies are installed when a check needs them', {});
+      }
       return;
     }
-    const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null, cwd }), preApproved: true, timeoutMs: 20 * 60_000 });
-    this.event(task.id, 'TOOL_CALL', `Installed dependencies in the worktree: ${outcome.result.summary}`, { executionId: outcome.execution.id, ok: outcome.result.ok });
+    const outcome = await this.d.tools.invoke({ capability: 'node.install', input: { frozen: true }, origin: 'engine', scope: this.scope(task, repo, { level: 2, stageId: null, cwd }), preApproved: true, timeoutMs: 20 * 60_000, signal });
+    // Without the marker the next run of the task installs again: slower, never wrong.
+    if (outcome.result.ok && existsSync(path.dirname(marker))) await writeFile(marker, `${now()}\n`).catch(() => undefined);
+    this.event(task.id, 'TOOL_CALL', `${outcome.result.ok ? 'Installed dependencies in the worktree' : 'Dependencies in the worktree were not installed'}: ${outcome.result.summary}`, { executionId: outcome.execution.id, ok: outcome.result.ok });
+  }
+
+  /**
+   * Install the dependencies of the task's worktrees (one per repository,
+   * in turn) in the background, so read-only stages run meanwhile; the engine
+   * waits with `settleInstall` before anything that runs code or removes a
+   * worktree. One install per task at a time. Its promise never rejects (Node
+   * exits on an unhandled rejection): a failure is logged and the task goes on,
+   * as it did when the install was awaited up front.
+   */
+  startInstall(task: TaskRecord, units: Array<{ repo: RepositoryRecord; cwd: string }>): void {
+    if (this.installs.has(task.id) || !units.length) return;
+    const controller = new AbortController();
+    const run = async () => {
+      try {
+        for (const unit of units) {
+          if (controller.signal.aborted) return;
+          await this.prepareWorktree(task, unit.repo, unit.cwd, controller.signal).finally(() => this.d.tools.forgetFolder(unit.cwd));
+        }
+      } catch (error) {
+        try {
+          this.event(task.id, 'TOOL_CALL', `Dependencies in the worktree were not installed: ${redact((error as Error)?.message ?? String(error)).slice(0, 200)}`, { ok: false });
+        } catch {
+          /* the database is closing */
+        }
+      }
+    };
+    const done = run().finally(() => this.installs.delete(task.id));
+    this.installs.set(task.id, { done, controller });
+  }
+
+  /** Whether the task's background install is still running. */
+  installRunning(taskId: string): boolean {
+    return this.installs.has(taskId);
+  }
+
+  /**
+   * Wait for the task's background install, if one runs. Returns whether there
+   * was one to wait for. Never rejects.
+   */
+  async settleInstall(taskId: string): Promise<boolean> {
+    const install = this.installs.get(taskId);
+    if (!install) return false;
+    await install.done;
+    return true;
+  }
+
+  /**
+   * Stop every background install (the orchestrator is shutting down). Its
+   * worktree is kept without the marker, so the next run installs it again.
+   */
+  abortInstalls(): void {
+    for (const install of this.installs.values()) install.controller.abort();
   }
 
   /**
@@ -472,8 +582,10 @@ export class EngineTooling {
 
   /**
    * Finish an isolated task: commit what it left uncommitted to its branch
-   * (completed), or keep it in a checkpoint ref (cancelled), then remove the
-   * worktree. The branch stays for you to merge.
+   * (completed), or keep it in a checkpoint ref (cancelled), then take the
+   * worktree away — moved to the trash at once, deleted later by `emptyTrash`
+   * (`moveToTrash`), or removed in place when it cannot be moved. The branch
+   * stays for you to merge.
    */
   async finalizeWorktree(task: TaskRecord, repo: RepositoryRecord, outcome: 'completed' | 'cancelled', gitRecord: TaskRecord['git'] = task.git, label: string | null = null): Promise<Partial<TaskRecord['git']>> {
     // A task across repositories finalizes each repository's worktree with its own Git record.
@@ -497,7 +609,8 @@ export class EngineTooling {
         const cp = await createCheckpoint(dir, ref, `${task.id}: uncommitted work when the task was cancelled`);
         this.event(task.id, 'CHECKPOINT_CREATED', `${who}Kept ${pending.length} uncommitted file(s) in ${ref} (${cp.commit.slice(0, 10)}) before removing the worktree`, { ref, commit: cp.commit });
       }
-      const removed = await removeWorktree(repo.path, dir, { force: outcome === 'cancelled' || pending.length > 0 });
+      const force = outcome === 'cancelled' || pending.length > 0;
+      const removed = (await this.moveToTrash(repo.path, dir, force)) || (await removeWorktree(repo.path, dir, { force }));
       if (removed) {
         patch.worktreePath = null;
         this.event(task.id, 'WORKTREE_REMOVED', `${who}Worktree removed; the work is on branch ${git.taskBranch}${outcome === 'completed' ? ' — merge it from Source Control' : ''}`, { branch: git.taskBranch, repositoryId: repo.id });
@@ -506,6 +619,97 @@ export class EngineTooling {
       this.event(task.id, 'WORKTREE_REMOVED', `${who}The worktree could not be cleaned up: ${redact((error as Error).message).slice(0, 200)}. It is kept at ${dir}.`, {});
     }
     return patch;
+  }
+
+  /** Where finished worktrees wait for deletion: in the data folder, so on the worktrees' drive and a rename away. */
+  trashRoot(): string {
+    return path.join(this.d.dataDir, 'trash');
+  }
+
+  /**
+   * The trash folder, only when it is a plain folder right where it belongs.
+   * Were it a link (a junction on Windows), moving into it or emptying it
+   * would act on whatever it points at, with the orchestrator's rights. Null
+   * when it is missing or not plain; the caller then leaves it alone.
+   */
+  private async plainTrashRoot(): Promise<string | null> {
+    const root = this.trashRoot();
+    try {
+      const stat = await lstat(root);
+      if (stat.isDirectory() && !stat.isSymbolicLink() && (await realpath(root)) === path.join(await realpath(this.d.dataDir), 'trash')) return root;
+    } catch {
+      return null;
+    }
+    console.warn(`[trash] ${root} is not a plain folder (a link?): it is neither used nor emptied, and finished worktrees are removed in place`);
+    return null;
+  }
+
+  /**
+   * Take a finished worktree out of its repository at once: rename its folder
+   * into the trash and prune Git's record of it, so deleting node_modules no
+   * longer holds up the task (~11 s on a large repository). False — the caller
+   * then removes it in place, as before — when it cannot be renamed (a locked
+   * file, a process still inside on Windows) or, without `force`, when it
+   * still has changes `git worktree remove` would refuse to drop.
+   */
+  private async moveToTrash(repoPath: string, dir: string, force: boolean): Promise<boolean> {
+    if (!existsSync(dir)) return false;
+    if (!force) {
+      const changes = await status(dir).catch(() => null);
+      if (changes === null || changes.length > 0) return false;
+    }
+    try {
+      await mkdir(this.trashRoot(), { recursive: true });
+      const root = await this.plainTrashRoot();
+      if (!root) return false;
+      await rename(dir, path.join(root, `${path.basename(path.dirname(dir))}-${path.basename(dir)}-${randomBytes(4).toString('hex')}`));
+    } catch {
+      return false;
+    }
+    await git(repoPath, ['worktree', 'prune']).catch(() => undefined);
+    return true;
+  }
+
+  /**
+   * Delete everything in the trash, in the background; one sweep at a time (a
+   * request during a sweep runs it again). It touches only the trash folder,
+   * only while that is a plain folder (`plainTrashRoot`), and `fs.rm` removes
+   * a link inside it — a junction on Windows — without following it. Never
+   * rejects: what cannot be deleted now waits for the next sweep, at the
+   * latest the one at start. Returns how many entries went.
+   */
+  emptyTrash(): Promise<number> {
+    if (this.trashSweep) {
+      this.trashAgain = true;
+      return this.trashSweep;
+    }
+    const sweep = async (): Promise<number> => {
+      let removed = 0;
+      do {
+        this.trashAgain = false;
+        const root = await this.plainTrashRoot();
+        if (!root) continue;
+        for (const name of await readdir(root).catch(() => [] as string[])) {
+          // Checked again before each entry: a link swapped in mid-sweep is not followed either.
+          if (!(await this.plainTrashRoot())) break;
+          try {
+            await rm(path.join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 400 });
+            removed++;
+          } catch {
+            /* locked: the next sweep tries again */
+          }
+        }
+      } while (this.trashAgain);
+      return removed;
+    };
+    this.trashSweep = sweep()
+      .catch(() => 0)
+      .finally(() => {
+        this.trashSweep = null;
+        // Asked for between the last pass and now: run once more.
+        if (this.trashAgain) void this.emptyTrash();
+      });
+    return this.trashSweep;
   }
 
   // ===========================================================================

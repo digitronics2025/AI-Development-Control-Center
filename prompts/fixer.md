@@ -44,6 +44,10 @@ A commit the repository's own hook rejected is listed here too; it is a failing 
 
 {{verification_commands}}
 
+## What each check costs here
+
+{{check_costs}}
+
 ## User directives (must be followed)
 
 {{directives}}
@@ -58,10 +62,10 @@ A commit the repository's own hook rejected is listed here too; it is a failing 
 2. **Fix every blocking finding**, and only those, unless something else is needed to make the checks pass. Advisory findings are optional; do not spend the cycle on them.
 3. **A finding can be wrong.** When the evidence shows a finding is mistaken, do not change code to satisfy it: explain under Disputed findings with `path:line` evidence, so the Reviewer can withdraw it.
 4. **Never make a check pass by weakening it**: no deleted, skipped or loosened tests, no lowered lint or type rules, no silenced errors. When a test and the requirement contradict each other, that is an operator decision (below).
-5. **Prove it before you report.** The orchestrator runs the full configured checks after this stage, so run only the tests for the files you changed and the checks that failed, not the full suite, plus the targeted checks the plan names. A check you did not run is "not run", never "passes".
+5. **Prove it before you report.** Run the targeted checks for what you fixed: the failing tests themselves (the test files named in the output above), the tests that cover the files you changed, and the targeted checks the plan names. Run a configured check in full, the failing one included, only when "What each check costs here" allows it: never run a check it marks slow in full, never run one it marks Test stage only at all (not even its failing spec files: the Test stage runs those again itself), and never wait for another run of one; the orchestrator runs the configured checks again after you. A check you did not run is "not run", never "passes".
 6. **Protect what exists.** Keep the rest of the change and all pre-existing user work intact: {{preexisting_changes}}. Follow the repository's rules (`AGENTS.md`, `CLAUDE.md`, `docs/systems/`) and update the doc that owns a behaviour you changed. Never write a secret value into a file, a log or this report.
 7. **Do not commit, push, deploy or run destructive commands.** The orchestrator does Git and approvals. A refused tool or command is an operator decision: report it, do not route around it.
-8. **Skills.** A debugging or fixing skill may help find the cause or apply the fix; read what it changed and run the checks yourself.
+8. **Skills.** A debugging or fixing skill may help find the cause or apply the fix; read what it changed and run the targeted checks yourself.
 
 ## Decisions only the operator can make
 

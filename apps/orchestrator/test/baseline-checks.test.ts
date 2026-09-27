@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addRepo, createTask, createTestApp, makeRepo, type TestApp } from './helpers.js';
+import { newId, now } from '../src/store/store.js';
+import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 /** Targeted baseline runs (docs/plans/LEAD_TIME_PLAN.md §3.1). */
 
@@ -124,5 +125,192 @@ describe('targeted baseline runs', () => {
     const after = f.baselineRuns();
     expect(after).toHaveLength(before + 1);
     expect(after.at(-1)).toMatch(/: npm test -- c\.test\.ts$/);
+  }, 90_000);
+});
+
+/** A kept result of `commandId` on an older commit of the repository: the history a warm-up is decided from. */
+const keptBefore = (app: TestApp, repositoryId: string, commandId: string, commandSha: string, over: { status?: 'passed' | 'failed'; durationMs?: number; createdAt?: string; commit?: string } = {}) =>
+  app.services.store.saveBaselineCheck({
+    id: newId(),
+    repositoryId,
+    baselineCommit: over.commit ?? '0'.repeat(40),
+    commandId,
+    commandSha,
+    status: over.status ?? 'failed',
+    summary: null,
+    failures: over.status === 'passed' ? [] : ['old > failure'],
+    durationMs: over.durationMs ?? 1000,
+    createdAt: over.createdAt ?? now(),
+  });
+const failedBefore = (app: TestApp, repositoryId: string, commandId: string, commandSha: string) => keptBefore(app, repositoryId, commandId, commandSha);
+/** Plenty of time before the command would start anyway, and its own typical duration known. */
+const ROOMY = { headStartMs: 60_000, typicalRunMs: 1000 };
+
+describe('warming a baseline before anything failed (TASK-0014)', () => {
+  it('warms only when the command failed on a baseline before, and a failure meanwhile waits for that run instead of starting another', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    // No failing history: nothing is warmed.
+    expect(f.checks.warm(f.base, ROOMY)).toBeNull();
+    expect(f.baselineRuns()).toHaveLength(0);
+    failedBefore(t, f.fullKey.repositoryId, 'test', f.fullKey.commandSha);
+    const warm = f.checks.warm(f.base, ROOMY);
+    expect(warm).not.toBeNull();
+    // A failure while the warm-up runs is classified from its result: no narrowed run, no second full run.
+    const verdict = await f.checks.classify({ ...f.base, failures: ['a.test.ts > A > one'] }, f.stopped);
+    expect(verdict).toMatchObject({ classification: 'preexisting' });
+    expect(verdict.checkedFiles).toBeUndefined();
+    expect((await warm!.done)?.status).toBe('failed');
+    expect(f.baselineRuns()).toEqual([expect.stringMatching(/: npm test$/)]);
+    // The answer is kept for this commit: nothing more to warm.
+    expect(f.checks.warm(f.base, ROOMY)).toBeNull();
+  }, 90_000);
+
+  it('warms nothing when a result is already kept at this commit, even one of only the failing files', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    failedBefore(t, f.fullKey.repositoryId, 'test', f.fullKey.commandSha);
+    f.store.saveBaselineCheck({ ...f.fullKey, commandSha: 'narrowed-sha', id: newId(), status: 'failed', summary: null, failures: ['a.test.ts > A > one'], durationMs: 1, createdAt: now() });
+    expect(f.checks.warm(f.base, ROOMY)).toBeNull();
+    // A kept attempt that could not run proves nothing: that one does not count.
+    f.store.saveBaselineCheck({ ...f.fullKey, commandSha: 'narrowed-sha', id: newId(), status: 'error', summary: 'could not run', failures: [], durationMs: 1, createdAt: now() });
+    const warm = f.checks.warm(f.base, ROOMY);
+    expect(warm).not.toBeNull();
+    await warm!.done;
+  }, 90_000);
+
+  it('follows the newest result that says whether the command fails there, not any failure ever kept', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    const { repositoryId, commandSha } = f.fullKey;
+    const at = (day: number) => `2026-09-${day}T12:00:00.000Z`;
+    // It failed on an old baseline, then passed on a newer one (the suite was fixed): nothing to warm.
+    keptBefore(t, repositoryId, 'test', commandSha, { commit: 'a'.repeat(40), createdAt: at(20) });
+    keptBefore(t, repositoryId, 'test', commandSha, { commit: 'b'.repeat(40), createdAt: at(21), status: 'passed' });
+    expect(f.checks.warm(f.base, ROOMY)).toBeNull();
+    // Only some files passing on a later baseline says nothing about the rest of the suite.
+    keptBefore(t, repositoryId, 'test', 'narrowed-pass', { commit: 'c'.repeat(40), createdAt: at(22), status: 'passed' });
+    expect(f.checks.warm(f.base, ROOMY)).toBeNull();
+    expect(f.baselineRuns()).toHaveLength(0);
+    // Some files failing on a later baseline fail the whole suite there: warmed again.
+    keptBefore(t, repositoryId, 'test', 'narrowed-fail', { commit: 'd'.repeat(40), createdAt: at(23) });
+    const warm = f.checks.warm(f.base, ROOMY);
+    expect(warm).not.toBeNull();
+    // Its own result is kept and is now the newest one, so a warm-up that passed would end warming by itself.
+    expect((await warm!.done)?.status).toBe('failed');
+    expect(f.store.getBaselineCheck(f.fullKey)?.status).toBe('failed');
+  }, 90_000);
+
+  it('warms only when it is expected to end before the command would start anyway', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    const { repositoryId, commandSha } = f.fullKey;
+    const clear = () => f.store.db.prepare('DELETE FROM baseline_checks').run();
+    // A whole run took 5 s: the checks before the command must typically take at least that long.
+    keptBefore(t, repositoryId, 'test', commandSha, { durationMs: 5000 });
+    expect(f.checks.warm(f.base, { headStartMs: 4999, typicalRunMs: null })).toBeNull();
+    // Only a run of the failing files kept (1 s: its worktree, install and those files): that plus the command's typical duration.
+    clear();
+    keptBefore(t, repositoryId, 'test', 'narrowed-fail', { durationMs: 1000 });
+    expect(f.checks.warm(f.base, { headStartMs: 60_000, typicalRunMs: null })).toBeNull();
+    expect(f.checks.warm(f.base, { headStartMs: 3999, typicalRunMs: 3000 })).toBeNull();
+    expect(f.baselineRuns()).toHaveLength(0);
+    const narrowed = f.checks.warm(f.base, { headStartMs: 4000, typicalRunMs: 3000 });
+    expect(narrowed?.expectedMs).toBe(4000);
+    await narrowed!.done;
+    clear();
+    keptBefore(t, repositoryId, 'test', commandSha, { durationMs: 5000 });
+    const whole = f.checks.warm(f.base, { headStartMs: 5000, typicalRunMs: null });
+    expect(whole?.expectedMs).toBe(5000);
+    await whole!.done;
+  }, 90_000);
+
+  it('stops a warm-up the stage no longer needs, while its command runs', async () => {
+    t = await createTestApp();
+    const f = await fixture(t);
+    const slow = { ...f.command, id: 'slow', command: 'npm test -- slow.test.ts' };
+    failedBefore(t, f.fullKey.repositoryId, 'slow', 'any-sha');
+    const warm = f.checks.warm({ ...f.base, command: slow }, ROOMY)!;
+    const exec = await waitFor(() => f.store.listExecutions(f.base.task.id).find((e) => e.command.startsWith('baseline ')), (e) => Boolean(e), 30_000, 'the warm-up to start');
+    // The command itself is running (its line is logged, and the flushed log shows it), not the worktree setup.
+    await waitFor(() => f.store.listLogLines(exec!.id).map((l) => l.text), (lines) => lines.some((l) => l.startsWith('$ npm test')), 30_000, 'the baseline command to start');
+    await new Promise((r) => setTimeout(r, 1500));
+    const started = Date.now();
+    warm.cancel();
+    const record = await warm.done;
+    // Stopped, not left to its 60 s timeout; kept as an error, which is always tried again.
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(record).toMatchObject({ status: 'error' });
+    expect(record!.summary).toMatch(/stopped/i);
+  }, 90_000);
+});
+
+describe('the tests stage warms the e2e baseline (TASK-0014)', () => {
+  /** A stand-in e2e suite with one failure that the baseline has too; it takes a moment, like a browser run. */
+  const FAKE_E2E = "setTimeout(() => { console.log(' FAIL  e2e/home.spec.ts > home > loads'); console.log(' Tests  1 failed | 3 passed'); process.exit(1); }, 1500);";
+  const E2E_ONLY = { id: 'e2e-check', name: 'E2E check', stages: [{ key: 'test', name: 'Test', role: 'tester', kind: 'tests', permissionLevel: 2, next: 'complete', commandKinds: ['test', 'e2e'] }] };
+
+  const UNIT = `node -e "console.log('1 passed')"`;
+
+  /** `unitTypicalMs`: how long the unit check typically took in an earlier task (the kept failure of the e2e baseline took 1 s). */
+  async function e2eTask({ history, e2eOnly = false, unitTypicalMs = 3000, parallel = false }: { history: boolean; e2eOnly?: boolean; unitTypicalMs?: number; parallel?: boolean }) {
+    t = await createTestApp();
+    expect((await t.api('PUT', `/api/workflows/${E2E_ONLY.id}`, E2E_ONLY)).status).toBe(200);
+    const repoPath = await makeRepo({ files: { 'fake-e2e.js': FAKE_E2E } });
+    const repoId = await addRepo(t, repoPath, {
+      preexistingFailures: 'allow',
+      commands: [
+        { id: 'unit', name: 'unit', command: UNIT, kind: 'test', enabled: !e2eOnly, timeoutSec: 60, parallelSafe: parallel },
+        { id: 'e2e', name: 'e2e', command: 'node fake-e2e.js', kind: 'e2e', enabled: true, timeoutSec: 60, parallelSafe: parallel },
+      ],
+    });
+    const { BaselineChecks } = await import('../src/engine/baseline-checks.js');
+    if (history) failedBefore(t, repoId, 'e2e', BaselineChecks.commandSha('node fake-e2e.js'));
+    const earlier = await createTask(t, repoId, 'An earlier task', { start: false });
+    const at = new Date(Date.now() - 60_000).toISOString();
+    t.services.store.insertTestRun({ id: newId(), taskId: earlier, stageId: null, executionId: null, name: 'unit', kind: 'test', command: UNIT, status: 'passed', exitCode: 0, durationMs: unitTypicalMs, summary: '1 passed', startedAt: at, finishedAt: at });
+    const id = await createTask(t, repoId, 'Check the e2e suite', { workflowId: E2E_ONLY.id, supervised: false });
+    const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    const cmds = t.services.store.listExecutions(id).filter((e) => e.kind === 'command');
+    const ms = (iso: string | null) => new Date(iso!).getTime();
+    return {
+      task,
+      baseline: cmds.filter((e) => e.command.startsWith('baseline ')),
+      unit: cmds.find((e) => e.command.includes('1 passed')),
+      e2e: cmds.find((e) => e.command === 'node fake-e2e.js')!,
+      e2eRun: t.services.store.listTestRuns(id).find((r) => r.name === 'e2e')!,
+      events: t.services.store.listEvents(id, { limit: 500 }),
+      ms,
+    };
+  }
+
+  it('starts the e2e baseline with the stage when history predicts it; the e2e waits for it and its failure needs no second run', async () => {
+    const r = await e2eTask({ history: true });
+    expect(r.task.status).toBe('COMPLETED');
+    expect(r.baseline).toHaveLength(1);
+    const [warm] = r.baseline;
+    // Started with the stage, beside the unit check, before any failure.
+    expect(r.ms(warm!.startedAt)).toBeLessThanOrEqual(r.ms(r.unit!.startedAt));
+    // The task's own e2e started only after the warm-up ended (a fixed port with reuseExistingServer).
+    expect(r.ms(r.e2e.startedAt)).toBeGreaterThanOrEqual(r.ms(warm!.finishedAt));
+    // Expected from the kept whole run (1 s), against the unit check's typical 3 s before it.
+    expect(r.events.find((e) => e.data?.baselineWarmup === 'e2e')?.data).toMatchObject({ expectedMs: 1000, headStartMs: 3000 });
+    expect(r.events.some((e) => e.data?.waitingFor === 'baseline')).toBe(true);
+    // Classified from the warmed result.
+    expect(r.e2eRun).toMatchObject({ status: 'failed', classification: 'preexisting' });
+  }, 90_000);
+
+  it.each([
+    ['without a failing history', { history: false }],
+    ['when nothing runs before the e2e (it would only wait)', { history: true, e2eOnly: true }],
+    ['when the checks before it typically end sooner than the baseline run (the e2e would wait)', { history: true, unitTypicalMs: 500 }],
+    ['when the check before it runs in the same parallel batch (it starts with the e2e)', { history: true, parallel: true }],
+  ])('warms nothing %s: the baseline runs after the e2e failed, as before', async (_why, opts) => {
+    const r = await e2eTask(opts);
+    expect(r.task.status).toBe('COMPLETED');
+    expect(r.baseline).toHaveLength(1);
+    expect(r.ms(r.baseline[0]!.startedAt)).toBeGreaterThanOrEqual(r.ms(r.e2e.finishedAt));
+    expect(r.events.some((e) => e.data?.baselineWarmup || e.data?.waitingFor)).toBe(false);
+    expect(r.e2eRun).toMatchObject({ status: 'failed', classification: 'preexisting' });
   }, 90_000);
 });

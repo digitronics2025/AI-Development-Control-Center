@@ -34,7 +34,12 @@ be released later with **Release…**.
 **Restarting after a new build**: `stop-control-center.ps1 -Drain`, then
 `start-control-center.ps1`. Another session must never force-stop an
 orchestrator that is running someone's stages; `-Force` is for a drain that
-cannot finish (a hung stage).
+cannot finish (a hung stage). A drain also waits for a worktree's dependency
+install still running beside a read-only stage; `-Force` stops it, and the
+task installs again when it next runs ([checkpoints.md](checkpoints.md#worktrees)).
+Every start empties `<data>\trash` in the background — finished worktrees on
+their way out, whose work is already on the task branch
+([orchestrator.md](orchestrator.md#data-folder)).
 
 `privileged-helper.ps1` is not a launcher: the orchestrator starts it through
 a UAC prompt for one signed, allowlisted request and it exits
@@ -85,7 +90,8 @@ repository; it needs a running orchestrator ([mcp.md](mcp.md)).
 
 ## Backups
 
-Everything durable is in the data folder: stop the orchestrator and copy it.
+Everything durable is in the data folder: stop the orchestrator and copy it
+(`trash\` can be left out: it is deleted anyway).
 Stored credentials are encrypted with a key that only this Windows account can
 unwrap (`credential-key.dpapi`), so a copy restored under another account or
 machine cannot read them — re-enter them there ([credential-broker.md](credential-broker.md)).

@@ -64,6 +64,7 @@ Templates saved before the check keep rendering `(none)` for unknown names.
 | `diff`, `changed_files` | against the task baseline for every agent role, packed by priority into 150 KB (redacted; `changed_files` carries `+a −d`); a Staged Review task gets the staged diff instead |
 | `diff_coverage` | "Diff shows N of M changed files in full" and one line per file not shown with its reason and how to read it. Reviewer and verifier must name each under `## Files reviewed`, or a PASS is asked again once and then fails `REVIEW_INCOMPLETE`; a user-edited template without the placeholder gets the block appended |
 | `verification_commands` | enabled lint, typecheck, test and build commands |
+| `check_costs` | each enabled lint, typecheck, test, build and e2e command with its typical duration in this repository, the slow-check rule and the e2e Test-stage-only rule ([below](#check-costs)); `(none)` without such commands |
 | `preexisting_changes` | files with uncommitted user work at task start, or `none` |
 | `previous_attempt` | the last FAILED, CANCELLED, INTERRUPTED or PAUSED run of this stage with its last 40 log lines |
 | `fix_cycle`, `max_fix_cycles` | `tasks.fix_cycles` (already incremented during a fix stage) and the limit |
@@ -103,17 +104,76 @@ the headings it lists.
 | Role | Gets, beyond the request | Must report |
 |---|---|---|
 | Investigator | attachments, Git status, earlier investigations (a second opinion checks the first), and on a root-cause return the plan, diff, review and test results | Summary, Findings, Relevant files, Repository rules that apply, Risks, Open questions (with defaults), Recommended approach, Found for Later, Skills used |
-| Planner | attachments, investigation, verification commands, and on a re-plan the previous plan with what came of it | Summary the operator can approve on, Goal, Scope, Success Criteria (each with its proof), Assumptions and Decisions, Implementation Plan, Verification, Security and Data Check, Irreversible steps and approvals, Completion Report, Found for Later, Next Recommended Task, Skills used |
-| Implementer | attachments, plan, investigation, verification commands, and the work so far (diff, test results, review, fix cycles) when a check or review sent the task back | Summary, Changes (with deviations from the plan), Verification performed (each check: ran and passed, failed, or not run), Known limitations, Found for Later, Skills used |
+| Planner | attachments, investigation, verification commands and their costs, and on a re-plan the previous plan with what came of it | Summary the operator can approve on, Goal, Scope, Success Criteria (each with its proof), Assumptions and Decisions, Implementation Plan, Verification, Security and Data Check, Irreversible steps and approvals, Completion Report, Found for Later, Next Recommended Task, Skills used |
+| Implementer | attachments, plan, investigation, verification commands and their costs, and the work so far (diff, test results, review, fix cycles) when a check or review sent the task back | Summary, Changes (with deviations from the plan), Verification performed (each check: ran and passed, failed, or not run), Known limitations, Found for Later, Skills used |
 | Reviewer | reports as claims, the previous review, diff and its coverage, test results, app check | Summary, Previous findings, Issues graded blocking or advisory, Advisory, Files reviewed (each file the diff did not show), Skills used, `NEEDS OPERATOR:` lines, `CAUSE:` with a FAIL, `VERDICT:`. Only blocking issues fail |
-| Fixer | plan, reports, review, failing checks (incl. a rejected commit hook), app check, diff, verification commands, fix cycle N of M | Summary, Root causes, Fixes, Disputed findings, Verification performed, Remaining concerns, Skills used. Never weakens a check to pass it |
+| Fixer | plan, reports, review, failing checks (incl. a rejected commit hook), app check, diff, verification commands and their costs, fix cycle N of M | Summary, Root causes, Fixes, Disputed findings, Verification performed, Remaining concerns, Skills used. Never weakens a check to pass it |
 | Verifier | plan, reports as claims, review, diff and its coverage, test results, app check | Summary, Criteria (met / not met / unverified with named evidence), Review follow-up, Files reviewed, Remaining limitations, Skills used, `NEEDS OPERATOR:` (repeating the review's open ones; one for a central criterion nothing can verify), `CAUSE:`, `VERDICT:` |
 
-Level 1 roles (investigator, planner, reviewer, verifier) are told what they
-can run: the read tools, read-only Git, and Level 1 Control Center checks
-against something already running ([agents.md](agents.md), the `analysis`
-profile in [autopilot.md](autopilot.md)). Level 2 roles must run the
-verification commands themselves before reporting.
+Level 1 roles (investigator, planner, reviewer, verifier) can use the read
+tools and, when the run lists Control Center tools, its
+read-only Git tools and Level 1 checks against something already running
+([agents.md](agents.md), the `analysis` profile in [autopilot.md](autopilot.md)).
+Claude Code has no shell at Level 1, so the investigator and planner templates
+say the stage "may have no shell" and forbid tests, builds and installs
+outright. Level 2 roles (implementer, fixer) run targeted checks before
+reporting and a configured check in full only when `check_costs` marks it
+neither slow nor Test stage only (e2e, which they never run at all); the planner
+names targeted checks and never orders a slow full run, an e2e run or a wait for
+another run.
+
+## Check costs
+
+`{{check_costs}}` (`checkCosts` in [context.ts](../../apps/orchestrator/src/engine/context.ts))
+keeps agents from running, or waiting on, whole suites the Test stage runs
+anyway: on the big repository that cost 54–69 min over seven tasks
+(TASK-0007..0019), one plan even ordering the implementer to wait for other
+runs and then run `npm test`. It is a prompt rule, not a tool deny rule (an
+exact `Bash(npm test)` deny misses `npm run test` and `npx vitest run`).
+
+- **Which commands:** each repository's enabled `lint`, `typecheck`, `test`,
+  `build` and `e2e` commands (a multi-repository task: each folder's, prefixed
+  `folder/`).
+- **Typical duration:** the median of the last 5 runs of that exact command
+  line in that repository, from `test_runs` of its 40 most recently updated
+  tasks (a single-repository task's rows carry no repository id: they count for
+  its primary one). A run counts when it timed the whole command: `passed`, or
+  `failed` only on what the baseline or a re-run explained (`preexisting`,
+  `flaky`; the suite still ran to its end). Affected-only (`selection =
+  changed`), reused (`reused_from`), stopped and newly failing runs do not; a
+  narrowed re-run of failing files has another command line and never matches,
+  and neither does history from before the command was edited.
+- **Slow** is a median over 2 minutes. The block lists every command with
+  `about <duration> (median of N recent runs)` or `not timed yet`, then
+  `**Test stage only**` (e2e) or `**slow**`, and
+  `no later stage of this task runs it` when no tests or command stage of
+  the workflow runs that kind (the tests stage's kinds plus the task's extra and
+  required kinds, less waived ones).
+- **The rule:** with a slow command, `**Slow here (typically over 2 minutes):
+  …**` — do not run it in full, do not start or wait for another run of it, run
+  targeted checks (the covering test files, lint on changed files, a scoped
+  typecheck), even when a plan says otherwise; a slow check no later stage runs
+  is reported as not run in full. Without one: "None is slow here … running
+  them in full is fine", or with no timed run at all "None of them has been
+  timed in this repository yet, so running them in full is fine" — fast
+  repositories keep the cheap early catch. Where the repository also has e2e,
+  these lines say "other than the end-to-end tests" / "apart from the
+  end-to-end tests", and a repository with only e2e gets no "fine" line.
+- **E2e is Test stage only**, however quick (`TEST_STAGE_ONLY_KINDS`):
+  `**End-to-end tests are left to the Test stage, however quick they are.**` —
+  do not run the e2e command, in full or for one spec file, nor start or wait
+  for another run; use a Control Center browser check when the run lists one,
+  otherwise report e2e as not run. An e2e suite usually starts the app on a
+  fixed port with a reused server (the big repository: port 8788,
+  `reuseExistingServer`, about two minutes), so an agent's run beside another
+  task's own e2e check would have one side test the other worktree's files, and
+  in the bad direction corrupt that check's verdict. The Test stage re-runs
+  failing spec files itself. `verification_commands` still lists only the
+  default verify kinds, never e2e.
+- **Templates:** implementer, fixer and planner carry it under `## What each
+  check costs here`; their step "Prove it" (the planner: "What a good plan
+  does", and `## Verification` names targeted checks first) points at it. A user-edited implementer, fixer or planner template without the
+  placeholder gets the block appended, like `diff_coverage`.
 
 ## Prompt artifacts
 
@@ -153,4 +213,4 @@ in code and validated as JSON, not editable templates:
 - The multi-repository plan will give each repository its own facts and diff
   block under the same placeholder names.
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

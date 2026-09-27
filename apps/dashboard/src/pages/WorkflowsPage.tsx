@@ -48,6 +48,16 @@ import { StageTeamEditor, teamLabel } from './StageTeamEditor';
 
 const KIND_LABEL: Record<(typeof STAGE_KINDS)[number], string> = { agent: 'Agent', tests: 'Tests (system)', command: 'Command (system)', git: 'Git checkpoint (system)', verify: 'App verification (system)', release: 'Release (system, Level 5)' };
 
+/**
+ * A stage switched to another kind, without the fields that kind does not take: validation rejects
+ * them and the inspector no longer shows them, so they would block saving from where no one can see.
+ */
+export function withStageKind(stage: StageDefinition, kind: StageDefinition['kind']): StageDefinition {
+  if (kind === stage.kind) return stage;
+  if (kind === 'agent') return { ...stage, kind, commandKinds: undefined };
+  return { ...stage, kind, agentId: undefined, model: undefined, effort: undefined, verdict: false, team: undefined, instructions: undefined, toolProfile: undefined, skills: undefined };
+}
+
 function issuesFor(issues: WorkflowIssue[], index: number | null, field?: string) {
   return issues.filter((i) => i.stageIndex === index && (field === undefined || i.field === field || i.field.startsWith(`${field}.`)));
 }
@@ -73,6 +83,8 @@ function StageInspector({
   const targets = [...stages.filter((s) => s.key !== stage.key).map((s) => ({ value: s.key, label: s.name, description: s.key })), { value: COMPLETE, label: 'Complete', description: 'Finish the task' }];
   const set = <K extends keyof StageDefinition>(key: K, value: StageDefinition[K]) => onChange({ ...stage, [key]: value });
   const roleDefault = settings.data?.roleDefaults[stage.role];
+  // The Skills text as typed: re-joining the parsed list on every key would swallow each comma as it is typed.
+  const [skillsText, setSkillsText] = useState<string | null>(null);
   return (
     <fieldset disabled={readOnly} className="flex flex-col gap-4">
       <legend className="sr-only">Stage {stage.name}</legend>
@@ -87,7 +99,15 @@ function StageInspector({
           <Select value={stage.role} onValueChange={(v) => set('role', v as StageDefinition['role'])} options={ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))} disabled={readOnly} />
         </Field>
         <Field label="Runs as" error={err('kind')}>
-          <Select value={stage.kind} onValueChange={(v) => set('kind', v as StageDefinition['kind'])} options={STAGE_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] }))} disabled={readOnly} />
+          <Select
+            value={stage.kind}
+            onValueChange={(v) => {
+              setSkillsText(null);
+              onChange(withStageKind(stage, v as StageDefinition['kind']));
+            }}
+            options={STAGE_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] }))}
+            disabled={readOnly}
+          />
         </Field>
       </div>
       {stage.kind === 'agent' ? (
@@ -174,8 +194,9 @@ function StageInspector({
             </Field>
             <Field label="Skills" optional error={err('skills')} helper="Installed skills this stage should run, separated by commas.">
               <Input
-                value={(stage.skills ?? []).join(', ')}
+                value={skillsText ?? (stage.skills ?? []).join(', ')}
                 onChange={(e) => {
+                  setSkillsText(e.target.value);
                   const list = e.target.value.split(',').map((x) => x.trim().replace(/^\//, '')).filter(Boolean);
                   set('skills', list.length ? list : undefined);
                 }}
@@ -285,8 +306,9 @@ export function WorkflowsPage() {
     });
 
   const stage = stageIndex !== null ? draft.stages[stageIndex] : null;
+  // Keyed by stage: text typed for one stage is not shown for the next.
   const inspector = stage ? (
-    <StageInspector stage={stage} index={stageIndex!} stages={draft.stages} issues={issues} readOnly={readOnly} onChange={(next) => updateStage(stageIndex!, next)} />
+    <StageInspector key={stageIndex} stage={stage} index={stageIndex!} stages={draft.stages} issues={issues} readOnly={readOnly} onChange={(next) => updateStage(stageIndex!, next)} />
   ) : null;
 
   return (

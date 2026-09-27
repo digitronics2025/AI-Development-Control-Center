@@ -8,7 +8,7 @@ export function unitsOfStage(task: TaskDetail, stageId: string): StageWorkUnit[]
 /**
  * The compact team line of the Stage Timeline (docs/plans/STAGE_TEAMS_PLAN.md
  * §3.13): "Team 2/3 running", "Team of 3 · done", "Team of 3 · 1 failed".
- * Counts only the workers; the integration and split runs are not team members.
+ * Counts only the workers; the integration, split and judge runs are not team members.
  */
 export function teamSummary(units: readonly StageWorkUnit[]): string | null {
   const workers = units.filter((u) => u.kind === 'worker');
@@ -21,6 +21,8 @@ export function teamSummary(units: readonly StageWorkUnit[]): string | null {
   if (queued) return `Team of ${total} · ${total - queued} done, ${queued} waiting`;
   const failed = workers.filter((u) => u.status === 'FAILED').length;
   if (failed) return `Team of ${total} · ${failed} failed`;
+  // Variants: every worker has finished while the judge compares them; the winner is integrated afterwards.
+  if (units.some((u) => u.kind === 'judge' && u.status === 'RUNNING')) return `Team of ${total} · judging`;
   const integrating = units.some((u) => u.kind === 'integration' && u.status === 'RUNNING');
   return integrating ? `Team of ${total} · integrating` : `Team of ${total} · done`;
 }

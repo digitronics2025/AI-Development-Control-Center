@@ -187,6 +187,8 @@ export class CacheSync {
       case 'settings':
         qc.setQueryData(keys.settings, message.settings);
         void qc.invalidateQueries({ queryKey: keys.askSources });
+        // The paid media view reads its switch and per-task budget from settings on the server.
+        void qc.invalidateQueries({ queryKey: keys.usageRoot });
         return;
       case 'repository': {
         const repo: Repository = message.repository;

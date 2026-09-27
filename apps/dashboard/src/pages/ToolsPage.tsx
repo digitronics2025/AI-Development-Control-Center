@@ -249,6 +249,11 @@ function TerminalsTab() {
   );
 }
 
+/** When an MCP server's access token renews, or null once it has expired: tokens renew only when the server is next used. */
+export function upcomingRenewal(expiresAt: string | null, now = Date.now()): string | null {
+  return expiresAt && Date.parse(expiresAt) > now ? expiresAt : null;
+}
+
 function McpTab() {
   const servers = useMcpServers();
   const mutations = useMcpMutations();
@@ -261,9 +266,11 @@ function McpTab() {
   const [form, setForm] = useState({ name: '', transport: 'stdio' as 'stdio' | 'http', command: '', args: '', url: '', level: '2', envVar: '', credential: '', oauth: false, scope: '' });
   // The sign-in page of the server being signed in to, shown as a link too (a browser may block the new tab).
   const [signIn, setSignIn] = useState<{ id: string; url: string } | null>(null);
-  const [signInError, setSignInError] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<{ title: string; message: string } | null>(null);
+  // The OAuth callback and the sealed tokens live on the machine itself: the cloud dashboard cannot sign in or out.
+  const local = connection.mode === 'local';
   const startSignIn = (s: McpServerView) => {
-    setSignInError(null);
+    setOauthError(null);
     mutations.signIn.mutate(s.id, {
       onSuccess: (r) => {
         if (r.authorized) {
@@ -274,8 +281,12 @@ function McpTab() {
         setSignIn({ id: s.id, url: r.authorizationUrl });
         window.open(r.authorizationUrl, '_blank', 'noopener,noreferrer');
       },
-      onError: (e) => setSignInError(errorMessage(e)),
+      onError: (e) => setOauthError({ title: 'Sign-in did not start', message: errorMessage(e) }),
     });
+  };
+  const signOut = (s: McpServerView) => {
+    setOauthError(null);
+    mutations.signOut.mutate(s.id, { onError: (e) => setOauthError({ title: 'Not signed out', message: errorMessage(e) }) });
   };
   const submit = () => {
     setError(null);
@@ -307,9 +318,9 @@ function McpTab() {
           Add server
         </Button>
       </div>
-      {signInError ? (
-        <Banner tone="danger" role="alert" title="Sign-in did not start">
-          {signInError}
+      {oauthError ? (
+        <Banner tone="danger" role="alert" title={oauthError.title}>
+          {oauthError.message}
         </Banner>
       ) : null}
       {servers.isLoading ? (
@@ -327,11 +338,11 @@ function McpTab() {
                 <span className="flex-1" />
                 {s.auth === 'oauth' ? (
                   s.oauth?.signedIn ? (
-                    <Button size="compact" icon={LogOut} onClick={() => mutations.signOut.mutate(s.id)} loading={mutations.signOut.isPending && mutations.signOut.variables === s.id} disabled={!connection.online}>
+                    <Button size="compact" icon={LogOut} onClick={() => signOut(s)} loading={mutations.signOut.isPending && mutations.signOut.variables === s.id} disabled={!local || !connection.online} disabledReason={local ? 'Offline' : 'Sign out on the machine itself'}>
                       Sign out
                     </Button>
                   ) : (
-                    <Button size="compact" icon={LogIn} onClick={() => startSignIn(s)} loading={mutations.signIn.isPending && mutations.signIn.variables === s.id} disabled={!connection.online}>
+                    <Button size="compact" icon={LogIn} onClick={() => startSignIn(s)} loading={mutations.signIn.isPending && mutations.signIn.variables === s.id} disabled={!local || !connection.online} disabledReason={local ? 'Offline' : 'Sign in on the machine itself'}>
                       Sign in
                     </Button>
                   )
@@ -348,7 +359,7 @@ function McpTab() {
                   {s.oauth?.signedIn ? (
                     <>
                       Signed in <RelativeTime iso={s.oauth.signedInAt} />
-                      {s.oauth.expiresAt ? (
+                      {upcomingRenewal(s.oauth.expiresAt) ? (
                         <>
                           {' '}· access renews <RelativeTime iso={s.oauth.expiresAt} />
                         </>

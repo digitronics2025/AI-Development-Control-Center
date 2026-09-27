@@ -93,6 +93,10 @@ folder, token or key files, or its listen address (`AIDevControlCenter`,
 folder and port are set at start with `setSelfReferences`) — and
 `ToolService.invoke` refuses **any** agent tool call whose input names them, so an
 agent running as the operator cannot read the token and act as the operator.
+A page a tool drives is judged by `webUrlReferencesSelf` for web URLs: the
+address in any spelling, one carried inside the URL, or the data folder — not
+the key files' bare names, which are ordinary path words on other servers
+([browser-and-web.md](browser-and-web.md)).
 The address is matched in every spelling Node's URL parser normalises
 (`referencesSelf`): each URL in the text, and a scheme-less `host:port` with
 any numeric or dotted host, is first normalised by Node's URL parser, so `127.1:4317`,

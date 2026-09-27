@@ -2,10 +2,13 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  AgentGuardError,
   capacityFromFailure,
   CapacityCollector,
   capture,
+  classifyFailureText,
   CliAgentAdapter,
+  PROTOCOL_MAX_LINE_LENGTH,
   sumCounts,
   tokenCount,
   type AgentExecutionInput,
@@ -16,7 +19,7 @@ import {
   type ProviderUsageCapabilities,
   type StreamParser,
 } from '@acc/agent-sdk';
-import type { AgentCapabilities, ModelDescriptor } from '@acc/shared';
+import type { AgentCapabilities, ErrorClass, ModelDescriptor } from '@acc/shared';
 
 const FALLBACK_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 
@@ -86,6 +89,53 @@ export function codexUsage(turns: CodexTurnUsage[], threadId: string | null, req
     turns: turns.length,
     apiDurationMs: null,
   };
+}
+
+/**
+ * Features that add MCP servers to a run on their own, measured on Codex
+ * 0.156.1 (docs/systems/agents.md#mcp-servers-in-a-codex-run): `apps` starts
+ * `codex_apps` (ChatGPT connectors); `plugins` starts plugin servers, including
+ * those of plugins installed on the ChatGPT account, which load even with
+ * --ignore-user-config; `skill_mcp_dependency_install` installs and enables
+ * servers a mentioned skill asks for. A CLI that does not know one of these
+ * flags refuses to start ("Unknown feature flag") rather than run without it.
+ */
+export const CODEX_MCP_FEATURES_OFF = ['apps', 'plugins', 'skill_mcp_dependency_install'] as const;
+
+/** A server as `codex mcp list --json` reports it; only what isolation needs. */
+export interface CodexConfiguredMcpServer {
+  name: string;
+  transport: { type: string };
+}
+
+const MCP_SERVER_NAME = /^[A-Za-z0-9_-]+$/;
+const DISABLED_TRANSPORT: Record<string, string> = {
+  stdio: 'command="acc-disabled"',
+  streamable_http: 'url="http://127.0.0.1/acc-disabled"',
+};
+
+/**
+ * `-c` overrides that switch off every configured MCP server except `keep`
+ * (the Control Center's own). Codex has no --strict-mcp-config, and a `-c`
+ * table merges into the loaded layers instead of replacing them, so each
+ * server is named. The entry restates a transport of the same kind because
+ * Codex refuses an entry without one — which it would be in a run where the
+ * layer that defines the server is not loaded (--ignore-user-config).
+ */
+export function codexMcpIsolationArgs(servers: CodexConfiguredMcpServer[], keep: string | null): string[] {
+  const args: string[] = [];
+  for (const server of servers) {
+    if (server.name === keep) continue;
+    const transport = DISABLED_TRANSPORT[server.transport?.type];
+    if (!MCP_SERVER_NAME.test(server.name) || !transport) {
+      throw new AgentGuardError(
+        `Codex reports an MCP server the Control Center cannot switch off (${JSON.stringify(server.name)}, transport ${String(server.transport?.type)}); refusing to run so it cannot join.`,
+        'PERMISSION_DENIED',
+      );
+    }
+    args.push('-c', `mcp_servers.${server.name}={enabled=false,${transport}}`);
+  }
+  return args;
 }
 
 export class CodexAdapter extends CliAgentAdapter {
@@ -165,8 +215,40 @@ export class CodexAdapter extends CliAgentAdapter {
     }
   }
 
-  protected buildArgs(input: AgentExecutionInput): string[] {
+  /**
+   * The MCP servers Codex would load in this run's folder — user, profile,
+   * trusted-project, system and managed layers — as the CLI itself resolves
+   * them. Plugin and app servers are not listed; the feature flags remove them.
+   * Any doubt refuses the run: a server that is not switched off would join it.
+   */
+  private async configuredMcpServers(input: AgentExecutionInput): Promise<CodexConfiguredMcpServer[]> {
+    const flags = CODEX_MCP_FEATURES_OFF.flatMap((feature) => ['--disable', feature]);
+    const listed = await this.captureCli(input, ['mcp', 'list', '--json', ...flags], 30_000, {
+      cwd: input.cwd,
+      maxLineLength: PROTOCOL_MAX_LINE_LENGTH,
+    });
+    const refuse = (why: string, errorClass: ErrorClass = 'PROCESS_CRASH') =>
+      new AgentGuardError(`Codex could not list its MCP servers, so the run was not started (a personal server could join it): ${why}`, errorClass);
+    if (!listed) throw refuse('the CLI was not found');
+    if (listed.result.exitCode !== 0) {
+      const text = `${listed.stderr}\n${listed.stdout}`;
+      throw refuse(truncate(text) || `exit ${listed.result.exitCode ?? 'none'}`, classifyFailureText(text) ?? 'PROCESS_CRASH');
+    }
+    let servers: unknown;
+    try {
+      servers = JSON.parse(listed.stdout);
+    } catch {
+      throw refuse(`unreadable output: ${truncate(listed.stdout)}`);
+    }
+    if (!Array.isArray(servers) || !servers.every((s) => typeof s?.name === 'string')) throw refuse(`unexpected output: ${truncate(listed.stdout)}`);
+    return servers as CodexConfiguredMcpServer[];
+  }
+
+  protected async buildArgs(input: AgentExecutionInput): Promise<string[]> {
     const args = ['exec', '--json', '--color', 'never', '--skip-git-repo-check', '-C', input.cwd];
+    // Only the Control Center's own MCP server may join a run: its tools go through ToolService.invoke at the stage's level.
+    for (const feature of CODEX_MCP_FEATURES_OFF) args.push('--disable', feature);
+    args.push(...codexMcpIsolationArgs(await this.configuredMcpServers(input), input.toolBridge?.name ?? null));
     // Level 1 stages analyse only; everything else may edit inside the workspace.
     args.push('--sandbox', input.permissionLevel <= 1 ? 'read-only' : 'workspace-write');
     // An execpolicy `allow` rule (the operator's ~/.codex/rules or the repository's .codex/rules)

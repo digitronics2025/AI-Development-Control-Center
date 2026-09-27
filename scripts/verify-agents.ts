@@ -8,6 +8,8 @@
  *                                       also proves skills run inside a stage's limits
  *   pnpm verify:agents --only claude --claude-model haiku --permissions
  *                                       also proves a repository's allow rules cannot widen a stage
+ *   pnpm verify:agents --only codex --mcp [--codex-mcp-repo <trusted repo>]
+ *                                       also proves only the Control Center's MCP server joins a Codex run
  *
  * The run happens in a new empty temporary folder, with API credentials
  * stripped (Subscription Only), and asks the agent to reply with one word.
@@ -93,8 +95,92 @@ for (const { adapter, model } of adapters) {
 
 if (flag('skills')) await verifySkills();
 if (flag('permissions')) await verifyPermissions();
+if (flag('mcp')) await verifyCodexMcp();
 
 console.log(failures ? `\n${failures} check(s) did not pass.` : '\nAll checks passed.');
+
+/**
+ * Real-CLI proof that a Codex run starts no MCP server but the Control Center's
+ * (docs/systems/agents.md#mcp-servers-in-a-codex-run). Codex has no
+ * --strict-mcp-config; the adapter switches every other server off by name and
+ * by feature flag, so this runs exactly what ships, with the operator's real
+ * configuration, and reads Codex's own log of what it started. A stand-in
+ * `acc` server records that it was started. Run it after every Codex update.
+ */
+async function verifyCodexMcp() {
+  const codex = adapters.find((a) => a.adapter.id === 'codex');
+  if (!codex) return;
+  console.log('\n== Codex MCP servers ==');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-mcp-'));
+  const server = path.join(dir, 'acc-probe-mcp.cjs');
+  writeFileSync(
+    server,
+    [
+      "const fs = require('node:fs');",
+      'fs.appendFileSync(process.argv[2], "started\\n");',
+      "let buf = '';",
+      "const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');",
+      "process.stdin.on('data', (d) => {",
+      '  buf += d;',
+      '  let i;',
+      "  while ((i = buf.indexOf('\\n')) >= 0) {",
+      '    const line = buf.slice(0, i).trim();',
+      '    buf = buf.slice(i + 1);',
+      '    let m;',
+      '    try { m = JSON.parse(line); } catch { continue; }',
+      '    if (m.id === undefined) continue;',
+      "    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'acc-verify-probe', version: '1.0.0' } } });",
+      "    else if (m.method === 'tools/list') send({ jsonrpc: '2.0', id: m.id, result: { tools: [] } });",
+      "    else send({ jsonrpc: '2.0', id: m.id, result: {} });",
+      '  }',
+      '});',
+    ].join('\n'),
+  );
+  const cases: Array<{ label: string; cwd: string; loadUserConfig: boolean }> = [
+    { label: 'with my Codex config loaded', cwd: path.join(dir, 'repo-a'), loadUserConfig: true },
+    { label: 'with my Codex config ignored', cwd: path.join(dir, 'repo-b'), loadUserConfig: false },
+  ];
+  const trusted = value('codex-mcp-repo', '');
+  if (trusted) cases.push({ label: `in ${trusted}, config loaded`, cwd: trusted, loadUserConfig: true });
+  try {
+    for (const c of cases) {
+      mkdirSync(c.cwd, { recursive: true });
+      const marker = path.join(dir, `started-${randomUUID()}`);
+      const lines: string[] = [];
+      const handle = await codex.adapter.execute({
+        ...options,
+        // Codex's log names every MCP server it starts; the run itself is unchanged.
+        baseEnv: { ...process.env, RUST_LOG: 'info' },
+        loadUserConfig: c.loadUserConfig,
+        executionId: randomUUID(),
+        cwd: c.cwd,
+        prompt: 'Reply with exactly the word PONG and nothing else. Do not run any commands, read any files or call any tools.',
+        model: codex.model,
+        effort: 'low',
+        permissionLevel: 1,
+        timeoutMs: 240_000,
+        toolBridge: { name: 'acc', command: process.execPath, args: [server, marker], env: {} },
+        onLine: (_stream, text) => lines.push(text),
+      });
+      const result = await handle.done;
+      const log = lines.join('\n');
+      const all = (re: RegExp) => [...new Set([...log.matchAll(re)].map((m) => m[1] ?? ''))];
+      const session = all(/codex\.conversation_starts[^\n]*? mcp_servers="([^"]*)"/g).flatMap((s) => s.split(/,\s*/)).filter(Boolean);
+      const failed = all(/MCP server startup failed server_name="?([^"\s,]+)/g);
+      const initialised = all(/server_info: Some\(Implementation \{ name: "([^"]+)"/g);
+      const others = [...session.filter((s) => s !== 'acc'), ...failed, ...initialised.filter((s) => s !== 'acc-verify-probe')];
+      const off = [...handle.commandLine.matchAll(/mcp_servers\.([\w-]+)=\{enabled=false/g)].map((m) => m[1]);
+      const ok = result.status === 'succeeded' && session.join(',') === 'acc' && others.length === 0 && existsSync(marker);
+      console.log(
+        `${ok ? 'pass' : 'FAIL'}  only acc starts ${c.label} — session: ${session.join(', ') || '(none)'}; others: ${others.join(', ') || 'none'}; acc started: ${existsSync(marker) ? 'yes' : 'no'}; run: ${result.status}${result.errorMessage ? ` (${redact.redact(result.errorMessage).slice(0, 200)})` : ''}`,
+      );
+      console.log(`info  switched off by name: ${off.join(', ') || 'none'}`);
+      if (!ok) failures++;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /**
  * Real-CLI proof that skills run inside a stage's limits (docs/plans/agent-skills.md).

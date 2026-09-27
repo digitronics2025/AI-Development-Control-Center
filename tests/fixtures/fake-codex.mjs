@@ -2,6 +2,8 @@
 // Test double for the Codex CLI. Behaviour is chosen by environment variables:
 //   FAKE_CODEX_AUTH      chatgpt | apikey | none
 //   FAKE_CODEX_SCENARIO  ok | usage | model | hang | secret
+//   FAKE_CODEX_MCP_LIST  JSON printed by `mcp list --json` (default []), or `fail`
+//   FAKE_MCP_ARGS_FILE   where `mcp list` records its argv and cwd
 import { writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -20,6 +22,16 @@ if (args[0] === 'login' && args[1] === 'status') {
     console.log('Not logged in');
     process.exit(1);
   }
+  process.exit(0);
+}
+
+if (args[0] === 'mcp' && args[1] === 'list') {
+  if (process.env.FAKE_MCP_ARGS_FILE) writeFileSync(process.env.FAKE_MCP_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd() }));
+  if (process.env.FAKE_CODEX_MCP_LIST === 'fail') {
+    console.error('Error: Unknown feature flag: plugins');
+    process.exit(1);
+  }
+  process.stdout.write(process.env.FAKE_CODEX_MCP_LIST ?? '[]');
   process.exit(0);
 }
 

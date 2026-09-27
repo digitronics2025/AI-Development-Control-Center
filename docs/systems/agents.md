@@ -32,12 +32,13 @@ was reported as "finished without producing any output".
 Control Center's stdio MCP server to a run; its session token is put in the
 agent's environment only ([mcp.md](mcp.md)). Claude Code gets a temporary
 `--mcp-config` file referencing the variable by name and `mcp__acc` in its
-allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars`. The file is
+allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars`, and every
+other MCP server switched off ([below](#mcp-servers-in-a-codex-run)). The file is
 removed when the run ends.
 
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
-- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
+- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --disable apps --disable plugins --disable skill_mcp_dependency_install [-c mcp_servers.<name>={enabled=false,…}]… --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
 - `--ignore-rules` on every run: Codex's execpolicy `.rules` files (the operator's
   `~/.codex/rules`, the repository's `.codex/rules/`) are never loaded. An `allow`
@@ -54,6 +55,50 @@ removed when the run ends.
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).
 - Output: JSONL events (`agent_message`, `command_execution`, `file_change`, `turn.failed`).
+
+### MCP servers in a Codex run
+
+Codex has no `--strict-mcp-config`, and MCP servers run outside its sandbox:
+any server but `acc` would hand an agent tools that skip `ToolService.invoke`
+and the stage's level. Measured on Codex 0.156.1 (2026-09-27, real
+`codex exec` runs with the adapter's flags, Codex's own log at
+`RUST_LOG=info`), a run without the isolation below loads:
+
+| Source | With `--ignore-user-config` | Switched off by |
+|---|---|---|
+| `$CODEX_HOME/config.toml` `[mcp_servers]` (7 here, incl. `node_repl`, the desktop app's computer-use runtime) | not loaded | name |
+| A trusted repository's `.codex/config.toml` (`tenten-d1` in tenten-accounting-in) | not loaded: trust lives in the user config | name |
+| `codex_apps`, ChatGPT connectors (reports itself as `plugin-runtime`) | **loaded** | `--disable apps` |
+| Plugin servers, including plugins installed on the ChatGPT account (`cloudflare-api` → mcp.cloudflare.com) | **loaded** (account plugins) | `--disable plugins` |
+| Servers a mentioned skill asks to install and enable | not reproduced | `--disable skill_mcp_dependency_install` |
+| System (`%ProgramData%\OpenAI\Codex\config.toml`) and workspace-managed config | loaded by design; none exist here | name |
+
+How ([index.ts](../../packages/agent-codex/src/index.ts) `buildArgs`):
+
+- Before each run, `codex mcp list --json` with the same three `--disable`
+  flags runs in the run's folder (~2 s), so Codex itself resolves every layer
+  and the repository's trust. `mcp list` has no `--ignore-user-config`, so it also
+  lists user servers when the run ignores them; switching those off is harmless.
+- Every listed server but the run's bridge gets
+  `-c mcp_servers.<name>={enabled=false,command="acc-disabled"}` (`url=…` for
+  HTTP). A `-c` table merges into the loaded layers — `-c mcp_servers={}`
+  changes nothing — so servers are named one by one, and the entry restates a
+  transport because Codex refuses one without ("invalid transport"), which it
+  would be when its layer is not loaded.
+- Refused, never run open (`AgentGuardError`): the listing fails or is
+  unreadable, or names a server a `-c` key cannot address (names outside
+  `[A-Za-z0-9_-]`, transports other than `stdio`/`streamable_http`). A CLI
+  that does not know one of the flags fails the listing with "Unknown feature
+  flag" → `MODEL_UNAVAILABLE` (update the CLI).
+- Price: plugin skills and ChatGPT connectors are not available in Codex runs.
+
+**Tripwire:** after every Codex update run `pnpm verify:agents --only codex
+--mcp [--codex-mcp-repo <trusted repository with a .codex MCP server>]`. With
+the operator's real config it runs the shipped argv with a stand-in `acc`
+server, config loaded and ignored, and passes only when Codex's log names `acc`
+alone at session start, no other server starts or fails to start, and the
+stand-in was started. 2026-09-27: 3/3 pass, `tenten-d1` switched off by name in
+tenten-accounting-in.
 
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
@@ -158,9 +203,10 @@ The description and directives stay the record; there is no separate task field.
 lookup still uses no model turn.
 
 Codex loads `~/.codex/skills` and `~/.agents/skills` itself;
-`--ignore-user-config` skips only `config.toml`. Its sandbox, not a tool
-list, bounds it (execpolicy rules are ignored, see Codex above). Not yet observed in a run (the ChatGPT workspace is out of
-credits).
+`--ignore-user-config` skips only `config.toml` (a run with it still scans
+`~/.agents/skills`, seen 2026-09-27). Plugin skills do not load
+([`--disable plugins`](#mcp-servers-in-a-codex-run)). Its sandbox, not a tool
+list, bounds it (execpolicy rules are ignored, see Codex above). A skill running in a Codex stage is not yet observed.
 
 ## Stage Team workers
 
@@ -218,8 +264,8 @@ REFUSED with the summary.
 
 ## Observed on the operator's machine (2026-09-24)
 
-- Codex 0.156.1 accepts the default model; runs now fail only with "workspace
-  is out of credits" (`USAGE_LIMIT`), an account matter.
+- Codex 0.156.1 accepts the default model; with credits back it runs end to
+  end (2026-09-27).
 - Claude Code 2.1.280 occasionally exits with `0xC0000409` mid-review with no
   result event; the stage retry recovers it.
 

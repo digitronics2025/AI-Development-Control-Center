@@ -128,13 +128,27 @@ They end in `WAITING_FOR_USER` with blocker `hard_blocker` or `limit`, never
 
 Completion writes `git-diff.patch`, `final-report.md` and `task.json` — all
 before `COMPLETED` is published, so clients never see a report without its
-task record. A non-empty `git-diff.patch` ends in exactly one newline (an
-empty one is an empty file): `git()` reads Git's output line by line and loses
-its final newline, and without it `git apply` calls the patch corrupt. The
-patch still does not apply when a file committed with CRLF endings changed
-(the same line reading drops each `\r`), when a binary file changed
-(`diffSince` passes no `--binary`, so Git prints only "Binary files … differ"),
-or when it was cut at 5,000,000 characters and marked `[truncated]`. Both carry **Where the time went**
+task record. `git-diff.patch` ([git.md](git.md#applicable-patches)) is
+written after the final commit: an isolated repository is diffed commit to
+commit (baseline → task branch), so it is exactly what the branch holds even
+when a pre-commit hook rewrote a file; an in-place task's working tree is
+diffed against the baseline. It is Git's own bytes, so `git apply` takes it
+back — reversed out of the task's checkout or forward onto the baseline —
+including changes to CRLF-committed files. Binary files, and any file that is
+not plain UTF-8 text, carry only their full object ids ("Binary files …
+differ"), resolved from the task's own repository; no binary content ever
+enters the artifact. A file holding secret-shaped content (its text, a
+binary file's content in any common encoding, a private key, or a file named
+like secret material such as `.env`) is replaced by a `[withheld from
+git-diff.patch: …]` line and the rest still applies. A multi-repository patch
+puts each repository's paths under its folder (a rename shows as a deletion
+plus an addition); its text applies from the folder holding the
+repositories, and with a binary change each repository applies its share from
+there with `git --git-dir=<folder>/.git --work-tree=. apply
+--include='<folder>/*' git-diff.patch`. Files past 5,000,000 bytes per
+repository, files Git cannot diff and binary files whose content the
+repository cannot supply are left out whole and named on a `[not included in
+git-diff.patch: …]` line. Both carry **Where the time went**
 ([time-breakdown.ts](../../apps/orchestrator/src/engine/time-breakdown.ts),
 also `GET /api/tasks/:id/time`, measured up to now for a running task): every
 millisecond from creation to the end in exactly one bucket, by precedence
@@ -186,7 +200,10 @@ workers in their own checkouts, one outcome — or falls back to one agent
 ([stage-teams.md](stage-teams.md)); the built-in Architecture and Full Autopilot
 workflows use teams. A tests stage runs consecutive commands the
 repository marked `parallelSafe` together, stopping the batch at the first
-real failure; everything else runs one at a time, in order.
+real failure; a check whose failure a repair would fix is repaired and run
+again alone once the rest of its batch is done
+([stage-teams.md](stage-teams.md#parallel-safe-checks)); everything else runs
+one at a time, in order.
 
 ## Gates that tell the truth
 
@@ -253,6 +270,56 @@ Smoke after a skipped Staging, the unit suite run three times):
   19-minute run. `nonBlockingFailure()` (shared) is the one test for both. A
   repository set to `preexistingFailures: 'block'` skips the comparison and the
   re-run.
+- **Baseline warm-up** ([runners.ts](../../apps/orchestrator/src/engine/runners.ts)
+  `runCommands`, `BaselineChecks.warm`). Found in TASK-0014: on
+  tenten-accounting-in the e2e baseline run (118.8–135.1 s, plus about 9 s of
+  cleanup) sat on the critical path after the task's own e2e failed with
+  failures that were already there. When a tests stage starts, before any
+  command runs, the full baseline run of its first `e2e` command starts beside
+  the checks before it, only when all of these hold:
+  - the e2e is not in the stage's first batch (something runs before it; a
+    check in its own parallel batch starts with it), the repository does not
+    `block` pre-existing failures, the e2e would not be reused on the current
+    tree, and the task has a baseline commit;
+  - no usable (non-`error`) `baseline_checks` row for the command
+    (`command_id`) exists at this commit yet, full or narrowed;
+  - the newest row (`created_at`) that says whether the command fails on a
+    baseline says it does. Such a row is a run of the whole command as it reads
+    now (`command_sha`), or a `failed` narrowed run, whose failing files fail
+    the whole suite too. A narrowed run that passed says nothing about the
+    rest, and `error` rows prove nothing. The warm-up keeps its own row, so
+    once the baseline passes again the next warm-up is the last. On
+    tenten-accounting-in (failed narrowed e2e rows from TASK-0014, suite fixed
+    on 09-26) that means one more warm-up, then none;
+  - it is expected to end within the head start: the typical time until the
+    e2e would start anyway. That is the sum, over the batches before the e2e's,
+    of each batch's longest check, using the median of the check's last 5
+    whole runs in the repository's last 40 tasks (passed or non-blocking, not
+    reused, not affected-only), timed as `{{check_costs}}` times them. A check
+    with no timing, one running only the affected tests, or one that will be
+    reused counts as 0. The expected duration of the warm-up is the newest
+    whole run's `duration_ms`. Without one, it is the newest narrowed row's
+    (worktree, install and those files) plus the e2e's own typical duration;
+    neither known means no warm-up. So a `[lint, e2e]` stage whose lint takes
+    seconds is never warmed.
+
+  It is an ordinary baseline run (same key and `inflight` dedup, lockfile
+  install through the tool policy, `node_modules` never linked in); event
+  `TEST_STARTED` with `data.baselineWarmup`, `data.expectedMs` and
+  `data.headStartMs`. Every e2e command of the stage waits for it to end before
+  starting, since a fixed port with `reuseExistingServer` would otherwise test
+  the baseline's server: summary "Waiting for the baseline check started with
+  this stage to finish (both may use the same port)", event
+  `data.waitingFor: 'baseline'`; a stop ends the wait. `classify` first awaits
+  an in-flight run of its own key, so a failure is classified from the warmed
+  result instead of starting a second run. When the stage ends before its e2e
+  ran (a real failure, a stop), the warm-up is cancelled unless another caller
+  waits on it: the command is killed, while an install already under way
+  finishes first; the `error` row it leaves is tried again later. A warm-up
+  that cannot start leaves the stage as it was. How often it fires on real
+  tasks has not been measured with this rule. The time breakdown still counts
+  its whole duration as "comparing failures with the baseline", although it
+  overlaps other checks.
 - **Waivers.** An operator directive with rule `waive_check` (the Answer and
   Add directive dialogs' **Don't gate this task on** checkboxes) removes those
   kinds from this task's tests stages and its completion gate; it wins over a
@@ -397,4 +464,4 @@ The final report's Tests line counts commands, not tests
 row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
 ([report.ts](../../apps/orchestrator/src/engine/report.ts)).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

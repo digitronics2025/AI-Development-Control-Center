@@ -484,11 +484,24 @@ export interface RepositoryDiscoveryReport {
   errors: Array<{ path: string; message: string }>;
 }
 
+export type RepositoryDownloadSkip = 'archived' | 'fork' | 'too-large' | 'folder-taken';
+
+/** New repositories downloaded from the watched GitHub accounts in one run. */
+export interface RepositoryDownloadReport {
+  accounts: string[];
+  downloaded: Array<{ id: string; name: string; path: string; remote: string }>;
+  /** Missing on this computer but left alone: `kind` for a short label, `reason` in full. */
+  skipped: Array<{ remote: string; kind: RepositoryDownloadSkip; reason: string }>;
+  errors: Array<{ subject: string; message: string }>;
+}
+
 export interface RepositoryAutomationRun {
   trigger: 'startup' | 'schedule' | 'manual';
   startedAt: Iso;
   finishedAt: Iso | null;
   discovery: RepositoryDiscoveryReport | null;
+  /** Null when no GitHub account is watched (or discovery is off). */
+  downloads: RepositoryDownloadReport | null;
   /** Count of repositories per outcome; null when sync did not run. */
   sync: Partial<Record<RepositorySyncOutcome, number>> | null;
 }
@@ -525,6 +538,12 @@ export interface Repository {
   status: RepositoryStatus;
   createdAt: Iso;
   updatedAt: Iso;
+}
+
+/** Creating always makes the local repository; the GitHub half can fail on its own and says so. */
+export interface NewRepositoryResult {
+  repository: Repository;
+  github: { ok: true; summary: string } | { ok: false; message: string } | null;
 }
 
 export interface ModelDescriptor {

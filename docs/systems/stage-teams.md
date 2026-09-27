@@ -297,9 +297,32 @@ consecutive commands that are marked, of kind lint/typecheck/test/build/e2e,
 and classified Level ≤2, non-production and not always-approve run together (at
 most 4, each with its own execution and test run, via `childControl`). The first
 real failure (after baseline and flaky classification) cancels the rest of the
-batch: their runs are `not_run`, "Stopped: <name> failed first". Repairs are
-serialised. Reuse, affected tests, baseline classification and the release
-tree proof are unchanged; everything unmarked runs one at a time, in order.
+batch: their runs are `not_run`, "Stopped: <name> failed first".
+
+No repair runs inside a batch: an `npm ci` would replace `node_modules` under
+the checks still running, and freeing a port could stop a sibling's server. A
+failure `tooling.plan` has a repair for (install, locked or not; free the
+task's port; back off) is not a failure of the batch and cancels nothing: the
+job returns `repair`, its run is `not_run` "Needs a repair (…): runs again
+alone once the rest of its batch is done" (event `TEST_STARTED`,
+`data.deferredRepair` = the strategy). When the batch is over, each such job,
+in order, is picked up again alone. It goes straight to the normal repair loop
+with the failure it had (no extra failing run first), unless that failure may
+be out of date: another job's repair has run since it failed (`repairsRun`
+against its `repairsBefore`; even a failed install changes `node_modules`), or
+`tooling.plan` no longer has a repair for it. Then it runs once more first,
+and that fresh result goes through the repair loop. So one install fixes
+several put-off jobs without a second install, and a job whose repair is no
+longer planned (an undeclared bin such as `run-p` once `node_modules` exists)
+is never failed on its stale output. A real failure there, or in the batch,
+leaves the rest `not_run` as above. A job that runs alone repairs exactly as
+before.
+
+Reuse, affected tests, baseline classification, flaky re-runs and the release
+tree proof are unchanged; everything unmarked runs one at a time, in order. The
+e2e baseline warm-up ([workflow-engine.md](workflow-engine.md#gates-that-tell-the-truth))
+runs beside the checks before the stage's first e2e, and every e2e check, in a
+batch or not, waits for it to end before it starts.
 
 ## Known limitations
 
@@ -349,4 +372,4 @@ task times are single runs, not a controlled comparison: they show the
 assessment and review stages taking less wall time than their summed agent
 time, not a general speed-up.
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

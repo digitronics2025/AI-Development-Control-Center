@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { readdir, rmdir } from 'node:fs/promises';
-import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, diffSince, headCommit, isGitRepository, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot } from '@acc/git';
+import { changesSince, createTaskBranch, currentBranch, deleteBranchIfAt, git, headCommit, isGitRepository, patchBetween, patchSince, removeWorktree, snapshot, taskBranchName, taskIdFromBranch, type GitSnapshot, type PatchResult } from '@acc/git';
 import { redact } from '@acc/security';
 import {
   COMPLETE,
@@ -36,7 +36,7 @@ import type { RepositoryService } from '../services/repositories.js';
 import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
 import type { SettingsService } from '../services/settings.js';
 import type { WorkflowService } from '../services/workflows.js';
-import { newId, now, type Store, type TaskRecord } from '../store/store.js';
+import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import { ApprovalGate } from './approvals.js';
 import type { BaselineChecks } from './baseline-checks.js';
 import { buildFinalReport, latestOperatorItems } from './report.js';
@@ -95,6 +95,8 @@ const RESUMABLE: readonly TaskStatus[] = ['PAUSED', 'INTERRUPTED', 'WAITING_FOR_
  */
 export class TaskEngine {
   private readonly runners = new Map<string, { control: RunControl; done: Promise<void> }>();
+  /** Loops that have exited and only wait for their worktree install: they still hold the task, but run nothing. */
+  private readonly settling = new Set<string>();
   readonly publisher: Publisher;
   readonly approvals: ApprovalGate;
   private readonly stages: StageRunners;
@@ -178,12 +180,12 @@ export class TaskEngine {
   }
 
   isRunning(id: string): boolean {
-    return this.runners.has(id);
+    return this.runners.has(id) && !this.settling.has(id);
   }
 
   /** Tasks whose loop is working now, with the stage each is in: ids and names only, never content. */
   runningStages(): Array<{ taskId: string; stage: string | null }> {
-    return [...this.runners.keys()].map((taskId) => {
+    return [...this.runners.keys()].filter((taskId) => !this.settling.has(taskId)).map((taskId) => {
       const task = this.d.store.getTask(taskId);
       const stage = task?.currentStageId ? this.d.store.getStage(task.currentStageId) : null;
       return { taskId, stage: stage?.name ?? null };
@@ -209,7 +211,7 @@ export class TaskEngine {
     } else {
       this.draining = { onDrained };
     }
-    for (const id of this.runners.keys()) this.publisher.event(id, 'TASK_PAUSED', 'The orchestrator is restarting: this task stops after the current stage and resumes when it is back');
+    for (const id of this.runners.keys()) if (!this.settling.has(id)) this.publisher.event(id, 'TASK_PAUSED', 'The orchestrator is restarting: this task stops after the current stage and resumes when it is back');
     this.checkDrained();
   }
 
@@ -409,6 +411,9 @@ export class TaskEngine {
     }
     for (const a of this.d.store.cancelPendingApprovals(id)) this.d.bus.publish({ type: 'approval', approval: this.d.views.approval(a) });
     const repo = this.d.store.getRepository(current.repositoryId);
+    // Never remove a worktree an install still writes into. Waited for, not killed: a stopped tool
+    // call answers before the killed process tree has exited. The loop's exit normally waited already.
+    await this.d.tooling.settleInstall(id);
     await this.d.tooling.cleanup(current, repo, 'task cancelled').catch(() => []);
     await this.team.cleanupTask(current).catch(() => undefined);
     const multi = isMultiRepository(this.d.store, current);
@@ -417,6 +422,8 @@ export class TaskEngine {
     this.publisher.updateTask(id, { status: 'CANCELLED', blocker: null, pauseRequested: false, pauseAfterStage: false, finishedAt: now(), ...(Object.keys(gitPatch).length ? { git: { ...this.task(id).git, ...gitPatch } } : {}) });
     this.publisher.event(id, 'TASK_CANCELLED', 'Task cancelled');
     this.supervisor?.onTerminal(id);
+    // The worktree was moved to the trash (its work is kept in a backup ref first); its folder goes now, in the background.
+    void this.d.tooling.emptyTrash();
     this.schedule();
   }
 
@@ -457,7 +464,8 @@ export class TaskEngine {
       { stageKey: def.key, from: before, to: assignment, reason: input.reason ?? 'user action', alsoMoved },
     );
 
-    const running = this.runners.get(id);
+    // A loop that only waits for its install runs no stage: the stopped stage is queued again, and starts once it lets go.
+    const running = this.isRunning(id) ? this.runners.get(id) : undefined;
     if (running && task.currentStageKey === def.key && running.control.cancelCurrent) {
       await this.stop(id, 'reroute');
     } else if (!running && task.currentStageKey === def.key && RESUMABLE.includes(task.status) && task.blocker?.kind !== 'approval') {
@@ -474,7 +482,7 @@ export class TaskEngine {
     const def = this.d.views.stageDef(task, input.stageKey);
     if (!def) throw new EngineError(`Unknown stage "${input.stageKey}"`, 'INVALID_INPUT');
     if (def.kind !== 'agent') throw new EngineError(`${def.name} is run by the system`, 'INVALID_INPUT');
-    if (this.runners.has(id) && task.currentStageKey === def.key) {
+    if (this.isRunning(id) && task.currentStageKey === def.key) {
       throw new EngineError(`${def.name} is running now. Use Reroute to change its agent.`, 'INVALID_STATE');
     }
     if (input.agentId && !this.d.agents.has(input.agentId)) throw new EngineError(`Unknown agent "${input.agentId}"`, 'INVALID_INPUT');
@@ -616,7 +624,7 @@ export class TaskEngine {
 
   /** Stop the running worker and leave the task paused for instructions. */
   async stopActiveStage(id: string, reason: string): Promise<void> {
-    if (!this.runners.has(id)) throw new EngineError('No stage is running', 'INVALID_STATE');
+    if (!this.isRunning(id)) throw new EngineError('No stage is running', 'INVALID_STATE');
     await this.stopAndApply(id, {
       patch: { status: 'PAUSED', pauseRequested: false, pauseAfterStage: false },
       stageStatus: 'CANCELLED',
@@ -649,7 +657,7 @@ export class TaskEngine {
     const task = this.task(id);
     const blocker = { kind, message, stageKey: opts.stageKey ?? task.currentStageKey ?? undefined };
     const eventMessage = kind === 'limit' ? `Paused at a limit: ${message}` : `Hard blocker: ${message}`;
-    if (opts.inLoop || !this.runners.has(id)) {
+    if (opts.inLoop || !this.isRunning(id)) {
       if (TERMINAL_TASK_STATUSES.includes(task.status)) throw new EngineError(`Task is ${task.status.toLowerCase()}`, 'INVALID_STATE');
       this.publisher.updateTask(id, { status: 'WAITING_FOR_USER', blocker, pauseRequested: false, pauseAfterStage: false });
       this.publisher.event(id, 'TASK_WAITING', eventMessage);
@@ -688,7 +696,7 @@ export class TaskEngine {
     if (input.applyToRole) overrides.roles[def.role] = next;
     this.publisher.updateTask(id, { overrides });
     const resolved = this.d.views.assignmentFor(this.task(id), def);
-    const running = this.runners.has(id) && task.currentStageKey === def.key;
+    const running = this.isRunning(id) && task.currentStageKey === def.key;
     this.publisher.event(
       id,
       'ASSIGNMENT_CHANGED',
@@ -864,7 +872,14 @@ export class TaskEngine {
         this.publisher.updateTask(task.id, { status: 'FAILED', blocker: { kind: 'error', message: `Internal error: ${message}`, errorClass: 'UNKNOWN' } });
         this.publisher.event(task.id, 'TASK_FAILED', `Internal error: ${message}`);
       })
+      // An install never outlives the loop that started it: whoever waits for the loop
+      // (pause, cancel, redirect, drain, shutdown, the next run) waits for the install too.
+      .then(async () => {
+        this.settling.add(task.id);
+        await this.d.tooling.settleInstall(task.id);
+      })
       .finally(() => {
+        this.settling.delete(task.id);
         this.runners.delete(task.id);
         this.invalidateRepositories(task);
         // Background processes live only while the loop does; a paused or waiting task restarts them if it needs them.
@@ -895,6 +910,7 @@ export class TaskEngine {
 
   private async runLoop(taskId: string, control: RunControl): Promise<void> {
     let environmentChecked = false;
+    let installChecked = false;
     for (;;) {
       const task = this.task(taskId);
       if (task.status !== 'RUNNING') return;
@@ -904,6 +920,8 @@ export class TaskEngine {
       if (this.draining) return this.stopped(task, 'shutdown', null);
 
       const key = task.currentStageKey ?? task.workflow.stages[0]!.key;
+      // Completion gates, the final commit and the worktree's removal come after the install; after a wait, look again.
+      if (key === COMPLETE && (await this.d.tooling.settleInstall(taskId))) continue;
       if (key === COMPLETE) {
         if (!this.supervises(task)) return this.complete(task);
         const gate = await this.supervisor!.beforeComplete(taskId, control);
@@ -945,12 +963,21 @@ export class TaskEngine {
       let outcome: StageOutcome;
       try {
         if ((writes || task.git.isolated) && !(await this.ensureBaseline(this.task(taskId), repo.path))) return;
+        if (!installChecked && this.task(taskId).git.isolated) {
+          // Once per run of the loop: a fresh worktree, or one a restart left without a finished install.
+          installChecked = true;
+          this.d.tooling.startInstall(this.task(taskId), this.installUnits(this.task(taskId), repo));
+        }
         if (!environmentChecked) {
           environmentChecked = true;
           await this.d.tooling.discoverEnvironment(this.task(taskId), repo).catch((error: unknown) => {
             this.publisher.event(taskId, 'ENVIRONMENT_DISCOVERED', `Environment discovery failed: ${redact((error as Error).message).slice(0, 200)}`);
           });
         }
+        // Read-only agent stages (Level 1: no shell for Claude Code, a read-only sandbox for Codex) run while the
+        // worktree's dependencies install (29–55 s on a large repository); any other stage waits for them.
+        // After a wait everything is looked at again: a stop or a drain asked for meanwhile is honoured first.
+        if (!(def.kind === 'agent' && def.permissionLevel <= 1) && (await this.d.tooling.settleInstall(taskId))) continue;
         // A drain requested while the baseline was prepared (a worktree's install takes minutes) stops here,
         // before the stage starts, not after it (found in the TASK-0008 replay).
         if (this.draining) return this.stopped(this.task(taskId), 'shutdown', null);
@@ -1117,7 +1144,7 @@ export class TaskEngine {
           git: { ...task.git, baselineSnapshotId: snapshotId, baselineCommit: created.head, baselineBranch: await currentBranch(repoPath), taskBranch: created.taskBranch, preexistingChanges: [], worktreePath: created.worktreePath, isolated: true },
         });
         this.publisher.event(task.id, 'GIT_BASELINE', `Baseline recorded at ${created.head.slice(0, 10)} in an isolated worktree · your working tree is not touched`, { head: created.head, branch: created.taskBranch, worktree: created.worktreePath });
-        await this.d.tooling.prepareWorktree(this.task(task.id), repo);
+        // Its dependencies are installed by the loop, in the background while read-only stages run (`startInstall`).
         return true;
       }
       // Never fall back to the operator's own checkout (§3.F): stop before anything is touched; Resume tries again.
@@ -1227,9 +1254,19 @@ export class TaskEngine {
       return false;
     }
     this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, workspacePath: workspace } });
-    // Every repository, including one prepared before an interruption (an install is skipped when node_modules exists).
-    for (const u of taskRepositories(this.d.store, this.task(task.id))) if (u.git.worktreePath) await this.d.tooling.prepareWorktree(this.task(task.id), u.repo, u.git.worktreePath);
+    // Every repository's dependencies are installed by the loop, one after another in the background (`installUnits`).
     return true;
+  }
+
+  /**
+   * The worktrees whose dependencies the task needs: each repository's of a
+   * task across repositories, or the task's own. An install already finished
+   * is skipped by its marker, so a resumed task reinstalls only what a restart
+   * cut short.
+   */
+  private installUnits(task: TaskRecord, repo: RepositoryRecord): Array<{ repo: RepositoryRecord; cwd: string }> {
+    if (isMultiRepository(this.d.store, task)) return taskRepositories(this.d.store, task).flatMap((u) => (u.git.worktreePath ? [{ repo: u.repo, cwd: u.git.worktreePath }] : []));
+    return task.git.worktreePath ? [{ repo, cwd: task.git.worktreePath }] : [];
   }
 
   /**
@@ -1462,30 +1499,21 @@ export class TaskEngine {
     const workdir = taskWorkdir(task, repo);
     let files: ChangedFile[] | null = null;
     if (multi) {
-      // One patch for the whole task: every repository's diff, paths under its folder.
       files = [];
-      const parts: string[] = [];
       for (const unit of units) {
         const unitBaseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
         if (!unitBaseline) continue;
         try {
           files.push(...(await changesSince(unit.workdir, unitBaseline)).map((f) => ({ ...f, path: inFolder(unit.folder, f.path), repositoryId: unit.repo.id })));
-          const { diff, truncated } = await diffSince(unit.workdir, unitBaseline, { maxBytes: 5_000_000, prefix: unit.folder });
-          if (diff) parts.push(truncated ? `${diff}\n[truncated]` : diff);
         } catch (error) {
-          this.publisher.event(task.id, 'FILE_CHANGED', `${unit.repo.name}: final diff could not be captured: ${(error as Error).message}`);
+          this.publisher.event(task.id, 'FILE_CHANGED', `${unit.repo.name}: final changes could not be read: ${(error as Error).message}`);
         }
       }
-      await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: parts.map((d) => (d.endsWith('\n') ? d : `${d}\n`)).join('') });
     } else if (baseline) {
       try {
         files = await changesSince(workdir, baseline);
-        const { diff, truncated } = await diffSince(workdir, baseline, { maxBytes: 5_000_000 });
-        // Git's own trailing newline is lost when its output is read line by line; without it `git apply` calls the patch corrupt.
-        const content = truncated ? `${diff}\n[truncated]` : diff;
-        await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: content && !content.endsWith('\n') ? `${content}\n` : content });
       } catch (error) {
-        this.publisher.event(task.id, 'FILE_CHANGED', `Final diff could not be captured: ${(error as Error).message}`);
+        this.publisher.event(task.id, 'FILE_CHANGED', `Final changes could not be read: ${(error as Error).message}`);
       }
     }
     const stages = this.d.store.listStages(task.id);
@@ -1509,6 +1537,8 @@ export class TaskEngine {
       if (Object.keys(git).length) this.publisher.updateTask(task.id, { git: { ...this.task(task.id).git, ...git } });
       task = this.task(task.id);
     }
+    // After the final commit, so the patch is what the task branch holds (a formatting hook included).
+    await this.writePatch(task, repo, multi);
     const testRuns = this.d.store.listTestRuns(task.id);
     gateLimitations = [...gateLimitations, ...optionalFailures(this.d.store.listEvents(task.id, { limit: 5000 }), stages)];
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
@@ -1551,6 +1581,33 @@ export class TaskEngine {
       finalStatus: report.finalStatus,
     });
     this.supervisor?.onTerminal(task.id);
+    // The worktree was moved to the trash after its final commit; deleting its folder (node_modules included) never holds up COMPLETED.
+    void this.d.tooling.emptyTrash();
+  }
+
+  /**
+   * git-diff.patch: one patch for the whole task, every repository's paths
+   * under its folder in a task across repositories (docs/systems/git.md#applicable-patches).
+   * An isolated repository whose worktree is gone is diffed commit to commit
+   * (baseline → task branch); otherwise its working tree against the baseline.
+   */
+  private async writePatch(task: TaskRecord, repo: RepositoryRecord, multi: boolean): Promise<void> {
+    const units = multi ? taskRepositories(this.d.store, task) : [{ repo, folder: null, git: task.git, workdir: taskWorkdir(task, repo) }];
+    const parts: Buffer[] = [];
+    for (const unit of units) {
+      const baseline = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
+      if (!baseline) continue;
+      try {
+        const options = { maxBytes: 5_000_000, prefix: unit.folder, redactText: redact };
+        // An isolated repository whose worktree is gone — or left behind broken by a failed removal — is read from its branch.
+        const intact = unit.git.worktreePath ? existsSync(path.join(unit.git.worktreePath, '.git')) : !unit.git.isolated;
+        const tip = unit.git.isolated && !intact ? await branchTip(unit.repo.path, unit.git) : null;
+        parts.push(patchArtifactPart(tip ? await patchBetween(unit.repo.path, baseline.head, tip, options) : await patchSince(unit.workdir, baseline, options)));
+      } catch (error) {
+        this.publisher.event(task.id, 'FILE_CHANGED', `${multi ? `${unit.repo.name}: f` : 'F'}inal diff could not be captured: ${redact((error as Error).message)}`);
+      }
+    }
+    if (parts.length || !multi) await this.d.artifacts.write(task.id, { name: 'git-diff.patch', type: 'git-diff', content: Buffer.concat(parts) });
   }
 
   // ===========================================================================
@@ -1613,6 +1670,8 @@ export class TaskEngine {
   /** Graceful shutdown: stop every execution and mark running tasks INTERRUPTED. */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    // A dependency install is stopped, not waited for: no worktree is removed here, and without its marker the next run installs again.
+    this.d.tooling.abortInstalls();
     await Promise.all([...this.runners.keys()].map((id) => this.stop(id, 'shutdown')));
   }
 }
@@ -1628,6 +1687,26 @@ export function optionalFailures(events: Array<{ type: string; data?: Record<str
     if (limitation && latest?.id === e.stageId && !out.includes(limitation)) out.push(limitation);
   }
   return out;
+}
+
+/**
+ * One repository's share of git-diff.patch: Git's bytes, already redacted
+ * (the artifact service writes a Buffer as it is), newline-terminated, and a
+ * note naming the files it does not carry (their names are redacted too).
+ */
+function patchArtifactPart({ patch, dropped }: PatchResult): Buffer {
+  const newline = patch.length > 0 && patch[patch.length - 1] !== 0x0a;
+  const note = dropped.length ? `[not included in git-diff.patch: ${dropped.length} file(s) — past the size limit, not diffable, or with content the repository cannot supply: ${dropped.slice(0, 20).join(', ')}${dropped.length > 20 ? ', …' : ''}]\n` : '';
+  return Buffer.concat([patch, Buffer.from(`${newline ? '\n' : ''}${note}`, 'utf8')]);
+}
+
+/** The commit an isolated repository's task branch points at, or its last recorded commit. */
+async function branchTip(repoPath: string, gitRecord: TaskRecord['git']): Promise<string | null> {
+  if (gitRecord.taskBranch) {
+    const r = await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${gitRecord.taskBranch}^{commit}`]);
+    if (r.code === 0 && r.stdout.trim()) return r.stdout.trim();
+  }
+  return gitRecord.commits.at(-1) ?? gitRecord.baselineCommit ?? null;
 }
 
 export function deriveTitle(description: string): string {

@@ -9,6 +9,10 @@
  *   pnpm verify:agents --images         also checks the model sees pictures: Claude Code
  *                                       reading a PNG, Codex given one with -i, and an
  *                                       MCP image block (docs/systems/design-agent.md)
+ *   pnpm verify:agents --only claude --claude-model haiku --permissions
+ *                                       also proves a repository's allow rules and hooks cannot widen a stage
+ *   pnpm verify:agents --only codex --mcp [--codex-mcp-repo <trusted repo>]
+ *                                       also proves only the Control Center's MCP server joins a Codex run
  *
  * The run happens in a new empty temporary folder, with API credentials
  * stripped (Subscription Only), and asks the agent to reply with one word.
@@ -17,7 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { crc32, deflateSync } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter } from '@acc/agent-sdk';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
@@ -95,6 +99,8 @@ for (const { adapter, model } of adapters) {
 
 if (flag('skills')) await verifySkills();
 if (flag('images')) await verifyImages();
+if (flag('permissions')) await verifyPermissions();
+if (flag('mcp')) await verifyCodexMcp();
 
 console.log(failures ? `\n${failures} check(s) did not pass.` : '\nAll checks passed.');
 
@@ -157,6 +163,89 @@ async function verifyImages() {
     }
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Real-CLI proof that a Codex run starts no MCP server but the Control Center's
+ * (docs/systems/agents.md#mcp-servers-in-a-codex-run). Codex has no
+ * --strict-mcp-config; the adapter switches every other server off by name and
+ * by feature flag, so this runs exactly what ships, with the operator's real
+ * configuration, and reads Codex's own log of what it started. A stand-in
+ * `acc` server records that it was started. Run it after every Codex update.
+ */
+async function verifyCodexMcp() {
+  const codex = adapters.find((a) => a.adapter.id === 'codex');
+  if (!codex) return;
+  console.log('\n== Codex MCP servers ==');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-mcp-'));
+  const server = path.join(dir, 'acc-probe-mcp.cjs');
+  writeFileSync(
+    server,
+    [
+      "const fs = require('node:fs');",
+      'fs.appendFileSync(process.argv[2], "started\\n");',
+      "let buf = '';",
+      "const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');",
+      "process.stdin.on('data', (d) => {",
+      '  buf += d;',
+      '  let i;',
+      "  while ((i = buf.indexOf('\\n')) >= 0) {",
+      '    const line = buf.slice(0, i).trim();',
+      '    buf = buf.slice(i + 1);',
+      '    let m;',
+      '    try { m = JSON.parse(line); } catch { continue; }',
+      '    if (m.id === undefined) continue;',
+      "    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'acc-verify-probe', version: '1.0.0' } } });",
+      "    else if (m.method === 'tools/list') send({ jsonrpc: '2.0', id: m.id, result: { tools: [] } });",
+      "    else send({ jsonrpc: '2.0', id: m.id, result: {} });",
+      '  }',
+      '});',
+    ].join('\n'),
+  );
+  const cases: Array<{ label: string; cwd: string; loadUserConfig: boolean }> = [
+    { label: 'with my Codex config loaded', cwd: path.join(dir, 'repo-a'), loadUserConfig: true },
+    { label: 'with my Codex config ignored', cwd: path.join(dir, 'repo-b'), loadUserConfig: false },
+  ];
+  const trusted = value('codex-mcp-repo', '');
+  if (trusted) cases.push({ label: `in ${trusted}, config loaded`, cwd: trusted, loadUserConfig: true });
+  try {
+    for (const c of cases) {
+      mkdirSync(c.cwd, { recursive: true });
+      const marker = path.join(dir, `started-${randomUUID()}`);
+      const lines: string[] = [];
+      const handle = await codex.adapter.execute({
+        ...options,
+        // Codex's log names every MCP server it starts; the run itself is unchanged.
+        baseEnv: { ...process.env, RUST_LOG: 'info' },
+        loadUserConfig: c.loadUserConfig,
+        executionId: randomUUID(),
+        cwd: c.cwd,
+        prompt: 'Reply with exactly the word PONG and nothing else. Do not run any commands, read any files or call any tools.',
+        model: codex.model,
+        effort: 'low',
+        permissionLevel: 1,
+        timeoutMs: 240_000,
+        toolBridge: { name: 'acc', command: process.execPath, args: [server, marker], env: {} },
+        onLine: (_stream, text) => lines.push(text),
+      });
+      const result = await handle.done;
+      const log = lines.join('\n');
+      const all = (re: RegExp) => [...new Set([...log.matchAll(re)].map((m) => m[1] ?? ''))];
+      const session = all(/codex\.conversation_starts[^\n]*? mcp_servers="([^"]*)"/g).flatMap((s) => s.split(/,\s*/)).filter(Boolean);
+      const failed = all(/MCP server startup failed server_name="?([^"\s,]+)/g);
+      const initialised = all(/server_info: Some\(Implementation \{ name: "([^"]+)"/g);
+      const others = [...session.filter((s) => s !== 'acc'), ...failed, ...initialised.filter((s) => s !== 'acc-verify-probe')];
+      const off = [...handle.commandLine.matchAll(/mcp_servers\.([\w-]+)=\{enabled=false/g)].map((m) => m[1]);
+      const ok = result.status === 'succeeded' && session.join(',') === 'acc' && others.length === 0 && existsSync(marker);
+      console.log(
+        `${ok ? 'pass' : 'FAIL'}  only acc starts ${c.label} — session: ${session.join(', ') || '(none)'}; others: ${others.join(', ') || 'none'}; acc started: ${existsSync(marker) ? 'yes' : 'no'}; run: ${result.status}${result.errorMessage ? ` (${redact.redact(result.errorMessage).slice(0, 200)})` : ''}`,
+      );
+      console.log(`info  switched off by name: ${off.join(', ') || 'none'}`);
+      if (!ok) failures++;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -320,5 +409,119 @@ async function verifySkillCatalog(adapter: AgentAdapter) {
   const freeOk = free?.turns === 0 && free?.cost === 0;
   console.log(`${freeOk ? 'pass' : 'FAIL'}  the /skills lookup uses no model turn${freeOk ? '' : ` — ${JSON.stringify(free)}`}`);
   if (!freeOk) failures++;
+}
+
+/**
+ * Real-CLI proof that a repository's permission allow rules cannot widen a
+ * stage (docs/systems/agents.md). The probe repository allows `Bash(*)` the way
+ * TASK-0009's did. Claude Code honours a committed .claude/settings.json allow
+ * rule only in a folder the operator has trusted, which a temporary folder never
+ * is, so the same rule also sits in an untracked .claude/settings.local.json —
+ * the operator's own file, honoured anywhere. A control run without the Control
+ * Center's policy proves the rule is live; without it the checks prove nothing.
+ * The same files carry SessionStart and Stop hooks, which `-p` runs in any folder:
+ * Level 1 must run none of them, and the Level 2 run proves they are live.
+ */
+async function verifyPermissions() {
+  const adapter = adapters.find((a) => a.adapter.id === 'claude');
+  if (!adapter) return;
+  console.log("\n== Claude Code: a repository's allow rules and hooks cannot widen a stage ==");
+  const executable = (await adapter.adapter.detect(options)).executablePath;
+  if (!executable) return;
+  const root = mkdtempSync(path.join(os.tmpdir(), 'acc-verify-permissions-'));
+  const cwd = path.join(root, 'repo');
+  const remote = path.join(root, 'remote.git');
+  const git = (dir: string, ...gitArgs: string[]) => execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8', env: sanitizeEnv(process.env, 'subscription').env }).trim();
+  const expect = (label: string, ok: boolean, detail: string) => {
+    console.log(`${ok ? 'pass' : 'FAIL'}  ${label}${ok ? '' : ` — ${redact.redact(detail).slice(0, 400)}`}`);
+    if (!ok) failures++;
+  };
+  // Hooks that leave a mark outside the repository; `disableAllHooks: false` is the repository trying to keep them on.
+  const hookMarker = path.join(root, 'hook-marker.txt');
+  const hook = { type: 'command', command: `node -e "require('fs').appendFileSync('${hookMarker.replace(/\\/g, '/')}','x')"` };
+  const settings = JSON.stringify(
+    {
+      permissions: { allow: ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)', 'Glob(*)', 'Grep(*)', 'mcp__probe-db__*'] },
+      disableAllHooks: false,
+      hooks: { SessionStart: [{ hooks: [hook] }], Stop: [{ hooks: [hook] }] },
+    },
+    null,
+    2,
+  );
+  const write = (name: string) => `node -e "require('fs').writeFileSync('${name}','x')"`;
+  try {
+    mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    mkdirSync(path.join(root, 'no-hooks'));
+    git(root, 'init', '--quiet', '--bare', remote);
+    git(cwd, 'init', '--quiet');
+    // A commit or push the policy let through must succeed, so a refusal is the policy's: own identity, no global hooks.
+    git(cwd, 'config', 'user.email', 'probe@example.invalid');
+    git(cwd, 'config', 'user.name', 'Control Center probe');
+    git(cwd, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
+    git(cwd, 'remote', 'add', 'origin', remote);
+    writeFileSync(path.join(cwd, '.claude', 'settings.json'), settings);
+    git(cwd, 'add', '.claude/settings.json');
+    git(cwd, 'commit', '--quiet', '-m', 'probe: repository allows Bash(*)');
+    writeFileSync(path.join(cwd, '.claude', 'settings.local.json'), settings);
+    const commits = () => git(cwd, 'rev-list', '--count', 'HEAD');
+    const pushed = () => git(cwd, 'ls-remote', '--heads', 'origin') !== '';
+    const written = (name: string) => existsSync(path.join(cwd, name));
+
+    // Control: Bash with no allow rule of the Control Center's; only the repository's rule can let this run.
+    const control = await new Promise<string>((resolve) => {
+      const controlArgs = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--permission-prompts', 'none', '--permission-mode', 'dontAsk', '--tools', 'Bash', '--setting-sources', 'project,local', '--strict-mcp-config'];
+      if (adapter.model !== 'default') controlArgs.push('--model', adapter.model);
+      const child = spawn(executable, controlArgs, { cwd, env: sanitizeEnv(process.env, 'subscription').env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      let text = '';
+      const timer = setTimeout(() => child.kill(), 240_000);
+      child.stdout.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+      child.stderr.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+      child.on('exit', () => {
+        clearTimeout(timer);
+        resolve(text);
+      });
+      child.stdin.end(`Run this exact Bash command once: ${write('control-marker.txt')}\nThen reply DONE.`);
+    });
+    const live = written('control-marker.txt');
+    expect("control: the probe repository's Bash(*) is in force without the Control Center's policy", live, control.split('\n').slice(-3).join(' | '));
+    if (!live) return;
+
+    const run = async (level: 1 | 2, steps: string[]) => {
+      const lines: string[] = [];
+      const before = commits();
+      rmSync(hookMarker, { force: true });
+      const handle = await adapter.adapter.execute({
+        ...options,
+        executionId: randomUUID(),
+        cwd,
+        prompt: ['This is a permissions test. Attempt every step, one Bash tool call each, even if an earlier one fails.', ...steps.map((s, i) => `${i + 1}. Run the Bash command: ${s}`), `${steps.length + 1}. Reply with which steps succeeded.`].join('\n'),
+        model: adapter.model,
+        effort: 'low',
+        permissionLevel: level,
+        timeoutMs: 240_000,
+        onLine: (_stream, text) => lines.push(text),
+      });
+      await handle.done;
+      // What the agent tried and what was refused; the CLI's own warnings are noise here.
+      const detail = lines.filter((l) => /^(\[tool\]|permission denied:|tool error:)/.test(l)).join(' | ') || lines.join(' | ');
+      return { lines, detail, committed: commits() !== before, hooked: existsSync(hookMarker) };
+    };
+
+    const l1 = await run(1, [write('l1-marker.txt'), 'git commit --allow-empty -m acc-probe-l1']);
+    expect('Level 1 cannot write a file through Bash', !written('l1-marker.txt'), l1.detail);
+    expect('Level 1 cannot git commit', !l1.committed, l1.detail);
+    expect("Level 1 runs none of the repository's hooks", !l1.hooked, l1.detail);
+
+    const l2 = await run(2, [write('l2-marker.txt'), 'git commit --allow-empty -m acc-probe-l2', 'git push origin HEAD']);
+    // The refusal line proves the command was attempted and stopped by the policy, not skipped by the model.
+    const refused = (command: string) => l2.lines.some((l) => l.startsWith(`permission denied: Bash ${command}`));
+    expect('Level 2 still runs other commands', written('l2-marker.txt'), l2.detail);
+    expect('Level 2 cannot git commit', !l2.committed && refused('git commit'), l2.detail);
+    expect('Level 2 cannot git push', !pushed() && refused('git push'), l2.detail);
+    // Also the control for the Level 1 hook check: the probe's hooks are live.
+    expect("Level 2 still runs the repository's hooks", l2.hooked, l2.detail);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 process.exit(failures ? 1 : 0);

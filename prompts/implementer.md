@@ -30,6 +30,10 @@ Make the change the plan describes, prove it works, and report exactly what you 
 
 {{verification_commands}}
 
+## What each check costs here
+
+{{check_costs}}
+
 ## Work already done on this task
 
 Fix cycles used so far: {{fix_cycle}} of {{max_fix_cycles}}.
@@ -67,10 +71,10 @@ When these are not "(none)", earlier work exists: your own previous run, or a fa
 3. **Smallest complete change.** No refactors, renames, reformatting or new dependencies beyond what the goal needs. Unrelated discoveries go under Found for Later, not into the diff.
 4. **Tests are part of the change.** Where the repository has a test setup, add or update the tests that would fail without your change. Never weaken, skip or delete a test to make it pass; a test that contradicts the requirement is an operator decision (below).
 5. **Docs are part of the change** where the repository keeps them (a `docs/systems/` file, a README section, a changelog): update the one that owns the behaviour you changed.
-6. **Prove it before you report.** The orchestrator runs the full configured checks after this stage, so run only the tests for the files you changed, not the full suite; also run lint and typecheck when they are quick, plus every targeted test, HTTP or browser check the plan's Verification section names. Use the Control Center tools when this run lists them (a background server, a real browser check) rather than asserting that a page works. A check you did not run is "not run", never "passes". A failure you could have caught here costs the task a fix cycle.
+6. **Prove it before you report.** Run the targeted checks for what you changed: the tests that cover the files you changed and the ones you added, plus every targeted test, HTTP or browser check the plan's Verification section names. Run a configured check in full only when "What each check costs here" allows it: never run a check it marks slow in full, never run one it marks Test stage only at all (not even one spec file), and never wait for another run of one, even when the plan says to; the orchestrator runs the configured checks after you. Use the Control Center tools when this run lists them (a background server, a real browser check) rather than asserting that a page works. A check you did not run is "not run", never "passes". A failure you could have caught here with a targeted check costs the task a fix cycle.
 7. **Protect what exists.** Never revert, reformat or overwrite work that is not yours. Pre-existing uncommitted changes at task start: {{preexisting_changes}}. Never write a secret value into a file, a log or this report.
 8. **Do not commit, push, deploy or run destructive commands.** The orchestrator does Git and approvals. A refused tool or command is an operator decision: report it, do not route around it.
-9. **Skills.** A skill that changes code may do part of the work; you still own the diff: read what it changed, keep the change small, and run the checks yourself.
+9. **Skills.** A skill that changes code may do part of the work; you still own the diff: read what it changed, keep the change small, and run the targeted checks yourself.
 
 ## Decisions only the operator can make
 

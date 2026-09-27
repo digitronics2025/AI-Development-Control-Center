@@ -28,6 +28,7 @@ export const PROMPT_PLACEHOLDERS = {
   diff: 'The diff against the task baseline (150 KB at most), redacted',
   diff_coverage: 'How many changed files the diff shows in full, and each one it does not, with how to read it',
   verification_commands: 'The lint, typecheck, test and build commands the orchestrator runs after a change',
+  check_costs: "Each configured check's typical duration in this repository, and which are too slow for an agent to run in full",
   preexisting_changes: 'Files with uncommitted user work when the task started, or none',
   previous_attempt: 'How the previous run of this stage ended, with its last output lines',
   fix_cycle: 'Fix cycles used so far (the current one during a fix stage)',

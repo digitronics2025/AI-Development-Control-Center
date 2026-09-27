@@ -44,6 +44,7 @@ means restoring the pre-release `acc.db` backup together with the matching build
 | `auth-token` | Local API token (created once, mode 600) |
 | `runtime.json` | `{url, port, pid}` while running; removed on clean shutdown. Used by the extension and launchers |
 | `tasks/TASK-NNNN/` | Artifacts (`request.md`, `plan.md`, `review.md`, `final-report.md`, `git-diff.patch`, `task.json`, attachments). Outside the repository so they never appear in its diff |
+| `trash/` | Finished task worktrees waiting for deletion: renamed here at completion or cancel, after their work was committed to the task branch or kept in a backup ref, then deleted in the background (`EngineTooling.emptyTrash`, [checkpoints.md](checkpoints.md#worktrees)). Emptied again at every start. Only this folder is swept, and only while it is a plain folder: were `trash` itself a link (a junction on Windows) it is neither moved into nor emptied — checked before the sweep and before each entry — and finished worktrees are removed in place. `fs.rm` removes a link inside it without following it |
 
 ## Tables
 
@@ -156,7 +157,8 @@ on a newer database) are left alone.
 `main.ts` runs `services.recover()` (tool executions left running are marked
 stopped, leftover terminals exited, leftover task processes — and agent or
 command processes of executions still marked running — killed only if still
-the same process (creation time within 15 s); then engine reconciliation, then the Chairman resumes
+the same process (creation time within 15 s); then engine reconciliation, the baseline-check and
+Stage Team sweeps, and — in the background — emptying `<data>/trash`; then the Chairman resumes
 interrupted supervised tasks and answers pending chat, the learning loop and
 phone alerts start — alerts send what a restart left unsent in the last hour,
 [operations.md](operations.md#phone-alerts) — and `close()` stops alerts
@@ -190,4 +192,4 @@ listener stays on loopback. Details: [remote-node.md](remote-node.md).
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

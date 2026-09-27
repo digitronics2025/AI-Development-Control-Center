@@ -33,7 +33,9 @@ The token and URL travel only in the agent's environment
 - Codex: `-c mcp_servers.acc.command=…`, `args=…`, and
   `env_vars=["ACC_TOOL_URL","ACC_TOOL_SESSION"]` to forward them.
 
-The prompt gains a "Control Center tools" section. Tool names are the
+The prompt gains a "Control Center tools" section (at Level 1 it also says to read Git
+through `git__status`/`git__diff`/`git__log`/`git__show`: Claude Code has no shell there,
+[agents.md](agents.md)). Tool names are the
 capability id with `.` → `__` (`network__port_owner`); two meta tools,
 `acc_find_capability` and `acc_call_capability`, reach capabilities that are
 not listed (escalation, [autopilot.md](autopilot.md)).
@@ -41,7 +43,15 @@ not listed (escalation, [autopilot.md](autopilot.md)).
 **Personal MCP servers are never loaded into agent runs.** Claude Code
 always gets `--strict-mcp-config`, so servers from the operator's own or
 plugin config do not start in a run; their tools would bypass the policy
-above. To give agents an outside server, register it in the gateway below
+above. Codex has no such flag: the adapter asks Codex which servers it would
+load in the run's folder (`codex mcp list --json`), switches each off by name,
+and turns off the features that add servers on their own — ChatGPT apps,
+plugins (including plugins installed on the ChatGPT account, which load even
+with `--ignore-user-config`) and skill-requested installs. If it cannot tell,
+the run is refused. Measured layers and the real-run check
+(`pnpm verify:agents --only codex --mcp`):
+[agents.md](agents.md#mcp-servers-in-a-codex-run).
+To give agents an outside server, register it in the gateway below
 (Tools → MCP servers); agents reach it through `acc_call_capability`.
 
 **Your own MCP client.** `node apps/orchestrator/dist/acc-mcp.js --repository <path> [--profile web-development]`
@@ -137,4 +147,4 @@ answers refused), a tool call with the tokens, silent refresh, the stop when
 refresh fails, sign-out, and that no token is in any response or in the
 database file.
 
-Last verified: 2026-09-24
+Last verified: 2026-09-27

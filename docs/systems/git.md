@@ -81,6 +81,50 @@ shown in full, including ones that never reached the collected diff
 (`withoutPartialTail` drops a chunk cut short when the raw diff hit its bound).
 `diffSince` now bounds git's output while it is read (`maxOutputBytes`).
 
+## Applicable patches
+
+`diffSince` is text for prompts and the dashboard: `git()` reads output line
+by line, which drops each `\r` before `\n`. [patch.ts](../../packages/git/src/patch.ts)
+builds the task's `git-diff.patch` ([workflow-engine.md](workflow-engine.md)),
+a patch `git apply` takes back, with nothing unredacted written to disk:
+
+- `patchSince(cwd, baseline, { prefix?, maxBytes, redactText? })` diffs a
+  working tree against the baseline: tracked changes, then each untracked file
+  (`--no-index` against `NUL`/`/dev/null`; exit 1 means "differs"; a path Git
+  cannot diff, such as a nested repository, is named in `dropped`).
+  `patchBetween(cwd, from, to, …)` diffs two commit ids (an isolated task's
+  baseline and its branch tip) and refuses anything else.
+- Git's stdout is read as bytes by a spawned `git`, never through the line
+  reader, so a change to a CRLF-committed file keeps its `\r`. The read is
+  bounded at 4 × `maxBytes`; stopping it (the bound or a timeout) kills the
+  whole process tree, since on Windows the `git` on PATH is a launcher.
+- The user's diff settings are pinned: `--no-color --no-ext-diff
+  --no-textconv --full-index -U3 --submodule=short --ignore-submodules=dirty`,
+  explicit `a/`/`b/` prefixes (or `a/<folder>/` with `--no-renames`, since Git
+  writes rename lines without the folder), `GIT_DIFF_OPTS` and
+  `GIT_EXTERNAL_DIFF` emptied.
+- A section that is not plain UTF-8 text (a NUL, or invalid UTF-8) — a binary
+  file, one a repository's `diff` attribute prints as text, a non-UTF-8 text
+  file — keeps its header and full `index` ids and says only "Binary files …
+  differ", like Git's own binary sections. No binary byte is carried; `git
+  apply` takes the content from the repository. `patchSince` stores exactly
+  those files (regular files only — never a link's target — up to 100 MB) with
+  `git hash-object -w` (no ref, index or file change), then checks every id
+  resolves (`cat-file --batch-check`); a file whose content the repository
+  still cannot supply is moved to `dropped`, so it cannot break the rest.
+- With `redactText` (the artifact mode) a section is withheld — replaced by one
+  `[withheld from git-diff.patch: <path> held secret-shaped content]` line —
+  when its text would be redacted, when it shows a `PRIVATE KEY-----` marker
+  (context lines of a key too), when `sensitiveFileReason` marks its path
+  (`.env`, `*.pem`, `id_rsa`, …), or when a binary/stubbed file's content, read
+  as UTF-8, Latin-1, UTF-16 LE/BE and with NULs removed, holds something the
+  redactor would change. The rest still applies, and no object id of a
+  withheld file remains (so a guessed secret cannot be confirmed against it).
+  Every name in a note or in `dropped` is redacted too.
+- Bounded by `maxBytes`, whole sections only (notes always kept): later files
+  are named in `dropped`, never cut; after an overflow every changed path the
+  read never reached is named as well.
+
 ## Worktrees
 
 [worktrees.ts](../../packages/git/src/worktrees.ts): `addWorktree`,
@@ -117,4 +161,4 @@ so background fetches fail instead of opening a credential window.
 
 [team.ts](../../packages/git/src/team.ts): `createWaveBase` (a normalised commit of the task's files — what `git add -A` would record, parent = task HEAD — plus the byte-exact tree, under `refs/acc/team/`), `addChildWorktree` (detached, the repository's own line-ending settings, so a child's `git status` starts clean), `captureResult` (the worker's result, normalised the same way), `changedPathsBetween` (renames as D+A), `combineResults` (private index, refuses two units on one path, refs only under `refs/acc/team/`), `applyIfUnchanged` (compares byte-exact with byte-exact, then writes only the changed paths with line-ending conversion on; deletions delete, binary files byte-exact), `treeOf`. Used by [stage-teams.md](stage-teams.md).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-27

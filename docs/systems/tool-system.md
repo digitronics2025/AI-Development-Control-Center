@@ -205,4 +205,8 @@ credential, checkpoint and session routes in their own docs. Realtime:
 - `node-pty`, `playwright-core`, `better-sqlite3` and `axe-core` stay external
   to the orchestrator bundle and must be dependencies of `@acc/orchestrator`.
 
-Last verified: 2026-09-26
+## Folder detections after an install
+
+Tools detected in a folder are cached 10 minutes; when a worktree's background dependency install ends, `ToolService.forgetFolder(cwd)` drops that folder's entries, so a tool (a local Wrangler) found missing during the install is found afterwards ([checkpoints.md](checkpoints.md)).
+
+Last verified: 2026-09-27

@@ -575,6 +575,15 @@ export class ToolService {
   }
 
   /**
+   * Forget what was detected in a folder: its dependencies were just
+   * installed (a worktree installed beside read-only stages), so a tool found
+   * missing a moment ago may be there now.
+   */
+  forgetFolder(cwd: string): void {
+    for (const key of [...this.folderDetections.keys()]) if (key.endsWith(`|${cwd}`)) this.folderDetections.delete(key);
+  }
+
+  /**
    * A provider detected in one folder rather than on PATH alone: the global
    * health check runs without a folder, so it cannot see project-local
    * binaries. Cached briefly per provider and folder.

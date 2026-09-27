@@ -43,6 +43,8 @@ const RULES: Array<{ errorClass: ErrorClass; patterns: RegExp[] }> = [
       /requires a newer version/i,
       // A CLI older than the flags the adapter passes: same remedy, update the CLI (Open Agents).
       /^error: unknown option '--/im,
+      /^error: unexpected argument '--[^']*' found/im,
+      /unknown feature flag/i,
       /unknown model/i,
       /invalid model/i,
       /no such model/i,

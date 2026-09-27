@@ -1,9 +1,10 @@
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudDownload, CloudOff, FolderGit2, FolderOpen, GitFork, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudDownload, CloudOff, FolderGit2, FolderOpen, FolderPlus, GitFork, Globe, Lock, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
   Badge,
   Button,
+  Checkbox,
   DataTable,
   Dialog,
   EmptyState,
@@ -18,7 +19,7 @@ import {
   type Column,
   type SegmentOption,
 } from '@acc/ui';
-import { parseCloneUrl, type Repository, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
+import { isCloneFolderName, parseCloneUrl, type Repository, type RepositoryDownloadSkip, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useCloneDefaults, useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
@@ -59,20 +60,32 @@ export function RemoteState({ repo, sync }: { repo: Repository; sync?: Repositor
   return <StatusChip size="compact" visual={{ label: 'Up to date', tone: 'success', icon: CheckCircle2 }} />;
 }
 
+const SKIP_LABEL: Record<RepositoryDownloadSkip, string> = {
+  archived: 'archived',
+  fork: 'a fork',
+  'too-large': 'too large',
+  'folder-taken': 'a folder with that name is already used',
+};
+
 /** The one quiet line above the list: what automation does and what its last run changed. */
 function AutomationSummary({ status, settings }: { status: RepositoryAutomationStatus | undefined; settings: Settings | undefined }) {
   if (!settings || !status) return null;
-  const { discover, sync, intervalMinutes } = settings.repositoryAutomation;
+  const { discover, sync, intervalMinutes, githubAccounts } = settings.repositoryAutomation;
   const settingsLink = (
     <Link to="/settings/repositories" className="text-fg underline">
       Settings → Repositories
     </Link>
   );
   if (!discover && !sync) return <p className="text-small text-fg-secondary">Automatic updates are off. Turn them on in {settingsLink}.</p>;
-  const what = [discover ? 'new repositories are added' : null, sync ? 'new commits are downloaded' : null].filter(Boolean).join(' and ');
+  const fromGitHub = discover && githubAccounts.length ? ` (also downloaded from GitHub: ${githubAccounts.join(', ')})` : '';
+  const what = [discover ? `new repositories are added${fromGitHub}` : null, sync ? 'new commits are downloaded' : null].filter(Boolean).join(' and ');
   const run = status.lastRun;
   const changes: string[] = [];
   if (run?.discovery?.added.length) changes.push(plural(run.discovery.added.length, 'new repository', 'new repositories'));
+  if (run?.downloads?.downloaded.length) changes.push(`downloaded ${run.downloads.downloaded.map((d) => d.name).join(', ')} from GitHub`);
+  // Named with a short label (the full reason is in the run report), so a skipped repository is never a mystery.
+  if (run?.downloads?.skipped.length) changes.push(`not downloaded from GitHub: ${run.downloads.skipped.map((s) => `${s.remote.replace(/^github\.com\//, '')} (${SKIP_LABEL[s.kind]})`).join('; ')}`);
+  if (run?.downloads?.errors.length) changes.push(`GitHub could not be checked for ${run.downloads.errors.map((e) => e.subject).join(', ')}`);
   if (run?.sync?.['fast-forwarded']) changes.push(`${plural(run.sync['fast-forwarded'], 'repository', 'repositories')} updated`);
   if (run?.sync?.failed) changes.push(`${plural(run.sync.failed, 'repository', 'repositories')} could not be reached`);
   if (run?.sync?.['remote-gone']) changes.push(`${plural(run.sync['remote-gone'], 'repository', 'repositories')} whose online copy was deleted`);
@@ -92,12 +105,26 @@ function AutomationSummary({ status, settings }: { status: RepositoryAutomationS
   );
 }
 
-type AddSource = 'local' | 'online';
+type AddSource = 'local' | 'online' | 'new';
 
 const ADD_SOURCES: SegmentOption<AddSource>[] = [
-  { value: 'local', label: 'Folder on this computer', icon: FolderOpen },
-  { value: 'online', label: 'Download from GitHub', icon: CloudDownload },
+  { value: 'local', label: 'On this computer', icon: FolderOpen },
+  { value: 'online', label: 'From GitHub', icon: CloudDownload },
+  { value: 'new', label: 'Create new', icon: FolderPlus },
 ];
+
+const VISIBILITIES: SegmentOption<'private' | 'public'>[] = [
+  { value: 'private', label: 'Private', icon: Lock },
+  { value: 'public', label: 'Public', icon: Globe },
+];
+
+const DESCRIPTIONS: Record<AddSource, string> = {
+  local: 'A local folder, normally a Git repository. Lint, test and build commands are detected from its files.',
+  online: 'A repository that is only online, such as one you just created on GitHub. A copy is downloaded into a new folder and added.',
+  new: 'A brand-new repository with a README. It is made on this computer, and on GitHub too if you choose.',
+};
+
+const SUBMIT_LABEL: Record<AddSource, string> = { local: 'Add repository', online: 'Download and add', new: 'Create repository' };
 
 export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [source, setSource] = useState<AddSource>('local');
@@ -105,14 +132,20 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
   const [url, setUrl] = useState('');
   const [parentFolder, setParentFolder] = useState('');
   const [name, setName] = useState('');
+  const [newName, setNewName] = useState('');
+  const [description, setDescription] = useState('');
+  const [onGitHub, setOnGitHub] = useState(true);
+  const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [error, setError] = useState<string | null>(null);
-  const { add, clone } = useRepositoryMutations();
-  const defaults = useCloneDefaults(open && source === 'online');
+  const { add, clone, create } = useRepositoryMutations();
+  const defaults = useCloneDefaults(open && source !== 'local');
   const { pickFolder } = useRuntime();
   const { toast } = useFeedback();
   const navigate = useNavigate();
   const parsed = parseCloneUrl(url);
-  const cloneParent = parentFolder.trim() || defaults.data?.parentFolder || '';
+  // Without its trailing separator, so the preview never shows a doubled one.
+  const cloneParent = (parentFolder.trim() || defaults.data?.parentFolder || '').replace(/[\\/]+$/, '');
+  const inParent = (folder: string) => `${cloneParent}${cloneParent.includes('/') ? '/' : '\\'}${folder}`;
   const done = (repo: Repository, verb: string) => {
     toast(`${repo.name} ${verb}`);
     onOpenChange(false);
@@ -120,9 +153,28 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
     setUrl('');
     setParentFolder('');
     setName('');
+    setNewName('');
+    setDescription('');
     navigate(`/repositories/${repo.id}`);
   };
   const submit = () => {
+    if (source === 'new') {
+      if (!isCloneFolderName(newName.trim())) {
+        setError('Use letters, digits, dot, dash and underscore only, for example my-app.');
+        return;
+      }
+      create.mutate(
+        { name: newName.trim(), parentFolder: parentFolder.trim() || undefined, github: onGitHub, visibility, description: description.trim() },
+        {
+          onSuccess: ({ repository, github }) => {
+            if (github && !github.ok) toast(`${repository.name} was created on this computer, but not on GitHub: ${github.message}`, 'info');
+            done(repository, github?.ok ? 'created here and on GitHub' : 'created');
+          },
+          onError: (e) => setError(errorMessage(e)),
+        },
+      );
+      return;
+    }
     if (source === 'online') {
       if (!parsed) {
         setError('Enter a GitHub "owner/name", or an https://, ssh:// or git@ address.');
@@ -140,7 +192,23 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
     }
     add.mutate({ path: path.trim(), name: name.trim() || undefined }, { onSuccess: (repo) => done(repo, 'added'), onError: (e) => setError(errorMessage(e)) });
   };
-  const pending = add.isPending || clone.isPending;
+  const pending = add.isPending || clone.isPending || create.isPending;
+  const parentField = (
+    <Field
+      label="Save in folder"
+      optional
+      helper={defaults.data ? `Defaults to ${defaults.data.parentFolder}. A new folder is created inside it.` : 'A new folder is created inside it.'}
+      addon={
+        pickFolder ? (
+          <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setParentFolder(p))}>
+            Browse…
+          </Button>
+        ) : null
+      }
+    >
+      <Input value={parentFolder} onChange={(e) => setParentFolder(e.target.value)} className="font-mono" spellCheck={false} placeholder={defaults.data?.parentFolder} />
+    </Field>
+  );
   return (
     <Dialog
       open={open}
@@ -149,18 +217,14 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
         onOpenChange(next);
       }}
       title="Add repository"
-      description={
-        source === 'local'
-          ? 'A local folder, normally a Git repository. Lint, test and build commands are detected from its files.'
-          : 'A repository that is only online, such as one you just created on GitHub. A copy is downloaded into a new folder and added.'
-      }
+      description={DESCRIPTIONS[source]}
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button variant="primary" onClick={submit} loading={pending}>
-            {source === 'local' ? 'Add repository' : 'Download and add'}
+            {SUBMIT_LABEL[source]}
           </Button>
         </>
       }
@@ -182,7 +246,7 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
           options={ADD_SOURCES}
           disabled={pending}
         />
-        {source === 'local' ? (
+        {source === 'local' && (
           <Field
             label="Folder path"
             error={error}
@@ -197,38 +261,47 @@ export function AddRepositoryDialog({ open, onOpenChange }: { open: boolean; onO
           >
             <Input value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
           </Field>
-        ) : (
+        )}
+        {source === 'online' && (
           <>
             <Field
               label="Repository address"
               error={error}
-              helper={
-                parsed && cloneParent
-                  ? `Will be saved in ${cloneParent}${cloneParent.includes('/') ? '/' : '\\'}${parsed.folderName}`
-                  : 'For example owner/my-app, or the address from GitHub’s green Code button.'
-              }
+              helper={parsed && cloneParent ? `Will be saved in ${inParent(parsed.folderName)}` : 'For example owner/my-app, or the address from GitHub’s green Code button.'}
             >
               <Input value={url} onChange={(e) => setUrl(e.target.value)} className="font-mono" autoFocus spellCheck={false} placeholder="owner/my-app" />
             </Field>
-            <Field
-              label="Save in folder"
-              optional
-              helper={defaults.data ? `Defaults to ${defaults.data.parentFolder}. A new folder is created inside it.` : 'A new folder is created inside it.'}
-              addon={
-                pickFolder ? (
-                  <Button icon={FolderOpen} onClick={() => void pickFolder().then((p) => p && setParentFolder(p))}>
-                    Browse…
-                  </Button>
-                ) : null
-              }
-            >
-              <Input value={parentFolder} onChange={(e) => setParentFolder(e.target.value)} className="font-mono" spellCheck={false} placeholder={defaults.data?.parentFolder} />
-            </Field>
+            {parentField}
           </>
         )}
-        <Field label="Display name" optional helper="Defaults to the folder name.">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        {source === 'new' && (
+          <>
+            <Field
+              label="Name"
+              error={error}
+              helper={isCloneFolderName(newName.trim()) && cloneParent ? `Will be created in ${inParent(newName.trim())}` : 'Letters, digits, dot, dash and underscore, for example my-app.'}
+            >
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} className="font-mono" autoFocus spellCheck={false} placeholder="my-app" />
+            </Field>
+            <Field label="Description" optional helper="Goes into the README, and on GitHub under the name.">
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={350} />
+            </Field>
+            {parentField}
+            <Checkbox
+              checked={onGitHub}
+              onCheckedChange={setOnGitHub}
+              label="Also create it on GitHub"
+              description="Made under the account the GitHub CLI is signed in to, and the first commit is uploaded. Leave this off to keep it on this computer only."
+              disabled={pending}
+            />
+            {onGitHub && <SegmentedControl label="Who can see it on GitHub" value={visibility} onValueChange={setVisibility} options={VISIBILITIES} size="compact" disabled={pending} />}
+          </>
+        )}
+        {source !== 'new' && (
+          <Field label="Display name" optional helper="Defaults to the folder name.">
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+        )}
         <button type="submit" hidden />
       </form>
     </Dialog>

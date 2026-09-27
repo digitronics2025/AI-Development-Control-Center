@@ -393,10 +393,10 @@ const CLONE_TIMEOUT_MS = 600_000;
  * ever being read as an option, and `protocol.allow` limits the transports
  * to the ones that parser accepts, so `ext::` can never run a command.
  */
-export async function cloneRepository(url: string, destination: string): Promise<GitResult> {
+export async function cloneRepository(url: string, destination: string, options: { unattended?: boolean } = {}): Promise<GitResult> {
   if (url.startsWith('-') || destination.startsWith('-')) throw new Error('Invalid clone source or destination');
   const args = ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'protocol.file.allow=always', 'clone', '--', url, destination];
-  return git(path.dirname(destination), args, { timeoutMs: CLONE_TIMEOUT_MS });
+  return git(path.dirname(destination), args, { timeoutMs: CLONE_TIMEOUT_MS, ...(options.unattended ? { env: UNATTENDED_REMOTE_ENV } : {}) });
 }
 
 /** Move the current branch to `ref` only if that is a fast-forward. Never merges. */

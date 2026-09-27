@@ -2,9 +2,10 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { RepositoryAutomationRun, RepositoryAutomationStatus, RepositoryDiscoveryReport, RepositorySyncOutcome, RepositorySyncResult } from '@acc/shared';
+import type { RepositoryAutomationRun, RepositoryAutomationStatus, RepositoryDiscoveryReport, RepositoryDownloadReport, RepositorySyncOutcome, RepositorySyncResult } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { SourceControlService } from '../source-control/service.js';
+import type { ToolService } from '../tools/service.js';
 import { now, type Store } from '../store/store.js';
 import { pathKey, RepositoryError, type RepositoryService } from './repositories.js';
 import type { SettingsService } from './settings.js';
@@ -26,6 +27,20 @@ export interface RepositoryAutomationDeps {
   excludedFolders: string[];
   /** Search root when none is configured. */
   homeDir?: string;
+  /** Lists GitHub accounts' repositories (`github.repo_list`) for GitHub downloads. */
+  tools: ToolService;
+}
+
+/** One row of `gh repo list --json` as `github.repo_list` returns it. */
+interface GitHubRepoRow {
+  name: string;
+  nameWithOwner: string;
+  url: string;
+  isArchived: boolean;
+  isFork: boolean;
+  isEmpty: boolean;
+  /** Kilobytes. */
+  diskUsage: number;
 }
 
 const FETCHED: ReadonlySet<RepositorySyncOutcome> = new Set(['up-to-date', 'fast-forwarded', 'behind-dirty', 'ahead', 'diverged']);
@@ -107,13 +122,15 @@ export class RepositoryAutomation {
     if (this.current) return this.current;
     this.clearTimer();
     const settings = this.d.settings.get().repositoryAutomation;
-    const run: RepositoryAutomationRun = { trigger, startedAt: now(), finishedAt: null, discovery: null, sync: null };
+    const run: RepositoryAutomationRun = { trigger, startedAt: now(), finishedAt: null, discovery: null, downloads: null, sync: null };
     this.lastRun = run;
     this.current = (async () => {
       // Yield first so `current` is assigned before anything (even an empty run) completes.
       await Promise.resolve();
       try {
         if (settings.discover) run.discovery = await this.discover();
+        // After the disk scan, so a copy that is already on disk is registered, not downloaded twice.
+        if (settings.discover && settings.githubAccounts.length) run.downloads = await this.downloadFromGitHub();
         if (settings.sync) run.sync = await this.syncAll();
       } finally {
         run.finishedAt = now();
@@ -171,6 +188,88 @@ export class RepositoryAutomation {
       } catch (error) {
         if (error instanceof RepositoryError && error.code === 'DUPLICATE') continue;
         report.errors.push({ path: folder, message: (error as Error).message });
+      }
+    }
+    return report;
+  }
+
+  /**
+   * Download the repositories of the watched GitHub accounts that are not on
+   * this computer yet, then register them (docs/systems/repository-automation.md).
+   * "On this computer" means any registered repository has a remote with the
+   * same `github.com/owner/name`, so a renamed folder still counts. Never
+   * uploads, never touches an existing folder, never opens a sign-in window.
+   */
+  async downloadFromGitHub(): Promise<RepositoryDownloadReport> {
+    const settings = this.d.settings.get().repositoryAutomation;
+    const report: RepositoryDownloadReport = { accounts: [...settings.githubAccounts], downloaded: [], skipped: [], errors: [] };
+    const parent = this.d.repositories.defaultCloneParent();
+    const scope = {
+      taskId: null,
+      stageId: null,
+      sessionId: null,
+      repositoryId: null,
+      cwd: parent,
+      roots: [parent],
+      stageLevel: 1 as const,
+      autoApproveUpToLevel: 1 as const,
+      mode: this.d.settings.get().execution.policyMode,
+      profile: 'operator' as const,
+      escalated: new Set<string>(),
+      protectedPaths: [],
+    };
+
+    const listed: GitHubRepoRow[] = [];
+    for (const owner of settings.githubAccounts) {
+      const outcome = await this.d.tools.invoke({ capability: 'github.repo_list', input: { owner }, origin: 'engine', scope, timeoutMs: 60_000 });
+      if (!outcome.result.ok || !Array.isArray(outcome.result.output)) {
+        report.errors.push({ subject: owner, message: outcome.result.error?.message ?? outcome.result.summary });
+        continue;
+      }
+      listed.push(...(outcome.result.output as GitHubRepoRow[]));
+    }
+    if (!listed.length) return report;
+
+    const known = new Set<string>();
+    await mapLimit(this.d.store.listRepositories(), SYNC_CONCURRENCY * 2, async (repo) => {
+      for (const id of await this.d.repositories.remoteIdentities(repo.path)) known.add(id);
+    });
+
+    const maxKb = settings.githubMaxSizeMb * 1024;
+    for (const row of listed) {
+      const identity = `github.com/${row.nameWithOwner}`.toLowerCase();
+      if (known.has(identity) || this.d.repositories.isRemoteIgnored(identity)) continue;
+      const remote = `github.com/${row.nameWithOwner}`;
+      if (row.isArchived) {
+        report.skipped.push({ remote, kind: 'archived', reason: 'Archived on GitHub' });
+        continue;
+      }
+      if (row.isFork) {
+        report.skipped.push({ remote, kind: 'fork', reason: 'A fork of someone else’s repository' });
+        continue;
+      }
+      if (row.diskUsage > maxKb) {
+        report.skipped.push({ remote, kind: 'too-large', reason: `${Math.round(row.diskUsage / 1024)} MB, over the ${settings.githubMaxSizeMb} MB limit: download it yourself from Add repository` });
+        continue;
+      }
+      const destination = path.join(parent, row.name);
+      if (this.d.repositories.isIgnored(destination)) continue;
+      try {
+        const repo = await this.d.repositories.clone({ url: row.url, parentFolder: parent, name: this.nameFor(destination) }, { unattended: true });
+        known.add(identity);
+        report.downloaded.push({ id: repo.id, name: repo.name, path: repo.path, remote });
+      } catch (error) {
+        if (error instanceof RepositoryError && error.code === 'DUPLICATE') {
+          // Say what the folder holds: often the same project under its old address (moved on GitHub), or a namesake from another account.
+          const holds = (await this.d.repositories.remoteIdentities(destination))[0];
+          report.skipped.push({
+            remote,
+            kind: 'folder-taken',
+            reason: holds ? `The folder ${destination} already holds ${holds}` : `The folder ${destination} already exists and is not this repository`,
+          });
+          continue;
+        }
+        report.errors.push({ subject: remote, message: (error as Error).message.slice(0, 500) });
       }
     }
     return report;

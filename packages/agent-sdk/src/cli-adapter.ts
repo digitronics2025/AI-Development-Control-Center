@@ -96,7 +96,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     env: NodeJS.ProcessEnv,
     options: AgentRuntimeOptions,
   ): Promise<Omit<AgentHealth, 'checkedAt'>>;
-  protected abstract buildArgs(input: AgentExecutionInput): string[];
+  /** May be async when argv depends on what the CLI reports (Codex asks which MCP servers it would load). Throw AgentGuardError to refuse the run. */
+  protected abstract buildArgs(input: AgentExecutionInput): string[] | Promise<string[]>;
   protected abstract createParser(context: ParserContext): StreamParser;
   abstract getCapabilities(): Promise<AgentCapabilities>;
   abstract listModels(options: AgentRuntimeOptions): Promise<ModelDescriptor[]>;
@@ -217,7 +218,7 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     const { env } = sanitizeEnv(input.baseEnv, input.billingMode);
     // The tool session token reaches the agent (and the MCP server it starts) only through its environment.
     if (input.toolBridge) Object.assign(env, input.toolBridge.env);
-    const args = this.buildArgs(input);
+    const args = await this.buildArgs(input);
     let guardViolation: string | null = null;
     let handle: ProcessHandle | null = null;
     const emit = (stream: AgentLogStream, text: string) => {

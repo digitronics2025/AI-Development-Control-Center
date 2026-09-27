@@ -243,6 +243,18 @@ export const cloneRepositorySchema = z.object({
 });
 export type CloneRepositoryInput = z.infer<typeof cloneRepositorySchema>;
 
+export const newRepositorySchema = z.object({
+  /** Folder name, and the GitHub repository name when `github` is on. */
+  name: z.string().min(1).max(100).refine(isCloneFolderName, 'Use letters, digits, dot, dash and underscore only'),
+  /** Folder the new repository is created in; defaults like a clone's. */
+  parentFolder: z.string().min(1).max(1000).optional(),
+  /** Also create it on GitHub (signed-in `gh` account) and upload the first commit. */
+  github: z.boolean().default(false),
+  visibility: z.enum(['private', 'public']).default('private'),
+  description: z.string().max(350).default(''),
+});
+export type NewRepositoryInput = z.input<typeof newRepositorySchema>;
+
 /** A plain Git name for a remote or branch: no spaces, no option-like leading dash, no `..`. */
 const gitNameSchema = z
   .string()
@@ -496,6 +508,15 @@ export const repositoryAutomationSettingsSchema = z.object({
   /** Download new commits in the background: fetch, then fast-forward a clean branch that is only behind. Never pushes. */
   sync: z.boolean().default(true),
   intervalMinutes: z.number().int().min(5).max(24 * 60).default(15),
+  /**
+   * GitHub users or organisations whose repositories are downloaded when they
+   * are missing on this computer (needs `discover`). Empty turns it off.
+   */
+  githubAccounts: z.array(z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/, 'A GitHub user or organisation name')).max(20).default([]),
+  /** Larger repositories are listed as skipped instead of downloaded. */
+  githubMaxSizeMb: z.number().int().min(1).max(100_000).default(500),
+  /** `host/owner/name` of repositories you removed: never downloaded again. */
+  ignoredRemotes: z.array(z.string().min(3).max(300)).max(1000).default([]),
 });
 export type RepositoryAutomationSettings = z.infer<typeof repositoryAutomationSettingsSchema>;
 

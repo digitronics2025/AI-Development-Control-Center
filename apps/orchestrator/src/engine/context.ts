@@ -11,9 +11,11 @@ import {
   PLACEHOLDER_PATTERN,
   ROLE_LABEL,
   type ArtifactType,
+  type CommandKind,
   type PromptPlaceholder,
   type StageDefinition,
   type StageInstance,
+  type TestRun,
 } from '@acc/shared';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
@@ -26,6 +28,22 @@ const UNKNOWN_COVERAGE = 'Diff coverage unknown — read every changed file list
 const MAX_DIFF_CHARS = 150_000;
 const MAX_SECTION_CHARS = 60_000;
 const MAX_TEXT_ATTACHMENT = 50_000;
+/** Check kinds an agent could run in full itself; `{{check_costs}}` says which it should leave to the Test stage. */
+const COSTED_KINDS: readonly CommandKind[] = ['lint', 'typecheck', 'test', 'build', 'e2e'];
+/**
+ * Kinds an agent never runs itself, however quick: an e2e suite usually starts
+ * the app on a fixed port with a reused server, so a run beside another task's
+ * checks tests the other worktree's files (the Test stage serializes its own).
+ */
+const TEST_STAGE_ONLY_KINDS: ReadonlySet<CommandKind> = new Set(['e2e']);
+/** Above this typical duration an agent's own full run only adds to the task's time (TASK-0007..0019: 54–69 min). */
+const SLOW_CHECK_MS = 120_000;
+/** Recent complete runs per command the typical duration is the median of. */
+const CHECK_COST_SAMPLES = 5;
+/** Recent tasks of a repository searched for those runs. */
+const CHECK_COST_TASKS = 40;
+/** Roles that run checks or plan them, and so get `{{check_costs}}` even from a template that leaves it out. */
+const CHECK_COST_ROLES: ReadonlySet<string> = new Set(['implementer', 'fixer', 'planner', 'designer', 'art-director']);
 
 /**
  * Prepended to every role prompt, including user-edited ones. Agents that load
@@ -134,6 +152,31 @@ function coverageOf(
   // Written after packing, so this note is never clipped away with the diff.
   const trailer = `\n[${omitted.length} changed file${omitted.length === 1 ? ' is' : 's are'} not shown in full here; see Diff coverage]\n`;
   return { diff: packed.text + trailer, coverage: lines.join('\n'), required: read.map((o) => o.path) };
+}
+
+/** The middle of a set of durations (the mean of the two middle ones for an even count). */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** "45 s", "1.8 min", "18 min". */
+function roughDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 90) return `${Math.max(1, seconds)} s`;
+  const minutes = ms / 60_000;
+  return `${minutes < 10 ? minutes.toFixed(1) : Math.round(minutes)} min`;
+}
+
+/**
+ * A run that timed the whole configured command: it passed, or failed only on
+ * what the baseline or a re-run explained (the suite still ran to its end).
+ * Reused, affected-only and stopped runs time something else; a narrowed
+ * re-run carries a different command and never matches.
+ */
+function timesWholeCommand(run: TestRun): boolean {
+  return (run.status === 'passed' || nonBlockingFailure(run)) && !run.reusedFrom && run.selection !== 'changed' && (run.durationMs ?? 0) > 0;
 }
 
 /** Fill `{{name}}` placeholders; an unknown or empty one renders as "(none)" so a prompt never fails for want of a value. */
@@ -375,6 +418,100 @@ export class ContextBuilder {
   }
 
   /**
+   * Durations of a repository's recent whole-command runs, newest first, keyed
+   * by kind and (redacted, as stored) command line: an edited command starts
+   * a new history rather than inheriting the old one's.
+   */
+  private recentDurations(repositoryId: string): Map<string, number[]> {
+    const runs = this.store
+      .listTasks({ repositoryId, limit: CHECK_COST_TASKS })
+      // A single-repository task's runs carry no repository id: they ran in its primary one.
+      .flatMap((t) => this.store.listTestRuns(t.id).filter((r) => (r.repositoryId ?? t.repositoryId) === repositoryId))
+      .filter(timesWholeCommand)
+      .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''));
+    const byCommand = new Map<string, number[]>();
+    for (const run of runs) {
+      const key = `${run.kind}\n${run.command}`;
+      const durations = byCommand.get(key) ?? [];
+      if (durations.length < CHECK_COST_SAMPLES) durations.push(run.durationMs!);
+      byCommand.set(key, durations);
+    }
+    return byCommand;
+  }
+
+  /** Check kinds a later tests or command stage of this task runs: the workflow's, what the task asked for, less what the operator waived. */
+  private kindsRunLater(task: TaskRecord): Set<CommandKind> {
+    const directives = this.store.listDirectives(task.id).filter((d) => d.state === 'active');
+    const required = directives.flatMap((d) => (d.rule?.type === 'require_check' ? d.rule.kinds : []));
+    const waived = new Set(directives.flatMap((d) => (d.rule?.type === 'waive_check' ? d.rule.kinds : [])));
+    const kinds = new Set<CommandKind>();
+    for (const s of task.workflow.stages) {
+      if (s.kind === 'tests') for (const k of [...(s.commandKinds ?? DEFAULT_VERIFY_COMMAND_KINDS), ...task.extraCheckKinds, ...required]) if (!waived.has(k)) kinds.add(k);
+      if (s.kind === 'command') for (const k of s.commandKinds ?? []) kinds.add(k);
+    }
+    return kinds;
+  }
+
+  /**
+   * `{{check_costs}}`: what each configured check typically costs in this
+   * repository, and the rule that follows. Agents running whole suites
+   * themselves, or waiting on one, cost 54–69 min over seven tasks of a
+   * repository whose unit suite takes 13–26 min; where every check takes
+   * seconds a full run is a cheap catch, so the rule names only slow ones.
+   * End-to-end suites are never in that "fine to run" set: see TEST_STAGE_ONLY_KINDS.
+   */
+  private checkCosts(task: TaskRecord, units: Array<Pick<TaskRepository, 'repo' | 'folder'>>): string {
+    const later = this.kindsRunLater(task);
+    const lines: string[] = [];
+    const slow: string[] = [];
+    const stageOnly: string[] = [];
+    let own = 0;
+    let timed = 0;
+    for (const u of units) {
+      const commands = u.repo.commands.filter((c) => c.enabled && COSTED_KINDS.includes(c.kind));
+      if (!commands.length) continue;
+      const history = this.recentDurations(u.repo.id);
+      for (const c of commands) {
+        const label = `${u.folder ? `${u.folder}/ ` : ''}${COMMAND_KIND_LABEL[c.kind]}`;
+        const durations = history.get(`${c.kind}\n${redact(c.command)}`) ?? [];
+        const typical = durations.length ? median(durations) : null;
+        const testStageOnly = TEST_STAGE_ONLY_KINDS.has(c.kind);
+        const notLater = later.has(c.kind) ? '' : ' — no later stage of this task runs it';
+        if (testStageOnly) stageOnly.push(label);
+        else own += 1;
+        const cost = typical === null ? 'not timed yet' : `about ${roughDuration(typical)} (median of ${durations.length} recent run${durations.length === 1 ? '' : 's'})`;
+        const isSlow = !testStageOnly && typical !== null && typical > SLOW_CHECK_MS;
+        if (isSlow) slow.push(label);
+        if (!testStageOnly && typical !== null) timed += 1;
+        lines.push(`- ${label} \`${c.command}\`: ${cost}${testStageOnly ? ' — **Test stage only**' : isSlow ? ' — **slow**' : ''}${notLater}`);
+      }
+    }
+    if (!lines.length) return '';
+    const intro = 'Typical duration of each configured check in this repository, from its recent complete runs (affected-only, re-run and reused runs are not counted):';
+    const apartFromE2e = stageOnly.length ? ' apart from the end-to-end tests' : '';
+    const rules: string[] = [];
+    if (slow.length) {
+      rules.push(
+        `**Slow here (typically over 2 minutes): ${slow.join(', ')}.** Do not run a slow check in full, and do not start or wait for another run of one: the orchestrator's Test stage runs the configured checks once the change is made, so a full run by an agent only adds its duration to the task. For a slow check, run targeted checks on what changed instead: the test files that cover the changed files and any you add (the test runner given those paths), the linter on the changed files only, and a typecheck scoped to the changed package where the repository has one. A slow check that no later stage runs is reported as not run in full. This holds even when a plan or an earlier report says to run the full command.`,
+      );
+      if (own > slow.length) rules.push(`Every other check above${apartFromE2e} is quick here or not timed yet: running it in full is fine.`);
+    } else if (own) {
+      const subject = stageOnly.length ? 'The checks above other than the end-to-end tests' : '';
+      rules.push(
+        timed
+          ? `${subject ? `${subject} are not` : 'None is'} slow here (each typically takes under 2 minutes, or has not been timed yet): running them in full is fine, and catches a failure before the orchestrator's checks do.`
+          : `${subject ? `${subject} have not` : 'None of them has'} been timed in this repository yet, so running them in full is fine.`,
+      );
+    }
+    if (stageOnly.length) {
+      rules.push(
+        `**End-to-end tests are left to the Test stage, however quick they are${units.some((u) => u.folder) ? ` (${stageOnly.join(', ')})` : ''}.** Do not run the end-to-end command yourself, in full or for a single spec file, and do not start or wait for another run of it: such a suite usually starts the app on a fixed port and reuses a server already listening there, so a run from here can test another task's files, or make the orchestrator's own check test yours. The Test stage runs it when this task's workflow includes it, and runs failing spec files again itself. For a behaviour a user sees, use a Control Center browser check when this run lists one; otherwise report the end-to-end tests as not run. This holds even when a plan or an earlier report says to run them.`,
+      );
+    }
+    return [intro, '', ...lines, ...rules.flatMap((r) => ['', r])].join('\n');
+  }
+
+  /**
    * Active directives only: removed and superseded ones never reach a stage,
    * routing directives act through assignments, and next-stage-only ones
    * reach just the stage they were applied to.
@@ -562,6 +699,7 @@ export class ContextBuilder {
             .filter((c) => c.enabled && verifyKinds.has(c.kind))
             .map((c) => `- ${COMMAND_KIND_LABEL[c.kind]}: \`${c.command}\``)
             .join('\n'),
+      check_costs: this.checkCosts(task, workspace ? units : [{ repo, folder: null }]),
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
@@ -585,8 +723,10 @@ export class ContextBuilder {
     const coverage = collected.required.length && !/\{\{\s*diff_coverage\s*\}\}/.test(template.body) ? `\n\n## Diff coverage\n\n${collected.coverage}\n` : '';
     // What the workflow tells this stage beyond its role template (docs/systems/design-agent.md).
     const instructions = def.instructions ? `\n\n## Stage instructions (from the workflow)\n\n${def.instructions}\n` : '';
+    // Likewise a user-edited template of a role that runs or plans checks still learns which are too slow to run in full.
+    const costs = CHECK_COST_ROLES.has(def.role) && vars.check_costs && !/\{\{\s*check_costs\s*\}\}/.test(template.body) ? `\n\n## What each check costs here\n\n${vars.check_costs}\n` : '';
     return {
-      prompt: header + renderTemplate(template.body, vars) + instructions + coverage + supervisor + lessons + tools,
+      prompt: header + renderTemplate(template.body, vars) + instructions + coverage + costs + supervisor + lessons + tools,
       templateVersion: template.version,
       coverage: { required: collected.required, all: collected.all },
     };

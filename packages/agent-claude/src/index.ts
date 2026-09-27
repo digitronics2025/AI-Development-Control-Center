@@ -18,7 +18,7 @@ import {
   type ProviderUsageCapabilities,
   type StreamParser,
 } from '@acc/agent-sdk';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -86,9 +86,6 @@ const BUILTIN_MODELS: Array<{ id: string; label: string; description: string }> 
 ];
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'LS'];
-const READ_ONLY_BASH = ['git status', 'git diff', 'git log', 'git show', 'git branch', 'git rev-parse', 'ls'].map(
-  (cmd) => `Bash(${cmd}:*)`,
-);
 const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 /** Never allowed from an agent: the orchestrator does these itself, behind approvals. */
 // Prefix rules on Claude Code's native Bash, not the Control Center's classifier: they catch the
@@ -131,19 +128,55 @@ const DEPLOY = ['wrangler deploy', 'wrangler publish', 'npm publish', 'pnpm publ
  * this set (WebFetch, Agent, PowerShell…) must not exist at all. `ToolSearch`
  * reaches the Control Center's deferred MCP tools.
  */
-const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Skill', 'ToolSearch', 'TodoWrite'];
+const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Skill', 'ToolSearch', 'TodoWrite'];
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
-/** Map a stage permission level to Claude Code's permission mode and tool policy. */
+/**
+ * Map a stage permission level to Claude Code's permission mode and tool policy.
+ *
+ * Settings files the run loads (the repository's `.claude/settings.json` and
+ * `settings.local.json`, the operator's own with user config on) add their
+ * `permissions.allow` rules to ours: a repository allowing `Bash(*)` allows
+ * every command. Only a deny rule or a missing tool beats an allow rule. From
+ * Level 2 every limit is a deny rule and Bash and edits are already allowed, so
+ * such a rule widens nothing. Level 1's limit — read-only commands only — cannot
+ * be written as deny rules, so Level 1 has no shell at all: it reads Git through
+ * the Control Center's own `git.*` tools, which ToolService judges.
+ */
 export function claudeToolPolicy(level: PermissionLevel): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
   if (level <= 1) {
-    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill', ...READ_ONLY_BASH], denied: [...WRITE_TOOLS, ...ALWAYS_DENIED] };
+    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill'], denied: ['Bash', ...WRITE_TOOLS] };
   }
-  const tools = [...BASE_TOOLS, ...EDIT_TOOLS];
+  const tools = [...BASE_TOOLS, 'Bash', ...EDIT_TOOLS];
   const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash', 'Skill'];
   if (level === 2) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
   if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY] };
   return { mode: 'acceptEdits', tools, allowed, denied: ALWAYS_DENIED };
+}
+
+/**
+ * `--settings` that switches every hook off: those of settings files, plugins and
+ * skills' frontmatter. A `true` from any source wins over a `false` from another
+ * (measured on 2.1.283), so a repository cannot turn its hooks back on.
+ */
+const NO_HOOKS = JSON.stringify({ disableAllHooks: true });
+
+/**
+ * The repository's own settings files that set `disableAllHooks: true`. Such a
+ * file switches off every hook of the run, the operator's own included (their
+ * secret guards), for the same reason a repository cannot undo `NO_HOOKS`. A file
+ * that does not parse is skipped, as the CLI skips it.
+ */
+export function repositoryHookSwitches(cwd: string): string[] {
+  return ['settings.json', 'settings.local.json']
+    .filter((name) => {
+      try {
+        return (JSON.parse(readFileSync(path.join(cwd, '.claude', name), 'utf8')) as { disableAllHooks?: unknown } | null)?.disableAllHooks === true;
+      } catch {
+        return false;
+      }
+    })
+    .map((name) => `.claude/${name}`);
 }
 
 function summarizeToolInput(input: Record<string, unknown> | undefined): string {
@@ -375,7 +408,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     if (this.skillLookupSpends) return [];
     const userConfig = options.loadUserConfig !== false;
     // --model haiku only bounds the cost if a future CLI ever sends `/skills` to the model; the guard below stops that.
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--model', 'haiku', '--tools', '', '--strict-mcp-config', '--settings', JSON.stringify({ disableAllHooks: true })];
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--model', 'haiku', '--tools', '', '--strict-mcp-config', '--settings', NO_HOOKS];
     if (!userConfig) args.push('--setting-sources', 'project,local');
     const run = await this.captureCli(options, args, 30_000, { cwd, stdin: '/skills', maxLineLength: PROTOCOL_MAX_LINE_LENGTH });
     if (run && !lookupWasFree(run.stdout)) {
@@ -441,6 +474,11 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     if (input.model !== 'default') args.push('--model', input.model);
     if (input.effort !== 'default') args.push('--effort', input.effort);
     if (input.loadUserConfig === false) args.push('--setting-sources', 'project,local');
+    // Level 1 runs no hooks. A repository's hooks — its settings files, its skills, or one an
+    // earlier stage wrote — are shell commands outside every permission rule, and `-p` runs them
+    // in trusted and untrusted folders alike. From Level 2 the agent has a shell anyway, and the
+    // switch would also take the operator's own hooks (their secret guards) away.
+    if (input.permissionLevel <= 1) args.push('--settings', NO_HOOKS);
     // Personal MCP servers never join a run: their tools would skip the Control Center's policy.
     // Only the Control Center's own server (--mcp-config) is loaded.
     args.push('--strict-mcp-config');
@@ -459,6 +497,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     const capacity = new CapacityCollector();
     const failureMessages: string[] = [];
     const filesChanged = new Set<string>();
+    // Only where the operator's hooks would otherwise load: Level 1 has none, and with user config off they are not loaded.
+    const hookSwitches = input.permissionLevel >= 2 && input.loadUserConfig !== false ? repositoryHookSwitches(input.cwd) : [];
 
     return {
       onStdout(line) {
@@ -476,6 +516,9 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
               initModel = typeof event.model === 'string' ? event.model : null;
               const skills = Array.isArray(event.skills) ? ` · ${event.skills.length} skills` : '';
               emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}${skills}`.trim());
+              if (hookSwitches.length) {
+                emit('system', `Warning: this repository's ${hookSwitches.join(' and ')} sets disableAllHooks, which also switches off your own Claude Code hooks (your secret guards included) for this run.`);
+              }
               // Runtime tripwire: the CLI itself says where its credentials came from.
               const source = event.apiKeySource;
               if (input.billingMode === 'subscription' && source && source !== 'none') {

@@ -11,6 +11,8 @@ describe('classifyFailureText', () => {
     ["The 'gpt-6' model requires a newer version of Codex", 'MODEL_UNAVAILABLE'],
     ['model gpt-foo does not exist', 'MODEL_UNAVAILABLE'],
     ["error: unknown option '--tools'", 'MODEL_UNAVAILABLE'],
+    ["Error: unexpected argument '--ignore-rules' found", 'MODEL_UNAVAILABLE'],
+    ['Error: Unknown feature flag: plugins', 'MODEL_UNAVAILABLE'],
     ['Prompt is too long', 'CONTEXT_FAILURE'],
     ['EACCES: permission denied, open x', 'PERMISSION_DENIED'],
   ] as const)('%s → %s', (text, expected) => {

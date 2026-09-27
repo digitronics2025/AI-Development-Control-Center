@@ -168,7 +168,7 @@ export function createServices(
   const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, dataDir: config.dataDir, baseEnv: options.baseEnv, release: options.release });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
-  const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, excludedFolders: [config.dataDir] });
+  const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, tools, excludedFolders: [config.dataDir] });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore, coordinator });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
@@ -256,6 +256,8 @@ export function createServices(
       await baselines.sweep(store.listRepositories()).catch(() => 0);
       // Stage Team checkouts a restart cut short are partial: removed, never integrated (STAGE_TEAMS_PLAN §3.12).
       await engine.team.sweep(store.listRepositories()).catch(() => 0);
+      // Finished worktrees a stop left in <data>/trash (their work is on the task branch): only that folder, in the background.
+      void tooling.emptyTrash();
       await chairman.onStartup();
       chat.recoverPending();
       ask.recoverPending();

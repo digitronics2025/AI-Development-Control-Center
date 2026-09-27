@@ -29,6 +29,9 @@ sync** downloads new commits into every registered repository. Code:
 | `ignoredPaths` | `[]` | Never registered automatically (≤ 1000) |
 | `sync` | `true` | Background sync; downloads only |
 | `intervalMinutes` | `15` | Time between runs, measured from the end of the last (5–1440) |
+| `githubAccounts` | `[]` | GitHub users/organisations whose missing repositories are downloaded (needs `discover`; empty = off) |
+| `githubMaxSizeMb` | `500` | Larger GitHub repositories are skipped, not downloaded |
+| `ignoredRemotes` | `[]` | `host/owner/name` never downloaded (≤ 1000) |
 
 ## Schedule
 
@@ -58,9 +61,44 @@ Paths compare through `pathKey` (resolved, trailing separator removed,
 lowercased on Windows); `add` uses the same check, so a case variant is a
 `DUPLICATE`.
 
-Discovery only sees disk. A repository that exists only online (for
-example one just created on GitHub) is never found by it — see *Download
-from GitHub* below.
+The disk walk only sees disk; repositories that exist only on GitHub come
+from *GitHub downloads* below (or by hand: *Download from GitHub*).
+
+## GitHub downloads
+
+`RepositoryAutomation.downloadFromGitHub`, in the same run right after the
+disk walk (so a copy already on disk is registered, not downloaded again),
+when `discover` is on and `githubAccounts` is not empty:
+
+1. Each account is listed through `github.repo_list` (`ToolService.invoke`,
+   origin `engine`, Level 1): `gh repo list <owner> --json …`, under the
+   account `gh` is signed in to. An account that fails is reported in
+   `errors`; the others still run.
+2. "Already here" = some registered repository has a remote whose
+   `host/owner/name` (`normalizeRemote`) equals `github.com/<nameWithOwner>`,
+   so a renamed folder still counts. Remote URLs are read as configured
+   (`git config --get-regexp`), not after `insteadOf` rewriting.
+3. Skipped with a `kind` and a full `reason`: `archived`, `fork`,
+   `too-large` (over `githubMaxSizeMb`, from `diskUsage`), or
+   `folder-taken` — the destination folder exists; the reason names the
+   remote it holds. Seen live 2026-09-27: a repository moved from the
+   personal account to an organisation (local copy still on the old,
+   redirecting address), and two same-named repositories on two accounts.
+   Nothing is overwritten in either case.
+   Silently skipped: `ignoredRemotes`, and a destination in `ignoredPaths`.
+4. The rest are cloned with `RepositoryService.clone(…, { unattended: true })`
+   into `defaultCloneParent()` (first discovery root, else home) —
+   `UNATTENDED_REMOTE_ENV`, so a private repository without a saved sign-in
+   fails instead of opening a window — and registered.
+
+**Removed stays removed:** `RepositoryService.remove` records the removed
+repository's remote identities in `ignoredRemotes` (and its path in
+`ignoredPaths`); adding it again by hand clears both. Settings →
+Repositories lists them with **Allow again**.
+
+The run's `downloads` report (`RepositoryDownloadReport`: accounts,
+downloaded, skipped, errors) feeds the Repositories summary line, which
+names what was downloaded and what was not, with the reason.
 
 **Ignore list.** Removing a repository appends its path to `ignoredPaths`;
 adding it again by hand removes it. Settings → Repositories shows the list
@@ -98,6 +136,30 @@ Add repository dialog's **Download from GitHub** option calls it.
 | GET | `/api/repositories/clone-defaults` | `{ parentFolder }` |
 
 Not a remote operation (like adding a folder, it names paths on this PC).
+
+## Create new
+
+`POST /api/repositories/new` `{ name, parentFolder?, github?, visibility?, description? }`
+→ 201 `NewRepositoryResult { repository, github }`. The dialog's **Create new**
+option calls it.
+
+1. **Always local** (`RepositoryService.createNew`): a new folder `name` in
+   `parentFolder` (default as for a clone), `git init -b main`, a README
+   (`# name` + description) and a commit "Initial commit" using the
+   operator's Git identity, then `add`. An existing folder is `DUPLICATE`;
+   any failure removes the folder (`CREATE_FAILED`, 500 — a missing Git
+   name/email says how to set it).
+2. **GitHub, if asked**: the route calls `github.repo_create` through
+   `ToolService.invoke` (origin `operator`, `preApproved` — the click is the
+   decision; recorded like any tool call). Private is Level 3; **public is
+   Level 5**, so an agent can never publish a repository without typed
+   approval. It runs
+   `gh repo create <name> --private|--public --source . --remote origin --push`
+   in the new folder, under the account `gh` is signed in to.
+3. A GitHub failure never undoes step 1: the answer has
+   `github: { ok: false, message }`, the repository shows **No upstream**, and
+   the dialog says it was created on this computer only. `github: null` when
+   not asked.
 
 ## Background sync
 

@@ -10,6 +10,7 @@ import {
   ERROR_CLASS_LABEL,
   ROLE_ACTIVITY,
   SUPERSEDED_PREFIX,
+  nonBlockingFailure,
   type ArtifactType,
   type CommandKind,
   type ErrorClass,
@@ -32,7 +33,7 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import type { ApprovalGate } from './approvals.js';
-import type { BaselineChecks, Classification } from './baseline-checks.js';
+import type { BaselineChecks, BaselineWarmup, Classification } from './baseline-checks.js';
 import type { ContextBuilder, PromptCoverage } from './context.js';
 import { LogSink } from './log-sink.js';
 import { extractOperatorBlockers } from './report.js';
@@ -332,10 +333,33 @@ export interface RunnerDeps {
 type JobResult =
   | { kind: 'passed' | 'reused' | 'preexisting' | 'flaky'; lines: string[] }
   | { kind: 'failed'; lines: string[]; failure: string }
-  | { kind: 'stopped'; lines: string[]; run: string };
+  | { kind: 'stopped'; lines: string[]; run: string }
+  /** Failed in a parallel batch for a reason a repair fixes: repaired and run again alone once the batch is over. */
+  | { kind: 'repair'; lines: string[]; run: string; pending: PendingRepair };
+
+/** Where a job stood when its repair was put off, so it resumes at the repair instead of failing once more first. */
+interface PendingRepair {
+  exec: CommandRun;
+  effective: RepositoryCommand;
+  selection: Selection;
+  run: TestRun;
+  treeId: string | null;
+  /** Repairs the stage had run when it failed: one since (another check's install) may have fixed it already. */
+  repairsBefore: number;
+}
 
 /** Parallel-safe checks running at once in one tests stage (STAGE_TEAMS_PLAN §3.11). */
 const MAX_PARALLEL_CHECKS = 4;
+/** Recent whole runs per command whose median is its typical duration, and the recent tasks searched for them (as `{{check_costs}}` counts). */
+const TYPICAL_SAMPLES = 5;
+const TYPICAL_TASKS = 40;
+
+/** The middle of a set of durations (the mean of the two middle ones for an even count). */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
 /** Only verification kinds may run side by side; smoke, staging deploys and "other" commands always run alone. */
 const PARALLEL_KINDS: ReadonlySet<CommandKind> = new Set(['lint', 'typecheck', 'test', 'build', 'e2e']);
 
@@ -772,63 +796,149 @@ export class StageRunners {
       trees.set(workdir, tree);
       return tree;
     };
-    // Repairs (an install, freeing a port) change what every command shares: one at a time, even in a parallel batch.
-    let repairLock: Promise<unknown> = Promise.resolve();
-    const serialRepair = <T>(fn: () => Promise<T>): Promise<T> => {
-      const next = repairLock.then(fn, fn);
-      repairLock = next.catch(() => undefined);
-      return next;
-    };
-
-    /** One command of the stage, start to verdict; its report lines are kept apart so a parallel batch still reports in order. */
-    const runJob = async (i: number, ctl: RunControl): Promise<JobResult> => {
-      const { command, unit, name } = jobs[i]!;
-      let { effective, selection } = jobs[i]!;
-      const { workdir } = unit;
-      let run = runs[i]!;
-      const lines: string[] = [];
-      if (ctl.stopReason) return { kind: 'stopped', lines, run: run.id };
-      // Earlier commands in this stage (a formatter, a generator) may have changed the files since the
-      // selection was made: decide again, now, before running only the affected tests (§3.2).
-      if (selection.mode === 'changed') {
-        const fresh = await this.selectionFor(def, unit, command);
-        if (fresh.mode !== 'changed') {
-          selection = fresh;
-          effective = command;
-          run = store.updateTestRun(run.id, { command: redact(command.command), selection: selectionMode(fresh) });
-          this.publishTestRun(run);
+    // Commands run one at a time, in order — except consecutive commands the repository marked parallel-safe,
+    // which run together in a bounded batch (STAGE_TEAMS_PLAN §3.11).
+    const batches: Array<{ start: number; end: number }> = [];
+    for (let i = 0; i < jobs.length; ) {
+      let end = i + 1;
+      if (this.parallelSafe(def, jobs[i]!)) while (end < jobs.length && end - i < MAX_PARALLEL_CHECKS && this.parallelSafe(def, jobs[end]!)) end++;
+      batches.push({ start: i, end });
+      i = end;
+    }
+    // The baseline of the stage's first e2e check starts now, beside the checks before it, when this repository's
+    // history says a failure will need it and it ends before those checks typically do (TASK-0014: about two
+    // minutes on the critical path after the e2e failed). Never for a check that will be reused.
+    const warmups: Array<BaselineWarmup & { finished: boolean }> = [];
+    const firstE2e = jobs.findIndex((j) => j.command.kind === 'e2e');
+    const e2eBatch = batches.findIndex((b) => b.start <= firstE2e && firstE2e < b.end);
+    if (def.kind === 'tests' && e2eBatch > 0 && jobs[firstE2e]!.unit.repo.preexistingFailures !== 'block') {
+      const { unit, command, name } = jobs[firstE2e]!;
+      try {
+        const reusable = async (k: number) => {
+          const tree = await treeOf(jobs[k]!.unit.workdir);
+          return Boolean(tree && this.reusablePass(task.id, tree, runs[k]!));
+        };
+        if (!(await reusable(firstE2e))) {
+          const histories = new Map<string, Map<string, number>>();
+          const typical = (k: number): number | null => {
+            const job = jobs[k]!;
+            let history = histories.get(job.unit.repo.id);
+            if (!history) histories.set(job.unit.repo.id, (history = this.typicalDurations(job.unit.repo.id)));
+            return history.get(`${job.command.kind}\n${redact(job.command.command)}`) ?? null;
+          };
+          // Until the e2e would start anyway: each earlier batch takes as long as its longest check. One with no
+          // timing yet, one that runs only the affected tests or one that will be reused counts as nothing.
+          let headStartMs = 0;
+          for (const b of batches.slice(0, e2eBatch)) {
+            let longest = 0;
+            for (let k = b.start; k < b.end; k++) if (jobs[k]!.selection.mode !== 'changed' && !(await reusable(k))) longest = Math.max(longest, typical(k) ?? 0);
+            headStartMs += longest;
+          }
+          const started = this.d.baselines.warm({ task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env }, { headStartMs, typicalRunMs: typical(firstE2e) });
+          if (started) {
+            const warm = { ...started, finished: false };
+            void warm.done.then(() => (warm.finished = true));
+            warmups.push(warm);
+            const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
+            publisher.event(task.id, 'TEST_STARTED', `${def.name}: checking ${name} on the baseline commit ${unit.git.baselineCommit!.slice(0, 7)} now, beside the checks before it — its latest baseline result in ${unit.repo.name} was a failure, so a failure here would need that answer; expected about ${secs(started.expectedMs)}, while the checks before it typically take ${secs(headStartMs)}`, { baselineWarmup: command.id, expectedMs: started.expectedMs, headStartMs }, stage.id);
+          }
         }
+      } catch {
+        // A warm-up that cannot start changes nothing: the stage runs as it always has.
       }
-      const treeId = await treeOf(workdir);
+    }
+    /** An e2e check never starts beside a warm-up: both may use the same fixed port, and a reused server would test the baseline's files. */
+    const waitForWarmups = async (run: TestRun, name: string, ctl: RunControl): Promise<void> => {
+      const running = warmups.filter((w) => !w.finished);
+      if (!running.length || ctl.stopReason) return;
+      this.publishTestRun(store.updateTestRun(run.id, { summary: 'Waiting for the baseline check started with this stage to finish (both may use the same port)' }));
+      publisher.event(task.id, 'TEST_STARTED', `${name} waits for the baseline check started with this stage to finish first (both may use the same port)`, { waitingFor: 'baseline' }, stage.id);
+      let release = (): void => undefined;
+      const stopped = new Promise<void>((resolve) => {
+        release = trackCancel(ctl, async () => resolve());
+      });
+      await Promise.race([Promise.all(running.map((w) => w.done)), stopped]);
+      release();
+      this.publishTestRun(store.updateTestRun(run.id, { summary: null }));
+    };
+    /** Repairs run so far in this stage (even a failed install changes node_modules). */
+    let repairsRun = 0;
 
-      // The same command already passed on exactly these files in this task: that result stands (§3.E).
-      const earlier = treeId ? this.reusablePass(task.id, treeId, run) : null;
-      if (earlier) {
-        const at = earlier.finishedAt ? earlier.finishedAt.slice(11, 19) : 'earlier';
-        const earlierStage = earlier.stageId ? (store.getStage(earlier.stageId)?.name ?? 'an earlier stage') : 'an earlier stage';
-        const summary = `Reused: same files as ${earlierStage} at ${at}`;
-        this.publishTestRun(store.updateTestRun(run.id, { status: 'passed', exitCode: 0, durationMs: 0, summary, startedAt: now(), finishedAt: now(), treeId, reusedFrom: earlier.id }));
-        lines.push(`✓ ${name.padEnd(16)} 0.0s   ${summary}`);
-        publisher.event(task.id, 'TEST_PASSED', `${name} passed (reused: nothing changed since ${earlierStage} at ${at})`, { reusedFrom: earlier.id }, stage.id);
-        return { kind: 'reused', lines };
+    /**
+     * One command of the stage, start to verdict; its report lines are kept apart so a parallel batch still
+     * reports in order. `deferRepair` (a parallel batch) hands a repairable failure back instead of repairing
+     * beside running siblings; `resume` picks such a job up again at its repair.
+     */
+    const runJob = async (i: number, ctl: RunControl, opts: { deferRepair?: boolean; resume?: PendingRepair } = {}): Promise<JobResult> => {
+      const { command, unit, name } = jobs[i]!;
+      let { effective, selection } = opts.resume ?? jobs[i]!;
+      const { workdir } = unit;
+      let run = opts.resume?.run ?? runs[i]!;
+      const lines: string[] = [];
+      let treeId: string | null;
+      let exec: CommandRun | null;
+      if (opts.resume) {
+        // It failed already, in its batch: straight to the repair — unless what it failed on may be gone by now
+        // (another check's repair ran since, or the files no longer call for one): then it runs once more first.
+        const { exec: failed, repairsBefore } = opts.resume;
+        treeId = opts.resume.treeId;
+        this.publishTestRun(store.updateTestRun(run.id, { status: 'running', summary: null }));
+        const stale = repairsRun > repairsBefore || !this.d.tooling.plan(this.d.tooling.classify(failed.tail, failed.result.timedOut), workdir, []);
+        exec = stale ? await this.executeCommand(task, stage, workdir, effective, env, ctl, run) : failed;
+      } else {
+        if (ctl.stopReason) return { kind: 'stopped', lines, run: run.id };
+        // Earlier commands in this stage (a formatter, a generator) may have changed the files since the
+        // selection was made: decide again, now, before running only the affected tests (§3.2).
+        if (selection.mode === 'changed') {
+          const fresh = await this.selectionFor(def, unit, command);
+          if (fresh.mode !== 'changed') {
+            selection = fresh;
+            effective = command;
+            run = store.updateTestRun(run.id, { command: redact(command.command), selection: selectionMode(fresh) });
+            this.publishTestRun(run);
+          }
+        }
+        treeId = await treeOf(workdir);
+
+        // The same command already passed on exactly these files in this task: that result stands (§3.E).
+        const earlier = treeId ? this.reusablePass(task.id, treeId, run) : null;
+        if (earlier) {
+          const at = earlier.finishedAt ? earlier.finishedAt.slice(11, 19) : 'earlier';
+          const earlierStage = earlier.stageId ? (store.getStage(earlier.stageId)?.name ?? 'an earlier stage') : 'an earlier stage';
+          const summary = `Reused: same files as ${earlierStage} at ${at}`;
+          this.publishTestRun(store.updateTestRun(run.id, { status: 'passed', exitCode: 0, durationMs: 0, summary, startedAt: now(), finishedAt: now(), treeId, reusedFrom: earlier.id }));
+          lines.push(`✓ ${name.padEnd(16)} 0.0s   ${summary}`);
+          publisher.event(task.id, 'TEST_PASSED', `${name} passed (reused: nothing changed since ${earlierStage} at ${at})`, { reusedFrom: earlier.id }, stage.id);
+          return { kind: 'reused', lines };
+        }
+        this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now(), treeId }));
+        if (command.kind === 'e2e') await waitForWarmups(run, name, ctl);
+        exec = await this.executeCommand(task, stage, workdir, effective, env, ctl, run);
       }
-      this.publishTestRun(store.updateTestRun(run.id, { status: 'running', startedAt: now(), treeId }));
 
-      // Run it; when it fails for a reason that is the environment's fault
-      // (missing dependency, port held by this task, network hiccup, file
-      // lock), repair and run it again — a bounded number of times.
+      // When it fails for a reason that is the environment's fault (missing
+      // dependency, port held by this task, network hiccup, file lock), repair
+      // and run it again — a bounded number of times.
       const attempted: RepairStrategy[] = [];
       const repairs: string[] = [];
-      let exec = await this.executeCommand(task, stage, workdir, effective, env, ctl, run);
       while (exec && !exec.passed && !exec.result.cancelled && !ctl.stopReason) {
         const classified = this.d.tooling.classify(exec.tail, exec.result.timedOut);
+        // In a parallel batch a repair (an install that replaces node_modules, freeing a port) would pull the
+        // ground from under the checks still running: it waits for the batch to end, and never cancels them.
+        const deferred = opts.deferRepair ? this.d.tooling.plan(classified, workdir, attempted) : null;
+        if (deferred) {
+          const what = deferred.description.replace(/, then run it again$/, '');
+          this.publishTestRun(store.updateTestRun(run.id, { status: 'not_run', summary: `Needs a repair (${what}): runs again alone once the rest of its batch is done` }));
+          publisher.event(task.id, 'TEST_STARTED', `${name} needs a repair (${what}); it is repaired and runs again alone once the rest of its batch is done`, { executionId: exec.executionId, deferredRepair: deferred.strategy }, stage.id);
+          return { kind: 'repair', lines, run: run.id, pending: { exec, effective, selection, run, treeId, repairsBefore: repairsRun } };
+        }
         // A repair that fails hands over to the next strategy (a locked install, then a normal one).
         let repaired = false;
         for (let plan = this.d.tooling.plan(classified, workdir, attempted); plan && !ctl.stopReason; plan = this.d.tooling.plan(classified, workdir, attempted)) {
           attempted.push(plan.strategy);
           const row = this.d.tooling.recordRepair(task, stage.id, effective.command, classified, plan, attempted.length);
-          const current = plan;
-          const result = await serialRepair(() => this.applyRepair(task, stage, unit.repo, workdir, current, env, ctl));
+          const result = await this.applyRepair(task, stage, unit.repo, workdir, plan, env, ctl);
+          repairsRun++;
           this.d.tooling.finishRepair(row.id, result.ok, result.detail);
           if (result.ok) {
             repairs.push(plan.description.replace(/, then run it again$/, ''));
@@ -916,44 +1026,60 @@ export class StageRunners {
       return { kind: 'failed', lines, failure: `${name} failed${summary ? `: ${summary}` : ''}` };
     };
 
-    // Commands run one at a time, in order — except consecutive commands the repository marked parallel-safe,
-    // which run together in a bounded batch; the first real failure stops the rest of its batch (STAGE_TEAMS_PLAN §3.11).
+    // Batch by batch; the first real failure stops the rest of its batch (STAGE_TEAMS_PLAN §3.11).
     const results: Array<JobResult | undefined> = [];
-    for (let i = 0; i < jobs.length && !failure && !control.stopReason; ) {
-      let end = i + 1;
-      if (this.parallelSafe(def, jobs[i]!)) while (end < jobs.length && end - i < MAX_PARALLEL_CHECKS && this.parallelSafe(def, jobs[end]!)) end++;
-      if (end - i === 1) {
-        results[i] = await runJob(i, control);
-      } else {
-        const batch = Array.from({ length: end - i }, (_, n) => ({ index: i + n, ...childControl(control) }));
-        publisher.event(task.id, 'TEST_STARTED', `${def.name}: running ${batch.map((b) => jobs[b.index]!.name).join(', ')} at the same time (marked parallel-safe)`, { parallel: batch.length }, stage.id);
-        let firstFailure: string | null = null;
-        await Promise.all(
-          batch.map(async (b) => {
-            const result = await runJob(b.index, b.control);
-            results[b.index] = result;
-            if (result.kind === 'failed' && !firstFailure) {
-              firstFailure = jobs[b.index]!.name;
-              await Promise.all(batch.filter((o) => o !== b).map((o) => o.stop('cancel')));
-            }
-          }),
-        );
-        if (firstFailure) {
+    try {
+      for (const { start: i, end } of batches) {
+        if (failure || control.stopReason) break;
+        if (end - i === 1) {
+          results[i] = await runJob(i, control);
+        } else {
+          const batch = Array.from({ length: end - i }, (_, n) => ({ index: i + n, ...childControl(control) }));
+          publisher.event(task.id, 'TEST_STARTED', `${def.name}: running ${batch.map((b) => jobs[b.index]!.name).join(', ')} at the same time (marked parallel-safe)`, { parallel: batch.length }, stage.id);
+          let firstFailure: string | null = null;
+          await Promise.all(
+            batch.map(async (b) => {
+              const result = await runJob(b.index, b.control, { deferRepair: true });
+              results[b.index] = result;
+              if (result.kind === 'failed' && !firstFailure) {
+                firstFailure = jobs[b.index]!.name;
+                await Promise.all(batch.filter((o) => o !== b).map((o) => o.stop('cancel')));
+              }
+            }),
+          );
+          // Checks whose repair was put off are repaired and run again now, alone and in order; a real failure
+          // (in the batch, or in one of these) leaves the rest not run, as a batch failure always has.
           for (const b of batch) {
             const r = results[b.index];
-            if (r?.kind === 'stopped' && !control.stopReason) this.publishTestRun(store.updateTestRun(r.run, { summary: `Stopped: ${firstFailure} failed first` }));
+            if (r?.kind !== 'repair') continue;
+            if (firstFailure || control.stopReason) {
+              results[b.index] = { kind: 'stopped', lines: r.lines, run: r.run };
+              if (control.stopReason) this.publishTestRun(store.updateTestRun(r.run, { summary: 'Stopped' }));
+              continue;
+            }
+            const again = await runJob(b.index, control, { resume: r.pending });
+            results[b.index] = again;
+            if (again.kind === 'failed') firstFailure = jobs[b.index]!.name;
+          }
+          if (firstFailure) {
+            for (const b of batch) {
+              const r = results[b.index];
+              if (r?.kind === 'stopped' && !control.stopReason) this.publishTestRun(store.updateTestRun(r.run, { summary: `Stopped: ${firstFailure} failed first` }));
+            }
           }
         }
+        for (let k = i; k < end; k++) {
+          const r = results[k];
+          if (r?.kind === 'failed' && !failure) failure = r.failure;
+          if (r?.kind === 'reused') reused++;
+          if (r?.kind === 'preexisting') preexisting.push(jobs[k]!.name);
+          if (r?.kind === 'flaky') flaky.push(jobs[k]!.name);
+        }
+        if (!failure && results.slice(i, end).some((r) => r?.kind === 'stopped')) break;
       }
-      for (let k = i; k < end; k++) {
-        const r = results[k];
-        if (r?.kind === 'failed' && !failure) failure = r.failure;
-        if (r?.kind === 'reused') reused++;
-        if (r?.kind === 'preexisting') preexisting.push(jobs[k]!.name);
-        if (r?.kind === 'flaky') flaky.push(jobs[k]!.name);
-      }
-      if (!failure && results.slice(i, end).some((r) => r?.kind === 'stopped')) break;
-      i = end;
+    } finally {
+      // A warm-up the stage no longer needs (it ended before its e2e ran) stops with it: no baseline e2e runs on into an agent's stage.
+      for (const w of warmups) w.cancel();
     }
     const report: string[] = [];
     runs.forEach((run, k) => {
@@ -1079,6 +1205,28 @@ export class StageRunners {
     const read = inputs ?? (async () => ({ changed: unit.git.baselineCommit ? await pathStatusSince(unit.workdir, unit.git.baselineCommit).catch(() => null) : null, scripts: packageScripts(unit.workdir) }));
     const { changed, scripts } = optedIn ? await read() : { changed: null, scripts: null };
     return selectTests({ repo: unit.repo, command, stageKind: def.kind, baselineCommit: unit.git.baselineCommit, changed, scripts });
+  }
+
+  /**
+   * Each command's typical duration in this repository, by kind and command line: the median of its recent
+   * whole runs (passed, or failed only on what the baseline or a re-run explained; never reused or
+   * affected-only), timed the way `{{check_costs}}` times them. A command never timed is absent.
+   */
+  private typicalDurations(repositoryId: string): Map<string, number> {
+    const samples = new Map<string, number[]>();
+    const runs = this.d.store
+      .listTasks({ repositoryId, limit: TYPICAL_TASKS })
+      // A single-repository task's runs carry no repository id: they ran in its primary one.
+      .flatMap((t) => this.d.store.listTestRuns(t.id).filter((r) => (r.repositoryId ?? t.repositoryId) === repositoryId))
+      .filter((r) => (r.status === 'passed' || nonBlockingFailure(r)) && !r.reusedFrom && r.selection !== 'changed' && (r.durationMs ?? 0) > 0)
+      .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''));
+    for (const run of runs) {
+      const key = `${run.kind}\n${run.command}`;
+      const durations = samples.get(key) ?? [];
+      if (durations.length < TYPICAL_SAMPLES) durations.push(run.durationMs!);
+      samples.set(key, durations);
+    }
+    return new Map([...samples].map(([key, durations]) => [key, median(durations)]));
   }
 
   private reusablePass(taskId: string, treeId: string, run: TestRun): TestRun | null {

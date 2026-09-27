@@ -1,7 +1,9 @@
+import dgram from 'node:dgram';
 import http from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveShell } from '@acc/executor';
 import { builtinProviders, closeAllBrowserPages, closeBrowserPages, findBrowser, openBrowserPages, ToolHealthCache, ToolRegistry, ToolRouter, type OperationContext, type OperationResult } from '../src/index.js';
@@ -54,6 +56,46 @@ const refOf = (snapshot: string, pattern: RegExp) => new RegExp(`${pattern.sourc
 let server: http.Server;
 let base: string;
 let diffColour = '#2255dd';
+let dotColour = '#2255dd';
+
+/** The pixels of a PNG Chromium drew (8-bit RGB or RGBA, not interlaced): `at(x, y)` is [r, g, b]. */
+function pngPixels(png: Buffer): { width: number; height: number; at: (x: number, y: number) => number[] } {
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (png[24] !== 8 || (png[25] !== 2 && png[25] !== 6) || png[28] !== 0) throw new Error('Not an 8-bit, non-interlaced RGB(A) PNG');
+  const bpp = png[25] === 6 ? 4 : 3;
+  const idat: Buffer[] = [];
+  for (let at = 8; at < png.length; at += 12 + png.readUInt32BE(at)) if (png.toString('latin1', at + 4, at + 8) === 'IDAT') idat.push(png.subarray(at + 8, at + 8 + png.readUInt32BE(at)));
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * bpp;
+  const out = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)]!;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? out[y * stride + i - bpp]! : 0;
+      const b = y > 0 ? out[(y - 1) * stride + i]! : 0;
+      const c = i >= bpp && y > 0 ? out[(y - 1) * stride + i - bpp]! : 0;
+      const p = a + b - c;
+      const paeth = Math.abs(p - a) <= Math.abs(p - b) && Math.abs(p - a) <= Math.abs(p - c) ? a : Math.abs(p - b) <= Math.abs(p - c) ? b : c;
+      const predicted = [0, a, b, (a + b) >> 1, paeth][filter]!;
+      out[y * stride + i] = (raw[y * (stride + 1) + 1 + i]! + predicted) & 0xff;
+    }
+  }
+  return { width, height, at: (x, y) => [...out.subarray((y * width + x) * bpp, (y * width + x) * bpp + 3)] };
+}
+
+/** How many pixels of a PNG are magenta, the colour a script paints when it runs. */
+function magentaPixels(png: Buffer): number {
+  const { width, height, at } = pngPixels(png);
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [r, g, b] = at(x, y) as [number, number, number];
+      if (r > 220 && g < 40 && b > 220) n++;
+    }
+  }
+  return n;
+}
 
 /** An uncompressed 24-bit BMP of the given size, a gradient so it is not blank. */
 function bitmap(width: number, height: number): Buffer {
@@ -107,6 +149,12 @@ beforeAll(async () => {
     if (req.url === '/diff') {
       res.setHeader('content-type', 'text/html');
       res.end(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;background:#fff}.box{width:200px;height:120px;margin:40px;background:${diffColour}}</style><div class="box"></div><p style="margin:40px;font:16px system-ui">Stable text</p>`);
+      return;
+    }
+    // A 3×3 dot: a change too small to show as a rounded percentage (browser.visual_diff at threshold 0).
+    if (req.url === '/dot') {
+      res.setHeader('content-type', 'text/html');
+      res.end(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;background:#fff}.dot{width:3px;height:3px;margin:40px;background:${dotColour}}</style><div class="dot"></div>`);
       return;
     }
     const page = PAGES[req.url ?? ''];
@@ -369,6 +417,49 @@ describe('browser.render_html (style tiles)', () => {
     expect(r.artifacts?.map((a) => a.name)).toEqual(['tile-bold-light.png', 'tile-bold-dark.png']);
   }, 90_000);
 
+  it('runs no script in a sandboxed frame either, so nothing leaves over WebRTC', async () => {
+    // A sandboxed frame is drawn in a process of its own, which the page's script switch reached only some of the time:
+    // its script painted the frame magenta and sent STUN over UDP, which the sealed proxy never sees. It was a race, so a few rounds.
+    const udp = dgram.createSocket('udp4');
+    let packets = 0;
+    udp.on('message', () => packets++);
+    await new Promise<void>((resolve) => udp.bind(0, '127.0.0.1', resolve));
+    const script = `document.body.style.background = 'rgb(255, 0, 255)'; const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:127.0.0.1:${udp.address().port}' }] }); pc.createDataChannel('x'); pc.createOffer().then((o) => pc.setLocalDescription(o));`;
+    const frame = `<body style="margin:0;background:#fff"><script>${script}</script></body>`;
+    const html = `<!doctype html><body style="margin:0">
+      <iframe sandbox="allow-scripts" srcdoc="${frame.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" style="width:300px;height:200px;border:0"></iframe>
+      <iframe sandbox="allow-scripts" src="data:text/html,${encodeURIComponent(frame)}" style="width:300px;height:200px;border:0"></iframe></body>`;
+    try {
+      const painted: string[] = [];
+      for (let round = 1; round <= 3; round++) {
+        const r = await call('browser.render_html', { html, name: 'frames', colorSchemes: ['light', 'dark'] });
+        expect(r.ok, r.summary).toBe(true);
+        expect(r.images).toHaveLength(2);
+        for (const image of r.images!) if (magentaPixels(image.data)) painted.push(`${image.name}, round ${round}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect({ painted, packets }).toEqual({ painted: [], packets: 0 });
+    } finally {
+      udp.close();
+    }
+  }, 120_000);
+
+  it('measures a page that sets html and body to the viewport height by what it scrolls', async () => {
+    // The <html> box is then one viewport high while the content runs on below it.
+    const page = (px: number) => `<!doctype html><style>html, body { height: 100%; margin: 0 }</style><body><div style="height:${px}px;background:#123456"></div></body>`;
+    const r = await call('browser.render_html', { html: page(2500), colorSchemes: ['light'] });
+    expect(r.ok, r.summary).toBe(true);
+    expect((r.output as { tiles: unknown[] }).tiles).toEqual([expect.objectContaining({ width: 1280, height: 2500, clipped: false })]);
+    expect(r.summary).not.toMatch(/cut at/);
+    // The bottom of the tile is the page, not blank.
+    const png = pngPixels(r.images![0]!.data);
+    expect(png.height).toBe(2500);
+    expect(png.at(10, 2499)).toEqual([0x12, 0x34, 0x56]);
+    const cut = await call('browser.render_html', { html: page(6000), colorSchemes: ['light'] });
+    expect((cut.output as { tiles: unknown[] }).tiles).toEqual([expect.objectContaining({ height: 4000, clipped: true })]);
+    expect(cut.summary).toMatch(/cut at 4000 px/);
+  }, 90_000);
+
   it('never draws a local file', async () => {
     // A 3000 px tall picture on disk: the tile stays short when it is not loaded.
     const { writeFileSync } = await import('node:fs');
@@ -417,6 +508,22 @@ describe('browser.visual_diff and browser.audit', () => {
     expect(moved.summary).toMatch(/differs from visual-baselines\/box-phone-light.png/);
     expect(moved.images?.[0]?.mime).toBe('image/png');
     diffColour = '#2255dd';
+  }, 120_000);
+
+  it('matches at threshold 0 only when no pixel changed', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-visual-'));
+    const at = (input: { update?: boolean; threshold?: number }) => call('browser.visual_diff', { url: `${base}/dot`, name: 'dot', viewport: 'phone', ...input }, { ...ctx(), cwd: dir, roots: [dir] });
+    dotColour = '#2255dd';
+    expect((await at({ update: true })).ok).toBe(true);
+    expect((await at({ threshold: 0 })).output).toMatchObject({ matches: true, changedPixels: 0 });
+    dotColour = '#dd2222';
+    // Nine pixels of a 390 × 844 page: 0.003 %, shown rounded as 0 % but not nothing.
+    const moved = await at({ threshold: 0 });
+    expect(moved.output).toMatchObject({ matches: false, changedPixels: 9, changedPercent: 0 });
+    expect(moved.summary).toMatch(/differs from visual-baselines\/dot-phone-light\.png: 9 pixel\(s\)/);
+    // Within the default 0.1 %.
+    expect((await at({})).output).toMatchObject({ matches: true, changedPixels: 9 });
+    dotColour = '#2255dd';
   }, 120_000);
 
   it('measures LCP and CLS and names the images and videos that cost users', async () => {

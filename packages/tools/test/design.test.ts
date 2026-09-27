@@ -68,6 +68,20 @@ describe('contrast math (WCAG 2)', () => {
     expect(parseColor('var(--x)')).toBeNull();
   });
 
+  it('reads modern hsl(): a bare saturation and lightness are percentages, a negative hue turns the wheel, out of range is refused', () => {
+    // hsl(0 0 20) is #333 in CSS Color 4, not white; the legacy comma syntax needs the `%`.
+    expect(parseColor('hsl(0 0 20)')).toMatchObject({ r: 51, g: 51, b: 51 });
+    expect(parseColor('hsl(0 0 20)')).toEqual(parseColor('hsl(0 0% 20%)'));
+    expect(parseColor('hsl(120 100 50 / 50%)')).toMatchObject({ r: 0, g: 255, b: 0, a: 0.5 });
+    expect(parseColor('hsl(0, 0, 20)')).toBeNull();
+    expect(parseColor('hsl(-75 100% 50%)')).toEqual(parseColor('hsl(285 100% 50%)'));
+    expect(parseColor('hsl(-75deg 100% 50%)')).toMatchObject({ r: 191.25, g: 0, b: 255 });
+    expect(parseColor('hsl(400 100% 50%)')).toEqual(parseColor('hsl(40 100% 50%)'));
+    expect(parseColor('hsl(0 150% 50%)')).toBeNull();
+    expect(parseColor('hsl(0 50% -10%)')).toBeNull();
+    expect(parseColor('hsl(0 0 120)')).toBeNull();
+  });
+
   it('reads light and dark custom properties from a stylesheet', () => {
     const css = `/* tokens */
       :root { --color-fg: #111111; --color-bg: #ffffff; --color-accent: var(--brand); --brand: #0a7a5a; }
@@ -104,6 +118,84 @@ describe('design.contrast_matrix', () => {
     const r = await call('design.contrast_matrix', { colors: { ink: '#1a1a1a', paper: '#fafafa' }, dark: { ink: '#eeeeee', paper: '#121212' }, pairs: [['ink', 'paper']] }, dir);
     expect(r.summary).toMatch(/All 2 colour pairs .* meet WCAG AA .* in light and dark/);
     expect((await call('design.contrast_matrix', { path: '../../etc/passwd' }, dir)).error?.code).toBe('OUTSIDE_ROOT');
+  });
+
+  it('pairs X-foreground with X, and never uses a foreground role as a background (shadcn)', async () => {
+    const dir = repo({
+      'app/globals.css': `@import "tailwindcss";
+        @theme inline { --color-background: var(--background); --color-card-foreground: var(--card-foreground); }
+        :root {
+          --background: oklch(1 0 0); --foreground: oklch(0.145 0 0);
+          --card: oklch(1 0 0); --card-foreground: oklch(0.145 0 0);
+          --popover: oklch(1 0 0); --popover-foreground: oklch(0.145 0 0);
+          --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0);
+          --muted: oklch(0.97 0 0); --muted-foreground: oklch(0.556 0 0);
+          --border: oklch(0.922 0 0); --ring: oklch(0.708 0 0);
+          --chart-1: oklch(0.646 0.222 41.116);
+        }
+        .dark {
+          --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0);
+          --card: oklch(0.205 0 0); --card-foreground: oklch(0.985 0 0);
+          --popover: oklch(0.205 0 0); --popover-foreground: oklch(0.985 0 0);
+          --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0);
+          --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0);
+          --border: oklch(1 0 0 / 10%); --ring: oklch(0.556 0 0);
+        }`,
+    });
+    const r = await call('design.contrast_matrix', { path: 'app/globals.css' }, dir);
+    const out = r.output as { themes: Array<{ theme: string; rows: Array<{ fg: string; bg: string; kind: string; pass: boolean }> }>; failures: string[] };
+    const rows = out.themes.flatMap((t) => t.rows.map((row) => ({ ...row, theme: t.theme })));
+    expect(rows.filter((row) => /foreground$/.test(row.bg))).toEqual([]);
+    const byTheme = (theme: string) => Object.fromEntries(rows.filter((row) => row.theme === theme).map((row) => [`${row.fg}/${row.bg}`, row]));
+    for (const theme of ['light', 'dark']) {
+      expect(byTheme(theme)['card-foreground/card']).toMatchObject({ kind: 'text', pass: true });
+      expect(byTheme(theme)['popover-foreground/popover']).toMatchObject({ kind: 'text', pass: true });
+      expect(byTheme(theme)['primary-foreground/primary']).toMatchObject({ kind: 'text', pass: true });
+      expect(byTheme(theme)['foreground/background']).toMatchObject({ kind: 'text', pass: true });
+    }
+    // A role named for its background is checked on that background: near-white primary-foreground is never put on the white page.
+    expect([...new Set(rows.filter((row) => row.fg.endsWith('-foreground')).map((row) => `${row.fg}/${row.bg}`))].sort()).toEqual([
+      'card-foreground/card',
+      'muted-foreground/muted',
+      'popover-foreground/popover',
+      'primary-foreground/primary',
+    ]);
+    // shadcn's muted text on the muted surface is a real miss (about 4.35:1); every other text pair passes.
+    expect(out.failures.filter((f) => !/^(?:border|ring) /.test(f))).toEqual([expect.stringMatching(/^muted-foreground on muted \(light\): 4\.3\d:1/)]);
+  });
+
+  it('pairs on-X with X (Material), whatever the prefix', async () => {
+    const dir = repo({
+      'src/tokens.css': `:root { --md-sys-color-surface: #fef7ff; --md-sys-color-on-surface: #1d1b20; --md-sys-color-primary: #6750a4; --md-sys-color-on-primary: #ffffff; }
+        @media (prefers-color-scheme: dark) { :root { --md-sys-color-surface: #141218; --md-sys-color-on-surface: #e6e0e9; --md-sys-color-primary: #d0bcff; --md-sys-color-on-primary: #381e72; } }`,
+    });
+    const r = await call('design.contrast_matrix', { path: 'src/tokens.css' }, dir);
+    const out = r.output as { themes: Array<{ theme: string; rows: Array<{ fg: string; bg: string; pass: boolean }> }> };
+    expect(out.themes.map((t) => t.rows.map((row) => `${row.fg}/${row.bg}`).sort())).toEqual([
+      ['md-sys-color-on-primary/md-sys-color-primary', 'md-sys-color-on-surface/md-sys-color-surface'],
+      ['md-sys-color-on-primary/md-sys-color-primary', 'md-sys-color-on-surface/md-sys-color-surface'],
+    ]);
+    expect(r.summary).toMatch(/^All 4 colour pairs .* meet WCAG AA/);
+
+    // Plain Material names: on-surface-variant has no surface-variant here, so it is checked on every background.
+    const plain = await call('design.contrast_matrix', { colors: { surface: '#fef7ff', 'on-surface': '#1d1b20', 'on-surface-variant': '#49454f', background: '#fef7ff', 'on-background': '#1d1b20' } }, repo({}));
+    const pairs = (plain.output as { themes: Array<{ rows: Array<{ fg: string; bg: string }> }> }).themes[0]!.rows.map((row) => `${row.fg}/${row.bg}`).sort();
+    expect(pairs).toEqual(['on-background/background', 'on-surface-variant/background', 'on-surface-variant/surface', 'on-surface/surface']);
+    expect(plain.summary).toMatch(/^All 4 colour pairs/);
+  });
+
+  it('decides AA and AAA on the exact ratio, so 4.4957:1 is not rounded up to a pass', async () => {
+    const r = await call('design.contrast_matrix', { colors: { text: '#007cc3', bg: '#ffffff' } }, repo({}));
+    const row = (r.output as { themes: Array<{ rows: Array<{ ratio: number; pass: boolean; aaa: boolean }> }> }).themes[0]!.rows[0]!;
+    expect(row).toMatchObject({ pass: false, aaa: false });
+    // The shown ratio never reads as meeting a threshold the pair misses.
+    expect(row.ratio).toBeLessThan(4.5);
+    expect(r.summary).toMatch(/^1 of 1 colour pairs .* fall short of WCAG AA: text on bg \(light\): 4\.49:1, needs 4\.5:1/);
+  });
+
+  it('reads a unitless modern hsl() as a percentage, so dark grey on black fails', async () => {
+    const r = await call('design.contrast_matrix', { colors: { text: 'hsl(0 0 20)', bg: '#000' } }, repo({}));
+    expect(r.summary).toMatch(/fall short of WCAG AA: text on bg \(light\): 1\.6\d:1/);
   });
 });
 
@@ -147,5 +239,71 @@ describe('design.lint_tokens', () => {
     expect((await call('design.lint_tokens', { paths: ['../'] }, dir)).ok).toBe(false);
     expect(lintLine('  --brand: #0a7a5a;', true)).toEqual([]);
     expect(lintLine('// was #123456', false)).toEqual([]);
+  });
+
+  it('finds colours on the continuation lines of a multi-line value (Prettier), and still skips id selectors and custom properties', async () => {
+    // What Prettier 3 writes for a long box-shadow, background-image and custom property.
+    const dir = repo({
+      'src/card.css': [
+        '.card {',
+        '  box-shadow:',
+        '    0 0 0 1px #ffffff,',
+        '    0 1px 2px #000000;',
+        '  background-image:',
+        '    linear-gradient(to right, #ff0000 0%, #0000ff 100%),',
+        '    linear-gradient(to bottom, #123456, #654321);',
+        '  --ring-shadow:',
+        '    0 0 0 1px #ababab, 0 0 0 2px rgb(1 2 3);',
+        '}',
+        'a:hover,',
+        '#decade {',
+        '  color: red;',
+        '}',
+      ].join('\n'),
+    });
+    const r = await call('design.lint_tokens', { paths: ['src'] }, dir);
+    const out = r.output as { findings: Array<{ line: number; kind: string; value: string }> };
+    expect(out.findings.map((f) => `${f.line} ${f.value}`)).toEqual(['3 #ffffff', '4 #000000', '6 #ff0000', '6 #0000ff', '7 #123456', '7 #654321']);
+    // lintLine alone cannot know a line continues a value; the caller says so.
+    expect(lintLine('    0 0 0 1px #fff,', true)).toEqual([]);
+    expect(lintLine('    0 0 0 1px #fff,', true, true).map((f) => f.value)).toEqual(['#fff']);
+    // An id selector that looks like hex (#decade, #bad) is still not a colour outside a value.
+    expect(lintLine('#decade {', true)).toEqual([]);
+    expect(lintLine('#bad {', true, true).map((f) => f.value)).toEqual(['#bad']);
+    expect(lintLine('  x; } #bad {', true, true)).toEqual([]);
+  });
+
+  it('keeps a long single-line stylesheet from stalling the event loop, and reports what it did not scan', async () => {
+    const hexes = Array.from({ length: 30_000 }, (_, i) => `#${(i * 97).toString(16).padStart(6, '0').slice(-6)}`);
+    const huge = `.a{color:${hexes.join(';color:')}}`;
+    // The per-match lookbehind is bounded: a 500 KB line of colours takes milliseconds, not seconds.
+    const started = performance.now();
+    expect(lintLine(huge, true)).toHaveLength(hexes.length);
+    expect(performance.now() - started).toBeLessThan(750);
+
+    const key = ['sk', 'proj', 'q'.repeat(40)].join('-');
+    const dir = repo({
+      'src/vendor.css': huge,
+      'src/lib/bootstrap.min.css': '.x{color:#ff0000}',
+      'src/long.tsx': `const style = { apiKey: "${key}", pad: "${'x'.repeat(400)}", color: '#3355ff' };\n`,
+    });
+    const t0 = performance.now();
+    const r = await call('design.lint_tokens', { paths: ['src'], maxFindings: 1000 }, dir);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    const out = r.output as { files: number; findings: Array<{ path: string; value: string; text: string }>; skipped: Array<{ path: string; reason: string; lines?: number[] }> };
+    expect([...out.skipped].sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'src/lib/bootstrap.min.css', reason: 'minified' },
+      { path: 'src/vendor.css', reason: 'line(s) over 4096 characters', lines: [1] },
+    ]);
+    expect(r.summary).toMatch(/2 skipped as minified or too long/);
+    // A finding on a long line shows the text around it, from the line redacted whole: the key never appears.
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]).toMatchObject({ path: 'src/long.tsx', value: '#3355ff' });
+    expect(out.findings[0]!.text).toContain("color: '#3355ff'");
+    expect(out.findings[0]!.text.length).toBeLessThanOrEqual(160);
+    const short = await call('design.lint_tokens', { paths: ['src'] }, repo({ 'src/a.tsx': `const s = { apiKey: "${key}", color: '#3355ff' };\n` }));
+    const text = (short.output as { findings: Array<{ text: string }> }).findings[0]!.text;
+    expect(text).toContain('[REDACTED]');
+    expect(text).not.toContain(key.slice(8));
   });
 });

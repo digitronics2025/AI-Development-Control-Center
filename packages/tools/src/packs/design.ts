@@ -37,11 +37,12 @@ function alpha(raw: string | undefined): number {
   return clamp01(v.endsWith('%') ? Number(v.slice(0, -1)) / 100 : Number(v));
 }
 
-/** `rgb(1 2 3 / 50%)`, `rgb(1, 2, 3)`, `hsl(…)`: the arguments and the alpha after `/` (or a fourth comma value). */
-function args(inner: string): { parts: string[]; a: string | undefined } {
+/** `rgb(1 2 3 / 50%)`, `rgb(1, 2, 3)`, `hsl(…)`: the arguments, the alpha after `/` (or a fourth comma value), and whether it is the legacy comma syntax. */
+function args(inner: string): { parts: string[]; a: string | undefined; legacy: boolean } {
   const [main, slash] = inner.split('/');
-  const parts = main!.includes(',') ? main!.split(',').map((p) => p.trim()) : main!.trim().split(/\s+/);
-  return { parts: parts.slice(0, 3), a: slash ?? parts[3] };
+  const legacy = main!.includes(',');
+  const parts = legacy ? main!.split(',').map((p) => p.trim()) : main!.trim().split(/\s+/);
+  return { parts: parts.slice(0, 3), a: slash ?? parts[3], legacy };
 }
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
@@ -74,12 +75,19 @@ export function parseColor(input: string): Rgba | null {
   }
   const fn = /^(rgba?|hsla?|oklch)\(\s*([^)]*)\)$/.exec(v);
   if (!fn) return null;
-  const { parts, a } = args(fn[2]!);
+  const { parts, a, legacy } = args(fn[2]!);
   if (parts.length < 3) return null;
   let rgb: [number, number, number];
   if (fn[1]!.startsWith('rgb')) rgb = [channel(parts[0]!, 255), channel(parts[1]!, 255), channel(parts[2]!, 255)];
-  else if (fn[1]!.startsWith('hsl')) rgb = hslToRgb(Number(parts[0]!.replace(/deg$/, '')), channel(parts[1]!, 1), channel(parts[2]!, 1));
-  else rgb = oklchToRgb(channel(parts[0]!, 1), parts[1]!.endsWith('%') ? (Number(parts[1]!.slice(0, -1)) / 100) * 0.4 : Number(parts[1]!), Number(parts[2]!.replace(/deg$/, '')));
+  else if (fn[1]!.startsWith('hsl')) {
+    // Saturation and lightness are percentages; the modern space-separated syntax may drop the `%` (hsl(0 0 20) is #333),
+    // the legacy comma syntax may not. Out of range is refused rather than clamped into a colour nobody wrote.
+    const pct = (raw: string) => (raw.endsWith('%') ? Number(raw.slice(0, -1)) : legacy ? NaN : Number(raw)) / 100;
+    const [s, l] = [pct(parts[1]!), pct(parts[2]!)];
+    if (!(s >= 0 && s <= 1 && l >= 0 && l <= 1)) return null;
+    const h = Number(parts[0]!.replace(/deg$/, ''));
+    rgb = hslToRgb(((h % 360) + 360) % 360, s, l);
+  } else rgb = oklchToRgb(channel(parts[0]!, 1), parts[1]!.endsWith('%') ? (Number(parts[1]!.slice(0, -1)) / 100) * 0.4 : Number(parts[1]!), Number(parts[2]!.replace(/deg$/, '')));
   if (rgb.some((n) => !Number.isFinite(n))) return null;
   const byte = (n: number) => Math.round(Math.min(255, Math.max(0, n)) * 1000) / 1000;
   return { r: byte(rgb[0]), g: byte(rgb[1]), b: byte(rgb[2]), a: alpha(a) };
@@ -170,9 +178,36 @@ function resolveToken(tokens: Record<string, string>, name: string, depth = 0): 
   return raw;
 }
 
-const FG = /(?:^|[-_])(?:fg|text|foreground|on|ink|content|link|heading|label|icon)(?:[-_]|$)/i;
-const BG = /(?:^|[-_])(?:bg|background|surface|canvas|card|panel|base|backdrop|page)(?:[-_]|$)/i;
-const UI = /(?:^|[-_])(?:border|outline|ring|focus|divider|stroke)(?:[-_]|$)/i;
+const FG = /^(?:fg|text|foreground|ink|content|link|heading|label|icon)$/;
+const BG = /^(?:bg|background|surface|canvas|card|panel|base|backdrop|page)$/;
+const UI = /^(?:border|outline|ring|focus|divider|stroke)$/;
+
+/**
+ * A colour role by its head: `on-X` is the colour used on X, so a foreground whatever X is (Material's
+ * on-surface); otherwise the last role word in the name decides, so `card-foreground` is a foreground,
+ * `card-border` a UI boundary and `link-hover-bg` a background.
+ */
+function role(name: string): 'fg' | 'bg' | 'ui' | null {
+  const words = name.toLowerCase().split(/[-_]+/);
+  if (words.slice(0, -1).includes('on')) return 'fg';
+  for (let i = words.length - 1; i >= 0; i--) {
+    if (FG.test(words[i]!)) return 'fg';
+    if (BG.test(words[i]!)) return 'bg';
+    if (UI.test(words[i]!)) return 'ui';
+  }
+  return null;
+}
+
+/**
+ * The background a foreground is named for, when it is one of the colours: `card-foreground` → `card`
+ * (shadcn), `on-surface` → `surface`, `md-sys-color-on-primary` → `md-sys-color-primary` (Material).
+ */
+function namedBackground(fg: string, colours: Set<string>): string | undefined {
+  const on = /^(.*[-_])?on[-_](.+)$/i.exec(fg);
+  const suffix = /^(.+)[-_](?:fg|text|foreground|ink|content|link|heading|label|icon)$/i.exec(fg);
+  const candidates = on ? [`${on[1] ?? ''}${on[2]}`, on[2]!] : suffix ? [suffix[1]!] : [];
+  return candidates.find((c) => colours.has(c) && role(c) !== 'fg' && role(c) !== 'ui');
+}
 
 export interface ContrastRow {
   fg: string;
@@ -206,20 +241,74 @@ const HEX = /(?<![\w/&#-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?!
 const COLOR_FN = /\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(\s*[\d.]/g;
 const FONT_SIZE = /\bfont-size\s*:\s*\d+(?:\.\d+)?(?:px|pt)\b/g;
 
-export function lintLine(line: string, css: boolean): Array<{ kind: LintFinding['kind']; value: string }> {
+/**
+ * The hard-coded design values on one line, with where each starts. `continued` says the line starts inside
+ * a declaration's value that began on an earlier line (see valueLines), so a hex at its start is a colour.
+ */
+export function lintLine(line: string, css: boolean, continued = false): Array<{ kind: LintFinding['kind']; value: string; index: number }> {
   // A custom property definition is a design value's home, not a bypass; so is a comment line.
   if (/^\s*--[\w-]+\s*:/.test(line) || /^\s*(?:\/\/|\/\*|\*|<!--)/.test(line)) return [];
-  const out: Array<{ kind: LintFinding['kind']; value: string }> = [];
+  const out: Array<{ kind: LintFinding['kind']; value: string; index: number }> = [];
+  // The last `:` and the last `;`/`{`/`}` before the match, read once left to right so a long line stays linear.
+  let colon = -1;
+  let end = -1;
+  let read = 0;
   for (const m of line.matchAll(HEX)) {
+    for (; read < m.index; read++) {
+      const ch = line[read];
+      if (ch === ':') colon = read;
+      else if (ch === ';' || ch === '{' || ch === '}') end = read;
+    }
     // An anchor (href="#top") or an id selector (#main) is not a colour: only 3/4/6/8 hex digits after a value position.
-    const before = line.slice(0, m.index);
-    if (/href\s*=\s*["']?$|id\s*=\s*["']?$/.test(before)) continue;
-    if (css && /(?:^|[{},\s])$/.test(before) && !/:\s*[^;{}]*$/.test(before)) continue;
-    out.push({ kind: 'hex-color', value: m[0] });
+    if (/href\s*=\s*["']?$|id\s*=\s*["']?$/.test(line.slice(Math.max(0, m.index - 64), m.index))) continue;
+    const inValue = colon > end || (continued && end === -1);
+    if (css && (m.index === 0 || /[{},\s]/.test(line[m.index - 1]!)) && !inValue) continue;
+    out.push({ kind: 'hex-color', value: m[0], index: m.index });
   }
-  for (const m of line.matchAll(COLOR_FN)) out.push({ kind: 'color-function', value: m[0].replace(/\(\s*[\d.]$/, '(…)') });
-  for (const m of line.matchAll(PALETTE)) out.push({ kind: 'tailwind-palette', value: m[0] });
-  if (css) for (const m of line.matchAll(FONT_SIZE)) out.push({ kind: 'font-size-literal', value: m[0].replace(/\s+/g, ' ') });
+  for (const m of line.matchAll(COLOR_FN)) out.push({ kind: 'color-function', value: m[0].replace(/\(\s*[\d.]$/, '(…)'), index: m.index });
+  for (const m of line.matchAll(PALETTE)) out.push({ kind: 'tailwind-palette', value: m[0], index: m.index });
+  if (css) for (const m of line.matchAll(FONT_SIZE)) out.push({ kind: 'font-size-literal', value: m[0].replace(/\s+/g, ' '), index: m.index });
+  return out;
+}
+
+/**
+ * For each line of a stylesheet, whether it starts inside a declaration's value that began on an earlier line:
+ * Prettier writes a long box-shadow or gradient on the lines after `box-shadow:`. `custom` marks the rest of a
+ * custom property's value (a design value's home). A statement is a declaration when it ends at `;` or `}`,
+ * and a selector (`a:hover,` then `#main {`) when it ends at `{`; comments and strings are skipped.
+ */
+function valueLines(lines: string[]): Array<'value' | 'custom' | undefined> {
+  const out: Array<'value' | 'custom' | undefined> = new Array(lines.length);
+  let colonLine = -1; // the line of the current statement's first `:`
+  let custom = false; // the current statement starts with `--`
+  let fresh = true; // no character of the current statement read yet
+  let comment = false;
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n]!;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (comment) {
+        if (ch === '*' && line[i + 1] === '/') {
+          comment = false;
+          i++;
+        }
+      } else if (ch === '/' && line[i + 1] === '*') {
+        comment = true;
+        i++;
+      } else if (ch === '"' || ch === "'") {
+        const close = line.indexOf(ch, i + 1);
+        i = close === -1 ? line.length : close;
+      } else if (ch === ';' || ch === '{' || ch === '}') {
+        if (ch !== '{' && colonLine !== -1) for (let k = colonLine + 1; k <= n; k++) out[k] = custom ? 'custom' : 'value';
+        colonLine = -1;
+        fresh = true;
+      } else if (!/\s/.test(ch)) {
+        if (fresh) custom = ch === '-' && line[i + 1] === '-';
+        fresh = false;
+        if (ch === ':' && colonLine === -1) colonLine = n;
+      }
+    }
+  }
   return out;
 }
 
@@ -259,12 +348,25 @@ async function contrastMatrix(
     return v !== null && parseColor(v) !== null;
   }));
   let pairs: Array<{ fg: string; bg: string; kind: 'text' | 'ui' }>;
-  if (input.pairs?.length) pairs = input.pairs.map(([fg, bg]) => ({ fg, bg, kind: UI.test(fg) ? 'ui' : 'text' }));
+  if (input.pairs?.length) pairs = input.pairs.map(([fg, bg]) => ({ fg, bg, kind: role(fg) === 'ui' ? 'ui' : 'text' }));
   else {
-    const fgs = input.foregrounds?.length ? input.foregrounds : colourNames.filter((n) => FG.test(n) && !BG.test(n));
-    const uis = input.foregrounds?.length ? [] : colourNames.filter((n) => UI.test(n) && !BG.test(n));
-    const bgs = input.backgrounds?.length ? input.backgrounds : colourNames.filter((n) => BG.test(n));
-    pairs = [...fgs.flatMap((fg) => bgs.map((bg) => ({ fg, bg, kind: 'text' as const }))), ...uis.flatMap((fg) => bgs.map((bg) => ({ fg, bg, kind: 'ui' as const })))];
+    const fgs = input.foregrounds?.length ? input.foregrounds : colourNames.filter((n) => role(n) === 'fg');
+    const uis = input.foregrounds?.length ? [] : colourNames.filter((n) => role(n) === 'ui');
+    const bgs = input.backgrounds?.length ? input.backgrounds : colourNames.filter((n) => role(n) === 'bg');
+    // A foreground named for its background is checked on that one, first: primary-foreground is made for primary, not the page.
+    const named = new Map<string, string>();
+    if (!input.foregrounds?.length && !input.backgrounds?.length) {
+      const colours = new Set(colourNames);
+      for (const fg of fgs) {
+        const bg = namedBackground(fg, colours);
+        if (bg) named.set(fg, bg);
+      }
+    }
+    pairs = [
+      ...[...named].map(([fg, bg]) => ({ fg, bg, kind: 'text' as const })),
+      ...fgs.filter((fg) => !named.has(fg)).flatMap((fg) => bgs.map((bg) => ({ fg, bg, kind: 'text' as const }))),
+      ...uis.flatMap((fg) => bgs.map((bg) => ({ fg, bg, kind: 'ui' as const }))),
+    ];
   }
   if (!pairs.length) {
     return { ok: true, summary: `No colour pairs to check in ${source}: name them in pairs, or use names with fg/text and bg/surface`, output: { tokens: colourNames, themes: [] }, evidence: [`contrast matrix of ${source}: no pairs`] };
@@ -288,9 +390,12 @@ async function contrastMatrix(
           if (!bg) unresolved.add(p.bg);
           continue;
         }
-        const ratio = Math.round(contrastRatio(fg, bg, canvas) * 100) / 100;
+        // WCAG thresholds are not rounded: AA and AAA are decided on the exact ratio, and the shown ratio is cut (not rounded)
+        // to two decimals, so 4.4957:1 reads 4.49:1 and fails rather than reading 4.5:1.
+        const exact = contrastRatio(fg, bg, canvas);
+        const ratio = Math.floor(exact * 100) / 100;
         const needed = p.kind === 'ui' ? 3 : 4.5;
-        const row: ContrastRow = { fg: p.fg, bg: p.bg, fgValue: fgValue!, bgValue: bgValue!, ratio, kind: p.kind, pass: ratio >= needed, aaa: ratio >= (p.kind === 'ui' ? 4.5 : 7) };
+        const row: ContrastRow = { fg: p.fg, bg: p.bg, fgValue: fgValue!, bgValue: bgValue!, ratio, kind: p.kind, pass: exact >= needed, aaa: exact >= (p.kind === 'ui' ? 4.5 : 7) };
         rows.push(row);
         if (!row.pass) failures.push(`${p.fg} on ${p.bg} (${theme}): ${ratio}:1, needs ${needed}:1`);
       }
@@ -307,12 +412,36 @@ async function contrastMatrix(
   };
 }
 
+/** A line longer than this is minified or generated (a bundle, a data URI), not written by hand: it is reported as skipped, not read. */
+const MAX_LINE = 4096;
+
+/**
+ * Up to 160 characters of a finding's line around it, cut from the line redacted whole: a window redacted
+ * on its own could cut a key name or a key prefix from its secret, and the rules would no longer see it.
+ */
+function excerpt(line: string, redacted: string, index: number, value: string): string {
+  const text = redacted.trim();
+  if (text.length <= 160) return text;
+  const lead = redacted.length - redacted.trimStart().length;
+  // Redaction moves what follows a secret; then the value's first place in the redacted line stands in for the match.
+  const at = (redacted === line ? index : Math.max(0, redacted.indexOf(value))) - lead;
+  const start = Math.min(Math.max(0, at - 60), text.length - 160);
+  return text.slice(start, start + 160);
+}
+
 async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow: string[]; maxFindings: number }): Promise<OperationResult> {
   const allow = new Set(input.allow.map((a) => a.toLowerCase()));
   const findings: LintFinding[] = [];
   const counts: Record<LintFinding['kind'], number> = { 'hex-color': 0, 'color-function': 0, 'tailwind-palette': 0, 'font-size-literal': 0 };
   let files = 0;
   let truncated = false;
+  // What was not read, so a clean result is never mistaken for a scan of generated files.
+  const skipped: Array<{ path: string; reason: string; lines?: number[] }> = [];
+  let skippedCount = 0;
+  const skip = (rel: string, reason: string, lines?: number[]) => {
+    skippedCount++;
+    if (skipped.length < 100) skipped.push(lines ? { path: rel, reason, lines } : { path: rel, reason });
+  };
   const exts = /\.(?:css|scss|sass|less|tsx|jsx|ts|js|mjs|vue|svelte|html|astro)$/i;
   const visit = async (abs: string, depth: number): Promise<void> => {
     if (depth > 12 || files >= 5000) return;
@@ -325,22 +454,42 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
         if (!SKIP_DIRS.has(e.name)) await visit(child, depth + 1);
         continue;
       }
-      if (!e.isFile() || !exts.test(e.name) || /\.(?:min|d)\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(e.name)) continue;
+      if (!e.isFile() || !exts.test(e.name) || /\.d\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(e.name)) continue;
       const rel = relativeTo(ctx.cwd, child);
       if (TOKEN_FILE.test(rel)) continue;
+      if (/\.min\.(?:css|[jt]s)$/i.test(e.name)) {
+        skip(rel, 'minified');
+        continue;
+      }
       const s = await stat(child).catch(() => null);
-      if (!s || s.size > 512 * 1024) continue;
+      if (!s) continue;
+      if (s.size > 512 * 1024) {
+        skip(rel, 'over 512 KB');
+        continue;
+      }
       files++;
       const css = /\.(?:css|scss|sass|less)$/i.test(e.name);
       const lines = (await readFile(child, 'utf8').catch(() => '')).split(/\r?\n/);
+      const within = css ? valueLines(lines) : [];
+      const long: number[] = [];
       lines.forEach((line, i) => {
-        for (const f of lintLine(line, css)) {
+        if (line.length > MAX_LINE) {
+          long.push(i + 1);
+          return;
+        }
+        if (within[i] === 'custom') return;
+        let redacted: string | undefined;
+        for (const f of lintLine(line, css, within[i] === 'value')) {
           if (allow.has(f.value.toLowerCase())) continue;
           counts[f.kind]++;
-          if (findings.length < input.maxFindings) findings.push({ path: rel, line: i + 1, kind: f.kind, value: f.value, text: redact(line.trim()).slice(0, 160) });
-          else truncated = true;
+          if (findings.length < input.maxFindings) {
+            // Redacted once per line, not once per finding.
+            redacted ??= redact(line);
+            findings.push({ path: rel, line: i + 1, kind: f.kind, value: f.value, text: excerpt(line, redacted, f.index, f.value) });
+          } else truncated = true;
         }
       });
+      if (long.length) skip(rel, `line(s) over ${MAX_LINE} characters`, long.slice(0, 20));
     }
   };
   const scanned: string[] = [];
@@ -355,13 +504,14 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
   if (!scanned.length) return failure('INVALID_INPUT', `None of ${input.paths.join(', ')} is a folder in the repository`);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const parts = (Object.entries(counts) as Array<[LintFinding['kind'], number]>).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`);
+  const notRead = skippedCount ? ` (${skippedCount} skipped as minified or too long: see skipped)` : '';
   return {
     ok: true,
     summary: total
-      ? `${total} hard-coded design value${total === 1 ? '' : 's'} in ${new Set(findings.map((f) => f.path)).size}${truncated ? '+' : ''} file(s) under ${scanned.join(', ')} (${parts.join(', ')}): use the design standard's semantic values instead`
-      : `No hard-coded colours, palette classes or font sizes in ${files} file(s) under ${scanned.join(', ')}`,
-    output: { scanned, files, counts, findings, truncated },
-    evidence: [`token lint of ${scanned.join(', ')}: ${files} files, ${total} finding(s)`],
+      ? `${total} hard-coded design value${total === 1 ? '' : 's'} in ${new Set(findings.map((f) => f.path)).size}${truncated ? '+' : ''} file(s) under ${scanned.join(', ')} (${parts.join(', ')}): use the design standard's semantic values instead${notRead}`
+      : `No hard-coded colours, palette classes or font sizes in ${files} file(s) under ${scanned.join(', ')}${notRead}`,
+    output: { scanned, files, counts, findings, truncated, skipped },
+    evidence: [`token lint of ${scanned.join(', ')}: ${files} files, ${total} finding(s)${skippedCount ? `, ${skippedCount} skipped` : ''}`],
   };
 }
 
@@ -378,7 +528,7 @@ export function designProvider(): ToolProvider {
         id: 'design.contrast_matrix',
         title: 'Check the contrast of colour roles in both themes',
         description:
-          'Read a stylesheet\'s custom properties (light from :root, dark from prefers-color-scheme: dark, .dark or [data-theme=dark]) or colours you give, pair foreground roles (fg, text, on-…) and UI boundaries (border, ring, focus) with background roles (bg, surface, canvas…) or the pairs you name, and report each WCAG 2 contrast ratio per theme with AA (4.5:1 text, 3:1 UI) and AAA. Reads hex, rgb(), hsl(), oklch() and var() references.',
+          'Read a stylesheet\'s custom properties (light from :root, dark from prefers-color-scheme: dark, .dark or [data-theme=dark]) or colours you give, pair foreground roles (fg, text, on-…; card-foreground and on-surface with the card and surface they are named for) and UI boundaries (border, ring, focus) with background roles (bg, surface, canvas…) or the pairs you name, and report each WCAG 2 contrast ratio per theme with AA (4.5:1 text, 3:1 UI) and AAA. Reads hex, rgb(), hsl(), oklch() and var() references.',
         input: z
           .object({
             path: repoPath.optional().describe('A stylesheet (or tokens file with CSS custom properties).'),
@@ -398,7 +548,7 @@ export function designProvider(): ToolProvider {
         id: 'design.lint_tokens',
         title: 'Find design values code hard-codes',
         description:
-          'Scan source folders for colours written as literals (hex, rgb()/hsl()/oklch()), Tailwind default-palette classes (bg-blue-500) and pixel font sizes in stylesheets, outside the files where a design standard defines its values (tokens, theme, variables, tailwind.config) and outside custom-property definitions. Use it to keep a change on the repository\'s semantic tokens.',
+          'Scan source folders for colours written as literals (hex, rgb()/hsl()/oklch()), Tailwind default-palette classes (bg-blue-500) and pixel font sizes in stylesheets, outside the files where a design standard defines its values (tokens, theme, variables, tailwind.config) and outside custom-property definitions. Minified files, files over 512 KB and lines over 4096 characters are not read and are listed in skipped. Use it to keep a change on the repository\'s semantic tokens.',
         input: z.object({
           paths: z.array(repoPath).min(1).max(20).default(['src']),
           allow: z.array(z.string().max(60)).max(100).default([]).describe('Values to ignore, e.g. "#fff" for an email template.'),

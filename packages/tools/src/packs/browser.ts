@@ -330,6 +330,13 @@ const MAX_TILE_HEIGHT = 4000;
  * A Chromium that cannot reach anything: every connection goes to a closed
  * port through a proxy that loopback does not bypass, so even what request
  * routing never sees (a preconnect, a prefetch) goes nowhere.
+ *
+ * It draws agent HTML only, so script is off for the whole browser, not just
+ * per page: a sandboxed frame is drawn in a process of its own that the
+ * per-page switch reached only some of the time, and its script could then
+ * send WebRTC UDP, which no proxy sees. Keeping sandboxed frames in the page's
+ * process is a second layer. Our own scripts (the pixel compare, the contact
+ * sheets) run in `launch()`, never here.
  */
 async function launchSealed(): Promise<Browser> {
   const choice = await findBrowser();
@@ -338,7 +345,7 @@ async function launchSealed(): Promise<Browser> {
   return chromium.launch({
     headless: true,
     executablePath: choice.executablePath ?? undefined,
-    args: ['--no-first-run', '--no-default-browser-check', '--dns-prefetch-disable'],
+    args: ['--no-first-run', '--no-default-browser-check', '--dns-prefetch-disable', '--blink-settings=scriptEnabled=false', '--disable-features=IsolateSandboxedIframes'],
     proxy: { server: 'http://127.0.0.1:9', bypass: '<-loopback>' },
     env: credentialFreeEnv(process.env) as Record<string, string>,
   });
@@ -377,8 +384,15 @@ export async function renderHtml(ctx: OperationContext, input: RenderHtmlInput):
         const page = await context.newPage();
         await page.setContent(input.html, { waitUntil: 'load', timeout: input.timeoutSec * 1000 });
         const size = await page.locator('html').boundingBox();
+        // A page that scrolls is as tall as it scrolls: with html, body { height: 100% } the <html> box is one viewport high.
+        const scrolled = await page.evaluate(() => {
+          // Runs in the page: browser globals through globalThis (this package compiles without DOM types).
+          const doc = (globalThis as any).document;
+          const root = doc.scrollingElement ?? doc.documentElement;
+          return root.scrollHeight > root.clientHeight ? (root.scrollHeight as number) : 0;
+        });
         const width = VIEWPORTS[input.viewport].width;
-        const full = Math.max(1, Math.ceil(size?.height ?? VIEWPORTS[input.viewport].height));
+        const full = Math.max(1, Math.ceil(Math.max(size?.height ?? VIEWPORTS[input.viewport].height, scrolled)));
         const height = Math.min(full, MAX_TILE_HEIGHT);
         const png = await page.screenshot({ type: 'png', fullPage: true, clip: { x: 0, y: 0, width, height }, timeout: input.timeoutSec * 1000 });
         const name = `tile-${input.name}-${scheme}.png`;
@@ -539,8 +553,9 @@ export async function visualDiff(ctx: OperationContext, input: VisualDiffInput):
     }
     if (!saved) return { ok: false, summary: `No baseline at ${rel}: run again with update to record one (a Level 2 call, it writes that file)`, error: { code: 'INVALID_INPUT', message: `No baseline at ${rel}` } };
     const cmp = await comparePngs(browser, saved, current);
+    // Rounded for display only: the match is decided on the exact share, so at threshold 0 one changed pixel differs.
     const percent = Math.round((cmp.changed / Math.max(1, cmp.total)) * 10_000) / 100;
-    const matches = !cmp.sizeChanged && percent <= input.threshold;
+    const matches = !cmp.sizeChanged && (cmp.changed / Math.max(1, cmp.total)) * 100 <= input.threshold;
     const name = `diff-${input.name}-${input.viewport}-${input.colorScheme}.png`;
     let artifact: { id: string; name: string } | null = null;
     if (ctx.artifacts) artifact = await ctx.artifacts.write({ name, type: 'screenshot', content: cmp.diff, mime: 'image/png' });
@@ -550,7 +565,7 @@ export async function visualDiff(ctx: OperationContext, input: VisualDiffInput):
       ok: true,
       summary: matches
         ? `${input.url} matches ${rel} (${percent}% of pixels changed, within ${input.threshold}%)`
-        : `${input.url} differs from ${rel}: ${percent}% of pixels changed${cmp.sizeChanged ? ', and the page size changed' : ''} (limit ${input.threshold}%); the red in the picture is what moved`,
+        : `${input.url} differs from ${rel}: ${cmp.changed} pixel(s) changed, ${percent}% of the page${cmp.sizeChanged ? ', and the page size changed' : ''} (limit ${input.threshold}%); the red in the picture is what moved`,
       output: { baseline: rel, matches, changedPercent: percent, changedPixels: cmp.changed, width: cmp.width, height: cmp.height, sizeChanged: cmp.sizeChanged, diff: artifact },
       evidence: [`visual diff of ${input.url} against ${rel}: ${percent}% changed`],
       artifacts: artifact ? [artifact] : [],

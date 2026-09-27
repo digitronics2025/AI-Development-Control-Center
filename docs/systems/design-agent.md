@@ -8,7 +8,8 @@ sources:
   - apps/orchestrator/src/chairman/policy.ts
   - apps/orchestrator/src/engine/runners.ts
   - packages/security/src/env-guard.ts
-verified_at: 8c6cbf7
+  - packages/tools/src/packs/media*.ts
+verified_at: c5503d3
 ---
 
 # Design agent (designer role, Frontend Design workflow)
@@ -56,10 +57,64 @@ Designer edits count everywhere implementer and fixer edits count: the READY
 gate ("tests have not run since the last change"), the report's Changed
 section, and "undo last change".
 
+## Media tools
+
+Built-in capabilities in [media.ts](../../packages/tools/src/packs/media.ts),
+[media-fal.ts](../../packages/tools/src/packs/media-fal.ts) and
+[media-ffmpeg.ts](../../packages/tools/src/packs/media-ffmpeg.ts); shared file
+handling in [media-files.ts](../../packages/tools/src/packs/media-files.ts).
+
+| Capability | Level | What it does |
+|---|---|---|
+| `media.image.view` | 1 | Shows the model a repository image (PNG/JPEG as is; WebP, AVIF, GIF, SVG drawn by an isolated Chromium: scripts off, network refused, checkerboard for transparency) |
+| `media.video.frames` | 1 (FFmpeg) | A contact sheet of frames, duration, size, audio yes/no; writes nothing into the repository |
+| `media.job.status` | 1 | A generation job's state; free |
+| `media.asset.fetch` | 2 | Downloads one image or video into the repository |
+| `media.svg.optimize` | 2 | Sanitises and minifies an SVG |
+| `media.asset.optimize` | 2 (FFmpeg) | AVIF/WebP (or JPEG) widths, never upscaled, with `srcset` and a `<picture>` snippet |
+| `media.video.encode` / `media.video.poster` | 2 (FFmpeg) | WebM (VP9) + MP4 (H.264, `+faststart`), no audio unless asked, `<video>` snippet; a poster frame |
+| `media.job.fetch` / `media.job.cancel` | 2 | Saves a finished job's files; cancels a queued job |
+| `media.image.generate`, `.edit`, `.upscale`, `.remove_background`, `.vectorize`, `media.video.generate` | 3 (paid) | fal queue API; results saved as `<folder>/<name>-N.<ext>` |
+
+**Files.** Every path is confined to the task's roots and never touches the
+user's own uncommitted work (`protectedCheck`). A file's type comes from its
+bytes and must match its extension; downloads are https (or loopback http),
+redirects judged hop by hop and never into the Control Center, streamed to a
+temporary file under a cap (25 MB image, 200 MB video) and moved into place
+only when valid. Every SVG saved or optimised is sanitised: scripts, event
+handlers, foreign objects, embedded documents, link-retargeting animations,
+`javascript:` and external references, style imports, DOCTYPE and entity
+declarations, comments, metadata and editor data are removed until nothing
+changes.
+
+**Generation (fal).** The key is the value of a `media` credential (default
+name `fal`; the input `credential` names another), read by name for that call
+only ([credential-broker.md](credential-broker.md)). A submission is never
+retried: a timeout is reported as "may have been accepted and billed", with
+the job id. Job ids carry fal's own status, result and cancel URLs, each
+proven to be on the queue's origin before the key is sent. A result is
+downloaded into the repository by its real type (a vendor's URL is never
+shipped) and kept as a task artifact (`image`/`video`, up to 50 MB). Each
+paid call returns a conservative cost estimate (`DEFAULT_MEDIA_PRICES`). The
+default models are starting points (`fal-ai/flux/dev`, `fal-ai/flux-pro/kontext`,
+`fal-ai/esrgan`, `fal-ai/bria/background/remove`, `fal-ai/recraft/vectorize`,
+Kling 2.1 for video); `model` and `arguments` pass any fal endpoint and its
+parameters. `ACC_FAL_API_BASE` may point the pack at a loopback stand-in (tests)
+and nowhere else.
+
+**FFmpeg.** Fixed argument templates, no shell; numbers and choices come from
+the schema; every path is passed as `file:<absolute path>` with
+`-protocol_whitelist file`, so a name can never be an option or another
+protocol. Missing FFmpeg is `NOT_INSTALLED` with the install hint; it is in
+the reviewed installer catalog (`Gyan.FFmpeg`).
+
 ## Operator setup
 
-1. **Media generation (fal through the MCP gateway).** Paid generation is
-   optional; without it the Assets stage writes an asset brief instead.
+1. **Media generation.** Paid generation is optional; without it the Assets
+   stage writes an asset brief instead. The built-in `media.*` tools need
+   only a Tools → Credentials entry of kind **media** named `fal` holding the
+   fal key (no environment variable). The alternative below uses fal's own
+   MCP server through the gateway.
    - Create a dedicated fal account and key with a prepaid balance; the
      balance is the hard spending cap.
    - Tools → Credentials: add an **unscoped** credential (no repositories:

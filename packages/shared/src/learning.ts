@@ -73,6 +73,7 @@ export const INSTALLABLE_TOOLS: readonly InstallableTool[] = [
   { id: 'uv', name: 'uv', commands: ['uv', 'uvx'], providerId: 'uv', method: { kind: 'winget', packageId: 'astral-sh.uv' }, purpose: 'Python environments and packages' },
   { id: 'adb', name: 'Android platform tools', commands: ['adb', 'fastboot'], providerId: 'adb', method: { kind: 'winget', packageId: 'Google.PlatformTools' }, purpose: 'Install and inspect Android apps on a device' },
   { id: 'wrangler', name: 'Wrangler', commands: ['wrangler'], providerId: 'wrangler', method: { kind: 'npm', packageName: 'wrangler' }, purpose: 'Cloudflare Workers, Pages and D1' },
+  { id: 'ffmpeg', name: 'FFmpeg', commands: ['ffmpeg', 'ffprobe'], providerId: 'ffmpeg', method: { kind: 'winget', packageId: 'Gyan.FFmpeg' }, purpose: 'Optimise images and video, poster frames and video frames (media tools)' },
 ];
 
 export const INSTALLABLE_TOOL_IDS = INSTALLABLE_TOOLS.map((t) => t.id) as [string, ...string[]];

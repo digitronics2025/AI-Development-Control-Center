@@ -235,6 +235,9 @@ export const ARTIFACT_TYPES = [
   'tool-output',
   /** Page evidence the operator sent from Private Browser (a re-check): never leaves this computer (remote.ts). */
   'operator-evidence',
+  /** Generated or collected media (docs/systems/design-agent.md): masters and previews kept out of the repository. */
+  'image',
+  'video',
 ] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 

@@ -180,7 +180,10 @@ describe('learning signals', () => {
     expect(installableFor('rg')?.id).toBe('ripgrep');
     expect(installableFor('gh.exe')?.id).toBe('gh');
     expect(installableFor('wrangler')?.method).toEqual({ kind: 'npm', packageName: 'wrangler' });
-    expect(installableFor('ffmpeg')).toBeNull();
+    // The media tools' encoder is in the catalog (docs/systems/design-agent.md); anything unreviewed is not.
+    expect(installableFor('ffprobe.exe')?.method).toEqual({ kind: 'winget', packageId: 'Gyan.FFmpeg' });
+    expect(installableFor('ffmpeg')?.providerId).toBe('ffmpeg');
+    expect(installableFor('imagemagick')).toBeNull();
   });
 });
 
@@ -252,7 +255,7 @@ describe('learning review', () => {
           { kind: 'process', title: 'Invented problem here', detail: 'x', evidence: ['s9'] },
           { kind: 'missing_skill', title: 'Use a skill nobody has', detail: 'x', evidence: ['s1'], proposal: { type: 'USE_SKILL', skill: 'made-up', when: 'always when fixing' } },
           { kind: 'missing_tool', title: 'Install jq', detail: 'jq missing', evidence: ['s2'], scope: 'repository', proposal: { type: 'INSTALL_TOOL', toolId: 'jq' } },
-          { kind: 'missing_tool', title: 'Install ffmpeg', detail: 'x', evidence: ['s2'], proposal: { type: 'INSTALL_TOOL', toolId: 'ffmpeg' } },
+          { kind: 'missing_tool', title: 'Install imagemagick', detail: 'x', evidence: ['s2'], proposal: { type: 'INSTALL_TOOL', toolId: 'imagemagick' } },
           { kind: 'app_defect', title: 'Engine misread the crash', detail: 'x', evidence: ['s1'], proposal: { type: 'ADD_LESSON', text: 'Nothing to learn from this one.' } },
           { kind: 'process', title: 'Same as before', detail: 'x', evidence: ['s1'], sameAs: 'old' },
           'not an object',
@@ -261,7 +264,7 @@ describe('learning review', () => {
       context,
     );
     expect(parsed.summary).toBe('Three rounds of fixing.');
-    expect(parsed.findings.map((f) => f.title)).toEqual(['Build before running e2e', 'Use a skill nobody has', 'Install jq', 'Install ffmpeg', 'Engine misread the crash']);
+    expect(parsed.findings.map((f) => f.title)).toEqual(['Build before running e2e', 'Use a skill nobody has', 'Install jq', 'Install imagemagick', 'Engine misread the crash']);
     expect(parsed.findings[1]!.proposal).toBeNull();
     expect(parsed.findings[2]).toMatchObject({ scope: 'global', repositoryId: null, proposal: { type: 'INSTALL_TOOL', toolId: 'jq' } });
     expect(parsed.findings[3]!.proposal).toBeNull();
@@ -382,7 +385,8 @@ describe('program installer', () => {
     expect(op.level).toBe(3);
     expect(op.classify!({ toolId: 'jq' }, { cwd: '.' })).toMatchObject({ level: 3, production: false });
     expect(op.input.safeParse({ toolId: 'jq' }).success).toBe(true);
-    expect(op.input.safeParse({ toolId: 'ffmpeg' }).success).toBe(false);
+    expect(op.input.safeParse({ toolId: 'ffmpeg' }).success).toBe(true);
+    expect(op.input.safeParse({ toolId: 'imagemagick' }).success).toBe(false);
     expect(op.input.safeParse({ toolId: 'jq; rm -rf /' }).success).toBe(false);
   });
 });

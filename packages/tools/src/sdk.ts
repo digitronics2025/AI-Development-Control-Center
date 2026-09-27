@@ -32,6 +32,7 @@ export const TOOL_CATEGORIES = [
   'verification',
   'environment',
   'mcp',
+  'media',
   'system',
 ] as const;
 export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
@@ -113,12 +114,16 @@ export interface CheckpointHost {
 
 export interface ArtifactSink {
   /** Save a file produced by an operation (screenshot, log, report) with the task. */
-  write(input: { name: string; type: 'screenshot' | 'browser-report' | 'tool-output' | 'environment'; content: string | Buffer; mime?: string }): Promise<{ id: string; name: string }>;
+  write(input: { name: string; type: 'screenshot' | 'browser-report' | 'tool-output' | 'environment' | 'image' | 'video'; content: string | Buffer; mime?: string }): Promise<{ id: string; name: string }>;
 }
 
 export interface CredentialHost {
-  /** Plaintext of a named credential, for injection into one child process. Never returned to a model. */
-  value(name: string): Promise<string | null>;
+  /**
+   * Plaintext of a named credential, for injection into one child process. Never returned to a model.
+   * With `kind`, only a credential of that kind is returned (the media tools read only `media` keys,
+   * so an agent cannot have another secret sent to a vendor by naming it).
+   */
+  value(name: string, opts?: { kind?: 'media' }): Promise<string | null>;
   /** Environment for credential kinds (e.g. `cloudflare` → CLOUDFLARE_API_TOKEN). */
   envFor(kinds: readonly string[]): Promise<Record<string, string>>;
   /**

@@ -590,7 +590,7 @@ export class ToolService {
       artifacts,
       credentials: {
         // Only a production secret deploy, which always waits for the operator's typed approval, may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
-        value: (name) => this.d.credentials.value(name, scope.repositoryId, run.deploysReserved ? { reserved: 'deploy' } : {}),
+        value: (name, opts) => this.d.credentials.value(name, scope.repositoryId, { ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}), ...(opts?.kind ? { kind: opts.kind } : {}) }),
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {

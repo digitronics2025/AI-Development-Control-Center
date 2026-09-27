@@ -132,6 +132,30 @@ describe('credential broker', () => {
   });
   afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
+  it('keeps a media key out of every environment and refuses billing variables as a credential variable', async () => {
+    const value = ['fal', 'media', 'key', '0123456789abcdef'].join('-');
+    const media = await t.api('POST', '/api/credentials', { name: 'fal', kind: 'media', value });
+    expect(media.status).toBe(201);
+    expect(media.body).toMatchObject({ kind: 'media', envVar: null });
+    // Read by name for one call (the media tools); never an environment variable of any child.
+    expect(await t.services.credentials.value('fal', repoId)).toBe(value);
+    expect(Object.values(await t.services.credentials.envFor(['media', 'http', 'other'], repoId))).not.toContain(value);
+    expect((await t.api('POST', '/api/credentials', { name: 'fal-env', kind: 'media', envVar: 'FAL_KEY', value })).body).toMatchObject({ error: { code: 'INVALID' } });
+    // A billing variable would stand in for the agent CLIs' own billing selection.
+    for (const envVar of ['OPENAI_API_KEY', 'gemini_api_key', 'ANTHROPIC_API_KEY']) {
+      const res = await t.api('POST', '/api/credentials', { name: `k-${envVar.toLowerCase()}`, kind: 'other', envVar, value });
+      expect(res.status, envVar).toBe(400);
+    }
+    const other = await t.api('POST', '/api/credentials', { name: 'plain', kind: 'other', envVar: 'MY_SERVICE_KEY', value: `${value}-2` });
+    expect(other.status).toBe(201);
+    expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { envVar: 'OPENAI_API_KEY' })).status).toBe(400);
+    expect((await t.api('PATCH', `/api/credentials/${other.body.id}`, { description: 'unrelated edit' })).status).toBe(200);
+    // The media tools ask for kind media: another secret named by an agent is never handed to a vendor.
+    expect(await t.services.credentials.value('fal', repoId, { kind: 'media' })).toBe(value);
+    expect(await t.services.credentials.value('plain', repoId, { kind: 'media' })).toBeNull();
+    for (const id of [media.body.id, other.body.id]) expect((await t.api('DELETE', `/api/credentials/${id}`)).status).toBeLessThan(300);
+  });
+
   it('stores values sealed, never returns them, injects them into one call and redacts echoes', async () => {
     const value = ['brokered', 'secret', 'value', '0042'].join('-');
     const created = await t.api('POST', '/api/credentials', { name: 'test-api', kind: 'http', value, description: 'fixture' });

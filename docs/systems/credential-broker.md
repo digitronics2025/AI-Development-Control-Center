@@ -90,7 +90,14 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
 4. The variables the broker manages are stripped from every inherited
    environment ([env-guard.ts](../../packages/security/src/env-guard.ts)).
 
-Kinds: `cloudflare`, `github`, `postgres`, `mysql`, `http`, `npm`, `other`.
+Kinds: `cloudflare`, `github`, `postgres`, `mysql`, `http`, `npm`, `media`, `other`.
+A `media` credential (an image or video generation key, [design-agent.md](design-agent.md))
+takes no environment variable and is read only by name with `value(name, {kind: 'media'})`,
+which returns null for any other kind, so an agent cannot have another secret sent
+to a vendor by naming it. A credential saved by hand may not take a billing
+variable (`API_BILLING_ENV_VARS`: `OPENAI_API_KEY`, `GEMINI_API_KEY` …; also
+reserved for generated and imported ones): the broker strips a credential's
+variable everywhere, so it would stand in for the agent CLIs' own billing selection.
 `GET /api/credentials` adds `source` (`manual` / `myvault` / `generated`) and
 `vault` (the link, no value). `GET /api/credentials/:id/events` is the audit.
 

@@ -15,7 +15,13 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  // Only ever served as a download (attachment): an SVG opened inline can run script.
+  '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
   '.sql': 'text/plain',
   '.html': 'text/plain',
 };

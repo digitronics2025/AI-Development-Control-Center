@@ -158,7 +158,8 @@ export interface McpServerView {
   updatedAt: string;
 }
 
-export const CREDENTIAL_KINDS = ['cloudflare', 'github', 'postgres', 'mysql', 'http', 'npm', 'other'] as const;
+/** `media`: an image or video generation key, read by name by the media tools only; it never takes an environment variable. */
+export const CREDENTIAL_KINDS = ['cloudflare', 'github', 'postgres', 'mysql', 'http', 'npm', 'media', 'other'] as const;
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
 /** Environment variable a credential kind is injected as, unless the credential names its own. */
@@ -169,6 +170,7 @@ export const CREDENTIAL_KIND_ENV: Record<CredentialKind, string | null> = {
   mysql: 'MYSQL_PWD',
   http: null,
   npm: 'NPM_TOKEN',
+  media: null,
   other: null,
 };
 

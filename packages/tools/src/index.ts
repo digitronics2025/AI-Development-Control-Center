@@ -13,6 +13,9 @@ import { gitProvider } from './packs/git.js';
 import { hostedProviders } from './packs/hosted.js';
 import { httpProviders } from './packs/http.js';
 import { installerProvider } from './packs/installer.js';
+import { mediaProvider } from './packs/media.js';
+import { falMediaProvider } from './packs/media-fal.js';
+import { ffmpegProvider } from './packs/media-ffmpeg.js';
 import { networkProviders } from './packs/network.js';
 import { runtimeProviders } from './packs/runtime.js';
 import { shellProviders } from './packs/shell.js';
@@ -42,7 +45,9 @@ export { checkPage, findBrowser, VIEWPORTS } from './packs/browser.js';
 export { closeBrowserPages, closeAllBrowserPages, openBrowserPages } from './packs/browser-session.js';
 export { verifyWeb, webVerifyInput, type WebVerifyInput } from './packs/verify.js';
 export { tcpConnect } from './packs/network.js';
-export { globToRegExp } from './packs/filesystem.js';
+export { globToRegExp, protectedCheck } from './packs/filesystem.js';
+export { dimensions, sanitizeSvg, sniff, type MediaKind } from './packs/media-files.js';
+export { DEFAULT_MEDIA_PRICES, decodeJob, encodeJob, estimate as estimateMediaCost, type CostEstimate, type MediaPriceUnit } from './packs/media-fal.js';
 export { refreshedPath, locateInstalled } from './packs/installer.js';
 export { resetCloudflareCatalog } from './packs/cloudflare-api.js';
 
@@ -69,5 +74,8 @@ export function builtinProviders(): ToolProvider[] {
     ...hostedProviders(),
     verifyProvider(),
     installerProvider(),
+    mediaProvider(),
+    falMediaProvider(),
+    ffmpegProvider(),
   ];
 }

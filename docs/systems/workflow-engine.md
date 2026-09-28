@@ -94,7 +94,9 @@ separate pass) (or checks HTTP status for APIs/Workers), fails on console
 errors, page errors, failed same-origin requests or horizontal scrolling,
 saves screenshots and `browser-verification.md`, stops the app, and on
 failure goes to `onFail` like a test failure. It is skipped when no runtime
-address is configured (`skipsForLackOfCommands`).
+address is configured (`skipsForLackOfCommands`). Its port is free because a
+background process an agent stage starts (a designer's dev server) stops when
+that stage ends ([tool-system.md](tool-system.md#task-processes-processests)).
 
 A `release` stage (Full Autopilot's **Release**, after Smoke) sends the
 task's tested commit live after a typed Level 5 approval and proves it
@@ -512,4 +514,4 @@ row carries that totals line (`- ✓ unit tests (4.2s) — 12 passed (12)`)
 task's `Fix attempts` counts fixer runs and designer runs started in a fix
 cycle (a design workflow's rebuilds), as the learning `fix_loops` signal does.
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

@@ -107,7 +107,9 @@ Autopilot brings the design specialist in only for user-interface work:
   required ([workflow-engine.md](workflow-engine.md#profiles)). A PASS stands
   while the UI files are unchanged. Its stage instructions replace the art
   direction: judge against the repository's standard and the look before the
-  change, block only regressions this change introduced, never on a look not
+  change, block only regressions this change introduced, use the App check's
+  screenshots (the App check has already stopped the app, so the critic never
+  opens its address), never on a look not
   seen (no running app: judge the changed files with `design.lint_tokens` and
   `design.contrast_matrix`), never NEEDS OPERATOR, always `CAUSE: code`.
 - **Design fix** (`design-fix`, designer on Claude, Level 2): the critique's
@@ -331,4 +333,4 @@ axe rule must fail in two stage runs: one critique's two themes are one finding.
   CLIs); the Control Center browser's screenshots do
   reach the model (MCP image blocks, three per call).
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

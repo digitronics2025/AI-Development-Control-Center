@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, sanitizeEnv } from '@acc/security';
+import { constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, relativizeOwnRoots, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -490,9 +490,12 @@ export class ToolService {
     if (!parsed.success) return refuse('failed', 'INVALID_INPUT', `Invalid input for ${req.capability}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`, 'deny');
     const input = parsed.data;
 
-    // 3. Classify this concrete call.
+    // 3. Classify this concrete call. It is judged with the task's own folders written relative to them: an isolated
+    // task's worktree lives in the data folder, and its own path is not the Control Center's files. Only the judging
+    // sees this form; the call runs with its input as given.
+    const judged = relativizeOwnRoots(input, [...scope.roots, scope.cwd, ...(scope.repositories ?? []).map((r) => r.root)]);
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const classified = operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
+    const classified = operation.classify?.(judged, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
     const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
@@ -500,7 +503,7 @@ export class ToolService {
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
     // Every URL in the input is read the way the tool's own `new URL()` will read it, so `127.1:4317`,
     // `2130706433:4317` and `[::ffff:127.0.0.1]:4317` are the listen address too (SEC-1).
-    if (req.origin === 'agent' && inputReferencesSelf(input)) {
+    if (req.origin === 'agent' && inputReferencesSelf(judged)) {
       const self: ToolRisk = { ...risk, level: 5, risk: 'dangerous', reasons: ["Reaches the Control Center's own token, data folder or API"] };
       this.escalate(scope, req.capability, 'denied', self.reasons[0]!, 5);
       return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);

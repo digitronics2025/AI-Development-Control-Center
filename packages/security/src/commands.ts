@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { CommandRisk, PermissionLevel } from '@acc/shared';
 import { sensitiveFileReason } from './sensitive-files.js';
 import { commandWord, decodeBase64Pipes, decodeEncodedCommands, expandAlias, quoteWord, shellWords, splitCommands, unquote, unwrapInterpreter, type Segment } from './shell-parse.js';
@@ -467,6 +468,47 @@ export function webUrlReferencesSelf(url: URL): boolean {
  * each string on its own — never the JSON text, where a file's lines run
  * together — and a string that is a JSON document by its objects too.
  */
+/**
+ * A tool input with every path inside one of the task's own folders (`roots`: its worktree, a worker's
+ * checkout) written relative to it: `C:\…\AIDevControlCenter\worktrees\app\TASK-0022\src\a.ts` becomes
+ * `.\src\a.ts`. An isolated task's worktree lives in the data folder, so its own path would otherwise read as
+ * the Control Center's files and every call naming it would be refused. Only for judging a call — never run.
+ * A path that climbs out of the root (`..`) is left as written, so the self-reference check still sees it; the
+ * file name is kept, so sensitive-file rules still apply.
+ */
+export function relativizeOwnRoots<T>(input: T, roots: readonly string[]): T {
+  const usable = [...new Set(roots.filter((r) => typeof r === 'string' && /^(?:[A-Za-z]:[\\/]|\/)./.test(r)))];
+  if (!usable.length) return input;
+  const rules = usable.map((root) => {
+    const windows = /^[A-Za-z]:/.test(root);
+    const pathApi = windows ? path.win32 : path.posix;
+    const normal = pathApi.normalize(root).replace(/[\\/]+$/, '');
+    const pattern = normal.split(/[\\/]+/).map(escapeRegExp).join('[\\\\/]+');
+    // The root, then the rest of the path up to whatever ends a path in a command or text.
+    const re = new RegExp(`${pattern}(?=$|[\\\\/\\s"'\`;,|&<>()])([^\\s"'\`;,|&<>()]*)`, windows ? 'gi' : 'g');
+    return { re, pathApi, normal, windows };
+  });
+  const rewrite = (text: string): string => {
+    let out = text;
+    for (const { re, pathApi, normal, windows } of rules) {
+      out = out.replace(re, (whole: string, rest: string) => {
+        const full = pathApi.normalize(`${normal}${pathApi.sep}${rest.replace(/[\\/]+/g, pathApi.sep)}`).replace(/[\\/]+$/, '');
+        const inside = windows ? full.toLowerCase() === normal.toLowerCase() || full.toLowerCase().startsWith(`${normal.toLowerCase()}${pathApi.sep}`) : full === normal || full.startsWith(`${normal}/`);
+        return inside ? `.${full.slice(normal.length) || ''}` : whole;
+      });
+    }
+    return out;
+  };
+  const walk = (value: unknown, depth: number): unknown => {
+    if (depth > 20) return value;
+    if (typeof value === 'string') return rewrite(value);
+    if (Array.isArray(value)) return value.map((v) => walk(v, depth + 1));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [rewrite(k), walk(v, depth + 1)]));
+    return value;
+  };
+  return walk(input, 0) as T;
+}
+
 export function inputReferencesSelf(input: unknown): boolean {
   if (namesSelf(JSON.stringify(input) ?? '') || requestOverridesHost(input)) return true;
   const strings: string[] = [];

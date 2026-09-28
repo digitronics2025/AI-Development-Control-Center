@@ -93,6 +93,13 @@ folder, token or key files, or its listen address (`AIDevControlCenter`,
 folder and port are set at start with `setSelfReferences`) — and
 `ToolService.invoke` refuses **any** agent tool call whose input names them, so an
 agent running as the operator cannot read the token and act as the operator.
+An isolated task's worktree lives in the data folder, so a call is judged with
+the task's own folders written relative to them (`relativizeOwnRoots`:
+`…\worktrees\app\TASK-0022\src` → `.\src`): its own paths are not the
+Control Center's files, while a path that climbs out (`..`), a sibling task's
+worktree or the data folder itself is still refused; only the judging sees
+that form, the call runs with its input as given (seen live on TASK-0022: the
+designer's `process.start` in its worktree was refused).
 A page a tool drives is judged by `webUrlReferencesSelf` for web URLs: the
 address in any spelling, one carried inside the URL, or the data folder — not
 the key files' bare names, which are ordinary path words on other servers

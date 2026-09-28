@@ -266,6 +266,11 @@ export class CodexAdapter extends CliAgentAdapter {
       args.push('-c', `mcp_servers.${name}.command=${literal(input.toolBridge.command)}`);
       args.push('-c', `mcp_servers.${name}.args=[${input.toolBridge.args.map(literal).join(',')}]`);
       args.push('-c', `mcp_servers.${name}.env_vars=[${Object.keys(input.toolBridge.env).map(literal).join(',')}]`);
+      // Codex asks before any MCP tool not marked read-only, and `exec` answers every such prompt "no" (approval
+      // policy never): measured on 0.156.1, `echo` (readOnlyHint) ran and `env` was refused. The Control Center's
+      // own server decides each call itself — level, profile, approvals, spend gate, self-reference — so its tools
+      // are approved here, as Claude Code allows `mcp__acc`. No other server is running (codexMcpIsolationArgs).
+      args.push('-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`);
     }
     for (const image of input.images ?? []) args.push('-i', image);
     args.push('-');

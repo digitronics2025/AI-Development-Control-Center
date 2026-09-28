@@ -132,6 +132,9 @@ describe('CodexAdapter', () => {
       expect(args).toContain('mcp_servers.tiktok-ads={enabled=false,url="http://127.0.0.1/acc-disabled"}');
       expect(args.some((a) => a.startsWith('mcp_servers.acc={'))).toBe(false);
       expect(args).toContain("mcp_servers.acc.command='node'");
+      // The bridge's tools are approved in Codex: exec refuses every approval prompt, and the Control Center judges each call.
+      expect(args).toContain('mcp_servers.acc.default_tools_approval_mode="approve"');
+      expect(args.filter((a) => a.includes('default_tools_approval_mode'))).toHaveLength(1);
       // The listing ran in the run's folder (trusted-project layers) with the same features off.
       const list = t.list()!;
       expect(list.args).toEqual(['mcp', 'list', '--json', '--disable', 'apps', '--disable', 'plugins', '--disable', 'skill_mcp_dependency_install']);
@@ -142,6 +145,8 @@ describe('CodexAdapter', () => {
       const t = await runWith({ env: { FAKE_CODEX_MCP_LIST: configured } });
       await (await new CodexAdapter().execute(t.run)).done;
       expect(t.exec()!.args).toContain('mcp_servers.acc={enabled=false,command="acc-disabled"}');
+      // Without a bridge nothing is approved.
+      expect(t.exec()!.args.some((a) => a.includes('default_tools_approval_mode'))).toBe(false);
     });
 
     it('still lists and switches off servers when the user config is not loaded', async () => {

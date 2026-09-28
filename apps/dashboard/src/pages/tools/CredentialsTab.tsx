@@ -24,7 +24,7 @@ import {
   type Column,
   type StatusVisual,
 } from '@acc/ui';
-import { CREDENTIAL_KIND_ENV, CREDENTIAL_KIND_HOSTS, CREDENTIAL_KINDS, type CredentialKind, type CredentialSource, type CredentialView, type Repository, type VaultLinkState, type VaultResolveAction } from '@acc/shared';
+import { CREDENTIAL_KIND_ENV, CREDENTIAL_KIND_HOSTS, CREDENTIAL_KINDS, HOST_ENTRY_HINT, normalizeHostEntry, type CredentialKind, type CredentialSource, type CredentialView, type Repository, type VaultLinkState, type VaultResolveAction } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useRepositories, useSettings } from '../../api/hooks';
 import { useCredentialEvents, useCredentialMutations, useCredentials, useVaultBridgeStatus, useVaultOriginMutations } from '../../api/tools';
@@ -96,6 +96,12 @@ function hostsText(c: CredentialView): string {
 /** Hosts typed as a list: commas, spaces or new lines between them. The server checks and normalises each. */
 const parseHosts = (text: string) => text.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
 
+/** Why a typed host list cannot be saved, by the server's own rule, so a mistake is explained without a refused request. */
+function hostsProblem(hosts: string[]): string | null {
+  const wrong = hosts.find((h) => normalizeHostEntry(h) === null);
+  return wrong ? `${wrong}: ${HOST_ENTRY_HINT}` : null;
+}
+
 function HostsEditor({ credential }: { credential: CredentialView }) {
   const mutations = useCredentialMutations();
   const { toast } = useFeedback();
@@ -116,7 +122,16 @@ function HostsEditor({ credential }: { credential: CredentialView }) {
         <Textarea value={text} onChange={(e) => setText(e.target.value)} className="min-h-[88px] font-mono" spellCheck={false} rows={3} />
       </Field>
       <div className="flex flex-wrap gap-2">
-        <Button size="compact" onClick={() => save(parseHosts(text))} loading={mutations.hosts.isPending}>
+        <Button
+          size="compact"
+          onClick={() => {
+            const hosts = parseHosts(text);
+            const problem = hostsProblem(hosts);
+            if (problem) setError(problem);
+            else save(hosts);
+          }}
+          loading={mutations.hosts.isPending}
+        >
           Save hosts
         </Button>
         {defaults.length && !credential.audience.fromKind ? (
@@ -463,6 +478,8 @@ export function CredentialsTab() {
     const done = { onSuccess: () => { toast(editing === 'new' ? 'Credential stored' : 'Value replaced'); closeEditor(); }, onError: (e: unknown) => setError(errorMessage(e)) };
     // No hosts typed: the kind's own (none for a kind that names no host).
     const hosts = parseHosts(form.hosts);
+    const problem = editing === 'new' ? hostsProblem(hosts) : null;
+    if (problem) return setError(problem);
     if (editing === 'new') mutations.create.mutate({ name: form.name.trim(), kind: form.kind, envVar: form.envVar.trim() || null, description: form.description.trim(), audience: hosts.length ? hosts : null, value: form.value }, done);
     else if (editing) mutations.replace.mutate({ id: editing.id, value: form.value }, done);
   };

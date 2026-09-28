@@ -230,13 +230,16 @@ export function normalizeHostEntry(entry: string): string | null {
   return wildcard ? `*.${host}` : host;
 }
 
+/** What a host entry must look like, shown by the API and by the dashboard before it sends one. */
+export const HOST_ENTRY_HINT = 'A host such as api.example.com, or *.example.com for its subdomains (no scheme, port or path)';
+
 export const hostEntrySchema = z
   .string()
   .max(260)
   .transform((value, ctx) => {
     const host = normalizeHostEntry(value);
     if (host === null) {
-      ctx.addIssue({ code: 'custom', message: 'A host such as api.example.com, or *.example.com for its subdomains (no scheme, port or path)' });
+      ctx.addIssue({ code: 'custom', message: HOST_ENTRY_HINT });
       return z.NEVER;
     }
     return host;

@@ -607,8 +607,10 @@ export async function auditPage(ctx: OperationContext, input: { url: string; vie
             new g.PerformanceObserver((list: any) => {
               for (const e of list.getEntries()) out.lcp = Math.round(e.renderTime || e.loadTime || e.startTime);
             }).observe({ type: 'largest-contentful-paint', buffered: true });
+            // Every shift counts: this page is never touched, yet phone emulation marks shifts in the first ~500 ms
+            // as having recent input, which would hide a late banner on phones (CI, 2026-09-28).
             new g.PerformanceObserver((list: any) => {
-              for (const e of list.getEntries()) if (!e.hadRecentInput) out.cls += e.value;
+              for (const e of list.getEntries()) out.cls += e.value;
             }).observe({ type: 'layout-shift', buffered: true });
           } catch {
             /* an engine without these entries: report nulls */

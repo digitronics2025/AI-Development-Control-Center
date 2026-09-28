@@ -127,6 +127,10 @@ const PAGES: Record<string, string> = {
   '/heavy': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Heavy</title><body style="margin:0;font:16px system-ui">
     <main><h1>Heavy page</h1><p style="height:300px;background:#cde">Content that the late banner pushes down.</p><img src="/big.bmp" alt="Hero" style="width:100px"><div style="height:2000px"></div><img src="/big.bmp" alt="Below" width="400" height="300"><video src="/none.mp4" muted></video></main>
     <script>setTimeout(() => { const d = document.createElement('div'); d.style.cssText = 'height:400px;background:#eee'; d.textContent = 'Late banner'; document.body.prepend(d); }, 700)</script></body></html>`,
+  // A banner right after load: phone emulation marks shifts this early as having recent input.
+  '/early-shift': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Early</title><body style="margin:0;font:16px system-ui">
+    <main><h1>Early shift</h1><p style="height:300px;background:#cde">Content the banner pushes down.</p></main>
+    <script>addEventListener('load', () => requestAnimationFrame(() => requestAnimationFrame(() => { const d = document.createElement('div'); d.style.cssText = 'height:400px;background:#eee'; d.textContent = 'Banner'; document.body.prepend(d); })));</script></body></html>`,
   '/themed': `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Themed</title><style>
     :root { color-scheme: light dark; --bg: #ffffff; --fg: #111111; }
     @media (prefers-color-scheme: dark) { :root { --bg: #111111; --fg: #f5f5f5; } }
@@ -528,6 +532,12 @@ describe('browser.visual_diff and browser.audit', () => {
     expect((await at({})).output).toMatchObject({ matches: true, changedPixels: 9 });
     dotColour = '#2255dd';
   }, 120_000);
+
+  it('counts a shift soon after load on a phone: nobody touched the page', async () => {
+    const r = await call('browser.audit', { url: `${base}/early-shift`, viewport: 'phone', settleMs: 1000 });
+    expect(r.ok, r.summary).toBe(true);
+    expect((r.output as { metrics: { cls: number } }).metrics.cls).toBeGreaterThan(0.1);
+  }, 90_000);
 
   it('measures LCP and CLS and names the images and videos that cost users', async () => {
     const r = await call('browser.audit', { url: `${base}/heavy`, viewport: 'phone', settleMs: 1500 });

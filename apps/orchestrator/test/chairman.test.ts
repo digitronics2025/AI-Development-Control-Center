@@ -37,6 +37,18 @@ const events = (id: string) => t.services.store.listEvents(id, { limit: 2000 });
 const eventTypes = (id: string) => events(id).map((e) => e.type);
 const decisions = (id: string) => t.services.chairman.store.listDecisions(id, 200);
 const actions = (id: string) => t.services.chairman.store.listActions(id, 500);
+/** How a task ended, for an assertion's message: a failure then names its cause instead of only the wrong value. */
+function endState(id: string): string {
+  const task = t.services.store.getTask(id);
+  return JSON.stringify({
+    status: task?.status,
+    finalStatus: task?.finalStatus,
+    blocker: task?.blocker?.message?.slice(0, 200),
+    stages: t.services.store.listStages(id).map((s) => `${s.stageKey}:${s.status}:${s.errorClass ?? ''}`),
+    decisions: decisions(id).map((d) => `${d.trigger}: ${d.decision}`),
+    errors: t.services.store.listExecutions(id).filter((e) => e.errorMessage).map((e) => e.errorMessage!.slice(0, 160)).slice(-3),
+  });
+}
 
 async function patchChairman(values: Record<string, unknown>) {
   const current = (await t.api('GET', '/api/settings')).body.chairman;
@@ -131,7 +143,7 @@ describe('supervised recovery (plan §7.2)', () => {
     const repo = await repoWith("console.log('FAIL test/a.test.js > adds'); console.log('2 failed, 3 passed'); process.exit(1);");
     const id = await createTask(t, await addRepo(t, repo), 'Never passes');
     const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000);
-    expect(task.status).toBe('WAITING_FOR_USER');
+    expect(task.status, endState(id)).toBe('WAITING_FOR_USER');
     expect(task.blocker).toMatchObject({ kind: 'limit' });
     expect(task.blocker!.message).toContain('Recovery cycle limit reached (2)');
     const recoveries = decisions(id).filter((x) => x.strategyFingerprint);
@@ -307,11 +319,10 @@ describe('strategy runs', () => {
     const dataDir = t.dataDir;
     const repo = await repoWith("if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('1 failed, 3 passed'); process.exit(1); } console.log('4 passed');");
     const id = await createTask(t, await addRepo(t, repo), 'Crash between the result and its evaluation');
-    const ended = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
+    await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
     const found = decisions(id).find((d) => d.strategyFingerprint);
     // When no strategy ran, say how the task ended instead of failing on `undefined.id` below.
-    const endedAs = { status: ended.status, finalStatus: ended.finalStatus, stages: t.services.store.listStages(id).map((s) => `${s.stageKey}:${s.status}:${s.errorClass ?? ''}`), decisions: decisions(id).map((d) => `${d.trigger}: ${d.decision}`) };
-    expect(found, `no Chairman strategy ran: ${JSON.stringify(endedAs)}`).toBeDefined();
+    expect(found, `no Chairman strategy ran: ${endState(id)}`).toBeDefined();
     const decision = found!;
     // As if the orchestrator died after the tests passed but before the outcome was written.
     t.services.db.prepare("UPDATE chairman_strategy_runs SET status = 'RUNNING', outcome_summary = NULL, health_after = NULL, evaluated_at = NULL WHERE decision_id = ?").run(decision.id);

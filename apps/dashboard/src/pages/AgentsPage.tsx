@@ -34,7 +34,10 @@ export const AGENT_STATE_VISUAL: Record<AgentHealthState, StatusVisual> = {
   unknown: { label: 'Not checked', tone: 'neutral', icon: CircleHelp },
 };
 
-const CAPABILITY_LABEL: Record<keyof AgentCapabilities, string> = {
+/** The yes/no capabilities; the provider label and permission ceiling are not features to list. */
+type CapabilityFlag = { [K in keyof AgentCapabilities]: AgentCapabilities[K] extends boolean ? K : never }[keyof AgentCapabilities];
+
+const CAPABILITY_LABEL: Record<CapabilityFlag, string> = {
   repositoryRead: 'Read',
   repositoryWrite: 'Write',
   commandExecution: 'Commands',
@@ -43,6 +46,7 @@ const CAPABILITY_LABEL: Record<keyof AgentCapabilities, string> = {
   nonInteractive: 'Non-interactive',
   modelSelection: 'Model selection',
   effortSelection: 'Effort selection',
+  pluginDirs: 'Skill plugins',
 };
 
 function AgentSettingsDrawer({ agent, open, onOpenChange }: { agent: AgentInfo; open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -142,7 +146,7 @@ function AgentCard({ agent }: { agent: AgentInfo }) {
   const mutations = useAgentMutations();
   const connection = useConnection();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const caps = (Object.keys(CAPABILITY_LABEL) as Array<keyof AgentCapabilities>).filter((k) => agent.capabilities[k]);
+  const caps = (Object.keys(CAPABILITY_LABEL) as CapabilityFlag[]).filter((k) => agent.capabilities[k]);
   return (
     <li className="flex flex-col gap-3 px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">

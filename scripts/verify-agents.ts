@@ -1,8 +1,10 @@
 /**
  * Manual provider verification (PLAN §36 Phase 1).
  *
- *   pnpm verify:agents                  detection, version, subscription check (no usage)
- *   pnpm verify:agents --run            also runs a harmless prompt through each CLI
+ *   pnpm verify:agents                  detection, version (against agents.compat.json), subscription check (no usage)
+ *   pnpm verify:agents --run            also runs a harmless prompt through each CLI, and prints
+ *                                       the apiKeySource Claude Code's init event carried
+ *                                       (`none` on a subscription; the billing tripwire needs it)
  *   pnpm verify:agents --run --only claude --claude-model haiku --codex-model gpt-5.6-sol
  *   pnpm verify:agents --only claude --claude-model haiku --skills
  *                                       also proves skills run inside a stage's limits
@@ -27,8 +29,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentExecutionInput } from '@acc/agent-sdk';
-import { ClaudeCodeAdapter, shellGuardSettings } from '@acc/agent-claude';
+import { cliCompat, type AgentAdapter, type AgentExecutionInput } from '@acc/agent-sdk';
+import { ClaudeCodeAdapter, loggedApiKeySource, shellGuardSettings } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
 import { detectApiCredentials, Redactor, sanitizeEnv, setSelfReferences } from '@acc/security';
 import type { OrchestratorConfig } from '../apps/orchestrator/src/config.js';
@@ -51,6 +53,7 @@ const HINTS: Record<string, string> = {
     '{agent} is installed and signed in correctly, but the account has no allowance left. Add credits or wait for the limit to reset. The Control Center pauses {agent} stages instead of switching to paid usage. To check the other agent only, re-run with --only.',
   MODEL_UNAVAILABLE: 'Update the {agent} CLI, or pass another model with --{id}-model.',
   AUTH_FAILURE: 'Sign in to {agent} with your subscription (not an API key), then re-run.',
+  PROTOCOL_DRIFT: "The installed {agent} CLI answered in a form the Control Center does not read (a CLI update?). Its runs fail until the adapter is updated; reroute {agent} roles meanwhile.",
 };
 
 const redact = Redactor.fromEnv();
@@ -70,6 +73,11 @@ for (const { adapter, model } of adapters) {
   console.log(`\n== ${adapter.displayName} ==`);
   const detection = await adapter.detect(options);
   console.log(`executable: ${detection.found ? `${detection.executablePath} (v${detection.version ?? '?'})` : `NOT FOUND — ${detection.error}`}`);
+  if (detection.found && detection.version) {
+    // Informational: the dashboard marks an untested version; widen agents.compat.json only after --run passes on it.
+    const compat = cliCompat(adapter.id, detection.version);
+    console.log(`tested:     ${compat.tested ? `${compat.tested.min} to ${compat.tested.max}` : 'no range'} (packages/agent-sdk/agents.compat.json) · this version: ${compat.status}`);
+  }
   const health = await adapter.healthCheck(options);
   console.log(`health:     ${health.state} · billing=${health.billing} · ${health.message}`);
   if (health.state !== 'connected') failures++;
@@ -77,6 +85,7 @@ for (const { adapter, model } of adapters) {
 
   const cwd = mkdtempSync(path.join(os.tmpdir(), `acc-verify-${adapter.id}-`));
   const started = Date.now();
+  const lines: string[] = [];
   try {
     const handle = await adapter.execute({
       ...options,
@@ -87,15 +96,25 @@ for (const { adapter, model } of adapters) {
       effort: 'low',
       permissionLevel: 1,
       timeoutMs: 180_000,
+      onLine: (_stream, text) => lines.push(text),
     });
     console.log(`command:    ${redact.redact(handle.commandLine)}`);
     const result = await handle.done;
-    const ok = result.status === 'succeeded' && /PONG/i.test(result.output);
+    let ok = result.status === 'succeeded' && /PONG/i.test(result.output);
     console.log(`result:     ${result.status} · exit ${result.exitCode} · ${((Date.now() - started) / 1000).toFixed(1)}s`);
     console.log(`output:     ${redact.redact(result.output).slice(0, 200) || '(empty)'}`);
+    // The billing tripwire rests on this field: a subscription login reports `none`, and a missing one stops every run.
+    const source = adapter instanceof ClaudeCodeAdapter ? loggedApiKeySource(lines) : 'none';
+    if (adapter instanceof ClaudeCodeAdapter) {
+      console.log(`init apiKeySource: ${source === undefined ? 'NO INIT EVENT' : source === null ? 'MISSING' : redact.redact(source)}`);
+      if (source !== 'none') ok = false;
+    }
     if (result.errorClass) {
       console.log(`error:      ${result.errorClass} — ${redact.redact(result.errorMessage ?? '')}`);
-      const hint = HINTS[result.errorClass];
+      const hint =
+        source === null
+          ? 'This {agent} no longer says where its credentials come from, so Subscription Only mode stops every run of it. The adapter needs updating for this CLI version.'
+          : HINTS[result.errorClass];
       if (hint) console.log(`what to do: ${hint.replaceAll('{agent}', adapter.displayName).replaceAll('{id}', adapter.id)}`);
     }
     if (!ok) failures++;

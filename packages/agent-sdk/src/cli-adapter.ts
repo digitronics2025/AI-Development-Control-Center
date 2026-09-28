@@ -319,6 +319,8 @@ export abstract class CliAgentAdapter implements AgentAdapter {
       return { ...base, status: 'failed', errorClass: 'PROCESS_CRASH', errorMessage: process.spawnError };
     }
     const failed = process.exitCode !== 0 || raw.failureMessages.length > 0 || raw.usageLimited;
+    // Exit 0 alone is not a success when the output lacked what every successful run shows (fail closed).
+    if (!failed && raw.protocolDrift) return { ...base, status: 'failed', errorClass: 'PROTOCOL_DRIFT', errorMessage: raw.protocolDrift };
     if (!failed) return { ...base, status: 'succeeded', errorClass: null, errorMessage: null };
 
     // Structured failure messages from the provider outrank incidental log noise in the tail,

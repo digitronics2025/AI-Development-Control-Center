@@ -45,6 +45,29 @@ export function readInitEvent(stdout: string): { skills: string[]; plugins: Arra
   return null;
 }
 
+/** How a run's first log line says the init event carried no `apiKeySource`. */
+const API_KEY_SOURCE_MISSING = '(not reported)';
+const API_KEY_SOURCE_MISSING_REASON =
+  "Claude Code did not say where its credentials come from (its init event has no apiKeySource), so Subscription Only mode cannot confirm the run uses your subscription and stopped it. Run `pnpm verify:agents --run --only claude` to see what the installed CLI reports";
+const NO_INIT_EVENT_REASON =
+  "Claude Code sent no init event, the event that says where its credentials come from, so Subscription Only mode cannot confirm the run uses your subscription and did not accept it. Run `pnpm verify:agents --run --only claude` to see what the installed CLI reports";
+/** Events of a model turn: in a run, each comes after the init event. */
+const TURN_EVENTS = new Set(['assistant', 'user', 'result', 'rate_limit_event']);
+
+/**
+ * What a run's first log line (the init event's summary) says about
+ * `apiKeySource`: its value, null when the event carried none, undefined when
+ * no such line was logged (the CLI printed no init event).
+ */
+export function loggedApiKeySource(lines: string[]): string | null | undefined {
+  for (const line of lines) {
+    if (!line.startsWith('Claude Code')) continue;
+    const value = / · apiKeySource (.+?)(?: · \d+ skills)?$/.exec(line)?.[1];
+    if (value !== undefined) return value === API_KEY_SOURCE_MISSING ? null : value;
+  }
+  return undefined;
+}
+
 /** True when a lookup's result event shows no model turn and no cost; a missing result counts as free (nothing was sent). */
 export function lookupWasFree(stdout: string): boolean {
   for (const line of stdout.split('\n')) {
@@ -542,6 +565,10 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
       nonInteractive: true,
       modelSelection: true,
       effortSelection: true,
+      // --plugin-dir per folder (buildArgs).
+      pluginDirs: true,
+      providerLabel: 'Anthropic (Claude Code)',
+      maxPermissionLevel: 5,
     };
   }
 
@@ -663,6 +690,7 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     let sessionId: string | null = null;
     let usageLimited = false;
     let initModel: string | null = null;
+    let initSeen = false;
     let usage: AgentUsageReport | null = null;
     const capacity = new CapacityCollector();
     const failureMessages: string[] = [];
@@ -681,17 +709,28 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           if (line.trim()) emit('stdout', line);
           return;
         }
+        // The tripwire below never ran: a turn without an init event is stopped like one without apiKeySource.
+        if (input.billingMode === 'subscription' && !initSeen && TURN_EVENTS.has(event.type)) abort(NO_INIT_EVENT_REASON);
         switch (event.type) {
           case 'system':
             if (event.subtype === 'init') {
+              initSeen = true;
               sessionId = event.session_id ?? null;
               initModel = typeof event.model === 'string' ? event.model : null;
-              const skills = Array.isArray(event.skills) ? ` · ${event.skills.length} skills` : '';
-              emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}${skills}`.trim());
-              // Runtime tripwire: the CLI itself says where its credentials came from.
-              const source = event.apiKeySource;
-              if (input.billingMode === 'subscription' && source && source !== 'none') {
-                abort(`Claude Code reported API key billing (apiKeySource=${source}); Subscription Only mode stopped the run`);
+              const source = typeof event.apiKeySource === 'string' && event.apiKeySource ? event.apiKeySource : null;
+              const facts = [
+                `Claude Code ${event.claude_code_version ?? ''}`.trim(),
+                `model ${event.model ?? 'default'}`,
+                typeof event.permissionMode === 'string' ? event.permissionMode : '',
+                `apiKeySource ${source ?? API_KEY_SOURCE_MISSING}`,
+                Array.isArray(event.skills) ? `${event.skills.length} skills` : '',
+              ];
+              emit('system', facts.filter(Boolean).join(' · '));
+              // Runtime tripwire: the CLI itself says where its credentials came from ('none' is the subscription
+              // login). It fails closed: a CLI that stops saying so cannot be told apart from one billing an API key.
+              if (input.billingMode === 'subscription') {
+                if (!source) abort(API_KEY_SOURCE_MISSING_REASON);
+                else if (source !== 'none') abort(`Claude Code reported API key billing (apiKeySource=${source}); Subscription Only mode stopped the run`);
               }
             }
             break;
@@ -759,6 +798,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           sessionId,
           usageLimited,
           guardViolation: null,
+          // An exit 0 with no event at all is not a success either (a run that failed keeps its own class).
+          protocolDrift: input.billingMode === 'subscription' && !initSeen ? NO_INIT_EVENT_REASON : null,
           filesChanged: [...filesChanged],
           usage,
           capacity: capacity.list(),

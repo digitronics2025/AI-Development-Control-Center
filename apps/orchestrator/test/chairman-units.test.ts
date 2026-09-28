@@ -61,6 +61,10 @@ describe('failure signatures', () => {
     expect(pointsAtPlan('The tests fail on null input')).toBe(false);
     const worker = signatureOf({ source: 'worker', stageKey: 'implement', message: 'out of credits', errorClass: 'USAGE_LIMIT' });
     expect(worker.category).toBe('AUTH_OR_EXTERNAL');
+    // A CLI whose output its adapter no longer reads is the agent's tooling failing, not the provider or the code.
+    const drift = signatureOf({ source: 'worker', stageKey: 'implement', message: 'Codex ended without turn.completed', errorClass: 'PROTOCOL_DRIFT' });
+    expect(drift.category).toBe('WORKER_OR_TOOL');
+    expect(drift.signature).toContain('WORKER|implement|PROTOCOL_DRIFT|');
   });
 
   it('lets an explicit CAUSE line decide over the plan words (prompts/verifier.md)', () => {
@@ -168,6 +172,26 @@ describe('recovery policy', () => {
     // A model the CLI rejects is only this stage's problem.
     const [narrow] = recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'investigate', providerWide: false }));
     expect(narrow!.actions.filter((a) => a.type === 'CHANGE_AGENT')).toHaveLength(1);
+  });
+
+  it("never hands a stage to an agent whose adapter cannot run the stage's permission level", () => {
+    // Implement is Level 2: an agent whose ceiling is Level 1 is no escape route for it, one whose ceiling allows it is.
+    expect(recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'implement', maxPermissionLevel: { codex: 1, claude: 5 } }))).toEqual([]);
+    expect(recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'implement', maxPermissionLevel: { codex: 2, claude: 5 } })).map((c) => c.id)).toEqual(['change_agent:implement:codex']);
+    // An agent whose ceiling is unknown in a given map takes nothing.
+    expect(recoveryCandidates(ctx({ trigger: 'provider_blocked', failingStageKey: 'implement', maxPermissionLevel: { claude: 5 } }))).toEqual([]);
+    // Moving a whole provider takes only the stages the new agent may run; the rest stay for their own recovery.
+    const [wide] = recoveryCandidates(
+      ctx({
+        trigger: 'provider_blocked',
+        failingStageKey: 'investigate',
+        providerWide: true,
+        assignments: { investigate: 'claude', plan: 'codex', implement: 'claude', review: 'codex', fix: 'claude', verify: 'codex' },
+        maxPermissionLevel: { codex: 1, claude: 5 },
+      }),
+    );
+    expect(wide!.id).toBe('change_agent:investigate:codex');
+    expect(wide!.actions.filter((a) => a.type === 'CHANGE_AGENT').map((a) => (a.params as { stageKey: string }).stageKey)).toEqual(['investigate']);
   });
 
   it('moves a family that did not work behind the other safe options, never out of the list', () => {

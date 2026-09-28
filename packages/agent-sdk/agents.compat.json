@@ -1,0 +1,7 @@
+{
+  "about": "Agent CLI versions each adapter was tested against, inclusive, by agent id (docs/systems/agents.md#tested-cli-versions). Settings > Agents & Models marks an installed version outside its range as unverified. Widen a range only after `pnpm verify:agents --run --only <id>` passes on the new version.",
+  "tested": {
+    "claude": { "min": "2.1.280", "max": "2.1.283" },
+    "codex": { "min": "0.156.1", "max": "0.156.1" }
+  }
+}

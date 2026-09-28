@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AgentGuardError, type AgentExecutionInput } from '@acc/agent-sdk';
-import { ClaudeCodeAdapter, claudeToolPolicy, lookupWasFree, readInitEvent, repositoryHookSwitches, rulePath, shellGuardSettings } from '../src/index.js';
+import { ClaudeCodeAdapter, claudeToolPolicy, loggedApiKeySource, lookupWasFree, readInitEvent, repositoryHookSwitches, rulePath, shellGuardSettings } from '../src/index.js';
 
 const fixture = path.resolve(import.meta.dirname, '../../../tests/fixtures', process.platform === 'win32' ? 'fake-claude.cmd' : 'fake-claude');
 /** A shell guard whose program exists (this test file stands in for the built hook script). */
@@ -20,7 +20,8 @@ function input(overrides: Partial<AgentExecutionInput> & { env?: NodeJS.ProcessE
     permissionLevel: 1,
     timeoutMs: 20_000,
     billingMode: 'subscription',
-    baseEnv: { ...process.env, ...env },
+    // A subscription login: the init event says the credentials are no API key.
+    baseEnv: { ...process.env, FAKE_CLAUDE_APIKEY_SOURCE: 'none', ...env },
     executablePath: fixture,
     ...rest,
   };
@@ -272,6 +273,53 @@ describe('ClaudeCodeAdapter', () => {
     const result = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_APIKEY_SOURCE: 'ANTHROPIC_API_KEY' } }))).done;
     expect(result).toMatchObject({ status: 'failed', errorClass: 'AUTH_FAILURE' });
     expect(result.errorMessage).toMatch(/API key billing/);
+  });
+
+  it('stops a subscription run whose init event does not say where its credentials come from (the tripwire fails closed)', async () => {
+    const lines: string[] = [];
+    const run = input({ onLine: (_s, t) => lines.push(t) });
+    delete run.baseEnv.FAKE_CLAUDE_APIKEY_SOURCE; // the fake's init event then carries no apiKeySource
+    const result = await (await new ClaudeCodeAdapter().execute(run)).done;
+    expect(result).toMatchObject({ status: 'failed', errorClass: 'AUTH_FAILURE' });
+    expect(result.errorMessage).toMatch(/did not say where its credentials come from \(its init event has no apiKeySource\)/);
+    expect(loggedApiKeySource(lines)).toBeNull();
+  });
+
+  it('stops a subscription run that sends no init event at all, and never counts one as a success', async () => {
+    // A renamed init event: the turn that follows is stopped at its first event.
+    const lines: string[] = [];
+    const renamed = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_INIT_SUBTYPE: 'session_start' }, onLine: (_s, t) => lines.push(t) }))).done;
+    expect(renamed).toMatchObject({ status: 'failed', errorClass: 'AUTH_FAILURE' });
+    expect(renamed.errorMessage).toMatch(/sent no init event/);
+    expect(loggedApiKeySource(lines)).toBeUndefined();
+    // No event at all and exit 0: not a success either.
+    const silent = await (await new ClaudeCodeAdapter().execute(input({ env: { FAKE_CLAUDE_SCENARIO: 'silent' } }))).done;
+    expect(silent).toMatchObject({ status: 'failed', exitCode: 0, errorClass: 'PROTOCOL_DRIFT' });
+    expect(silent.errorMessage).toMatch(/sent no init event/);
+    // API Mode does not depend on the init event.
+    const api = await (await new ClaudeCodeAdapter().execute(input({ billingMode: 'api', env: { FAKE_CLAUDE_INIT_SUBTYPE: 'session_start' } }))).done;
+    expect(api.status).toBe('succeeded');
+  });
+
+  it('leaves a missing apiKeySource alone in API billing mode, and logs what the init event said', async () => {
+    const lines: string[] = [];
+    const adapter = new ClaudeCodeAdapter();
+    const run = input({ billingMode: 'api', onLine: (_s, t) => lines.push(t) });
+    delete run.baseEnv.FAKE_CLAUDE_APIKEY_SOURCE;
+    const handle = await adapter.execute(run);
+    // The fake keeps going until stopped: the tripwire would stop it at once, so wait for its init line and stop it here.
+    for (let i = 0; i < 200 && loggedApiKeySource(lines) === undefined; i++) await new Promise((r) => setTimeout(r, 50));
+    await adapter.cancel(run.executionId);
+    expect((await handle.done).status).toBe('cancelled');
+    expect(lines).toContain('Claude Code 9.9.9 · model claude-test · dontAsk · apiKeySource (not reported)');
+
+    // A subscription login says `none`, and the run succeeds.
+    const said: string[] = [];
+    const ok = await (await new ClaudeCodeAdapter().execute(input({ onLine: (_s, t) => said.push(t) }))).done;
+    expect(ok.status).toBe('succeeded');
+    expect(loggedApiKeySource(said)).toBe('none');
+    expect(loggedApiKeySource(['Claude Code 2.1.283 · model opus · dontAsk · apiKeySource /login managed key · 12 skills'])).toBe('/login managed key');
+    expect(loggedApiKeySource(['[tool] Read src/a.ts'])).toBeUndefined();
   });
 
   it('classifies a rejected rate limit as USAGE_LIMIT', async () => {

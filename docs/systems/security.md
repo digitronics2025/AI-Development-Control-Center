@@ -36,7 +36,11 @@ therefore every repository hook — and the Playwright browser run with
 `credentialFreeEnv`, which strips all of the above whatever the mode. At start
 the orchestrator logs the **names** of any such variable it withheld.
 `CLAUDE_CODE_OAUTH_TOKEN` (the subscription sign-in) is kept. Adapters verify the CLI's own login before each launch
-(cached 5 minutes) and refuse API-key logins. Explicit API Mode requires typing
+(cached 5 minutes) and refuse API-key logins; a Claude Code run also stops
+unless its init event reports `apiKeySource: none`, a missing field or a
+missing init event included ([agents.md](agents.md#claude-code-agent-claude)). The shared adapter
+conformance kit checks the stripping and the login refusal for every adapter
+([agents.md](agents.md#adapter-conformance-kit)). Explicit API Mode requires typing
 `API BILLING` in Settings → Billing — checked by the server: `PATCH /api/settings`
 with `billingMode: 'api'` is 422 `CONFIRMATION_REQUIRED` unless the body carries
 `confirmation: 'API BILLING'` — and shows a persistent indicator.

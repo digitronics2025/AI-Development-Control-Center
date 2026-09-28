@@ -1,5 +1,5 @@
-import { AgentGuardError, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRunAs, type AgentRuntimeOptions } from '@acc/agent-sdk';
-import type { AgentCapabilities, AgentInfo, AgentSettings, ModelDescriptor, UsageBilling } from '@acc/shared';
+import { AgentGuardError, cliCompat, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRunAs, type AgentRuntimeOptions } from '@acc/agent-sdk';
+import { PERMISSION_LEVEL_INFO, type AgentCapabilities, type AgentInfo, type AgentSettings, type ModelDescriptor, type PermissionLevel, type UsageBilling } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { Store } from '../store/store.js';
 import type { UsageAttribution } from '../usage/ledger.js';
@@ -15,6 +15,10 @@ const NO_CAPABILITIES: AgentCapabilities = {
   nonInteractive: false,
   modelSelection: false,
   effortSelection: false,
+  pluginDirs: false,
+  // Empty until the first health check stores the adapter's declaration; the dashboard then names the provider by its key.
+  providerLabel: '',
+  maxPermissionLevel: 1,
 };
 
 export class AgentNotFoundError extends Error {}
@@ -59,6 +63,14 @@ export class AgentRegistry {
     return this.adapters.has(id);
   }
 
+  /**
+   * What the adapter declares it can do, read from the adapter itself (never a
+   * stored copy), for decisions: the permission ceiling, plugin folders.
+   */
+  capabilities(id: string): Promise<AgentCapabilities> {
+    return this.adapter(id).getCapabilities();
+  }
+
   /** Who pays for a run of this agent, as far as its last health check knows. */
   private billing(id: string, adapter: AgentAdapter): UsageBilling {
     if (adapter.usageCapabilities.provider === 'simulated') return 'simulated';
@@ -70,10 +82,22 @@ export class AgentRegistry {
    * every provider attempt passes (docs/systems/usage.md#capture). A budget
    * whose policy stops new runs refuses the launch; once the process starts,
    * exactly one usage event is recorded when it finishes. Telemetry never
-   * changes the run's result.
+   * changes the run's result. A run above the permission level the adapter
+   * can enforce (`maxPermissionLevel`) is refused before anything starts.
    */
   async launch(agentId: string, input: AgentExecutionInput, attribution: UsageAttribution): Promise<AgentExecutionHandle> {
     const adapter = this.adapter(agentId);
+    const { maxPermissionLevel } = await adapter.getCapabilities();
+    // Written to fail closed: a ceiling the adapter did not declare refuses every run.
+    if (!(input.permissionLevel <= maxPermissionLevel)) {
+      const level = (n: PermissionLevel) => (PERMISSION_LEVEL_INFO[n] ? `Level ${n} (${PERMISSION_LEVEL_INFO[n].name})` : `Level ${String(n)}`);
+      throw new AgentGuardError(
+        PERMISSION_LEVEL_INFO[maxPermissionLevel]
+          ? `${adapter.displayName} can run at most ${level(maxPermissionLevel)}, and this run needs ${level(input.permissionLevel)}. Reroute the stage to an agent that allows it, or lower the stage's level.`
+          : `${adapter.displayName} declares no permission ceiling (maxPermissionLevel), so no run of it starts. Reroute the stage to another agent.`,
+        'PERMISSION_DENIED',
+      );
+    }
     const info = { agentId, capabilities: adapter.usageCapabilities, model: input.model, attribution };
     const blocked = this.meter?.blockReason(info) ?? null;
     if (blocked) throw new AgentGuardError(blocked, 'PERMISSION_DENIED');
@@ -130,18 +154,26 @@ export class AgentRegistry {
     return this.store
       .listAgents()
       .filter((a) => this.adapters.has(a.id))
-      .map((a) => ({
-        id: a.id,
-        name: a.name,
-        detection: a.detection ?? { found: false, executablePath: null, version: null, error: null },
-        health: a.settings.enabled
-          ? (a.health ?? { state: 'unknown', message: 'Not checked yet', authMethod: null, billing: 'unknown', checkedAt: null })
-          : { state: 'disabled', message: 'Disabled in settings', authMethod: null, billing: 'unknown', checkedAt: a.health?.checkedAt ?? null },
-        capabilities: a.capabilities ?? NO_CAPABILITIES,
-        models: models.filter((m) => m.agentId === a.id),
-        settings: a.settings,
-        capacityBlock: a.settings.enabled ? (this.meter?.capacityBlock(a.id) ?? null) : null,
-      }));
+      .map((a) => {
+        const adapter = this.adapters.get(a.id)!;
+        const detection = a.detection ?? { found: false, executablePath: null, version: null, error: null };
+        return {
+          id: a.id,
+          name: a.name,
+          provider: adapter.usageCapabilities.provider,
+          detection,
+          // Simulated agents have no CLI whose version could drift.
+          compat: detection.found && detection.version && adapter.usageCapabilities.provider !== 'simulated' ? cliCompat(a.id, detection.version) : null,
+          health: a.settings.enabled
+            ? (a.health ?? { state: 'unknown', message: 'Not checked yet', authMethod: null, billing: 'unknown', checkedAt: null })
+            : { state: 'disabled', message: 'Disabled in settings', authMethod: null, billing: 'unknown', checkedAt: a.health?.checkedAt ?? null },
+          // A copy stored before a capability existed lacks it: the default fills the gap until the next health check.
+          capabilities: { ...NO_CAPABILITIES, ...a.capabilities },
+          models: models.filter((m) => m.agentId === a.id),
+          settings: a.settings,
+          capacityBlock: a.settings.enabled ? (this.meter?.capacityBlock(a.id) ?? null) : null,
+        };
+      });
   }
 
   get(id: string): AgentInfo {

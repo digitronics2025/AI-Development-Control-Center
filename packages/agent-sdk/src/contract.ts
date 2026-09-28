@@ -188,6 +188,12 @@ export interface RawAgentResult {
   sessionId: string | null;
   usageLimited: boolean;
   guardViolation: string | null;
+  /**
+   * Why the CLI's output did not follow the protocol the adapter knows (e.g. no
+   * event that ends every successful turn). A run that would otherwise count as
+   * a success fails `PROTOCOL_DRIFT` with it instead. Absent or null: no drift seen.
+   */
+  protocolDrift?: string | null;
   filesChanged: string[];
   usage: AgentUsageReport | null;
   capacity: CapacityObservation[];

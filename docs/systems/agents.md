@@ -57,6 +57,44 @@ allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars`, and every
 other MCP server switched off ([below](#mcp-servers-in-a-codex-run)). The file is
 removed when the run ends.
 
+## Declared capabilities
+
+`getCapabilities()` returns `AgentCapabilities`
+([types.ts](../../packages/shared/src/types.ts)). The orchestrator decides by
+what an adapter declares, never by its id: no `agentId === 'claude'` branch
+exists in `apps/orchestrator/src`. Decisions read the adapter itself
+(`AgentRegistry.capabilities(id)`); `GET /api/agents` serves the copy the last
+health check stored, filled with defaults for fields a copy stored before they
+existed (`providerLabel` empty, `maxPermissionLevel` 1).
+
+| Field | Claude Code | Codex | Used by |
+|---|---|---|---|
+| `pluginDirs` | yes (`--plugin-dir`) | no | the learning loop: a run that loads plugin folders is told a learned skill "is loaded for this run", others get its file to read ([learning.md](learning.md)) |
+| `providerLabel` | Anthropic (Claude Code) | OpenAI (Codex) | the dashboard's provider names; `AgentInfo.provider` is the usage provider key it names |
+| `maxPermissionLevel` | 5 | 5 | `AgentRegistry.launch` refuses a run above it before anything starts (`PERMISSION_DENIED`, "<agent> can run at most Level n (…), and this run needs Level m (…)"; and every run when the adapter declares no ceiling: "<agent> declares no permission ceiling…"); the Chairman's recovery never hands a stage above it to that agent, and a provider-wide move leaves such stages where they are ([chairman.md](chairman.md)) |
+
+The refusal sits in the one launch door, so a stage (`runners.launchAgent`,
+Stage Team workers included) fails with the message in its execution and waits
+for the operator like any other `PERMISSION_DENIED`. Simulated agents declare 5,
+`Simulated agents`, and `pluginDirs` only for the simulated `claude`.
+
+### Tested CLI versions
+
+[agents.compat.json](../../packages/agent-sdk/agents.compat.json) names, per
+agent id, the inclusive range of CLI versions the adapter was verified against:
+Claude Code 2.1.280–2.1.283 and Codex 0.156.1. `cliCompat(id, version)`
+([compat.ts](../../packages/agent-sdk/src/compat.ts)) compares plain `x.y.z`
+versions by number and fails closed: a version outside the range, one with a
+suffix (`-beta`, `+build`), or an agent with no range is `unverified`.
+`GET /api/agents` carries the verdict as `AgentInfo.compat` (`{ tested, status }`;
+null when no version was detected, and for simulated agents), and
+Settings → Agents & Models shows it ([dashboard.md](dashboard.md#pages)). An
+unverified version still runs: the fail-closed checks (the billing tripwire,
+`PROTOCOL_DRIFT`) guard it. `pnpm verify:agents` prints the range and the verdict;
+widen a range only after `pnpm verify:agents --run --only <id>` passes on the new
+version. The fake Claude Code reports `FAKE_CLAUDE_VERSION` (default 9.9.9, like
+the fake Codex: unverified).
+
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
 - Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --disable apps --disable plugins --disable skill_mcp_dependency_install [-c mcp_servers.<name>={enabled=false,…}]… --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
@@ -82,6 +120,11 @@ removed when the run ends.
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).
 - Output: JSONL events (`agent_message`, `command_execution`, `file_change`, `turn.failed`).
+  A run that exits 0 without a `turn.completed` — the event that ends every
+  successful turn and carries its usage — fails `PROTOCOL_DRIFT` instead of
+  succeeding (`codexProtocolDrift`; a `thread.started` alone holds no turn): a
+  changed event format is never counted as a success. A run that failed anyway
+  (`turn.failed`, a non-zero exit) keeps its own class.
 
 ### MCP servers in a Codex run
 
@@ -177,7 +220,7 @@ tenten-accounting-in.
   which way the installed CLI goes.
 - `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.
-- Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
+- Runtime tripwire (Subscription Only mode): the init event must report `apiKeySource: none` (a claude.ai login). Any other value stops the run, and so does a missing field: it fails closed, because a CLI that stops reporting where its credentials come from cannot be told apart from one billing an API key. Both end `AUTH_FAILURE`, the missing field with its own message. A run with no init event at all (a renamed or dropped event) is stopped too, at the first event of a turn (`assistant`, `user`, `result`, `rate_limit_event`) that arrives before one (`AUTH_FAILURE`); one that exits 0 with no event at all fails `PROTOCOL_DRIFT` rather than succeeding. API Mode runs are not stopped. The run log's first line states what the event said (`· apiKeySource none`, or `(not reported)`; `loggedApiKeySource` reads it back), and `pnpm verify:agents --run` prints it for the installed CLI (`init apiKeySource: none | MISSING | NO INIT EVENT`; anything but `none` fails the check) — run it after every Claude Code update. The fake CLI omits the field when `FAKE_CLAUDE_APIKEY_SOURCE` is unset, renames the event with `FAKE_CLAUDE_INIT_SUBTYPE`, and prints nothing with `FAKE_CLAUDE_SCENARIO=silent`.
 - Usage limits: `rate_limit_event` with `status: rejected`, or `api_error_status: 429`.
 
 ## Skills
@@ -308,6 +351,47 @@ reported none) and `capacity` observations, and every adapter declares
 (cached input is inside `input_tokens`) and no cost. Runs are launched only
 through `AgentRegistry.launch`, which records them — see [usage.md](usage.md).
 
+## Adapter conformance kit
+
+[test-kit](../../packages/agent-sdk/test-kit/index.ts) (`@acc/agent-sdk/test-kit`)
+holds the security-critical behaviour every adapter must show.
+`adapterConformance(target)` registers one test per check; the adapters run it
+([agent-claude](../../packages/agent-claude/test/conformance.test.ts),
+[agent-codex](../../packages/agent-codex/test/conformance.test.ts)) against their
+fake CLIs (`tests/fixtures/fake-*.mjs`), so `pnpm check` runs it for both:
+
+| Check | Holds when |
+|---|---|
+| `promptOnStdin` | the prompt arrives on stdin, and no piece of it (12 consecutive characters or more) is in argv or the displayed command line |
+| `apiBillingBlocked` | an API-key sign-in in Subscription Only mode is `api_billing_blocked` and `execute` refuses (`AUTH_FAILURE`) before the CLI starts; API Mode connects |
+| `billingEnvStripped` | no `API_BILLING_ENV_VARS` name reaches the CLI's environment |
+| `sessionTokenPrivate` | the tool session token (bridge and shell guard) is in the CLI's environment only: not argv, not a file the arguments name, not a file under a temp entry new or changed since the check began; the run gets its own empty temp folder, so a reused name counts. Looked for as the run starts and after it ends (a file removed at the end counts) |
+| `strictMcp` | with the operator's own servers (and Codex account plugins) configured, a run loads only `acc` with a bridge and nothing without |
+| `levelOneReadOnly` | a Level 1 run cannot change files, user config on or off |
+| `failureClasses` | the fake's usage-limit, sign-in and model failures end `USAGE_LIMIT`, `AUTH_FAILURE`, `MODEL_UNAVAILABLE` |
+| `usageNullNotZero` | usage is `null`, never a zero report, when none was reported (a usage-limit run, a run stopped before its summary) |
+| `declaredCapabilities` | a non-empty `providerLabel`, a `maxPermissionLevel` of Level 1–5, and, when it declares `pluginDirs`, a run given a plugin folder names it in argv |
+
+Each check carries a positive control (the prompt did arrive, the environment
+was seen, Level 2 can write…), so it cannot pass vacuously. A fake takes part
+by writing a launch record to `$FAKE_ARGS_FILE` when a run starts: argv, cwd,
+the environment's variable names, stdin, the files its arguments name, and what
+the real CLI would make of the arguments — the MCP servers it would load and
+whether it could change files, by the semantics measured above
+(`--strict-mcp-config`, `--tools`/`--disallowedTools`; `-c mcp_servers.*`,
+`--disable apps|plugins`, `--sandbox`, `--ignore-rules`); Claude's variadic
+`--tools`/`--disallowedTools`/`--mcp-config` count every value and repeat.
+`runConformanceCheck(id,
+target)` runs one check as a function that throws `ConformanceFailure`: each
+adapter's test proves deliberately broken variants (the prompt, or its opening
+words, in argv; the session token in a temp folder of the adapter's own, kept,
+removed at the end or reused, or in a temp file already there; `--strict-mcp-config` or `--disable plugins` dropped, a second `--mcp-config`, Level 1 given Level 2's
+arguments or a second `--tools`, a key forwarded through the guard environment, plugin folders
+dropped, a Level 6 ceiling…) fail the check that
+guards them, in that check's words. Adapter-specific guards — Claude Code's
+shell precheck and billing tripwire, Codex's execpolicy flag and protocol
+check — stay in each adapter's own tests.
+
 ## Failure classification ([classify.ts](../../packages/agent-sdk/src/classify.ts))
 
 Structured provider messages are classified before log noise: `USAGE_LIMIT`
@@ -315,6 +399,16 @@ Structured provider messages are classified before log noise: `USAGE_LIMIT`
 `MODEL_UNAVAILABLE` ("requires a newer version", a CLI's own "error: unknown
 option '--…'" line when it is older than the adapter's flags…), `PERMISSION_DENIED`,
 `CONTEXT_FAILURE`; otherwise `PROCESS_CRASH`.
+
+`PROTOCOL_DRIFT` ("Agent output not recognised") is set by a parser, not by
+text: the run exited 0 but its output lacked what every successful run shows
+(`RawAgentResult.protocolDrift`, applied by `parseResult` only when nothing else
+failed; today Codex's missing `turn.completed`, and a Subscription Only Claude Code
+run with no init event). For the engine it is an ordinary
+error: retried, then `FAILED` — or, supervised, handed to the Chairman, which
+files it under Agent or tool (`WORKER_OR_TOOL`, recovery `worker_failure`:
+change agent first). The task's banner offers **Open Agents**, where the CLI
+version is.
 
 Only plain output lines count as evidence from the output tail
 (`isProtocolEvent`): stdout protocol events (`{"type":…}`, matched by prefix
@@ -359,7 +453,8 @@ Teams: `[sim:team]` (units alpha and beta), `[sim:team-chain]`, `[sim:team-three
 (`- Your approach:`) writes `sim-output.md` and `variant-<key>.md`, and role
 `judge` answers `WINNER:` with the first variant, the last with
 `[sim:judge-last]`, none with `[sim:judge-none]`. The simulated `codex`
-declares `images: true` like the real one and logs the pictures it receives.
+declares `images: true` like the real one and logs the pictures it receives;
+the simulated `claude` declares `pluginDirs` like the real one.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.
 Role `ask` answers "Simulated answer to: <question>" and names the repository
 and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`

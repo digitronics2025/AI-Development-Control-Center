@@ -188,7 +188,8 @@ export function createServices(
   const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir, tools, toolStore, tooling, credentials });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
-  context.lessons = (task, def, stage) => learning.promptSection(task, def, stage);
+  // The adapter's declaration decides whether the run loads a learned skill or is pointed at its file.
+  context.lessons = async (task, def, stage) => learning.promptSection(task, def, stage, stage.agentId && agents.has(stage.agentId) ? (await agents.capabilities(stage.agentId)).pluginDirs : false);
   context.pluginDirs = (task) => learning.pluginDirs(task);
   tools.registerProvider(environmentProvider({ store, repositories, tooling }));
   tools.registerProvider(controlCenterProvider({ store, views, chairman, usage, learning }));

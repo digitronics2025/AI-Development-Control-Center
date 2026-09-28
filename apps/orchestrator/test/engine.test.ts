@@ -213,7 +213,7 @@ describe('generated media in review coverage', () => {
     });
     const repoPath = await makeRepo();
     // Your own untracked mockup, there before the task started: context, not part of the change under review.
-    writeFileSync(path.join(repoPath, 'mockup.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+    writeFileSync(path.join(repoPath, 'mockup.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAE' + 'AAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
     const id = await createTask(t, await addRepo(t, repoPath), 'Add a greeting [sim:review-miss-coverage]', { workflowId: 'plain-review', supervised: false });
     const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
     expect(task.status, task.blocker?.message).toBe('COMPLETED');
@@ -236,7 +236,7 @@ describe('image attachments', () => {
         { key: 'review', name: 'Review', role: 'reviewer', agentId: 'claude', permissionLevel: 1, verdict: true, next: 'complete' },
       ],
     });
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64').toString('base64');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAE' + 'AAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64').toString('base64');
     const id = await createTask(t, await addRepo(t, await makeRepo()), 'Match the reference', {
       workflowId: 'image-refs',
       attachments: [
@@ -361,6 +361,69 @@ describe('failure handling', () => {
     expect(task.blocker).toMatchObject({ kind: 'error', errorClass: 'PROCESS_CRASH', stageKey: 'investigate' });
     expect(t.services.store.listStages(id).filter((s) => s.stageKey === 'investigate')).toHaveLength(2);
     expect(eventTypes(id)).toContain('STAGE_RETRY');
+  });
+
+  it("refuses a stage above the agent's permission ceiling before anything starts, and runs the ones within it", async () => {
+    const levels: number[] = [];
+    // An adapter that can enforce only Level 1 (read-only).
+    class ReadOnlyAgent extends SimulatedAgentAdapter {
+      override async getCapabilities() {
+        return { ...(await super.getCapabilities()), maxPermissionLevel: 1 as const };
+      }
+      override execute(input: Parameters<SimulatedAgentAdapter['execute']>[0]) {
+        levels.push(input.permissionLevel);
+        return super.execute(input);
+      }
+    }
+    await t.close();
+    t = await createTestApp({ adapters: [new SimulatedAgentAdapter('codex', 'Codex (simulated)', 10), new ReadOnlyAgent('claude', 'Claude Code (simulated)', 10)] });
+    t.services.workflows.save('ceiling', {
+      name: 'Ceiling',
+      maxFixCycles: 0,
+      stages: [
+        { key: 'look', name: 'Look', role: 'investigator', agentId: 'claude', permissionLevel: 1, next: 'build' },
+        { key: 'build', name: 'Build', role: 'implementer', agentId: 'claude', permissionLevel: 2, next: 'complete' },
+      ],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Change a file', { workflowId: 'ceiling', supervised: false });
+    const task = await waitForStatus(t, id, ['FAILED', 'WAITING_FOR_USER', 'COMPLETED']);
+    expect(task.status).not.toBe('COMPLETED');
+    expect(task.blocker).toMatchObject({ errorClass: 'PERMISSION_DENIED', stageKey: 'build' });
+    expect(t.services.store.latestStage(id, 'look')!.status).toBe('SUCCESS');
+    // The Level 2 stage never reached the adapter.
+    expect(levels).toEqual([1]);
+    const build = t.services.store.listExecutions(id).filter((e) => e.stageId === t.services.store.latestStage(id, 'build')!.id);
+    expect(build.length).toBeGreaterThan(0);
+    for (const e of build) {
+      expect(e).toMatchObject({ status: 'failed', errorClass: 'PERMISSION_DENIED' });
+      expect(e.errorMessage).toContain('Claude Code (simulated) can run at most Level 1 (Analyze), and this run needs Level 2 (Develop)');
+    }
+  });
+
+  it('refuses every run of an adapter that declares no permission ceiling', async () => {
+    let started = 0;
+    class Undeclared extends SimulatedAgentAdapter {
+      override async getCapabilities() {
+        const { maxPermissionLevel: _dropped, ...rest } = await super.getCapabilities();
+        return rest as Awaited<ReturnType<SimulatedAgentAdapter['getCapabilities']>>;
+      }
+      override execute(input: Parameters<SimulatedAgentAdapter['execute']>[0]) {
+        started++;
+        return super.execute(input);
+      }
+    }
+    await t.close();
+    t = await createTestApp({ adapters: [new SimulatedAgentAdapter('codex', 'Codex (simulated)', 10), new Undeclared('claude', 'Claude Code (simulated)', 10)] });
+    t.services.workflows.save('undeclared', {
+      name: 'Undeclared',
+      maxFixCycles: 0,
+      stages: [{ key: 'look', name: 'Look', role: 'investigator', agentId: 'claude', permissionLevel: 1, next: 'complete' }],
+    });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Read a file', { workflowId: 'undeclared', supervised: false });
+    const task = await waitForStatus(t, id, ['FAILED', 'WAITING_FOR_USER', 'COMPLETED']);
+    expect(task.blocker).toMatchObject({ errorClass: 'PERMISSION_DENIED', stageKey: 'look' });
+    expect(task.blocker?.message).toContain('Claude Code (simulated) declares no permission ceiling (maxPermissionLevel), so no run of it starts');
+    expect(started).toBe(0);
   });
 
   it('asks before continuing when a repository has no verification commands', async () => {

@@ -52,7 +52,7 @@ class ReportingCli extends CliAgentAdapter {
     };
   }
   async getCapabilities(): Promise<AgentCapabilities> {
-    return { repositoryRead: true, repositoryWrite: true, commandExecution: true, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false };
+    return { repositoryRead: true, repositoryWrite: true, commandExecution: true, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false, pluginDirs: false, providerLabel: 'Test agents', maxPermissionLevel: 5 };
   }
   async listModels(): Promise<ModelDescriptor[]> {
     return [];

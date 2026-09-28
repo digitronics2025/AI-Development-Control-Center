@@ -112,7 +112,7 @@ function BlockerBanner({ task, onReroute, onDirective, onChairman }: { task: Tas
               Reroute stage
             </Button>
           ) : null}
-          {blocker.kind === 'auth' || (blocker.kind === 'error' && blocker.errorClass === 'MODEL_UNAVAILABLE') ? (
+          {blocker.kind === 'auth' || (blocker.kind === 'error' && (blocker.errorClass === 'MODEL_UNAVAILABLE' || blocker.errorClass === 'PROTOCOL_DRIFT')) ? (
             <Button size="compact" icon={Bot} onClick={() => navigate('/agents')}>
               Open Agents
             </Button>

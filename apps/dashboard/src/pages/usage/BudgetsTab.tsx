@@ -35,6 +35,7 @@ import {
 import { errorMessage } from '../../api/client';
 import { useAgents, useRepositories } from '../../api/hooks';
 import { useBudgets, useUsageMutations } from '../../api/usage';
+import { providerOptions } from './common';
 
 /** A media budget limits paid generation, never agent runs (docs/systems/design-agent.md). */
 const MEDIA_POLICY_HELP: Record<BudgetPolicy, string> = {
@@ -106,16 +107,7 @@ function BudgetDialog({ budget, open, onOpenChange }: { budget: BudgetStatus | n
         return <Select value={form.scopeId || undefined} placeholder="Choose an agent" onValueChange={(v) => setForm({ ...form, scopeId: v })} options={(agents.data ?? []).map((a) => ({ value: a.id, label: a.name }))} />;
       case 'PROVIDER':
         return (
-          <Select
-            value={form.scopeId || undefined}
-            placeholder="Choose a provider"
-            onValueChange={(v) => setForm({ ...form, scopeId: v })}
-            options={[
-              { value: 'anthropic', label: 'Anthropic (Claude Code)' },
-              { value: 'openai', label: 'OpenAI (Codex)' },
-              { value: 'simulated', label: 'Simulated agents' },
-            ]}
-          />
+          <Select value={form.scopeId || undefined} placeholder="Choose a provider" onValueChange={(v) => setForm({ ...form, scopeId: v })} options={providerOptions(agents.data ?? [])} />
         );
       default:
         return <Input value={form.scopeId} onChange={(e) => setForm({ ...form, scopeId: e.target.value })} placeholder={form.scopeType === 'MODEL' ? 'e.g. claude-opus-5' : 'e.g. TASK-0042'} />;

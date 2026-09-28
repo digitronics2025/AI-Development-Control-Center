@@ -42,6 +42,7 @@ import { errorMessage } from '../api/client';
 import { useHealth, usePromptMutations, usePrompts, useSettings, useUpdateSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
 import { useConnection, useRuntime } from '../app/runtime';
+import { AgentVersions } from '../components/agent-versions';
 import { AskSettingsPanel } from '../components/ask-settings';
 import { AssignmentPicker } from '../components/assignment-picker';
 import { PhoneAlertsSection } from '../components/phone-alerts';
@@ -345,6 +346,7 @@ export function SettingsPage() {
               />
             </div>
           ))}
+          <AgentVersions />
           <p className="text-small text-fg-secondary">
             Health, executables and custom model IDs are managed on the <Link to="/agents" className="text-fg underline">Agents</Link> page.
           </p>

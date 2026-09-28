@@ -403,6 +403,23 @@ describe('the native shell precheck (SEC-3 step 2)', () => {
     await t!.api('POST', `/api/tasks/${taskId}/cancel`);
   }, 60_000);
 
+  it("reads a relative climb from the folder the agent's shell is in, following each cd, for a worktree left in the data folder", async () => {
+    // Review, 2026-09-28: the hook did not say where the shell was, and a cd earlier in the line was not followed.
+    const { taskId, session } = await runningStage();
+    const legacy = path.join(t!.dataDir, 'worktrees', 'app', 'TASK-L');
+    mkdirSync(path.join(legacy, 'src'), { recursive: true });
+    const inData = t!.services.tools.openSession({ ...session.scope, cwd: legacy, roots: [legacy] }, 'agent');
+    const ask = (command: string, cwd?: string) => t!.api('POST', '/api/tool-session/precheck', { command, ...(cwd ? { cwd } : {}) }, sessionHeaders(inData.token));
+    for (const [command, cwd] of [['cat ../../../../acc.db', path.join(legacy, 'src')], ['cd src && cat ../../../../acc.db'], ['cd ..; cd ..; cd ..; cat acc.db']] as Array<[string, string?]>) {
+      expect((await ask(command, cwd)).body.decision, command).toBe('deny');
+    }
+    // Work inside its own folders is not refused: a climb read from where it runs stays inside.
+    for (const [command, cwd] of [['cd src && cat ../package.json'], ['cat ../package.json', path.join(legacy, 'src')], ['git commit -m "Move helpers to ../../shared"']] as Array<[string, string?]>) {
+      expect((await ask(command, cwd)).body.decision, command).not.toMatch(/deny/);
+    }
+    await t!.api('POST', `/api/tasks/${taskId}/cancel`);
+  }, 60_000);
+
   it("judges Claude's native file reads by the paths they read: the Control Center's files refused and recorded, the rest read", async () => {
     const { taskId, stage, worktree, session } = await runningStage();
     const dataDir = t!.dataDir;

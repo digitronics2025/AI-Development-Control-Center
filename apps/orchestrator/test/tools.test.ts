@@ -252,6 +252,19 @@ describe('task processes', () => {
     expect((await start('STAGE-APP-CHECK', designerPort)).status).toBe('healthy');
     expect(await t.services.processes.stopForTask('TASK-S', 'test')).toBe(2);
   }, 90_000);
+
+  it("closes the terminals one stage's agent opened when that stage ends, and no other stage's", async () => {
+    const one = await t.services.terminals.host('TASK-T', 2, [], 'STAGE-IMPLEMENT').start({ shell: process.platform === 'win32' ? 'powershell' : 'bash', cwd: repoPath });
+    const two = await t.services.terminals.host('TASK-T', 2, [], 'STAGE-OTHER').start({ shell: process.platform === 'win32' ? 'powershell' : 'bash', cwd: repoPath });
+    try {
+      expect(await t.services.terminals.closeForStage('TASK-T', 'STAGE-IMPLEMENT')).toBe(1);
+      expect(t.services.terminals.list({ taskId: 'TASK-T', running: true }).map((x) => x.id)).toEqual([two.id]);
+      expect(t.services.terminals.list({ taskId: 'TASK-T' }).find((x) => x.id === one.id)?.status).toBe('exited');
+      expect(await t.services.terminals.closeForStage('TASK-T', 'STAGE-IMPLEMENT')).toBe(0);
+    } finally {
+      await t.services.terminals.closeForTask('TASK-T');
+    }
+  }, 60_000);
 });
 
 describe('engine integration', () => {

@@ -11,7 +11,7 @@ Part of [Agent adapters](agents.md).
 
 ## Codex ([agent-codex](../../packages/agent-codex/src/index.ts))
 
-- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --disable apps --disable plugins --disable skill_mcp_dependency_install [-c mcp_servers.<name>={enabled=false,…}]… --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…]] [-i <image>]… -`
+- Run: `codex exec --json --color never --skip-git-repo-check -C <repo> --disable apps --disable plugins --disable skill_mcp_dependency_install [-c mcp_servers.<name>={enabled=false,…}]… --sandbox read-only|workspace-write --ignore-rules [-m model] [-c model_reasoning_effort="…"] -c forced_login_method="chatgpt" [--ignore-user-config] [-c mcp_servers.acc.command=… -c mcp_servers.acc.args=[…] -c mcp_servers.acc.env_vars=[…] -c mcp_servers.acc.default_tools_approval_mode="approve"] [-i <image>]… -`
 - Level 1 stages use the read-only sandbox; higher levels `workspace-write`.
 - Images: `launchAgent` passes the task's image attachments (PNG, JPEG, WebP,
   GIF; five at most, 10 MB each) as `images` to any adapter whose
@@ -83,6 +83,7 @@ server, config loaded and ignored, and passes only when Codex's log names `acc`
 alone at session start, no other server starts or fails to start, and the
 stand-in was started; then a tool not marked read-only must run on a stand-in
 `acc` (the approval setting in [agents-contract.md](agents-contract.md)). 2026-09-27: 3/3 pass, `tenten-d1` switched off by name in
-tenten-accounting-in.
+tenten-accounting-in. 2026-09-28 (0.156.1, the operator's config): all three
+checks pass, the tool not marked read-only among them.
 
 Last verified: 2026-09-28

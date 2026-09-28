@@ -30,7 +30,7 @@ export function hostedProviders(): ToolProvider[] {
         operation({
           id: 'process.start',
           title: 'Start a background process',
-          description: 'Start a long-running command (dev server, watcher) owned by this task. Give `port`/`readyUrl` to wait until it answers. It is stopped automatically when the task ends.',
+          description: 'Start a long-running command (dev server, watcher) owned by this task. Give `port`/`readyUrl` to wait until it answers. A process an agent starts is stopped automatically when the stage that started it ends, so a later stage does not find its port taken.',
           input: z.object({
             name: z.string().min(1).max(60),
             command: z.string().min(1).max(2000),
@@ -115,7 +115,7 @@ export function hostedProviders(): ToolProvider[] {
         operation({
           id: 'terminal.start',
           title: 'Open a terminal',
-          description: 'Start an interactive shell session (PTY). Use terminal.send to type and terminal.read to see output. Every line you send is classified first.',
+          description: 'Start an interactive shell session (PTY). Use terminal.send to type and terminal.read to see output. Every line you send is classified first. It closes when the stage that opened it ends; for a server a later stage should not inherit, prefer process.start.',
           input: z.object({
             shell: shellKind.default(process.platform === 'win32' ? 'powershell' : 'bash'),
             cols: z.number().int().min(20).max(400).default(120),

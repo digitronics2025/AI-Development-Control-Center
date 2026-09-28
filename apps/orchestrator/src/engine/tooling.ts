@@ -929,7 +929,9 @@ export class EngineTooling {
   /** An agent stage ended: stop the background processes it started, so the next stage finds its ports free. */
   async stopStageProcesses(taskId: string, stage: StageInstance, stageName: string): Promise<void> {
     const names = await this.d.processes.stopForStage(taskId, stage.id, `${stageName} ended`).catch(() => [] as string[]);
-    if (names.length) this.event(taskId, 'PROCESS_STOPPED', `Stopped ${names.length} background process(es) ${stageName} left running: ${names.join(', ')}`, { names }, stage.id);
+    const terminals = await this.d.terminals.closeForStage(taskId, stage.id).catch(() => 0);
+    const parts = [...(names.length ? [`stopped ${names.length} background process(es) (${names.join(', ')})`] : []), ...(terminals ? [`closed ${terminals} terminal(s)`] : [])];
+    if (parts.length) this.event(taskId, 'PROCESS_STOPPED', `${stageName} ended: ${parts.join(' and ')} it left running`, { names, terminals }, stage.id);
   }
 
   async stopProcesses(taskId: string, reason: string): Promise<void> {

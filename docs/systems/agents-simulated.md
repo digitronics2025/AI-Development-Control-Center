@@ -49,6 +49,11 @@ Role `ask` answers "Simulated answer to: <question>" and names the repository
 and any task it was shown ([ask.md](ask.md)). `[sim:lookup:<capability>:<json>]`
 in the question makes it call that capability through its tool session
 (`ACC_TOOL_URL`/`ACC_TOOL_SESSION` from `toolBridge.env`) and report OK or
-REFUSED with the summary.
+REFUSED with the summary. `[sim:call:<role>:<capability>:<json>]` in a task
+does the same for any role's stage run, on one line (the prompt also shows the
+title cut short): an implementer starting a dev server it leaves running, for
+the stage-end cleanup test
+([stage-processes.test.ts](../../apps/orchestrator/test/stage-processes.test.ts)).
+It needs a tool route over HTTP, as a real bridge does.
 
 Last verified: 2026-09-28

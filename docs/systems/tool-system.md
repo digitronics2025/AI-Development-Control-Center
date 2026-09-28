@@ -271,7 +271,7 @@ local API token is refused there, and a session token opens nothing else);
 a `guardOnly` session (tools off for agents, or a stage run as the agent
 account, [security.md](security.md#agent-os-boundary)) is refused there with 403.
 `POST /api/tool-session/precheck` (SEC-3) is the native precheck a
-Claude Code run's hook asks before each Bash command (`{ command }`) and each
+Claude Code run's hook asks before each Bash command (`{ command, cwd }`: the folder its shell is in) and each
 Read, Grep and Glob (`{ tool, input, cwd? }`): only the live agent
 session of a stage that is `STARTING`, `RUNNING` or `RETRYING` gets an answer
 (`{decision: 'allow'}` or `{decision: 'deny', reason}`; anything else is 401
@@ -347,8 +347,12 @@ instead of fought over; readiness is an HTTP poll; child pids are learned
 (Win32_Process on Windows, `ps` parent links elsewhere) so "is this pid ours"
 covers the real server under a shell. What an agent stage starts (a dev
 server to look at) stops when that stage ends — `stopForStage`, with a
-`PROCESS_STOPPED` event naming them — so the App check never finds its port
-taken (TASK-0024, 2026-09-28). Processes stop as a
+`PROCESS_STOPPED` event naming them — and the terminals its agent opened close
+with it (`TerminalService.closeForStage`; which stage opened each is held in
+memory, as a terminal does not outlive a restart), so a later stage, the App
+check among them, does not find a port the stage left taken (TASK-0024,
+2026-09-28). A server started by other means (a detached shell command) is not
+tracked and still ends only with the task. Processes stop as a
 tree when the task's loop exits in any state other than running/queued, on
 completion and cancel, and at shutdown. After a crash, rows still marked live
 are killed only if the pid's creation time (Win32_Process, or `ps -o lstart`)

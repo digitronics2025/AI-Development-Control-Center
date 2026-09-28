@@ -16,6 +16,7 @@ import {
   redact,
   REDACTED,
   referencesSelf,
+  relativeClimbTargets,
   relativizeOwnRoots,
   sanitizeEnv,
   scanOutbound,
@@ -190,6 +191,39 @@ function dangerous(reason: string, effect: ToolRisk['effects'][number]): ToolRis
 /** The task's own folders, which a call may name as its own (`relativizeOwnRoots`): its roots, working folder and linked repositories. */
 function ownRoots(scope: ToolScope): string[] {
   return [...scope.roots, scope.cwd, ...(scope.repositories ?? []).map((r) => r.root)];
+}
+/**
+ * A relative climb, or a `cd`, out of the task's own folders into the Control Center's: `..\..\..\acc.db` from a
+ * worktree in the data folder. Read from the folder the call runs in: its own `cwd` (where shell.run and
+ * process.start run), else `shellCwd` (the folder the agent's native shell is in, which its hook reports), else the
+ * task's folder.
+ */
+function climbsIntoSelf(input: unknown, scope: ToolScope, shellCwd: string | null = null): boolean {
+  const own = ownRoots(scope);
+  const given = input && typeof input === 'object' && typeof (input as { cwd?: unknown }).cwd === 'string' ? (input as { cwd: string }).cwd : null;
+  const base = given !== null ? path.resolve(scope.cwd, given) : shellCwd && path.isAbsolute(shellCwd) ? shellCwd : scope.cwd;
+  return relativeClimbTargets(input, [base]).some((p) => !own.some((root) => isInside(root, p)) && referencesSelf(p));
+}
+/**
+ * The two readings a call is classified in, the stricter one counting: its own folders relative to the folder it
+ * runs in (a sibling repository is `..\api`, so the release gate reads the right one), and relative to the root
+ * that holds each (a whole-tree command on any of its own folders reads as `.`). A `..` never keeps a path absolute
+ * here: the classifier knows `git checkout -- .` discards everything, not the same folder written out.
+ */
+function ownViews<T>(input: T, scope: ToolScope): T[] {
+  const own = ownRoots(scope);
+  const [fromCwd, fromRoot] = [relativizeOwnRoots(input, own, scope.cwd), relativizeOwnRoots(input, own)];
+  // Most calls run in their task's only root, where both readings are the same: classified once.
+  return JSON.stringify(fromCwd) === JSON.stringify(fromRoot) ? [fromCwd] : [fromCwd, fromRoot];
+}
+/** The stricter of several classifications of one call: the highest level, writing if any reading writes. */
+function stricter<R extends { level?: number; writes?: boolean } | undefined>(risks: R[]): R {
+  const [first, ...rest] = risks;
+  let pick = first as R;
+  for (const r of rest) if (r && (!pick || (r.level ?? 0) > (pick.level ?? 0))) pick = r;
+  if (!pick) return pick;
+  const writes = risks.some((r) => r?.writes);
+  return writes && !pick.writes ? { ...pick, writes } : pick;
 }
 /** A path segment `..`: a read-only folder's mention followed by one leaves the folder. */
 const PARENT_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
@@ -594,9 +628,11 @@ export class ToolService {
     // 3. Classify this concrete call. It is judged with the task's own folders written relative to them: an isolated
     // task's worktree lives in the data folder, and its own path is not the Control Center's files. Only the judging
     // sees this form; the call runs with its input as given.
-    const judged = relativizeOwnRoots(input, ownRoots(scope));
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const classified = operation.classify?.(judged, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
+    const ctx = { cwd: scope.cwd, isTaskOwnedPid: (pid: number) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) };
+    const classified = operation.classify ? stricter(ownViews(input, scope).map((v) => operation.classify!(v, ctx))) : undefined;
+    // The self-reference check reads the call failing closed: with a `..` anywhere, as written.
+    const judged = relativizeOwnRoots(input, ownRoots(scope), scope.cwd, { failClosed: true });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
     let risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
@@ -604,7 +640,7 @@ export class ToolService {
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
     // Every URL in the input is read the way the tool's own `new URL()` will read it, so `127.1:4317`,
     // `2130706433:4317` and `[::ffff:127.0.0.1]:4317` are the listen address too (SEC-1).
-    if (req.origin === 'agent' && inputReferencesSelf(judged)) {
+    if (req.origin === 'agent' && (inputReferencesSelf(judged) || climbsIntoSelf(input, scope))) {
       const self: ToolRisk = { ...risk, level: 5, risk: 'dangerous', reasons: ["Reaches the Control Center's own token, data folder or API"] };
       this.escalate(scope, req.capability, 'denied', self.reasons[0]!, 5);
       return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);
@@ -846,7 +882,7 @@ export class ToolService {
       shell: (k) => this.shell(k),
       detection: (id) => this.health.get(id),
       processes: this.d.processes.host(scope.taskId, scope.stageId),
-      terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel, this.releaseBranchesOf(scope)) : undefined,
+      terminals: this.d.settings.get().execution.terminals ? this.d.terminals.host(scope.taskId, scope.stageLevel, this.releaseBranchesOf(scope), scope.stageId) : undefined,
       checkpoints: scope.taskId ? this.checkpointsFor(scope.taskId) : undefined,
       artifacts,
       prices: this.d.spend?.prices(),
@@ -911,10 +947,12 @@ export class ToolService {
    * names the Control Center itself (`referencesSelf`), Claude Code's settings
    * files, or — to do more than read — the hook's own script or folder
    * (`namesShellGuard`), through which the hook could be switched off. Its learned
-   * plugins may be read (`excuseReadOnlyFolders`). Only refusals are recorded,
-   * as `native.bash` rows in tool_executions. File reads: `precheckFile`.
+   * plugins may be read (`excuseReadOnlyFolders`). `shellCwd` is the folder the
+   * CLI's shell is in, which the hook reports: a relative climb is read from it.
+   * Only refusals are recorded, as `native.bash` rows in tool_executions. File
+   * reads: `precheckFile`.
    */
-  precheck(session: ToolSession, command: string): NativeDecision {
+  precheck(session: ToolSession, command: string, shellCwd: string | null = null): NativeDecision {
     const refuse = (reason: string, risk: ToolRisk) => this.refuseNative(session, 'native.bash', { command }, reason, risk);
     const { scope } = session;
     if (NAMES_CLAUDE_SETTINGS.test(command)) {
@@ -928,16 +966,20 @@ export class ToolService {
     }
     // Judged with the task's own folders written relative to them, as `invoke` judges a tool call: a worktree the
     // start could not move out of the data folder is the task's own, not the Control Center's files.
-    const judged = relativizeOwnRoots(command, ownRoots(scope));
+    const own = ownRoots(scope);
     // The learned plugins may be read; a command that does more than read them is judged as written.
-    const excused = excuseReadOnlyFolders(judged, [learnedPluginsRoot(this.d.dataDir)]);
-    const text = excused !== judged && classifyCommand(excused).readOnly ? excused : judged;
-    if (referencesSelf(text)) {
+    const plugins = [learnedPluginsRoot(this.d.dataDir)];
+    const readable = (text: string) => {
+      const excused = excuseReadOnlyFolders(text, plugins);
+      return excused !== text && classifyCommand(excused).readOnly ? excused : text;
+    };
+    if (referencesSelf(readable(relativizeOwnRoots(command, own, scope.cwd, { failClosed: true }))) || climbsIntoSelf(command, scope, shellCwd)) {
       const reason = "Reaches the Control Center's own token, data folder or API";
       return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
     }
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const risk: ToolRisk = { ...this.baseRisk(2, 'Runs a native shell command'), ...classifyScript(text, [], { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) }) };
+    const ctx = { cwd: scope.cwd, isTaskOwnedPid: (pid: number) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) };
+    const risk: ToolRisk = { ...this.baseRisk(2, 'Runs a native shell command'), ...stricter(ownViews(command, scope).map((v) => classifyScript(readable(v), [], ctx))) };
     // The stage is running, so it passed its approval gate: its own level runs, as its native shell always did there.
     const decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile: true, origin: 'agent', approvedLevel: scope.stageLevel });
     if (decision.decision === 'allow') return { decision: 'allow' };
@@ -981,7 +1023,7 @@ export class ToolService {
     for (const root of roots) add(root);
     const readable = [learnedPluginsRoot(this.d.dataDir), ...(scope.taskId ? [path.join(this.d.dataDir, 'tasks', scope.taskId, 'attachments')] : [])];
     const own = ownRoots(scope);
-    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(relativizeOwnRoots(p, own), readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
+    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(relativizeOwnRoots(p, own, scope.cwd), readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
     const data = path.resolve(this.d.dataDir);
     if (roots.some((root) => isInside(root, data) || isInside(realish(root), realish(data)))) return refuse("Searches a folder that holds the Control Center's own data folder");
     return { decision: 'allow' };

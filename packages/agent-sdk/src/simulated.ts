@@ -475,6 +475,31 @@ export class SimulatedAgentAdapter implements AgentAdapter {
         const notShown = [...input.prompt.matchAll(/^- (.+?) \([^\n]*\) → read: /gm)].map((m) => m[1]!);
         if (notShown.length) output = output.replace(/\n(VERDICT: \w+)\s*$/, `\n## Files reviewed\n\n${[...new Set(notShown)].map((p) => `- ${p}: read from disk`).join('\n')}\n\n$1`);
       }
+      // `[sim:call:<role>:<capability>:<json input>]`: that role calls the tool through its run's session, as a real
+      // agent would over MCP (a designer starting a dev server it then leaves running).
+      // One line: the prompt also shows the task's title cut short, and a match must not run on into the next line.
+      for (const m of input.prompt.matchAll(/\[sim:call:([\w-]+):([\w.]+)(?::(\{[^\]\n]*\}))?\]/g)) {
+        if (m[1] !== role) continue;
+        const bridge = input.toolBridge?.env;
+        if (!bridge?.ACC_TOOL_URL || !bridge.ACC_TOOL_SESSION) {
+          emit(`No tools for ${m[2]}`);
+          continue;
+        }
+        let callInput: unknown;
+        try {
+          callInput = m[3] ? JSON.parse(m[3]) : {};
+        } catch {
+          emit(`${m[2]}: REFUSED unreadable input`);
+          continue;
+        }
+        const res = await fetch(`${bridge.ACC_TOOL_URL}/api/tool-session/call`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${bridge.ACC_TOOL_SESSION}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ capability: m[2], input: callInput }),
+        }).catch(() => null);
+        const r = (await res?.json().catch(() => null)) as { ok?: boolean; summary?: string } | null;
+        emit(`${m[2]}: ${r?.ok ? 'OK' : 'REFUSED'} ${r?.summary ?? `HTTP ${res?.status ?? 'error'}`}`);
+      }
       for (const line of output.split('\n')) if (line.trim()) emit(line);
       return { ...base, usage: this.usage(input, output, sessionId), capacity: this.capacity(), status: 'succeeded', exitCode: 0, output, errorClass: null, errorMessage: null };
     })();

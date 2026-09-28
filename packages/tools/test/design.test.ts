@@ -247,6 +247,10 @@ describe('design.lint_tokens', () => {
     expect(out.skipped.map((s) => s.path).sort()).toEqual(['src/components/card.test.js', 'styles/tokens.css']);
     // Files and folders mix; a path that is neither is still refused.
     expect((await call('design.lint_tokens', { paths: ['src', 'styles/app.css'] }, dir)).output).toMatchObject({ files: 3 });
+    // A file named with its folder, or a folder with its parent, is read once: its values count once.
+    const twice = await call('design.lint_tokens', { paths: ['styles', 'styles/app.css', 'src', 'src/components'] }, dir);
+    expect(twice.output).toMatchObject({ files: 3, counts: { 'hex-color': 2 } });
+    expect((twice.output as { findings: Array<{ path: string }> }).findings.map((f) => f.path).sort()).toEqual(['src/other.js', 'styles/app.css']);
     const missing = await call('design.lint_tokens', { paths: ['nope.css'] }, dir);
     expect(missing).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
   });
@@ -317,7 +321,7 @@ describe('design.lint_tokens', () => {
       { path: 'src/lib/bootstrap.min.css', reason: 'minified' },
       { path: 'src/vendor.css', reason: 'line(s) over 4096 characters', lines: [1] },
     ]);
-    expect(r.summary).toMatch(/2 skipped as minified, too long or too deep/);
+    expect(r.summary).toMatch(/2 not read: see skipped/);
     // A finding on a long line shows the text around it, from the line redacted whole: the key never appears.
     expect(out.findings).toHaveLength(1);
     expect(out.findings[0]).toMatchObject({ path: 'src/long.tsx', value: '#3355ff' });
@@ -335,6 +339,6 @@ describe('design.lint_tokens', () => {
     const out = r.output as { skipped: Array<{ path: string; reason: string }>; stoppedAtFiles: boolean };
     expect(out.skipped).toEqual([{ path: deep, reason: 'nested deeper than 12 folders' }]);
     expect(out.stoppedAtFiles).toBe(false);
-    expect(r.summary).toMatch(/^No hard-coded colours.+\(1 skipped as minified, too long or too deep: see skipped\)$/);
+    expect(r.summary).toMatch(/^No hard-coded colours.+\(1 not read: see skipped\)$/);
   });
 });

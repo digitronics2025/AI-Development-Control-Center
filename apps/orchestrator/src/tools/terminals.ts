@@ -37,6 +37,8 @@ export class TerminalService {
   private readonly agentHistory = new Map<string, string[]>();
   /** The lines of a command each agent terminal's shell is still reading (an open quote, a trailing `\`), not yet run. */
   private readonly agentPending = new Map<string, string>();
+  /** The stage whose agent opened each agent terminal: it closes when that stage ends (a terminal dies with a restart). */
+  private readonly stageOf = new Map<string, string>();
 
   constructor(
     private readonly store: ToolStore,
@@ -200,6 +202,7 @@ export class TerminalService {
     this.agentLines.delete(id);
     this.agentHistory.delete(id);
     this.agentPending.delete(id);
+    this.stageOf.delete(id);
     await this.session(id).kill('closed');
     this.store.updateTerminal(id, { status: 'exited', endedAt: now() });
     this.publish(id);
@@ -210,10 +213,11 @@ export class TerminalService {
   }
 
   /** A task's terminals for its agent: every line judged at Enter against `maxLevel` and the task's release branches. */
-  host(taskId: string | null, maxLevel: number, releaseBranches: readonly string[] = []): TerminalHost {
+  host(taskId: string | null, maxLevel: number, releaseBranches: readonly string[] = [], stageId: string | null = null): TerminalHost {
     return {
       start: async (input) => {
         const t = await this.open({ ...input, taskId, ownerKind: 'agent' });
+        if (stageId) this.stageOf.set(t.id, stageId);
         return { id: t.id, pid: t.pid };
       },
       send: async (id, text) => {
@@ -234,9 +238,30 @@ export class TerminalService {
     };
   }
 
+  /**
+   * Close the terminals one stage's agent opened, when that stage ends: a dev server typed into one would otherwise
+   * hold its port into the next stage (review, 2026-09-28). Returns how many were closed.
+   */
+  async closeForStage(taskId: string, stageId: string): Promise<number> {
+    let closed = 0;
+    for (const t of this.store.listTerminals({ taskId, running: true })) {
+      if (this.stageOf.get(t.id) !== stageId) continue;
+      try {
+        await this.close(t.id);
+        closed++;
+      } catch {
+        /* already gone */
+      }
+    }
+    return closed;
+  }
+
   async closeForTask(taskId: string): Promise<void> {
     await this.manager.killForTask(taskId);
-    for (const t of this.store.listTerminals({ taskId, running: true })) this.store.updateTerminal(t.id, { status: 'exited', endedAt: now() });
+    for (const t of this.store.listTerminals({ taskId, running: true })) {
+      this.stageOf.delete(t.id);
+      this.store.updateTerminal(t.id, { status: 'exited', endedAt: now() });
+    }
   }
 
   /** Terminals recorded as running before a restart died with the old process. */

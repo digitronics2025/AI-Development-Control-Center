@@ -108,8 +108,9 @@ Autopilot brings the design specialist in only for user-interface work:
   while the UI files are unchanged. Its stage instructions replace the art
   direction: judge against the repository's standard and the look before the
   change, block only regressions this change introduced, use the App check's
-  screenshots (the App check has already stopped the app, so the critic never
-  opens its address), never on a look not
+  screenshots (the App check stops any app it started, and the critic does not
+  start it; an app still answering was started outside the task and may not
+  show the change), never on a look not
   seen (no running app: judge the changed files with `design.lint_tokens` and
   `design.contrast_matrix`), never NEEDS OPERATOR, always `CAUSE: code`.
 - **Design fix** (`design-fix`, designer on Claude, Level 2): the critique's

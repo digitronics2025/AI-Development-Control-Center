@@ -856,6 +856,44 @@ describe('SEC-1: more spellings of a push, and lines that only mention one', () 
   });
 });
 
+describe('discarding the whole working tree, however the tree is written', () => {
+  // Review, 2026-09-28: a quoted "." read as one file (Level 3); a task's own folder written relative reads as ".".
+  it.each([
+    'git checkout -- .',
+    'git checkout -- "."',
+    "git checkout -- '.'",
+    'git checkout -- ./',
+    'git checkout -- :/',
+    'git restore "."',
+    'git -C "..\\api" checkout -- "."',
+    'git checkout -- "."; echo ..',
+    'git restore -- .',
+    'git restore --worktree -- .',
+    'git restore -s HEAD .',
+    'git restore --source HEAD .',
+    'git checkout HEAD -- .',
+    'git checkout HEAD .',
+    'git restore --staged --worktree .',
+    'GIT checkout -- .',
+  ])('%s is Level 5', (command) => {
+    expect(classifyCommand(command)).toMatchObject({ level: 5, reasons: expect.arrayContaining(['Discards uncommitted work']) });
+  });
+
+  it.each(['git checkout -- ./src', 'git checkout -- .env', 'git checkout -- "src/a.ts"', 'git restore ./README.md'])('%s discards files, not the tree', (command) => {
+    expect(classifyCommand(command).level).toBe(3);
+  });
+
+  it.each(['git restore --staged .', 'git restore --staged ./', 'git restore -S .'])('%s only unstages', (command) => {
+    expect(classifyCommand(command).level).toBeLessThan(5);
+  });
+
+  it('reads a long line in time', () => {
+    const started = Date.now();
+    for (const line of ['git checkout '.repeat(8000), `${'git restore '.repeat(8000)} --staged`]) classifyCommand(line);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
 describe('SEC-1: Git global options with a quoted value', () => {
   it.each(['git -c user.name="A B" gc --prune=now', 'git -c x="a b" reflog expire --all', 'git -c core.editor="code --wait" reflog expire --all --expire=now', 'git -c user.name="A B" reset --hard', `git -c 'user.name=A B' prune`])('%s is Level 5', (command) => {
     expect(classifyCommand(command)).toMatchObject({ level: 5, risk: 'dangerous' });

@@ -472,7 +472,12 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
     }
   };
   const lintable = (name: string) => exts.test(name) && !/\.d\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(name);
+  // A file is read once, however many of the named paths hold it (a file and its folder, a folder and its parent).
+  const seen = new Set<string>();
   const scanFile = async (abs: string, name: string): Promise<void> => {
+    const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+    if (seen.has(key)) return;
+    seen.add(key);
     const rel = relativeTo(ctx.cwd, abs);
     if (/\.min\.(?:css|[jt]s)$/i.test(name)) return skip(rel, 'minified');
     const s = await stat(abs).catch(() => null);
@@ -525,7 +530,7 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
   if (!scanned.length) return failure('INVALID_INPUT', `None of ${input.paths.join(', ')} is a file or folder in the repository`);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const parts = (Object.entries(counts) as Array<[LintFinding['kind'], number]>).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`);
-  const notRead = `${skippedCount ? ` (${skippedCount} skipped as minified, too long or too deep: see skipped)` : ''}${stopped ? ` (stopped after ${MAX_FILES} files: name narrower paths)` : ''}`;
+  const notRead = `${skippedCount ? ` (${skippedCount} not read: see skipped)` : ''}${stopped ? ` (stopped after ${MAX_FILES} files: name narrower paths)` : ''}`;
   return {
     ok: true,
     summary: total

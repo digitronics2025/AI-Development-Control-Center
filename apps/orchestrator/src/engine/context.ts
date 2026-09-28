@@ -22,6 +22,7 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { PromptService } from '../services/prompts.js';
 import type { RepositoryRecord, Store, TaskRecord } from '../store/store.js';
 import { agentWorkdir, inFolder, taskRepositories, type TaskRepository } from './task-repositories.js';
+import { taskRepositoryView } from './task-checks.js';
 import { taskWorkdir } from './workdir.js';
 
 const NONE = '(none)';
@@ -29,6 +30,9 @@ const UNKNOWN_COVERAGE = 'Diff coverage unknown — read every changed file list
 const MAX_DIFF_CHARS = 150_000;
 const MAX_SECTION_CHARS = 60_000;
 const MAX_TEXT_ATTACHMENT = 50_000;
+/** `{{verification_commands}}` of a repository with no checks yet: the task's own scripts become its checks (task-checks.ts). */
+const NO_CHECKS_YET =
+  'None configured yet. Checks this task adds become its gates: `test`, `build`, `lint` and `typecheck` scripts in package.json (and a `dev` script using Vite, Next or Wrangler for the app check) run after implementation. A new app needs a `test` script with real tests, or the Test stage stops and asks the operator.';
 /** Check kinds an agent could run in full itself; `{{check_costs}}` says which it should leave to the Test stage. */
 const COSTED_KINDS: readonly CommandKind[] = ['lint', 'typecheck', 'test', 'build', 'e2e'];
 /**
@@ -671,8 +675,10 @@ export class ContextBuilder {
   }
 
   async build(task: TaskRecord, def: StageDefinition, stage: StageInstance): Promise<BuiltPrompt> {
-    const repo = this.store.getRepository(task.repositoryId);
-    if (!repo) throw new Error('Repository record is missing');
+    const stored = this.store.getRepository(task.repositoryId);
+    if (!stored) throw new Error('Repository record is missing');
+    // As the task sees it: with the checks the task's own files add (task-checks.ts).
+    const repo = taskRepositoryView(stored, taskWorkdir(task, stored));
     const template = this.prompts.get(def.role);
     const baseline = task.git.baselineSnapshotId ? this.store.getSnapshot(task.git.baselineSnapshotId) : null;
     const snapshot: GitSnapshot | null = baseline ? { branch: baseline.branch, head: baseline.head, files: baseline.files } : null;
@@ -745,7 +751,7 @@ export class ContextBuilder {
         : repo.commands
             .filter((c) => c.enabled && verifyKinds.has(c.kind))
             .map((c) => `- ${COMMAND_KIND_LABEL[c.kind]}: \`${c.command}\``)
-            .join('\n'),
+            .join('\n') || NO_CHECKS_YET,
       check_costs: this.checkCosts(task, workspace ? units : [{ repo, folder: null }]),
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),

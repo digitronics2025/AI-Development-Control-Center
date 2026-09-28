@@ -75,6 +75,24 @@ by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design ad
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
 
+A task sees each repository through `taskRepositoryView`
+([task-checks.ts](../../apps/orchestrator/src/engine/task-checks.ts)): the
+stored commands plus the checks **the task added** — detected
+(`detectToolingSync`) in its worktree but not in the repository's own folder —
+and a `dev` start command the same way when none is stored. A script the
+repository already has stays the operator's to configure (removed, replaced or
+disabled stays so); a task in the operator's own folder adds nothing; nothing
+is written back. So a new app's first `test`/`build`/`dev` scripts gate the
+task that wrote them without a Re-detect: the stage announces them ("checks
+found in this task's own files"), and their failure is `new` without a baseline
+run (`addedByTask`). With no checks at all, `{{verification_commands}}` tells
+the builder to add them, and Tests still asks `skip_tests` if none appear.
+
+A repository with no commits gets an empty first commit on its unborn branch
+before its worktree is made (`ensureFirstCommit` in
+[worktrees.ts](../../packages/git/src/worktrees.ts): plumbing only, so the
+working tree, the index and hooks are untouched; announced as `GIT_BASELINE`).
+
 Full Autopilot runs `app-check → critique → review`: the Visual critique
 (visual critic, Level 1, `when: ui-changed`) goes on FAIL to **Design fix**
 (designer on Claude, Level 2, then back to Test), so a backend task never runs
@@ -228,8 +246,9 @@ supervised task spent two recovery cycles and 13 agent runs to end on a
 generic hard blocker; now it stops at Investigate after one run with the
 question and options.
 
-An optional `command` stage with no matching command configured is skipped
-without asking for approval (`skipsForLackOfCommands`).
+An optional `command` stage with no matching command configured — in the
+task's view, so one the task wrote counts — is skipped without asking for
+approval (`skipsForLackOfCommands`).
 
 An agent stage with a `team` runs as a **Stage Team** — several workers, write
 workers in their own checkouts, one outcome — or falls back to one agent

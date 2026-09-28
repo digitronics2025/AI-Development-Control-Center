@@ -45,6 +45,7 @@ import { targetedCommand, testFilesOf } from './targeted-tests.js';
 import { selectTests, type PathChange, type Selection } from './test-selection.js';
 import type { EngineTooling } from './tooling.js';
 import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
+import { addedByTask, devCommandAddedByTask, taskRepositoryView } from './task-checks.js';
 import { taskWorkdir } from './workdir.js';
 
 /** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
@@ -739,6 +740,16 @@ export class StageRunners {
     const configured = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
     const jobs = await this.withSelections(def, configured.filter((j) => !waived.has(j.command.kind)));
     const commands = jobs.map((j) => j.command);
+    const ownChecks = jobs.filter((j) => addedByTask(store, j.unit.repo, j.command));
+    if (ownChecks.length) {
+      publisher.event(
+        task.id,
+        'TEST_STARTED',
+        `${def.name}: checks found in this task's own files — ${ownChecks.map((j) => `${j.name} (\`${j.command.command}\`)`).join(', ')}. Their base commit has none, so every failure counts as this task's.`,
+        { addedByTask: ownChecks.map((j) => j.command.id) },
+        stage.id,
+      );
+    }
     // One-shot requests are consumed by the stage that runs them.
     if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
     const skippedByWaiver = [...new Set(configured.filter((j) => waived.has(j.command.kind)).map((j) => j.command.kind))];
@@ -855,7 +866,7 @@ export class StageRunners {
     const warmups: Array<BaselineWarmup & { finished: boolean }> = [];
     const firstE2e = jobs.findIndex((j) => j.command.kind === 'e2e');
     const e2eBatch = batches.findIndex((b) => b.start <= firstE2e && firstE2e < b.end);
-    if (def.kind === 'tests' && e2eBatch > 0 && jobs[firstE2e]!.unit.repo.preexistingFailures !== 'block') {
+    if (def.kind === 'tests' && e2eBatch > 0 && jobs[firstE2e]!.unit.repo.preexistingFailures !== 'block' && !addedByTask(store, jobs[firstE2e]!.unit.repo, jobs[firstE2e]!.command)) {
       const { unit, command, name } = jobs[firstE2e]!;
       try {
         const reusable = async (k: number) => {
@@ -1019,11 +1030,16 @@ export class StageRunners {
       // A failure is compared with the baseline commit before it may block (§3.B).
       let verdict: Classification | null = null;
       if (!exec.passed && def.kind === 'tests' && unit.repo.preexistingFailures !== 'block' && !ctl.stopReason) {
-        this.publishTestRun(store.updateTestRun(run.id, { summary: `${summary ?? 'Failed'} — checking the baseline commit` }));
-        verdict = await this.d.baselines.classify(
-          { task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env, failures: failures ?? [], overflow: exec.overflow },
-          { stopped: () => ctl.stopReason !== null },
-        );
+        // A check the task itself added has no result on the base commit: nothing there can explain its failure.
+        if (addedByTask(store, unit.repo, command)) {
+          verdict = { classification: 'new', baselineCommit: null, reason: 'the check was added by this task, so its base commit has nothing to compare with' };
+        } else {
+          this.publishTestRun(store.updateTestRun(run.id, { summary: `${summary ?? 'Failed'} — checking the baseline commit` }));
+          verdict = await this.d.baselines.classify(
+            { task, stage, repo: unit.repo, baselineCommit: unit.git.baselineCommit, command, env, failures: failures ?? [], overflow: exec.overflow },
+            { stopped: () => ctl.stopReason !== null },
+          );
+        }
         // The runner's own totals line says how many failed; the ids are not a test count (LEAD_TIME_PLAN §3.2).
         if (verdict.classification === 'preexisting') {
           const narrowed = verdict.checkedFiles ? ` (only the ${verdict.checkedFiles} failing test file${verdict.checkedFiles === 1 ? '' : 's'} run there)` : '';
@@ -1432,6 +1448,9 @@ export class StageRunners {
     }
     for (const unit of units) {
       if (!unit.repo.runtime.devCommand) continue;
+      if (devCommandAddedByTask(this.d.store, unit.repo)) {
+        publisher.event(task.id, 'TEST_STARTED', `${def.name}: ${unitLabel(unit, 'how to start the app')} was found in this task's own files (\`${unit.repo.runtime.devCommand}\`)`, { devCommandAddedByTask: true }, stage.id);
+      }
       const blocked = this.gateCommand(task, def, stage, unit.repo, unitLabel(unit, 'start the app'), unit.repo.runtime.devCommand, unit.workdir);
       if (blocked) return blocked;
     }
@@ -1655,7 +1674,10 @@ export class StageRunners {
   /** Every repository the task works in, primary first; for a single-repository task just `repo`. */
   private units(task: TaskRecord, repo: RepositoryRecord): RepoUnit[] {
     const all = taskRepositories(this.d.store, task);
-    if (all.length <= 1) return [{ repo, workdir: taskWorkdir(task, repo), folder: null, git: task.git }];
+    if (all.length <= 1) {
+      const workdir = taskWorkdir(task, repo);
+      return [{ repo: taskRepositoryView(repo, workdir), workdir, folder: null, git: task.git }];
+    }
     return all.map((r) => ({ repo: r.repo, workdir: r.workdir, folder: r.folder, git: r.git }));
   }
 

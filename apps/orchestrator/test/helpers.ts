@@ -91,6 +91,8 @@ export interface RepoOptions {
   files?: Record<string, string>;
   dirty?: Record<string, string>;
   noPackageJson?: boolean;
+  /** A brand-new repository: `git init` only — no files, no commit. */
+  noCommits?: boolean;
 }
 
 /** A real Git repository with a package.json whose scripts become verification commands. */
@@ -104,6 +106,7 @@ export async function makeRepo(options: RepoOptions = {}): Promise<string> {
   await run(['config', 'user.email', 'test@example.com']);
   await run(['config', 'user.name', 'Test']);
   await run(['config', 'commit.gpgsign', 'false']);
+  if (options.noCommits) return dir;
   writeFileSync(path.join(dir, 'README.md'), '# Test repo\n');
   if (!options.noPackageJson) {
     writeFileSync(

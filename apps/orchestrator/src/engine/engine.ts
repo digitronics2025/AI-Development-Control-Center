@@ -49,6 +49,7 @@ import type { SupervisorHooks } from './supervision.js';
 import type { EngineTooling } from './tooling.js';
 import { inFolder, isMultiRepository, strictestPolicy, taskRepositories, taskRepositoryIds, workspaceFolders, type TaskRepository } from './task-repositories.js';
 import { conditionFacts, taskChanges, uiDigest } from './task-changes.js';
+import { taskRepositoryView } from './task-checks.js';
 import { taskWorkdir } from './workdir.js';
 import type { ContextBuilder } from './context.js';
 import { ReleaseService, type Probe } from '../release/service.js';
@@ -938,7 +939,9 @@ export class TaskEngine {
       const def = this.d.views.stageDef(task, key);
       if (!def) throw new Error(`Workflow snapshot has no stage "${key}"`);
 
-      const repo = this.d.repositories.record(task.repositoryId);
+      // As the task sees it: with the checks the task's own files add (task-checks.ts).
+      const stored = this.d.repositories.record(task.repositoryId);
+      const repo = taskRepositoryView(stored, taskWorkdir(task, stored));
       // A stage whose prerequisite did not succeed has nothing to act on: skipped before any approval is asked.
       const unmet = this.unmetRequirement(task, def);
       if (unmet) {

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SimulatedAgentAdapter } from '@acc/agent-sdk';
@@ -436,6 +436,64 @@ describe('failure handling', () => {
     const done = await waitForStatus(t, id, ['COMPLETED', 'FAILED']);
     expect(done.status).toBe('COMPLETED');
     expect(done.finalStatus).toBe('NEEDS_USER_ACTION');
+  });
+
+  describe('checks a new app writes for itself', () => {
+    const eventMessages = (id: string) => t.services.store.listEvents(id, { limit: 2000 }).map((e) => e.message);
+
+    it('runs the test script the task created in its own worktree, without asking to skip tests', async () => {
+      const repoPath = await makeRepo({ noPackageJson: true });
+      const repoId = await addRepoTo(t, repoPath);
+      const id = await createTask(t, repoId, 'Build a calculator [sim:new-app-checks]');
+      const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+
+      expect(task.status).toBe('COMPLETED');
+      expect((await t.api('GET', '/api/approvals')).body.filter((a: { kind: string }) => a.kind === 'skip_tests')).toEqual([]);
+      expect(t.services.store.listTestRuns(id).map((r) => `${r.name}:${r.status}`)).toEqual(['unit tests:passed']);
+      expect(eventMessages(id).some((m) => /checks found in this task's own files — unit tests \(`npm test`\)/.test(m))).toBe(true);
+      // Nothing is written back: the repository's stored settings still describe the operator's checkout.
+      expect(t.services.store.getRepository(repoId)!.commands).toEqual([]);
+      expect(existsSync(path.join(repoPath, 'package.json'))).toBe(false);
+    });
+
+    it('builds a brand-new app in a repository with no commits yet, gated by its own test script', async () => {
+      const repoPath = await makeRepo({ noCommits: true });
+      const repoId = await addRepoTo(t, repoPath);
+      const id = await createTask(t, repoId, 'Build a calculator [sim:new-app-checks]');
+      const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+
+      expect(task.status).toBe('COMPLETED');
+      expect(t.services.store.listTestRuns(id).map((r) => `${r.name}:${r.status}`)).toEqual(['unit tests:passed']);
+      // The only change to the operator's repository: one empty first commit on main.
+      const first = (await git(repoPath, ['log', '--format=%H %s', 'main'])).stdout.trim().split('\n');
+      expect(first).toHaveLength(1);
+      expect(first[0]).toMatch(/ Initial commit$/);
+      expect(task.git.baselineCommit).toBe(first[0]!.split(' ')[0]);
+      expect(eventMessages(id).some((m) => m.includes('had no commits yet: made an empty first commit'))).toBe(true);
+    });
+
+    it('fails on the task-created check without comparing it with the base commit', async () => {
+      const repoId = await addRepoTo(t, await makeRepo({ noPackageJson: true }));
+      const id = await createTask(t, repoId, 'Build a calculator [sim:new-app-checks-fail]');
+      await waitFor(() => t.services.store.listTestRuns(id), (runs) => runs.some((r) => r.status === 'failed'), 30_000, 'a failed test run');
+
+      const [run] = t.services.store.listTestRuns(id).filter((r) => r.status === 'failed');
+      expect(run!.name).toBe('unit tests');
+      expect(eventMessages(id).some((m) => m.includes('checking the baseline commit'))).toBe(false);
+      expect(run!.summary ?? '').not.toContain('checking the baseline commit');
+    });
+
+    it("never brings back a check the repository already had and the operator removed", async () => {
+      const repoPath = await makeRepo({ scripts: { test: 'node -e "process.exit(1)"' } });
+      const repoId = await addRepoTo(t, repoPath);
+      t.services.store.updateRepository(repoId, { commands: [] });
+      const id = await createTask(t, repoId, 'Untested change');
+      const task = await waitForStatus(t, id, ['WAITING_FOR_USER', 'COMPLETED']);
+      expect(task.blocker?.kind).toBe('approval');
+      const [approval] = (await t.api('GET', '/api/approvals')).body;
+      expect(approval.kind).toBe('skip_tests');
+      expect(t.services.store.listTestRuns(id)).toEqual([]);
+    });
   });
 });
 

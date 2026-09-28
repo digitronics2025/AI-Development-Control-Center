@@ -55,7 +55,9 @@ directory. Never entered: names starting with `.`, `node_modules`, `AppData`,
 junctions (so the walk cannot loop), and the orchestrator's data folder and
 work root (its task worktrees).
 Registration goes through `RepositoryService.add` (same tool detection as a
-manual add). Name = folder name, or `parent/name` if another repository
+manual add). Detection also runs per task: checks a task adds in its worktree
+are merged in memory (`taskRepositoryView`, [workflow-engine.md](workflow-engine.md)),
+so an empty repository needs no Re-detect once a task adds its checks. Name = folder name, or `parent/name` if another repository
 already has that name.
 
 Paths compare through `pathKey` (resolved, trailing separator removed,

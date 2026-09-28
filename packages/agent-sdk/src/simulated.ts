@@ -57,6 +57,8 @@ import type {
  *   [sim:assets-bad-hash]    ...with a manifest whose SHA-256 for hero-2.png is wrong
  *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
  *   [sim:judge-none]         ...or names none
+ *   [sim:new-app-checks]     the implementer of a repository with no package.json writes one with a passing `test` script
+ *   [sim:new-app-checks-fail] ...with a `test` script that fails
  *
  * Role `art-director` answers like the planner (a plan) and `visual-critic` like the reviewer (a verdict).
  *
@@ -365,6 +367,13 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             await appendFile(path.join(input.cwd, ui), `// ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
             emit(`[file] update ${ui}`);
             files.push(ui);
+          }
+          // A new app's first checks (the task's own gates): a package.json with a test script, written once.
+          if ((has('new-app-checks') || has('new-app-checks-fail')) && role === 'implementer' && !folders.length && !existsSync(path.join(input.cwd, 'package.json'))) {
+            const test = has('new-app-checks-fail') ? 'node -e "console.log(\'1 failed\');process.exit(1)"' : 'node -e "console.log(\'3 passed\')"';
+            await writeFile(path.join(input.cwd, 'package.json'), `${JSON.stringify({ name: 'sim-new-app', private: true, scripts: { test } }, null, 2)}\n`, 'utf8');
+            emit('[file] create package.json');
+            files.push('package.json');
           }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {

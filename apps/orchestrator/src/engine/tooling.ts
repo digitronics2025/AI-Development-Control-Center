@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, status, taskBranchName } from '@acc/git';
+import { addWorktree, ensureFirstCommit, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, status, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
 import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, SKILL_TOKEN, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun, roleClass } from '@acc/shared';
 import {
@@ -673,6 +673,9 @@ export class EngineTooling {
         if (head) await deleteBranchIfAt(repo.path, taskBranchName(task.id, task.title), head);
       }
       mkdirSync(path.dirname(dir), { recursive: true });
+      // A brand-new repository has no commit to branch from: it gets an empty first one, and nothing else changes.
+      const first = await ensureFirstCommit(repo.path);
+      if (first) this.event(task.id, 'GIT_BASELINE', `${repo.name} had no commits yet: made an empty first commit ${first.commit.slice(0, 10)} on ${first.branch} (no files; your working folder and anything staged are untouched) so the task can work in its own worktree`, { firstCommit: first.commit, branch: first.branch });
       const { branch, head } = await addWorktree(repo.path, dir, taskBranchName(task.id, task.title));
       this.event(task.id, 'WORKTREE_CREATED', `Working in an isolated worktree on ${branch}; your working tree is not touched`, { path: dir, branch });
       return { ok: true, worktreePath: dir, taskBranch: branch, head };

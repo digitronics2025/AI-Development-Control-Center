@@ -11,6 +11,38 @@ import { branchExists, currentBranch, EMPTY_TREE, git, GitError, headCommit, par
  * uncommitted work — is never touched while it runs.
  */
 
+/**
+ * A repository with no commits (its branch is unborn) cannot give a task a
+ * worktree. This gives it an empty first commit on that branch — no files —
+ * written with plumbing only: the working tree, the index (anything staged)
+ * and hooks are not involved. The ref moves only if it is still unborn, so a
+ * commit made meanwhile wins. Returns the new commit, or null when the
+ * repository already had one.
+ */
+export async function ensureFirstCommit(repo: string): Promise<{ commit: string; branch: string } | null> {
+  if (await headCommit(repo)) return null;
+  const ref = await git(repo, ['symbolic-ref', '--quiet', 'HEAD']);
+  const target = ref.stdout.trim();
+  if (ref.code !== 0 || !target.startsWith('refs/heads/')) throw new GitError('The repository has no commits and no branch to add one to', ref);
+  // The empty tree in this repository's own object format.
+  const tree = await git(repo, ['mktree'], { stdin: '' });
+  if (tree.code !== 0) throw new GitError(`git mktree failed: ${tree.stderr.trim()}`, tree);
+  const commit = await git(repo, ['commit-tree', tree.stdout.trim(), '-m', 'Initial commit']);
+  if (commit.code !== 0) {
+    const hint = /user\.(name|email)|identity/i.test(commit.stderr) ? ' Set your Git name and email first (git config --global user.name / user.email).' : '';
+    throw new GitError(`Could not make the first commit: ${commit.stderr.trim()}${hint}`, commit);
+  }
+  const sha = commit.stdout.trim();
+  const zero = '0'.repeat(sha.length);
+  const update = await git(repo, ['update-ref', '-m', 'Initial commit for an isolated task', target, sha, zero]);
+  if (update.code !== 0) {
+    // Someone committed meanwhile: theirs stands, and the worktree is made from it.
+    if (await headCommit(repo)) return null;
+    throw new GitError(`git update-ref failed: ${update.stderr.trim()}`, update);
+  }
+  return { commit: sha, branch: target.slice('refs/heads/'.length) };
+}
+
 export async function addWorktree(repo: string, dir: string, branchName: string): Promise<{ branch: string; head: string }> {
   const head = await headCommit(repo);
   if (!head) throw new GitError('A worktree needs at least one commit in the repository', { code: 1, stdout: '', stderr: 'no commits' });

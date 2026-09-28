@@ -60,7 +60,7 @@ one write path for a repository's Git record.
 |---|---|
 | Baseline | Every repository gets its worktree and baseline before the first stage (`ensureWorkspace`). A repository already baselined is kept, so it resumes. On a failure the worktrees and still-empty branches of this attempt are removed (`deleteBranchIfAt`, an atomic `update-ref -d <branch> <head>`) and the task waits: "Could not prepare X for this task…" |
 | Scheduling | A task waits for any unfinished writer task sharing one of its repositories; the message names the repository when either task spans several |
-| Checks | Each repository's own commands in its folder, named `web · unit tests`; `skip_tests` only when no repository has checks |
+| Checks | Each repository's own commands in its folder, named `web · unit tests`, including checks the task wrote there (`taskRepositoryView`); `skip_tests` only when no repository has checks |
 | App check | Each repository with a runtime, one after another, each stopped before the next; one `browser-verification.md` |
 | Git checkpoint | Commits task files in each repository; a hook rejection names the repository |
 | Complete | One `git-diff.patch` with folder prefixes (`a/web/src/x.ts`); per-repository Files and Git sections in the report; every worktree finalized, then the empty workspace removed |

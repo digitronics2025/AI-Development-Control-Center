@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { cloneRepository, failureText, git, isGitRepository, repositoryStatus, topLevel } from '@acc/git';
@@ -47,7 +47,7 @@ export function pathKey(folder: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-interface Detected {
+export interface Detected {
   tooling: string[];
   commands: RepositoryCommand[];
   runtime: RepositoryRuntime;
@@ -56,9 +56,9 @@ interface Detected {
 /** Port the verify stage starts dev servers on: uncommon, so it rarely meets a server the user runs. */
 export const VERIFY_PORT = 5199;
 
-async function readJson(file: string): Promise<Record<string, any> | null> {
+function readJson(file: string): Record<string, any> | null {
   try {
-    return JSON.parse(await readFile(file, 'utf8'));
+    return JSON.parse(readFileSync(file, 'utf8'));
   } catch {
     return null;
   }
@@ -66,6 +66,14 @@ async function readJson(file: string): Promise<Record<string, any> | null> {
 
 /** Detect tooling and propose verification commands from the files present. */
 export async function detectTooling(root: string): Promise<Detected> {
+  return detectToolingSync(root);
+}
+
+/**
+ * The same detection, synchronously: it reads one package.json and checks a
+ * few file names, so a task can ask it of its own worktree at any stage.
+ */
+export function detectToolingSync(root: string): Detected {
   const has = (file: string) => existsSync(path.join(root, file));
   const tooling: string[] = [];
   const commands: RepositoryCommand[] = [];
@@ -73,7 +81,7 @@ export async function detectTooling(root: string): Promise<Detected> {
     commands.push({ id, name, command, kind, enabled: true, timeoutSec });
 
   let runtime: RepositoryRuntime = repositoryRuntimeSchema.parse({});
-  const pkg = await readJson(path.join(root, 'package.json'));
+  const pkg = readJson(path.join(root, 'package.json'));
   if (pkg) {
     const pm = has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : has('bun.lockb') || has('bun.lock') ? 'bun' : 'npm';
     tooling.push('node', pm);
@@ -119,6 +127,17 @@ export async function detectTooling(root: string): Promise<Detected> {
   }
   if (has('.git')) tooling.push('git');
   return { tooling: [...new Set(tooling)], commands, runtime };
+}
+
+/**
+ * Detection merged into a repository's stored settings: the stored commands
+ * stay as they are (one the user disabled stays disabled) and detected ones
+ * are added by id; the stored runtime stays when it has a dev command.
+ */
+export function mergeDetected(rec: Pick<RepositoryRecord, 'commands' | 'runtime'>, detected: Detected): { commands: RepositoryCommand[]; added: RepositoryCommand[]; runtime: RepositoryRuntime } {
+  const existing = new Set(rec.commands.map((c) => c.id));
+  const added = detected.commands.filter((c) => !existing.has(c.id));
+  return { commands: [...rec.commands, ...added], added, runtime: rec.runtime.devCommand ? rec.runtime : detected.runtime };
 }
 
 export class RepositoryService {
@@ -307,10 +326,7 @@ export class RepositoryService {
   async redetect(id: string): Promise<Repository> {
     const rec = this.record(id);
     const detected = await detectTooling(rec.path);
-    // Keep the user's commands; add newly detected ones by id.
-    const existing = new Set(rec.commands.map((c) => c.id));
-    const commands = [...rec.commands, ...detected.commands.filter((c) => !existing.has(c.id))];
-    const runtime = rec.runtime.devCommand ? rec.runtime : detected.runtime;
+    const { commands, runtime } = mergeDetected(rec, detected);
     this.store.updateRepository(id, { tooling: detected.tooling, commands, runtime });
     const view = await this.get(id, true);
     this.bus.publish({ type: 'repository', repository: view });

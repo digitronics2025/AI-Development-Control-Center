@@ -141,7 +141,10 @@ a patch `git apply` takes back, with nothing unredacted written to disk:
 `addDetachedWorktree` (no branch: a bisect step, a baseline check),
 `removeWorktree` (prunes; clears a locked folder on force), `changesInRange` /
 `diffInRange` (task changes after its worktree is gone) and
-`checkpointMetadata`. How tasks use them: [checkpoints.md](checkpoints.md#worktrees).
+`checkpointMetadata`. `ensureFirstCommit` gives a repository with no commits an
+empty first commit on its unborn branch (`mktree` + `commit-tree` +
+`update-ref` guarded on the branch still being unborn: index, working tree and
+hooks untouched), so a task worktree can be made from it. How tasks use them: [checkpoints.md](checkpoints.md#worktrees).
 
 ## Limitations
 

@@ -41,7 +41,9 @@ Teams: `[sim:team]` (units alpha and beta), `[sim:team-chain]`, `[sim:team-three
 `[sim:fail-unit-once:<key>]` ([stage-teams.md](stage-teams.md)); a variant
 (`- Your approach:`) writes `sim-output.md` and `variant-<key>.md`, and role
 `judge` answers `WINNER:` with the first variant, the last with
-`[sim:judge-last]`, none with `[sim:judge-none]`. The simulated `codex`
+`[sim:judge-last]`, none with `[sim:judge-none]`. `[sim:new-app-checks]` makes the
+implementer of a repository with no package.json write one with a passing
+`test` script (`[sim:new-app-checks-fail]`: a failing one). The simulated `codex`
 declares `images: true` like the real one and logs the pictures it receives;
 the simulated `claude` declares `pluginDirs` like the real one.
 Role `chairman` answers the Chairman's recovery and chat prompts with JSON.

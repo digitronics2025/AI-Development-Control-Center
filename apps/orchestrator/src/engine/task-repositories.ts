@@ -1,5 +1,6 @@
 import { POLICY_MODES, type PolicyMode } from '@acc/shared';
 import type { RepositoryRecord, Store, TaskGitRecord, TaskRecord } from '../store/store.js';
+import { taskRepositoryView } from './task-checks.js';
 import { taskWorkdir } from './workdir.js';
 
 /**
@@ -31,10 +32,16 @@ export function agentWorkdir(task: Pick<TaskRecord, 'git'>, repo: Pick<Repositor
 export function taskRepositories(store: Store, task: TaskRecord): TaskRepository[] {
   const out: TaskRepository[] = [];
   const primary = store.getRepository(task.repositoryId);
-  if (primary) out.push({ repo: primary, folder: task.git.folder ?? null, git: task.git, primary: true, workdir: taskWorkdir(task, primary) });
+  // Each repository as the task sees it: with the checks its own files add (task-checks.ts).
+  if (primary) {
+    const workdir = taskWorkdir(task, primary);
+    out.push({ repo: taskRepositoryView(primary, workdir), folder: task.git.folder ?? null, git: task.git, primary: true, workdir });
+  }
   for (const linked of store.listLinkedRepositories(task.id)) {
     const repo = store.getRepository(linked.repositoryId);
-    if (repo) out.push({ repo, folder: linked.folder, git: linked.git, primary: false, workdir: linked.git.worktreePath ?? repo.path });
+    if (!repo) continue;
+    const workdir = linked.git.worktreePath ?? repo.path;
+    out.push({ repo: taskRepositoryView(repo, workdir), folder: linked.folder, git: linked.git, primary: false, workdir });
   }
   return out;
 }

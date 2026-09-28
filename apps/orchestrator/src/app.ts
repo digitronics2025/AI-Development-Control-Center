@@ -166,7 +166,7 @@ export function createServices(
   const spend = new MediaSpendGate(db, usage.media, { stopping: () => usage.budgets.stoppingMediaBudgets() }, () => settings.get().media);
   // The native shell precheck hook (SEC-3), built beside the bridge; the precheck keeps it out of agents' reach.
   const shellGuard = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', SHELL_GUARD_SCRIPT);
-  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv, shellGuardPath: shellGuard });
+  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv, shellGuardPath: shellGuard, localToken: config.token });
   const mcp = new McpService(toolStore, bus, tools, credentials, config.port || DEFAULT_PORT);
   const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'), () => ({
     account: settings.get().agentIsolation.account,

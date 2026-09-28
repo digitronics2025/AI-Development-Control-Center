@@ -124,6 +124,14 @@ saved as a task artifact as before. Before this, agents got only a file name.
   (preferred) renders the page and returns the text of `main`/`article`/body
   plus up to 60 links; the built-in `web` provider (preference 60) fetches and
   strips HTML when no browser exists.
+- Both declare what they send (`outbound()`: `web.read`'s URL, either
+  provider; `web.search`'s query and `site`), so before either runs the
+  outbound check (SEC-4, [tool-system.md](tool-system.md#the-execution-door-servicets))
+  looks there for a known secret — a stored credential, the local token, a
+  sensitive environment value; raw or encoded — or a token of a known format:
+  an agent or an Ask session is refused, the operator asked. A loopback URL
+  may carry a token of a known format (an app under test's own test key),
+  never a stored secret.
 - Profiles: `web.*` is in every profile's inspect set; `browser.open`,
   `snapshot`, `logs`, `close` are in `analysis` and `general`; `act` and
   `evaluate` need a building stage (`web-development`, `cloudflare-worker`

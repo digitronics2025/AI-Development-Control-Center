@@ -1410,7 +1410,11 @@ environment variables mapped to stored credentials — never raw values).
 
 Names, kind, environment variable, scope and fingerprint only. Values are
 write-only: the add/replace dialog uses a password field and the value is
-never shown again. Delete uses a confirmation dialog.
+never shown again. Delete uses a confirmation dialog. A **Sends to** column
+lists the hosts each may be sent to (the kind's by default; the add dialog
+and the Manage drawer's **Hosts** section edit them). A credential still sent
+to any host carries a warning chip, **Any host · review** (icon and text),
+and a warning banner above the list asks for its hosts.
 
 ## Connected apps
 

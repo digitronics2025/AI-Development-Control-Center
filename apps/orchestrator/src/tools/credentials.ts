@@ -2,10 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { captureScript, resolveShell } from '@acc/executor';
-import { API_BILLING_ENV_VARS, newCredentialKey, openSecret, redact, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues } from '@acc/security';
+import { API_BILLING_ENV_VARS, hostAllowed, hostOf, newCredentialKey, openSecret, redact, registerSecretValues, sealSecret, secretFingerprint, setBrokerManagedEnvVars, unregisterSecretValues, type OutboundSecret } from '@acc/security';
 import {
   CREDENTIAL_KINDS,
   CREDENTIAL_KIND_ENV,
+  credentialAudience,
   credentialInputSchema,
   credentialUpdateSchema,
   type CredentialEventView,
@@ -187,6 +188,7 @@ function view(r: CredentialRecord, link: VaultLinkRecord | null): CredentialView
     envVar: r.envVar,
     description: r.description,
     repositoryIds: r.repositoryIds,
+    audience: credentialAudience(r.kind, r.audience),
     fingerprint: r.fingerprint,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
@@ -312,7 +314,7 @@ export class CredentialBroker {
     const id = newId();
     const sealed = sealSecret(await this.loadKey(), input.value, id);
     const ts = now();
-    const rec: CredentialRecord = { id, name: input.name, kind: input.kind, envVar: input.envVar ?? null, description: input.description, repositoryIds: input.repositoryIds, ...sealed, fingerprint: secretFingerprint(input.value), createdAt: ts, updatedAt: ts, lastUsedAt: null };
+    const rec: CredentialRecord = { id, name: input.name, kind: input.kind, envVar: input.envVar ?? null, description: input.description, repositoryIds: input.repositoryIds, audience: input.audience ?? null, ...sealed, fingerprint: secretFingerprint(input.value), createdAt: ts, updatedAt: ts, lastUsedAt: null };
     this.store.upsertCredential(rec);
     registerSecretValues([input.value]);
     this.syncManagedEnv();
@@ -351,6 +353,7 @@ export class CredentialBroker {
       envVar: input.envVar === undefined ? current.envVar : input.envVar,
       description: input.description ?? current.description,
       repositoryIds: input.repositoryIds === undefined ? current.repositoryIds : input.repositoryIds,
+      audience: input.audience === undefined ? current.audience : input.audience,
       ...sealed,
       fingerprint,
       updatedAt: now(),
@@ -365,6 +368,10 @@ export class CredentialBroker {
     this.syncManagedEnv();
     if (input.value !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'replace', direction: 'local', status: 'ok' });
     if (input.repositoryIds !== undefined) this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'scope', direction: 'local', status: 'ok', target: rec.repositoryIds === null ? 'all repositories' : `${rec.repositoryIds.length} repositories` });
+    if (input.audience !== undefined) {
+      const audience = credentialAudience(rec.kind, rec.audience);
+      this.event({ credentialId: rec.id, credentialName: rec.name, operation: 'hosts', direction: 'local', status: 'ok', target: audience.hosts.length ? audience.hosts.join(', ') : 'no host', detail: audience.fromKind ? `the ${rec.kind} kind's hosts` : undefined });
+    }
     return this.publish(rec.id)!;
   }
 
@@ -405,7 +412,8 @@ export class CredentialBroker {
     registerSecretValues([value]);
     const id = newId();
     const ts = now();
-    const rec: CredentialRecord = { id, name: parsed.name, kind: parsed.kind, envVar: parsed.envVar ?? null, description: parsed.description, repositoryIds: parsed.repositoryIds, ...sealSecret(key, value, id), fingerprint: secretFingerprint(value), createdAt: ts, updatedAt: ts, lastUsedAt: null };
+    // Its kind's hosts, which for a generated (application) secret are none: the operator names any it is sent to.
+    const rec: CredentialRecord = { id, name: parsed.name, kind: parsed.kind, envVar: parsed.envVar ?? null, description: parsed.description, repositoryIds: parsed.repositoryIds, audience: null, ...sealSecret(key, value, id), fingerprint: secretFingerprint(value), createdAt: ts, updatedAt: ts, lastUsedAt: null };
     this.store.transaction(() => {
       this.store.upsertCredential(rec);
       this.store.upsertVaultLink({ credentialId: id, authority: 'control-center', origin: null, vaultId: null, itemId: null, state: 'pending_push', syncedFingerprint: null, vaultFingerprint: null, replaceVaultFingerprint: null, vaultUpdatedAt: null, firstSyncedAt: null, lastSyncedAt: null, lastError: null, createdAt: ts, updatedAt: ts });
@@ -549,7 +557,7 @@ export class CredentialBroker {
       registerSecretValues([item.value]);
       const id = newId();
       const name = this.uniqueName(nameFromTitle(item.title));
-      const rec: CredentialRecord = { id, name, kind, envVar: item.envVar, description: 'Imported from MyVault', repositoryIds: [], ...sealSecret(key, item.value, id), fingerprint: vaultFingerprint, createdAt: ts, updatedAt: ts, lastUsedAt: null };
+      const rec: CredentialRecord = { id, name, kind, envVar: item.envVar, description: 'Imported from MyVault', repositoryIds: [], audience: null, ...sealSecret(key, item.value, id), fingerprint: vaultFingerprint, createdAt: ts, updatedAt: ts, lastUsedAt: null };
       this.store.transaction(() => {
         this.store.upsertCredential(rec);
         this.store.upsertVaultLink({ credentialId: id, authority: 'myvault', origin, vaultId, itemId: item.itemId, state: 'synced', syncedFingerprint: vaultFingerprint, vaultFingerprint, replaceVaultFingerprint: null, vaultUpdatedAt: item.updatedAt, firstSyncedAt: ts, lastSyncedAt: ts, lastError: null, createdAt: ts, updatedAt: ts });
@@ -650,26 +658,81 @@ export class CredentialBroker {
     return link?.authority === 'control-center' && link.syncedFingerprint !== r.fingerprint;
   }
 
+  /** Whether `value()` would hand this credential out to a caller with these options, its audience aside. */
+  private opens(r: CredentialRecord, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy'; kind?: CredentialKind }): boolean {
+    if (!this.inScope(r, repositoryId)) return false;
+    // A caller that names a kind (the media tools: `media`) never receives a credential of another kind.
+    if (opts.kind && r.kind !== opts.kind) return false;
+    // A media key opens only for a caller that asks for kind media (the media tools, behind the spend gate): a
+    // kind-less read (http.request, a secret put, an MCP server's variables) could spend it with no reservation.
+    if (r.kind === 'media' && opts.kind !== 'media') return false;
+    // A credential kept for the orchestrator's own use (an http token) is read only by it, or deployed by a production secret put.
+    const reserved = r.kind === 'http' && this.reservedForOrchestrator().has(r.name.toLowerCase());
+    if (reserved && !opts.reserved) return false;
+    // The orchestrator reads only such a token: naming a provider key in Settings never sends it anywhere.
+    if (opts.reserved === 'orchestrator' && !reserved) return false;
+    return opts.includeUnsynced || !this.heldForVault(r);
+  }
+
+  /** Whether the credential's audience (SEC-4) holds the host of `url`: its hosts, its kind's, or any host while marked for review. */
+  private sendsTo(r: CredentialRecord, url: string): boolean {
+    const audience = credentialAudience(r.kind, r.audience);
+    const host = hostOf(url);
+    return audience.anyHost || (host !== null && hostAllowed(host, audience.hosts));
+  }
+
   /**
    * Plaintext of one named credential for one call, if this repository may use
    * it. `includeUnsynced` is for the orchestrator's own checks only; no tool
-   * path passes it.
+   * path passes it. With `targetUrl` (the address a tool sends it to as a
+   * header), a credential whose audience does not hold that host is not handed
+   * out unless `approvedSend` says the operator approved this very send.
    */
-  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy'; kind?: CredentialKind } = {}): Promise<string | null> {
+  async value(name: string, repositoryId: string | null, opts: { includeUnsynced?: boolean; reserved?: 'orchestrator' | 'deploy'; kind?: CredentialKind; targetUrl?: string; approvedSend?: boolean } = {}): Promise<string | null> {
     const r = this.store.credential(name);
-    if (!r || !this.inScope(r, repositoryId)) return null;
-    // A caller that names a kind (the media tools: `media`) never receives a credential of another kind.
-    if (opts.kind && r.kind !== opts.kind) return null;
-    // A media key opens only for a caller that asks for kind media (the media tools, behind the spend gate): a
-    // kind-less read (http.request, a secret put, an MCP server's variables) could spend it with no reservation.
-    if (r.kind === 'media' && opts.kind !== 'media') return null;
-    // A credential kept for the orchestrator's own use (an http token) is read only by it, or deployed by a production secret put.
-    const reserved = r.kind === 'http' && this.reservedForOrchestrator().has(r.name.toLowerCase());
-    if (reserved && !opts.reserved) return null;
-    // The orchestrator reads only such a token: naming a provider key in Settings never sends it anywhere.
-    if (opts.reserved === 'orchestrator' && !reserved) return null;
-    if (!opts.includeUnsynced && this.heldForVault(r)) return null;
+    if (!r || !this.opens(r, repositoryId, opts)) return null;
+    if (opts.targetUrl !== undefined && !opts.approvedSend && !this.sendsTo(r, opts.targetUrl)) return null;
     return this.open(r);
+  }
+
+  /**
+   * The credential `http.request` would send by name to `url` when that host is
+   * outside its audience (checked before the call runs, SEC-4), or null: it is
+   * inside, or the credential would not be handed out at all (so the call fails
+   * on its own and nothing about it is told).
+   */
+  outsideAudience(name: string, repositoryId: string | null, url: string): { kind: CredentialKind; name: string; host: string } | null {
+    const r = this.store.credential(name);
+    if (!r || !this.opens(r, repositoryId, {}) || this.sendsTo(r, url)) return null;
+    return { kind: r.kind, name: r.name, host: hostOf(url) ?? 'an unknown host' };
+  }
+
+  /**
+   * Every stored value, for the outbound check (SEC-4): labelled by kind and
+   * name, with the hosts it may go to — its audience, and only where this
+   * repository may use it (another repository's key is exempt nowhere). Read
+   * without touching `lastUsedAt`; never returned to a caller of a tool. The
+   * redactor learns each value too, so what the call records masks it even
+   * when the startup priming could not open the key. Throws when the key will
+   * not load: the check is then incomplete, and fails closed.
+   */
+  async outboundSecrets(repositoryId: string | null): Promise<OutboundSecret[]> {
+    const all = this.store.listCredentials();
+    if (!all.length) return [];
+    const key = await this.loadKey();
+    const out: OutboundSecret[] = [];
+    for (const r of all) {
+      let value: string;
+      try {
+        value = openSecret(key, r, r.id);
+      } catch {
+        continue;
+      }
+      const audience = credentialAudience(r.kind, r.audience);
+      out.push({ label: `${r.kind} credential "${r.name}"`, kind: r.kind, value, hosts: this.opens(r, repositoryId, {}) ? audience.hosts : [] });
+    }
+    registerSecretValues(out.map((s) => s.value));
+    return out;
   }
 
   /** Environment variables for credential kinds (the first in-scope credential of each kind, never one reserved for Ask). */

@@ -53,12 +53,27 @@ or broadcast, and to terminal output whole lines at a time: the line in
 progress is held back briefly so a secret split across two chunks is redacted
 whole, and a private key stays hidden across chunks (`streamRedactor`,
 [pty.md](pty.md)). Covers provider key formats, GitHub/GitLab/Slack/AWS/Google/
-Stripe/npm tokens, JWTs, bearer/basic headers, URL credentials, cookies,
+Stripe/npm tokens, Hugging Face (`hf_`), PyPI (`pypi-AgEIcHlwaS5vcmc…`),
+SendGrid (`SG.x.y`), Shopify (`shpat_`/`shpca_`/`shppa_`/`shpss_`), Supabase
+(`sbp_`), Sentry (`sntrys_`, `sntryu_`), Linear (`lin_api_`) and Telegram bot
+tokens (`<8–10 digits>:A…`, anchored so a host:port, a longer number or a
+timestamp is not one, but found in a path segment and in the Bot API's own
+`/bot<token>/` URL), JWTs, bearer/basic headers, URL credentials, cookies,
 `secret-name=value` pairs, the signature and session parameters of signed URLs
 (`sig`, `signature`, `X-Amz-Signature`, `X-Goog-Signature`,
 `X-Amz-Security-Token`, `X-Amz-Credential`, `X-Goog-Credential`: only their
 values, so host, path and expiry stay readable), and the literal values of
-sensitive environment variables present on the machine.
+sensitive environment variables present on the machine and of registered
+secrets (brokered credentials, the local token, sign-in tokens). Each literal
+value it masks (8–512 characters) is also masked in its encoded spellings
+(`encodedForms`): base64 and base64url at all three byte offsets (so it is found
+inside the encoding of `user:secret`), hex and percent-encoding (URI and form
+style, of the value and of its base64, and every byte as `%XX`) in any case;
+an 8-character value's spellings (base64 cores of 10, hex of 16) are no weaker
+than the value. A stretch between spaces, quotes and `?`/`&`/`#` that shows
+such a value, or a token of a blocking format, only once its `%XX` escapes are
+decoded (`percentDecoded`) is masked whole, however few of its characters are
+escaped (`%51uartz…`, `%67hp_…`).
 
 An `Authorization:` header value is masked whatever it looks like (any
 scheme, any case, all lowercase), `:` included, so both halves of a fal
@@ -75,9 +90,9 @@ so the rest of the URL stays readable; any other `key=value` secret keeps `&`
 (`#3355ff`, `rgb(…)`/`oklch(…)`, `var(--x)`, `1.25rem`) is skipped only when it
 is the whole value: `#Bad!Pass99` and `2024%SummerPass` are masked.
 
-`detectSecrets` reports which **blocking** rules match (provider keys, cloud
-and registry tokens, credentials in URLs, private keys — not JWTs or the broad
-`key=value` rule) and [sensitive-files.ts](../../packages/security/src/sensitive-files.ts)
+`detectSecrets` reports which **blocking** rules match (provider keys, cloud,
+registry and SaaS tokens including the formats above, credentials in URLs,
+private keys — not JWTs or the broad `key=value` rule) and [sensitive-files.ts](../../packages/security/src/sensitive-files.ts)
 names files that are secret by name (`.env*` except `.example/.sample/.template`,
 keys, keystores, `.npmrc`, SSH and cloud credentials). Source Control uses both to
 block commits and pushes ([source-control.md](source-control.md)).
@@ -285,12 +300,40 @@ native shell denies the usual spellings from Level 3 ([agents-claude-code.md](ag
   are added only from the dashboard. A `media` (generation) key opens only for
   a read that asks for that kind — the media tools, behind the spend gate;
   `http.request`, a secret put or an MCP server's variables get nothing.
+  `http.request` sends a credential only to a host in its audience (its kind's
+  hosts by default; [credential-broker.md](credential-broker.md#audience)):
+  otherwise agents are refused and operators asked.
+- Outbound secrets ([dlp.ts](../../packages/security/src/dlp.ts), SEC-4):
+  before `http.*`, `web.read`, `web.search` or an outside MCP tool runs,
+  ToolService searches what the caller wrote (URL, headers, body, query, MCP
+  arguments, every string at any depth, and the name and content of each
+  `http.request` multipart file, read inside the roots before the check; the
+  run sends those very bytes, and a file the check could not read is not sent)
+  for every value the redactor knows — stored credentials, the local token,
+  sensitive environment values — raw, percent-decoded (byte by byte, so a
+  stray invalid `%FF` hides nothing) or in any encoded spelling above, also
+  when broken up the way tools print it (base64 wrapped over lines, hex bytes
+  spaced or separated by `:` or `-`), and
+  for a token of a blocking format that is not stored (a URL's own
+  `user:pass@` is not one; a loopback URL may carry one, an app under test's
+  own test key, but never a stored secret). A stored credential going to a
+  host of its own audience, from a repository that may use it, is no finding.
+  A host whose own name carries a finding is never named (`namedHost`). A finding refuses an agent or a
+  read-only session and asks anyone else; it is named by kind, name and host
+  in the refusal, the approval and a `TOOL_CALL` event, never by value
+  ([tool-system.md](tool-system.md#the-execution-door-servicets)). The check
+  fails closed: when the stored values cannot be read (the credential key will
+  not load) it is itself a finding. Claude's
+  native shell is outside this door (its precheck is SEC-3's).
   Policy and the
   privileged helper: [autopilot.md](autopilot.md). Terminals are loopback only
   ([pty.md](pty.md)).
 - Redaction also covers values the broker hands out
-  (`registerSecretValues`), and variables the broker manages are stripped from
-  every inherited environment along with `ACC_TOOL_SESSION`.
+  (`registerSecretValues`), every stored value the outbound check has read
+  (so a call it stops records none, even after a restart), and their encoded
+  spellings, and variables the
+  broker manages are stripped from every inherited environment along with
+  `ACC_TOOL_SESSION`.
 
 ## Permission levels
 

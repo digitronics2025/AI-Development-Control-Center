@@ -1366,4 +1366,18 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE stage_work_units ADD COLUMN specialty TEXT;
     `,
   },
+  {
+    // Credential audiences (SEC-4, docs/systems/credential-broker.md): the
+    // hosts http.request may send a credential to, as a JSON list; NULL = its
+    // kind's hosts (github, cloudflare, npm; none for the other kinds). A
+    // credential saved before this whose kind names no host keeps working
+    // with any host, as it did: it is marked ["*"] and the Credentials tab
+    // asks for a review. Media keys never reach http.request. Additive only.
+    version: 24,
+    name: 'credential audience',
+    sql: `
+      ALTER TABLE credential_references ADD COLUMN audience TEXT;
+      UPDATE credential_references SET audience = '["*"]' WHERE kind IN ('http', 'other', 'postgres', 'mysql');
+    `,
+  },
 ];

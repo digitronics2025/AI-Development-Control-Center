@@ -19,11 +19,12 @@ import {
   Skeleton,
   StatusChip,
   Switch,
+  Textarea,
   useFeedback,
   type Column,
   type StatusVisual,
 } from '@acc/ui';
-import { CREDENTIAL_KIND_ENV, CREDENTIAL_KINDS, type CredentialKind, type CredentialSource, type CredentialView, type Repository, type VaultLinkState, type VaultResolveAction } from '@acc/shared';
+import { CREDENTIAL_KIND_ENV, CREDENTIAL_KIND_HOSTS, CREDENTIAL_KINDS, type CredentialKind, type CredentialSource, type CredentialView, type Repository, type VaultLinkState, type VaultResolveAction } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useRepositories, useSettings } from '../../api/hooks';
 import { useCredentialEvents, useCredentialMutations, useCredentials, useVaultBridgeStatus, useVaultOriginMutations } from '../../api/tools';
@@ -77,6 +78,55 @@ function scopeText(c: CredentialView, repos: Repository[]): string {
   if (c.repositoryIds.length === 0) return 'No repository yet';
   const names = c.repositoryIds.map((id) => repos.find((r) => r.id === id)?.name ?? 'removed repository');
   return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
+}
+
+/** Saved before credentials had hosts: tools may still send it anywhere until the operator names its hosts (SEC-4). */
+const ANY_HOST_VISUAL: StatusVisual = { label: 'Any host · review', tone: 'warning', icon: AlertTriangle };
+
+/** A credential still sent to any host; a media key never reaches http.request, so it needs no hosts. */
+const needsHostReview = (c: CredentialView) => c.audience.anyHost && c.kind !== 'media';
+
+function hostsText(c: CredentialView): string {
+  if (c.kind === 'media') return 'Media tools only';
+  const hosts = c.audience.hosts;
+  if (!hosts.length) return 'No host';
+  return hosts.length > 2 ? `${hosts.slice(0, 2).join(', ')} +${hosts.length - 2}` : hosts.join(', ');
+}
+
+/** Hosts typed as a list: commas, spaces or new lines between them. The server checks and normalises each. */
+const parseHosts = (text: string) => text.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
+
+function HostsEditor({ credential }: { credential: CredentialView }) {
+  const mutations = useCredentialMutations();
+  const { toast } = useFeedback();
+  const defaults = CREDENTIAL_KIND_HOSTS[credential.kind];
+  const [text, setText] = useState(credential.audience.anyHost ? '' : credential.audience.hosts.join('\n'));
+  const [error, setError] = useState<string | null>(null);
+  const save = (audience: string[] | null) =>
+    mutations.hosts.mutate({ id: credential.id, audience }, { onSuccess: () => { setError(null); toast('Hosts saved'); }, onError: (e) => setError(errorMessage(e)) });
+  return (
+    <div className="flex flex-col gap-3">
+      {needsHostReview(credential) ? (
+        <Banner tone="warning" title="Sent to any host">
+          Saved before credentials had hosts, so tools may still send it to any address. Name the hosts it is meant for.
+        </Banner>
+      ) : null}
+      {error ? <Banner tone="danger" role="alert" title="Not saved">{error}</Banner> : null}
+      <Field label="Hosts it may be sent to" helper="One per line, such as api.example.com, or *.example.com for its subdomains. Sending it anywhere else is refused for agents and asks you first.">
+        <Textarea value={text} onChange={(e) => setText(e.target.value)} className="min-h-[88px] font-mono" spellCheck={false} rows={3} />
+      </Field>
+      <div className="flex flex-wrap gap-2">
+        <Button size="compact" onClick={() => save(parseHosts(text))} loading={mutations.hosts.isPending}>
+          Save hosts
+        </Button>
+        {defaults.length && !credential.audience.fromKind ? (
+          <Button size="compact" variant="ghost" onClick={() => { setText(defaults.join('\n')); save(null); }} disabled={mutations.hosts.isPending}>
+            Use the {credential.kind} hosts
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ScopeEditor({ credential, repos, onSaved }: { credential: CredentialView; repos: Repository[]; onSaved: () => void }) {
@@ -158,6 +208,13 @@ function CredentialDrawer({ credential, repos, onClose, onReplace, onDelete }: {
           <p className="text-small text-fg-secondary">Only these repositories&apos; tools and tasks may use it.</p>
           <ScopeEditor key={`${c.id}-${JSON.stringify(c.repositoryIds)}`} credential={c} repos={repos} onSaved={() => undefined} />
         </section>
+        {c.kind === 'media' ? null : (
+          <section className="flex flex-col gap-2" aria-labelledby="hosts">
+            <h3 id="hosts" className="text-h3">Hosts</h3>
+            <p className="text-small text-fg-secondary">Where tools may send it as a header.</p>
+            <HostsEditor key={`${c.id}-${JSON.stringify(c.audience)}`} credential={c} />
+          </section>
+        )}
         <section className="flex flex-col gap-2" aria-labelledby="value-actions">
           <h3 id="value-actions" className="text-h3">Value</h3>
           {managedByMyVault(c) ? (
@@ -388,10 +445,11 @@ export function CredentialsTab() {
   const [connecting, setConnecting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', kind: 'cloudflare' as CredentialKind, envVar: '', description: '', value: '' });
+  const [form, setForm] = useState({ name: '', kind: 'cloudflare' as CredentialKind, envVar: '', description: '', hosts: '', value: '' });
   const managed = credentials.data?.find((c) => c.id === managing) ?? null;
+  const reviewHosts = (credentials.data ?? []).filter(needsHostReview).length;
   const startNew = () => {
-    setForm({ name: '', kind: 'cloudflare', envVar: '', description: '', value: '' });
+    setForm({ name: '', kind: 'cloudflare', envVar: '', description: '', hosts: '', value: '' });
     setError(null);
     setEditing('new');
   };
@@ -403,7 +461,9 @@ export function CredentialsTab() {
   const save = () => {
     setError(null);
     const done = { onSuccess: () => { toast(editing === 'new' ? 'Credential stored' : 'Value replaced'); closeEditor(); }, onError: (e: unknown) => setError(errorMessage(e)) };
-    if (editing === 'new') mutations.create.mutate({ name: form.name.trim(), kind: form.kind, envVar: form.envVar.trim() || null, description: form.description.trim(), value: form.value }, done);
+    // No hosts typed: the kind's own (none for a kind that names no host).
+    const hosts = parseHosts(form.hosts);
+    if (editing === 'new') mutations.create.mutate({ name: form.name.trim(), kind: form.kind, envVar: form.envVar.trim() || null, description: form.description.trim(), audience: hosts.length ? hosts : null, value: form.value }, done);
     else if (editing) mutations.replace.mutate({ id: editing.id, value: form.value }, done);
   };
   const columns: Column<CredentialView>[] = [
@@ -425,6 +485,11 @@ export function CredentialsTab() {
       key: 'scope',
       header: 'Repositories',
       cell: (c) => <span className={c.repositoryIds?.length === 0 ? 'text-body text-warning' : 'text-body text-fg-secondary'}>{scopeText(c, repos)}</span>,
+    },
+    {
+      key: 'hosts',
+      header: 'Sends to',
+      cell: (c) => (needsHostReview(c) ? <StatusChip visual={ANY_HOST_VISUAL} size="compact" /> : <span className="wrap-anywhere text-body text-fg-secondary">{hostsText(c)}</span>),
     },
     { key: 'vault', header: 'MyVault', cell: (c) => (c.vault ? <StatusChip visual={VAULT_VISUAL[c.vault.state]} size="compact" /> : <span className="text-fg-secondary">—</span>) },
     { key: 'used', header: 'Last used', hideStacked: true, sortValue: (c) => c.lastUsedAt ?? '', cell: (c) => (c.lastUsedAt ? <RelativeTime iso={c.lastUsedAt} /> : <span className="text-fg-secondary">Never</span>) },
@@ -464,6 +529,11 @@ export function CredentialsTab() {
           }
         >
           They stay encrypted here and cannot be deployed until MyVault has saved them. Nothing will be regenerated.
+        </Banner>
+      ) : null}
+      {reviewHosts > 0 ? (
+        <Banner tone="warning" title={`${reviewHosts} ${reviewHosts === 1 ? 'credential is' : 'credentials are'} still sent to any host`}>
+          They were saved before credentials had hosts, so tools may send them to any address, as before. Open Manage on each row marked Any host and name the hosts it is meant for.
         </Banner>
       ) : null}
       {s && s.conflicts > 0 ? (
@@ -526,6 +596,11 @@ export function CredentialsTab() {
               <Field label="Environment variable" optional helper={`Default: ${CREDENTIAL_KIND_ENV[form.kind] ?? 'none'}`}>
                 <Input value={form.envVar} onChange={(e) => setForm({ ...form, envVar: e.target.value })} className="font-mono" />
               </Field>
+              {form.kind === 'media' ? null : (
+                <Field label="Hosts it may be sent to" optional helper={CREDENTIAL_KIND_HOSTS[form.kind].length ? `Default: ${CREDENTIAL_KIND_HOSTS[form.kind].join(', ')}` : 'Default: none. Tools send it nowhere until you name hosts, such as api.example.com.'}>
+                  <Input value={form.hosts} onChange={(e) => setForm({ ...form, hosts: e.target.value })} className="font-mono" spellCheck={false} placeholder="api.example.com, *.example.com" />
+                </Field>
+              )}
               <Field label="Description" optional>
                 <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
               </Field>

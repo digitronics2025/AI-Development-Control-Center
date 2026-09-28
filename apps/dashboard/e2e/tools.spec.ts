@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { api, setTheme, trackConsoleErrors } from './helpers';
+import { api, expectNoAxeViolations, expectNoHorizontalOverflow, setTheme, trackConsoleErrors } from './helpers';
 
 /**
  * Tools section and task Execution tab (design.md §7.10, §7.3) against the
@@ -39,8 +39,11 @@ test('a stored credential never comes back to the page', async ({ page }) => {
   await dialog.getByLabel('Name').fill('e2e-api');
   await dialog.getByLabel('Value').fill(value);
   await expect(dialog.getByLabel('Value')).toHaveAttribute('type', 'password');
+  // Left empty, the hosts are the kind's own (SEC-4): Cloudflare's API.
+  await expect(dialog.getByText('Default: api.cloudflare.com')).toBeVisible();
   await dialog.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('cell', { name: 'e2e-api' }).or(page.getByText('e2e-api')).first()).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'e2e-api' })).toContainText('api.cloudflare.com');
   expect(await page.content()).not.toContain(value);
   const listed = await api<Array<{ name: string }>>(page, 'GET', '/api/credentials');
   expect(JSON.stringify(listed)).not.toContain(value);
@@ -55,6 +58,54 @@ test('a stored credential never comes back to the page', async ({ page }) => {
   await expect(row.getByText('Ask only')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`a credential still sent to any host is marked for review until its hosts are named (${theme})`, async ({ page }, testInfo) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    await setTheme(page, theme);
+    try {
+      const name = `e2e-legacy-${theme}`;
+      const value = ['e2e', 'legacy', theme, String(Date.now())].join('-');
+      await api(page, 'POST', '/api/credentials', { name, kind: 'http', value });
+      // It stands in for a credential saved before hosts existed, which migration 24 marks "any host" (the migration
+      // itself is covered by apps/orchestrator/test/outbound-secrets.test.ts): the list says so until hosts are named.
+      await page.route(/\/api\/credentials$/, async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const response = await route.fetch();
+        const list = (await response.json()) as Array<{ name: string; audience: { hosts: string[]; anyHost: boolean; fromKind: boolean } }>;
+        await route.fulfill({ response, json: list.map((c) => (c.name === name && c.audience.fromKind ? { ...c, audience: { hosts: [], anyHost: true, fromKind: false } } : c)) });
+      });
+      await page.goto('/tools/credentials');
+      await expect(page.getByText(/still sent to any host/)).toBeVisible();
+      const row = page.getByRole('row').filter({ hasText: name });
+      await expect(row).toContainText('Any host · review');
+      await row.getByRole('button', { name: 'Manage' }).click();
+      const drawer = page.getByRole('dialog', { name });
+      await expect(drawer.getByText('Sent to any host')).toBeVisible();
+      await expectNoAxeViolations(page, testInfo);
+      const hosts = drawer.getByLabel('Hosts it may be sent to');
+      // Only a host: no scheme, port or path.
+      await hosts.fill('https://api.legacy.example/v1');
+      await drawer.getByRole('button', { name: 'Save hosts' }).click();
+      await expect(drawer.getByRole('alert')).toContainText('A host such as api.example.com');
+      await hosts.fill('api.legacy.example\n*.uploads.legacy.example');
+      await drawer.getByRole('button', { name: 'Save hosts' }).click();
+      await expect(drawer.getByText('Sent to any host')).toHaveCount(0);
+      await expect(drawer.getByRole('listitem').filter({ hasText: 'hosts' }).first()).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(drawer).toBeHidden();
+      await expect(row).toContainText('api.legacy.example, *.uploads.legacy.example');
+      await expect(row).not.toContainText('Any host');
+      await expectNoHorizontalOverflow(page);
+      expect(await page.content()).not.toContain(value);
+      expect(errors).toEqual([]);
+    } finally {
+      await setTheme(page, 'dark');
+    }
+  });
+}
 
 test('the execution policy is one segmented choice and persists', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });

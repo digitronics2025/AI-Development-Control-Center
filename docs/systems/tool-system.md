@@ -26,7 +26,12 @@ provides one, decides whether the call may run, runs it and records it.
   level, a per-input `classify()` and `run()`. A paid operation also declares
   `estimateCost()` (see the spend gate below); an outside MCP tool carries
   `inputJsonSchema`, its server's own schema, which agents are shown (the call
-  is still validated by the Zod schema).
+  is still validated by the Zod schema). An operation that sends what its
+  caller wrote declares it with `outbound()` (URL or target, headers, body,
+  a credential attached by name): `http.request` (fetch and curl alike),
+  `http.health`, `web.read` (both providers), `web.search` (the query, to
+  DuckDuckGo) and every outside MCP tool (its arguments, to its server's URL,
+  or to the server by name for stdio). The outbound check below reads it.
 - Several providers may offer one capability: `shell.run` (PowerShell, CMD,
   Git Bash, WSL), `network.port_owner` (Windows via PowerShell, netstat;
   elsewhere `ss`/`netstat`, then `lsof` where those show no pids, as on macOS),
@@ -99,6 +104,34 @@ Between 3 and 4, an agent's call whose input names the Control Center itself
 Node's URL parser normalises: `127.1:4317`, `2130706433:4317`,
 `[::ffff:127.0.0.1]:4317`) is denied (`inputReferencesSelf`,
 [security.md](security.md#command-classification-commandsts)).
+
+Then the **outbound check** (SEC-4, `outboundCheck`), for an operation with
+`outbound()`: a credential attached by name to a host outside its audience
+(`CredentialBroker.outsideAudience`, [credential-broker.md](credential-broker.md#audience)),
+and every known secret (stored credentials, the local token, sensitive
+environment values) raw or encoded, or a token of a known format, in what the
+caller wrote (`scanOutbound`, [security.md](security.md#tool-layer)) — and in
+what the run reads from disk and sends: `http.request`'s `outbound()` reads each
+multipart file inside the roots and the run sends the bytes it read (a file it
+could not read fails the run unsent). The call's `inputSummary` is recorded
+again after the check, which has taught the redactor every stored value; a
+string in which the check still reads a secret once redacted (base64 wrapped
+over lines, hex bytes spaced) is recorded as `[REDACTED]` whole. A finding
+adds its reason and the `credentials` effect to the risk and is passed to
+`decide()` as `leak`: after the stage-level check, an agent (or a read-only
+session) is refused and anyone else asked — whatever the mode would run on its
+own; a Level 5 call keeps its typed confirmation. The reason names kind, name
+and host only (`Sends github credential "x" to h…`, `Carries the Control Center
+token to h…`) — a host whose own name carries a secret or token, which WHATWG
+parsing lower-cases past the redactor's reach, is named `a host whose name
+carries a secret` (`namedHost`) — and each such call adds a `TOOL_CALL` event (`<capability>
+refused` / `needs approval` / `sent with approval`, `data.outbound`: kind,
+name, host, where, form). A check that throws — the credential key not
+loading included — counts as a finding. The
+operator's approval re-runs the call with `preApproved`, and only then may the
+broker hand the credential to that host (`approvedSend`). `http.request` that
+carries a stored credential off the machine is Level 3 with the `credentials`
+effect even as a read (`classifyRequest`).
 `classify()` gets the call's `cwd` (moved by the tool's own `cwd` input, where
 it has one) and the release branches it can reach
 (`ClassifyContext.releaseBranches`, from each release setting that pushes,

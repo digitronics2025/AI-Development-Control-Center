@@ -525,6 +525,7 @@ export function browserPageOperations(): ToolOperation[] {
       input: z.object({ url: httpUrl, maxChars: z.number().int().min(500).max(MAX_TEXT_CHARS).default(20_000), links: z.boolean().default(true), timeoutSec: z.number().int().min(5).max(90).default(30) }),
       level: 1,
       classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
+      outbound: (input) => [{ url: input.url }],
       async run(input) {
         const browser = await launch();
         try {

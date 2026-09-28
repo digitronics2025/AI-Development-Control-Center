@@ -182,6 +182,83 @@ export const CREDENTIAL_KIND_ENV: Record<CredentialKind, string | null> = {
   other: null,
 };
 
+/**
+ * A credential's audience (SEC-4): the hosts `http.request` may send it to.
+ * These are each kind's hosts when the operator names none; a kind without
+ * any (`http`, `other`, databases, `media`) is sent nowhere until hosts are set.
+ * GitHub Enterprise and other self-hosted addresses are the operator's to add.
+ */
+export const CREDENTIAL_KIND_HOSTS: Record<CredentialKind, readonly string[]> = {
+  cloudflare: ['api.cloudflare.com'],
+  github: ['api.github.com', 'uploads.github.com', 'github.com'],
+  postgres: [],
+  mysql: [],
+  http: [],
+  npm: ['registry.npmjs.org'],
+  media: [],
+  other: [],
+};
+
+/**
+ * The stored audience of a credential saved before audiences existed whose kind
+ * names no host (migration 24): it is still sent to any host, as before, and the
+ * Credentials tab asks the operator to review it. Never accepted as input.
+ */
+export const ANY_HOST = '*';
+
+/**
+ * One audience entry in its compared form, or null: a host name or address
+ * as WHATWG URL parsing reads it (lower case, international names in punycode,
+ * `127.1` as `127.0.0.1`, no trailing dot), or `*.` and a name with a dot for
+ * its subdomains (never the name itself, never a bare suffix). No port, path,
+ * user or scheme.
+ */
+export function normalizeHostEntry(entry: string): string | null {
+  const raw = entry.trim();
+  const wildcard = raw.startsWith('*.');
+  const rest = wildcard ? raw.slice(2) : raw;
+  if (!rest || /[\s/\\?#@*]/.test(rest) || (rest.includes(':') && !rest.startsWith('['))) return null;
+  let url: URL;
+  try {
+    url = new URL(`http://${rest}/`);
+  } catch {
+    return null;
+  }
+  if (url.port || url.username || url.password || url.pathname !== '/') return null;
+  const host = url.hostname.replace(/\.$/, '');
+  if (!host || (wildcard && (!host.includes('.') || host.startsWith('[') || /^[\d.]+$/.test(host)))) return null;
+  return wildcard ? `*.${host}` : host;
+}
+
+export const hostEntrySchema = z
+  .string()
+  .max(260)
+  .transform((value, ctx) => {
+    const host = normalizeHostEntry(value);
+    if (host === null) {
+      ctx.addIssue({ code: 'custom', message: 'A host such as api.example.com, or *.example.com for its subdomains (no scheme, port or path)' });
+      return z.NEVER;
+    }
+    return host;
+  });
+
+/** Where a credential may be sent, as the API shows it. */
+export interface CredentialAudienceView {
+  /** The hosts it may be sent to (the kind's, when `fromKind`). */
+  hosts: string[];
+  /** Saved before audiences existed: still sent to any host; the operator should name its hosts. */
+  anyHost: boolean;
+  /** No hosts of its own: its kind's (`CREDENTIAL_KIND_HOSTS`). */
+  fromKind: boolean;
+}
+
+/** The audience a stored list means for a kind: null = the kind's hosts; `[ANY_HOST]` = any host (review). */
+export function credentialAudience(kind: CredentialKind, stored: readonly string[] | null): CredentialAudienceView {
+  if (stored === null) return { hosts: [...CREDENTIAL_KIND_HOSTS[kind]], anyHost: false, fromKind: true };
+  if (stored.includes(ANY_HOST)) return { hosts: [], anyHost: true, fromKind: false };
+  return { hosts: [...stored], anyHost: false, fromKind: false };
+}
+
 export interface CredentialView {
   id: string;
   name: string;
@@ -190,6 +267,8 @@ export interface CredentialView {
   description: string;
   /** Null = every repository. */
   repositoryIds: string[] | null;
+  /** The hosts `http.request` may send it to (SEC-4). */
+  audience: CredentialAudienceView;
   /** Short hash so two values can be told apart; never the value. */
   fingerprint: string;
   createdAt: string;
@@ -227,7 +306,7 @@ export interface CredentialEventView {
   id: string;
   credentialId: string | null;
   credentialName: string;
-  operation: 'create' | 'generate' | 'import' | 'update_from_vault' | 'push' | 'ack' | 'conflict' | 'missing' | 'detached' | 'resolve' | 'scope' | 'replace' | 'delete' | 'deploy_blocked' | 'deposit' | 'collected';
+  operation: 'create' | 'generate' | 'import' | 'update_from_vault' | 'push' | 'ack' | 'conflict' | 'missing' | 'detached' | 'resolve' | 'scope' | 'hosts' | 'replace' | 'delete' | 'deploy_blocked' | 'deposit' | 'collected';
   direction: 'to_vault' | 'from_vault' | 'local' | null;
   status: 'ok' | 'failed' | 'pending' | 'blocked';
   taskId: string | null;
@@ -391,6 +470,8 @@ export const credentialInputSchema = z.object({
   envVar: envName.nullable().optional(),
   description: z.string().max(300).default(''),
   repositoryIds: z.array(z.string().min(1).max(100)).max(200).nullable().default(null),
+  /** Hosts `http.request` may send it to (SEC-4); null or left out = its kind's (`CREDENTIAL_KIND_HOSTS`), [] = none. */
+  audience: z.array(hostEntrySchema).max(50).nullable().optional(),
   /** Write-only: accepted here, never returned by any endpoint. */
   value: z.string().min(1).max(20_000),
 });

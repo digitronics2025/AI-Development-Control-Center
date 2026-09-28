@@ -4,7 +4,24 @@ import os from 'node:os';
 import path from 'node:path';
 import type { GuardedFileTool } from '@acc/agent-claude';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { classifyCommand, constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, referencesSelf, relativizeOwnRoots, sanitizeEnv } from '@acc/security';
+import {
+  classifyCommand,
+  constantTimeEqual,
+  describeFindings,
+  inputReferencesSelf,
+  knownSecretValues,
+  maskPersonalData,
+  maskPersonalText,
+  namedHost,
+  redact,
+  REDACTED,
+  referencesSelf,
+  relativizeOwnRoots,
+  sanitizeEnv,
+  scanOutbound,
+  type OutboundFinding,
+  type OutboundSecret,
+} from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -27,6 +44,7 @@ import {
   type PolicyDecision,
   type ProfileId,
   type ToolDetection,
+  type ToolOperation,
   type ToolProvider,
   type ToolRisk,
 } from '@acc/tools';
@@ -223,11 +241,12 @@ const MAX_LISTED = 60;
 /** Capabilities that put a stored secret where it is used. Only a production put (Level 5, always a typed approval) may read a reserved one. */
 const SECRET_DEPLOYS: ReadonlySet<string> = new Set(['cloudflare.secret_put', 'github.secret_put']);
 
-function clipInput(input: unknown): string {
+/** A call's input as it is recorded: redacted and clipped; a string (or key) `masked` names is recorded as `[REDACTED]`. */
+function clipInput(input: unknown, masked?: (text: string) => boolean): string {
   const shrink = (v: unknown): unknown => {
-    if (typeof v === 'string') return v.length > 300 ? `[${v.length} characters]` : v;
+    if (typeof v === 'string') return v.length > 300 ? `[${v.length} characters]` : masked?.(v) ? REDACTED : v;
     if (Array.isArray(v)) return v.slice(0, 20).map(shrink);
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).slice(0, 30).map(([k, x]) => [k, shrink(x)]));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).slice(0, 30).map(([k, x]) => [masked?.(k) ? REDACTED : k, shrink(x)]));
     return v;
   };
   const text = redact(JSON.stringify(shrink(input)) ?? '');
@@ -276,6 +295,17 @@ export interface ToolServiceDeps {
   baseEnv: NodeJS.ProcessEnv;
   /** The native shell precheck hook's script (SEC-3), which the precheck keeps agents from changing (`namesShellGuard`). */
   shellGuardPath?: string | null;
+  /** The local API token: the outbound check names it when a request would carry it (SEC-4). */
+  localToken?: string | null;
+}
+
+/** What an outbound request would carry where it may not go (SEC-4): by kind, name and host, never a value. */
+export interface OutboundLeak {
+  reason: string;
+  /** A stored credential attached by name to a host outside its audience. */
+  audience: Array<{ kind: string; name: string; host: string }>;
+  /** Known secrets and token formats in what the caller wrote. */
+  findings: OutboundFinding[];
 }
 
 /**
@@ -568,7 +598,7 @@ export class ToolService {
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
     const classified = operation.classify?.(judged, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
-    const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
+    let risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
     // An agent never reaches the Control Center itself — its token, keys, data folder or API — through
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
@@ -586,10 +616,25 @@ export class ToolService {
       return refuse('denied', 'DENIED', DESIGN_MCP_REFUSAL, 'deny', risk);
     }
 
+    // 3b. What the call sends off this machine (SEC-4): a stored credential outside its audience, or a known
+    // secret (raw or encoded) or token in what the caller wrote. Refused for agents, asked of anyone else.
+    const outbound = operation.outbound ? await this.outboundCheck(operation, input, scope) : null;
+    const leak = outbound?.leak ?? null;
+    if (outbound) {
+      // Recorded again now that the check has taught the redactor every stored value; a string in which the check
+      // still reads a secret once redacted (base64 wrapped over lines, hex bytes spaced) is recorded masked whole.
+      const everywhere = outbound.secrets.map(({ hosts: _hosts, ...secret }) => secret);
+      base.inputSummary = clipInput(req.input, (text) => scanOutbound({ target: 'the record', body: redact(text) }, everywhere).length > 0);
+    }
+    if (leak) risk = { ...risk, reasons: [...risk.reasons, leak.reason], effects: [...new Set([...risk.effects, 'credentials' as const])] };
+
     // 4. Policy.
     const inProfile = profileIncludes(PROFILES[scope.profile], req.capability) || scope.escalated.has(req.capability);
-    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
+    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(leak ? { leak: leak.reason } : {}), ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
+    // The operator approved this very send: the broker may hand the credential to this call's host.
+    const approvedSend = Boolean(leak) && req.preApproved === true && req.origin !== 'agent' && decision.decision === 'approval';
     if (req.preApproved && decision.decision === 'approval') decision = { decision: 'allow', reason: `${decision.reason} — approved` };
+    if (leak) this.leakEvent(scope, req.capability, leak, decision.decision);
     if (decision.decision === 'deny') {
       this.escalate(scope, req.capability, 'denied', decision.reason, risk.level);
       return refuse('denied', 'DENIED', decision.reason, 'deny', risk);
@@ -653,7 +698,7 @@ export class ToolService {
       // In a task workspace, a Git process started by any tool stops searching for a repository at the workspaces folder.
       const ceiling = req.scope.repositories?.length ? { GIT_CEILING_DIRECTORIES: path.dirname(req.scope.roots[0]!) } : {};
       const readOnlyEnv = scope.readOnly ? { ...scope.readOnly.env, ACC_READ_ONLY: '1' } : {};
-      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine, deploysReserved: SECRET_DEPLOYS.has(req.capability) && risk.level >= 5 });
+      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine, deploysReserved: SECRET_DEPLOYS.has(req.capability) && risk.level >= 5, approvedSend });
       result = missingCredential
         ? { ok: false, summary: `No read-only ${missingCredential} key is set up for this conversation (Settings → Ask).`, error: { code: 'AUTH_REQUIRED', message: `No read-only ${missingCredential} key is set up (Settings → Ask).` } }
         : await Promise.race([
@@ -711,7 +756,74 @@ export class ToolService {
     }
   }
 
-  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine']; deploysReserved: boolean }): OperationContext {
+  /**
+   * The outbound check (SEC-4) of one call, before it runs: a credential it
+   * attaches by name to a host outside that credential's audience, and the
+   * secrets the Control Center knows — stored credentials (each exempt on the
+   * hosts it may be sent to, where this repository may use it), its own token,
+   * sensitive environment values — raw or encoded, plus well-known token
+   * formats, in the URL, headers or body the caller wrote (and a multipart
+   * file's content). `leak` is null when clean; `secrets` are the values it
+   * looked for. Fails closed: a request that cannot be checked — the credential
+   * key not loading included — is reported as a leak.
+   */
+  private async outboundCheck(operation: Pick<ToolOperation, 'outbound'>, input: unknown, scope: ToolScope): Promise<{ leak: OutboundLeak | null; secrets: OutboundSecret[] }> {
+    let secrets: OutboundSecret[] = [];
+    try {
+      const requests = await operation.outbound!(input, { cwd: scope.cwd, roots: scope.roots });
+      if (!requests.length) return { leak: null, secrets };
+      const stored = await this.d.credentials.outboundSecrets(scope.repositoryId);
+      const token = this.d.localToken ?? null;
+      const labelled = new Set([...stored.map((s) => s.value), ...(token ? [token] : [])]);
+      secrets = [
+        ...stored,
+        ...(token ? [{ label: 'the Control Center token', kind: 'control-center-token', value: token }] : []),
+        ...knownSecretValues()
+          .filter((v) => !labelled.has(v))
+          .map((value) => ({ label: 'a secret the Control Center keeps', kind: 'secret', value })),
+      ];
+      // Its host named as the findings name it: never a host whose own name carries a secret.
+      const audience = requests.flatMap((r) => {
+        const outside = r.credential && r.url ? this.d.credentials.outsideAudience(r.credential, scope.repositoryId, r.url) : null;
+        return outside ? [{ ...outside, host: namedHost(r, secrets) }] : [];
+      });
+      const findings = requests.flatMap((r) => scanOutbound(r, secrets));
+      if (!audience.length && !findings.length) return { leak: null, secrets };
+      const lines = [
+        ...audience.map((a) => `Sends ${a.kind} credential "${a.name}" to ${a.host}, which is not among the hosts it may be sent to (Tools → Credentials)`),
+        ...(findings.length ? [describeFindings(findings)] : []),
+      ];
+      return {
+        leak: { reason: redact(lines.join('; ')).slice(0, 600), audience: audience.map((a) => ({ ...a, host: redact(a.host).slice(0, 200) })), findings: findings.map((f) => ({ ...f, host: redact(f.host).slice(0, 200) })) },
+        secrets,
+      };
+    } catch (error) {
+      return { leak: { reason: `The request could not be checked for secrets (${redact((error as Error).message).slice(0, 200)})`, audience: [], findings: [] }, secrets };
+    }
+  }
+
+  /** The TOOL_CALL event of a call the outbound check stopped or an operator let through: kinds, names and hosts only. */
+  private leakEvent(scope: ToolScope, capability: string, leak: OutboundLeak, decision: PolicyDecision['decision']): void {
+    if (!scope.taskId) return;
+    const verb = decision === 'deny' ? 'refused' : decision === 'approval' ? 'needs approval' : 'sent with approval';
+    this.events(
+      scope.taskId,
+      'TOOL_CALL',
+      `${capability} ${verb}: ${leak.reason}`.slice(0, 700),
+      {
+        capability,
+        ok: decision === 'allow',
+        decision,
+        outbound: [
+          ...leak.audience.map((a) => ({ kind: a.kind, name: a.name, host: a.host, reason: 'outside audience' })),
+          ...leak.findings.map((f) => ({ kind: f.kind, name: f.label, host: f.host, where: f.where, form: f.form })),
+        ],
+      },
+      scope.stageId,
+    );
+  }
+
+  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine']; deploysReserved: boolean; approvedSend?: boolean }): OperationContext {
     const artifacts: ArtifactSink | undefined = scope.taskId
       ? {
           write: async (a) => {
@@ -740,7 +852,13 @@ export class ToolService {
       prices: this.d.spend?.prices(),
       credentials: {
         // Only a production secret deploy, which always waits for the operator's typed approval, may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
-        value: (name, opts) => this.d.credentials.value(name, scope.repositoryId, { ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}), ...(opts?.kind ? { kind: opts.kind } : {}) }),
+        // Sent as a header to `targetUrl`: only within its audience, or as the operator just approved (SEC-4).
+        value: (name, opts) =>
+          this.d.credentials.value(name, scope.repositoryId, {
+            ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}),
+            ...(opts?.kind ? { kind: opts.kind } : {}),
+            ...(opts?.targetUrl !== undefined ? { targetUrl: opts.targetUrl, approvedSend: run.approvedSend === true } : {}),
+          }),
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {

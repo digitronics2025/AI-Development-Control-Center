@@ -40,6 +40,8 @@ export interface CredentialRecord {
   envVar: string | null;
   description: string;
   repositoryIds: string[] | null;
+  /** Hosts http.request may send it to (migration 24): null = its kind's; `["*"]` = any host, saved before audiences. */
+  audience: string[] | null;
   ciphertext: string;
   iv: string;
   tag: string;
@@ -182,6 +184,7 @@ const toCredential = (r: Row): CredentialRecord => ({
   envVar: r.env_var,
   description: r.description,
   repositoryIds: parse(r.repository_ids, null),
+  audience: parse(r.audience, null),
   ciphertext: r.ciphertext,
   iv: r.iv,
   tag: r.tag,
@@ -492,12 +495,12 @@ export class ToolStore {
   upsertCredential(c: CredentialRecord): void {
     this.db
       .prepare(
-        `INSERT INTO credential_references (id, name, kind, env_var, description, repository_ids, ciphertext, iv, tag, fingerprint, created_at, updated_at, last_used_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO credential_references (id, name, kind, env_var, description, repository_ids, audience, ciphertext, iv, tag, fingerprint, created_at, updated_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, env_var = excluded.env_var, description = excluded.description, repository_ids = excluded.repository_ids,
-           ciphertext = excluded.ciphertext, iv = excluded.iv, tag = excluded.tag, fingerprint = excluded.fingerprint, updated_at = excluded.updated_at`,
+           audience = excluded.audience, ciphertext = excluded.ciphertext, iv = excluded.iv, tag = excluded.tag, fingerprint = excluded.fingerprint, updated_at = excluded.updated_at`,
       )
-      .run(c.id, c.name, c.kind, c.envVar, c.description, c.repositoryIds ? json(c.repositoryIds) : null, c.ciphertext, c.iv, c.tag, c.fingerprint, c.createdAt, c.updatedAt, c.lastUsedAt);
+      .run(c.id, c.name, c.kind, c.envVar, c.description, c.repositoryIds ? json(c.repositoryIds) : null, c.audience ? json(c.audience) : null, c.ciphertext, c.iv, c.tag, c.fingerprint, c.createdAt, c.updatedAt, c.lastUsedAt);
   }
 
   touchCredential(id: string): void {

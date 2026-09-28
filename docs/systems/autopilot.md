@@ -35,6 +35,12 @@ task runs an L4 stage without asking.
 In order: dangerous / Level 5 / production → **approval** (typed), or
 **deny** for an agent (it cannot wait; it reports an operator decision) →
 above the stage's own level → **deny** (an Analyze stage never writes) →
+a `leak` (SEC-4: the outbound check found a stored credential going outside
+its audience, or a known secret or token in what the call sends; named by
+kind, name and host, never the value,
+[tool-system.md](tool-system.md#the-execution-door-servicets)) →
+**approval** without a typed confirmation (operator/engine) or **deny**
+(agent), whatever the mode would run on its own →
 above the mode's ceiling → **approval** (operator/engine) or **deny** (agent);
 a call that passes `approvedLevel` (only the native shell precheck: its stage
 is running, so it passed `stageGate` at its level) has that level as its
@@ -47,8 +53,10 @@ then pass the spend gate in `ToolService.invoke`, which fails closed
 ([design-agent.md](design-agent.md)).
 
 A read-only session (Ask, [ask.md](ask.md)) is decided before all of that:
-off its allow-list, not declared a read (`writes !== false`), or dangerous →
-**deny**; otherwise **allow**, whatever the level. Nothing is escalated.
+off its allow-list, carrying a `leak` (an Ask `web.search` or `web.read`
+holding a stored secret included), not declared a read (`writes !== false`),
+or dangerous → **deny**; otherwise **allow**, whatever the level. Nothing is
+escalated.
 
 ## Privileged helper
 

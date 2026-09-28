@@ -6,8 +6,12 @@
  *  1. Pattern rules for well-known credential formats and `key=value` pairs
  *     whose key names a secret.
  *  2. Value rules: the literal values of sensitive environment variables
- *     present on this machine, so a token printed by a tool is caught even
- *     when its format is unknown.
+ *     present on this machine and of the secrets registered with it, so a
+ *     token printed by a tool is caught even when its format is unknown —
+ *     also once base64, base64url, hex or percent-encoded (`encodedForms`).
+ * A stretch that shows such a value, or a token of a blocking format, only
+ * once its `%XX` escapes are decoded is masked whole, however few of its
+ * characters are escaped.
  */
 
 export const REDACTED = '[REDACTED]';
@@ -42,6 +46,17 @@ const RULES: Rule[] = [
   { name: 'google-api-key', pattern: /\bAIza[A-Za-z0-9_-]{35}\b/g, replace: REDACTED, blocking: true },
   { name: 'stripe', pattern: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, replace: REDACTED, blocking: true },
   { name: 'npm', pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replace: REDACTED, blocking: true },
+  // Registry, messaging and SaaS tokens (gitleaks' shapes, SEC-4).
+  { name: 'huggingface', pattern: /\bhf_[A-Za-z0-9]{34,}\b/g, replace: REDACTED, blocking: true },
+  { name: 'pypi', pattern: /\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}/g, replace: REDACTED, blocking: true },
+  { name: 'sendgrid', pattern: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, replace: REDACTED, blocking: true },
+  { name: 'shopify', pattern: /\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b/g, replace: REDACTED, blocking: true },
+  { name: 'supabase', pattern: /\bsbp_[a-f0-9]{40}\b/g, replace: REDACTED, blocking: true },
+  { name: 'sentry', pattern: /\b(?:sntrys_[A-Za-z0-9+/=_]{40,}|sntryu_[a-f0-9]{64}\b)/g, replace: REDACTED, blocking: true },
+  { name: 'linear', pattern: /\blin_api_[A-Za-z0-9]{40}\b/g, replace: REDACTED, blocking: true },
+  // A bot id, `:`, then 35 characters starting `A`. Anchored on both sides, so a longer number, a host:port or a
+  // timestamp followed by other text is not one; a path segment and the Bot API's own `/bot<token>/` spelling are.
+  { name: 'telegram', pattern: /(?:(?<=\bbot)|(?<![\w:.-]))\d{8,10}:A[A-Za-z0-9_-]{34}(?![\w-])/g, replace: REDACTED, blocking: true },
   { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replace: REDACTED },
   // An Authorization header's value is a credential whatever it looks like (any scheme, any case, all lowercase),
   // `:` included: a fal key is `Key <id>:<secret>`.
@@ -100,12 +115,82 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** The shortest literal value the redactor masks: shorter ones would hit ordinary words. */
+export const MIN_SECRET_LENGTH = 8;
+/**
+ * Encoded spellings are made for every value the redactor masks as written,
+ * up to a length: a longer one (a certificate, a key file) would swell the
+ * pattern, and key blocks have a rule. The shortest value's spellings are no
+ * weaker than the value itself: 8 characters give base64 cores of 10 and hex of 16.
+ */
+export const ENCODED_SECRET_LENGTH = { min: MIN_SECRET_LENGTH, max: 512 } as const;
+
+/**
+ * The part of `bytes`' base64 (or base64url) that the bytes alone decide, at
+ * each of the three offsets they can start at inside longer encoded data (so
+ * `secret` is found in the encoding of `user:secret`): the characters shared
+ * with a neighbouring byte are left off at both ends.
+ */
+function base64Cores(bytes: Buffer, alphabet: 'base64' | 'base64url'): string[] {
+  const cores: string[] = [];
+  for (let offset = 0; offset < 3; offset += 1) {
+    const total = offset + bytes.length;
+    const encoded = Buffer.concat([Buffer.alloc(offset), bytes]).toString(alphabet).replace(/=+$/, '');
+    const skip = [0, 2, 3][offset]!;
+    const keep = Math.floor(total / 3) * 4 + [0, 1, 2][total % 3]!;
+    cores.push(encoded.slice(skip, keep));
+  }
+  return cores;
+}
+
+/**
+ * The spellings a secret takes once a tool or a request encodes it (SEC-4):
+ * base64 and base64url (each at the three byte offsets), matched exactly; hex
+ * and percent-encoding (URI component and form style, of the value and of its
+ * base64, as a query string carries it, and every byte as `%XX`), matched in
+ * any case. Empty outside `ENCODED_SECRET_LENGTH`. Never shown: they are
+ * secrets too.
+ */
+export function encodedForms(value: string): { exact: string[]; anyCase: string[] } {
+  if (value.length < ENCODED_SECRET_LENGTH.min || value.length > ENCODED_SECRET_LENGTH.max) return { exact: [], anyCase: [] };
+  const bytes = Buffer.from(value, 'utf8');
+  const exact = new Set([...base64Cores(bytes, 'base64'), ...base64Cores(bytes, 'base64url')].filter((f) => f !== value));
+  const percent = (text: string) => [encodeURIComponent(text), new URLSearchParams({ v: text }).toString().slice(2)];
+  const hex = bytes.toString('hex');
+  const anyCase = new Set([hex, hex.replace(/../g, '%$&'), ...percent(value), ...[...exact].flatMap(percent)].filter((f) => f !== value && !exact.has(f)));
+  return { exact: [...exact], anyCase: [...anyCase] };
+}
+
+/** One alternation of literal strings, longest first, or null for none. */
+function literals(values: Iterable<string>, flags: string): RegExp | null {
+  const sorted = [...new Set(values)].sort((a, b) => b.length - a.length);
+  return sorted.length ? new RegExp(sorted.map(escapeRegExp).join('|'), flags) : null;
+}
+
+/**
+ * `%XX` runs decoded byte by byte as UTF-8, an invalid byte becoming U+FFFD
+ * (never throwing), so a secret percent-encoded any way at all reads as itself
+ * — a stray `%FF` beside it included, which a whole-run `decodeURIComponent`
+ * would give up on.
+ */
+export function percentDecoded(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'));
+}
+
+/** A stretch of text between spaces, quotes and URL separators (`?`, `&`, `#`): what one percent-encoded value spans. */
+const PERCENT_SPAN = /[^\s"'`<>?&#]+/g;
+const PERCENT_ESCAPE = /%[0-9A-Fa-f]{2}/;
+
 export class Redactor {
   private valuePattern: RegExp | null;
+  /** Hex and percent spellings of the same values, whose letters may be either case. */
+  private anyCasePattern: RegExp | null;
 
   constructor(secretValues: Iterable<string> = []) {
-    const values = [...new Set([...secretValues].filter((v) => v.length >= 8))].sort((a, b) => b.length - a.length);
-    this.valuePattern = values.length ? new RegExp(values.map(escapeRegExp).join('|'), 'g') : null;
+    const values = [...new Set([...secretValues].filter((v) => v.length >= MIN_SECRET_LENGTH))];
+    const forms = values.map(encodedForms);
+    this.valuePattern = literals([...values, ...forms.flatMap((f) => f.exact)], 'g');
+    this.anyCasePattern = literals(forms.flatMap((f) => f.anyCase), 'gi');
   }
 
   /** Build a redactor that also knows the sensitive values in an environment. */
@@ -122,6 +207,8 @@ export class Redactor {
     if (!text) return text;
     let out = text;
     if (this.valuePattern) out = out.replace(this.valuePattern, REDACTED);
+    if (this.anyCasePattern) out = out.replace(this.anyCasePattern, REDACTED);
+    if (out.includes('%')) out = out.replace(PERCENT_SPAN, (span) => (this.hiddenByPercent(span) ? REDACTED : span));
     for (const rule of RULES) out = out.replace(rule.pattern, rule.replace);
     if (PRIVATE_KEY_BEGIN.test(out)) {
       out = out.replace(
@@ -130,6 +217,20 @@ export class Redactor {
       );
     }
     return out;
+  }
+
+  /**
+   * Whether percent-encoding hides a secret in `span`, however few of its
+   * characters are escaped (`%51uartz…`, `%67hp_…`): once decoded it holds a
+   * value this redactor knows, in any spelling, or a token of a blocking
+   * format that the span as written does not show. Such a span is masked whole.
+   */
+  private hiddenByPercent(span: string): boolean {
+    if (!PERCENT_ESCAPE.test(span)) return false;
+    const decoded = percentDecoded(span);
+    if ((this.valuePattern && decoded.search(this.valuePattern) >= 0) || (this.anyCasePattern && decoded.search(this.anyCasePattern) >= 0)) return true;
+    const written = new Set(detectSecrets(span));
+    return detectSecrets(decoded).some((rule) => !written.has(rule));
   }
 
   /**
@@ -193,6 +294,16 @@ export function redact(text: string): string {
   return sharedRedactor().redact(text);
 }
 
+/**
+ * Every literal value the shared redactor masks: the orchestrator's sensitive
+ * environment values and the values registered with it (brokered credentials,
+ * the local token, sign-in tokens). For the outbound check (`scanOutbound`),
+ * which must know them to refuse a request that carries one; never shown.
+ */
+export function knownSecretValues(): string[] {
+  return [...new Set([...envSecretValues(sharedEnv), ...registered])].filter((v) => v.length >= MIN_SECRET_LENGTH);
+}
+
 export function resetSharedRedactor(env?: NodeJS.ProcessEnv): void {
   sharedEnv = env;
   shared = null;
@@ -206,7 +317,7 @@ export function resetSharedRedactor(env?: NodeJS.ProcessEnv): void {
 export function registerSecretValues(values: Iterable<string>): void {
   let changed = false;
   for (const value of values) {
-    if (value.length >= 8 && !registered.has(value)) {
+    if (value.length >= MIN_SECRET_LENGTH && !registered.has(value)) {
       registered.add(value);
       changed = true;
     }

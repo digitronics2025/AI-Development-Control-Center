@@ -229,6 +229,28 @@ describe('design.lint_tokens', () => {
     expect((allowed.output as { counts: Record<string, number> }).counts['hex-color']).toBe(0);
   });
 
+  it('reads the files a change touched when they are named, under the same rules as a folder walk', async () => {
+    // A critic names a change's files, not folders (seen live on TASK-0025, 2026-09-28).
+    const dir = repo({
+      'styles/app.css': '.sold-out { color: #999999; }\n',
+      'styles/tokens.css': ':root { --muted: #5c574c; }\n',
+      'src/components/card.js': "el.style.color = 'var(--muted)';\n",
+      'src/components/card.test.js': "const x = '#123456';\n",
+      'src/other.js': "const y = '#abcdef';\n",
+    });
+    const r = await call('design.lint_tokens', { paths: ['styles/app.css', 'src/components/card.js', 'styles/tokens.css', 'src/components/card.test.js'] }, dir);
+    expect(r.ok).toBe(true);
+    const out = r.output as { files: number; findings: Array<{ path: string; value: string }>; skipped: Array<{ path: string; reason: string }> };
+    // Only the named files are read: the unnamed src/other.js is not.
+    expect(out.files).toBe(2);
+    expect(out.findings.map((f) => `${f.path} ${f.value}`)).toEqual(['styles/app.css #999999']);
+    expect(out.skipped.map((s) => s.path).sort()).toEqual(['src/components/card.test.js', 'styles/tokens.css']);
+    // Files and folders mix; a path that is neither is still refused.
+    expect((await call('design.lint_tokens', { paths: ['src', 'styles/app.css'] }, dir)).output).toMatchObject({ files: 3 });
+    const missing = await call('design.lint_tokens', { paths: ['nope.css'] }, dir);
+    expect(missing).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
+  });
+
   it('never follows a link out of the repository, and refuses paths outside it', async () => {
     const outside = repo({ 'evil.css': '.x { color: #ff0000; }\n' });
     const dir = repo({ 'src/ok.css': '.ok { color: var(--fg); }\n' });

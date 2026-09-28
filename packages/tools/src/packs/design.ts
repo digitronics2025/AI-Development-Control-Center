@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { redact } from '@acc/security';
 import { z } from 'zod';
@@ -462,58 +462,67 @@ async function lintTokens(ctx: OperationContext, input: { paths: string[]; allow
         if (!SKIP_DIRS.has(e.name)) await visit(child, depth + 1);
         continue;
       }
-      if (!e.isFile() || !exts.test(e.name) || /\.d\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(e.name)) continue;
-      const rel = relativeTo(ctx.cwd, child);
-      if (TOKEN_FILE.test(rel)) continue;
+      if (!e.isFile() || !lintable(e.name)) continue;
+      if (TOKEN_FILE.test(relativeTo(ctx.cwd, child))) continue;
       if (files >= MAX_FILES) {
         stopped = true;
         return;
       }
-      if (/\.min\.(?:css|[jt]s)$/i.test(e.name)) {
-        skip(rel, 'minified');
-        continue;
-      }
-      const s = await stat(child).catch(() => null);
-      if (!s) continue;
-      if (s.size > 512 * 1024) {
-        skip(rel, 'over 512 KB');
-        continue;
-      }
-      files++;
-      const css = /\.(?:css|scss|sass|less)$/i.test(e.name);
-      const lines = (await readFile(child, 'utf8').catch(() => '')).split(/\r?\n/);
-      const within = css ? valueLines(lines) : [];
-      const long: number[] = [];
-      lines.forEach((line, i) => {
-        if (line.length > MAX_LINE) {
-          long.push(i + 1);
-          return;
-        }
-        if (within[i] === 'custom') return;
-        let redacted: string | undefined;
-        for (const f of lintLine(line, css, within[i] === 'value')) {
-          if (allow.has(f.value.toLowerCase())) continue;
-          counts[f.kind]++;
-          if (findings.length < input.maxFindings) {
-            // Redacted once per line, not once per finding.
-            redacted ??= redact(line);
-            findings.push({ path: rel, line: i + 1, kind: f.kind, value: f.value, text: excerpt(line, redacted, f.index, f.value) });
-          } else truncated = true;
-        }
-      });
-      if (long.length) skip(rel, `line(s) over ${MAX_LINE} characters`, long.slice(0, 20));
+      await scanFile(child, e.name);
     }
+  };
+  const lintable = (name: string) => exts.test(name) && !/\.d\.[jt]s$|\.test\.|\.spec\.|\.stories\./.test(name);
+  const scanFile = async (abs: string, name: string): Promise<void> => {
+    const rel = relativeTo(ctx.cwd, abs);
+    if (/\.min\.(?:css|[jt]s)$/i.test(name)) return skip(rel, 'minified');
+    const s = await stat(abs).catch(() => null);
+    if (!s) return;
+    if (s.size > 512 * 1024) return skip(rel, 'over 512 KB');
+    files++;
+    const css = /\.(?:css|scss|sass|less)$/i.test(name);
+    const lines = (await readFile(abs, 'utf8').catch(() => '')).split(/\r?\n/);
+    const within = css ? valueLines(lines) : [];
+    const long: number[] = [];
+    lines.forEach((line, i) => {
+      if (line.length > MAX_LINE) {
+        long.push(i + 1);
+        return;
+      }
+      if (within[i] === 'custom') return;
+      let redacted: string | undefined;
+      for (const f of lintLine(line, css, within[i] === 'value')) {
+        if (allow.has(f.value.toLowerCase())) continue;
+        counts[f.kind]++;
+        if (findings.length < input.maxFindings) {
+          // Redacted once per line, not once per finding.
+          redacted ??= redact(line);
+          findings.push({ path: rel, line: i + 1, kind: f.kind, value: f.value, text: excerpt(line, redacted, f.index, f.value) });
+        } else truncated = true;
+      }
+    });
+    if (long.length) skip(rel, `line(s) over ${MAX_LINE} characters`, long.slice(0, 20));
   };
   const scanned: string[] = [];
   for (const p of input.paths) {
     const abs = confined(ctx, p);
     if (isFailure(abs)) continue;
-    const s = await stat(abs).catch(() => null);
-    if (!s?.isDirectory()) continue;
-    scanned.push(relativeTo(ctx.cwd, abs) || '.');
-    await visit(abs, 0);
+    // lstat: a named link is not followed either.
+    const s = await lstat(abs).catch(() => null);
+    const rel = relativeTo(ctx.cwd, abs) || '.';
+    if (s?.isDirectory()) {
+      scanned.push(rel);
+      await visit(abs, 0);
+    } else if (s?.isFile()) {
+      // A critic or reviewer names the files a change touched; each is read under the folder walk's rules.
+      scanned.push(rel);
+      const name = path.basename(abs);
+      if (!lintable(name)) skip(rel, 'not a source file this tool reads (a test, a type declaration or another kind of file)');
+      else if (TOKEN_FILE.test(rel)) skip(rel, 'defines the design values');
+      else if (files < MAX_FILES) await scanFile(abs, name);
+      else stopped = true;
+    }
   }
-  if (!scanned.length) return failure('INVALID_INPUT', `None of ${input.paths.join(', ')} is a folder in the repository`);
+  if (!scanned.length) return failure('INVALID_INPUT', `None of ${input.paths.join(', ')} is a file or folder in the repository`);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const parts = (Object.entries(counts) as Array<[LintFinding['kind'], number]>).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`);
   const notRead = `${skippedCount ? ` (${skippedCount} skipped as minified, too long or too deep: see skipped)` : ''}${stopped ? ` (stopped after ${MAX_FILES} files: name narrower paths)` : ''}`;
@@ -560,7 +569,7 @@ export function designProvider(): ToolProvider {
         id: 'design.lint_tokens',
         title: 'Find design values code hard-codes',
         description:
-          'Scan source folders for colours written as literals (hex, rgb()/hsl()/oklch()), Tailwind default-palette classes (bg-blue-500) and pixel font sizes in stylesheets, outside the files where a design standard defines its values (tokens, theme, variables, tailwind.config) and outside custom-property definitions. Minified files, files over 512 KB and lines over 4096 characters are not read and are listed in skipped. Use it to keep a change on the repository\'s semantic tokens.',
+          'Scan source folders, or the files a change touched, for colours written as literals (hex, rgb()/hsl()/oklch()), Tailwind default-palette classes (bg-blue-500) and pixel font sizes in stylesheets, outside the files where a design standard defines its values (tokens, theme, variables, tailwind.config) and outside custom-property definitions. Minified files, files over 512 KB and lines over 4096 characters are not read and are listed in skipped. Use it to keep a change on the repository\'s semantic tokens.',
         input: z.object({
           paths: z.array(repoPath).min(1).max(20).default(['src']),
           allow: z.array(z.string().max(60)).max(100).default([]).describe('Values to ignore, e.g. "#fff" for an email template.'),

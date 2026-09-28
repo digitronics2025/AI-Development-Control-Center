@@ -233,6 +233,25 @@ export class ProcessManager {
     return live.length;
   }
 
+  /**
+   * Stop what one stage started and left running (an agent's dev server). Processes belong to the stage that started
+   * them: a later stage — the App check starting the app on the same port — must not find it taken (seen live on
+   * TASK-0024, 2026-09-28). Returns the names of the processes stopped.
+   */
+  async stopForStage(taskId: string, stageId: string, reason: string): Promise<string[]> {
+    const live = this.store.listProcesses({ taskId, live: true }).filter((p) => p.stageId === stageId);
+    const names: string[] = [];
+    for (const p of live) {
+      try {
+        await this.stop(p.id, reason);
+        names.push(p.name);
+      } catch {
+        /* already gone */
+      }
+    }
+    return names;
+  }
+
   async stopAll(reason: string): Promise<void> {
     await Promise.all([...this.live.keys()].map((id) => this.stop(id, reason).catch(() => undefined)));
   }

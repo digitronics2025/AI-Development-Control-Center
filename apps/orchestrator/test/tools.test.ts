@@ -225,6 +225,24 @@ describe('task processes', () => {
     expect(await t.services.processes.stopForTask('TASK-P', 'test')).toBe(1);
     await waitFor(async () => (await fetch(`http://127.0.0.1:${port}`).then(() => 'up', () => 'down')), (v) => v === 'down', 15_000, 'port to close');
   }, 90_000);
+
+  it('stops only what one stage started when that stage ends, freeing its port for the next stage', async () => {
+    const script = path.join(repoPath, 'server.cjs');
+    writeFileSync(script, "require('http').createServer((q, s) => s.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');\n");
+    const port = () => 20_000 + Math.floor(Math.random() * 20_000);
+    const [designerPort, otherPort] = [port(), port() + 1];
+    const start = (stageId: string, p: number) => t.services.processes.start({ taskId: 'TASK-S', stageId, name: `dev server ${stageId}`, command: `node "${script}"`, cwd: repoPath, port: p, readyTimeoutSec: 30 });
+    expect((await start('STAGE-IMPLEMENT', designerPort)).status).toBe('healthy');
+    expect((await start('STAGE-OTHER', otherPort)).status).toBe('healthy');
+    expect(await t.services.processes.stopForStage('TASK-S', 'STAGE-IMPLEMENT', 'Implement ended')).toEqual(['dev server STAGE-IMPLEMENT']);
+    await waitFor(async () => (await fetch(`http://127.0.0.1:${designerPort}`).then(() => 'up', () => 'down')), (v) => v === 'down', 15_000, 'stage port to close');
+    // Another stage's process, and a stage with nothing running, are left alone.
+    expect(await fetch(`http://127.0.0.1:${otherPort}`).then((r) => r.text())).toBe('ok');
+    expect(await t.services.processes.stopForStage('TASK-S', 'STAGE-IMPLEMENT', 'again')).toEqual([]);
+    // The next stage can start on the freed port.
+    expect((await start('STAGE-APP-CHECK', designerPort)).status).toBe('healthy');
+    expect(await t.services.processes.stopForTask('TASK-S', 'test')).toBe(2);
+  }, 90_000);
 });
 
 describe('engine integration', () => {

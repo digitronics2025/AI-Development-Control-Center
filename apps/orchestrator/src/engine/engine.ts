@@ -1011,6 +1011,8 @@ export class TaskEngine {
         switch (def.kind) {
           case 'agent':
             outcome = await this.stages.runAgent(this.task(taskId), def, stage, repo, control);
+            // What the agent started (a dev server to look at) ends with its stage: the App check starts its own.
+            await this.d.tooling.stopStageProcesses(taskId, stage, def.name);
             break;
           case 'tests':
           case 'command':

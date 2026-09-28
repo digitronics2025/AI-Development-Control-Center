@@ -101,7 +101,8 @@ stages:
       or theme the repository already supports, a hard-coded value where the standard defines one, an inaccessible
       control it added. Never block for a look you could not see, missing screenshots, a stopped app, a theme or
       width the repository does not support, taste, or problems in code this change did not touch (those are
-      advisory). Use the App check screenshots above; do not try to start the app. When nothing ran, write "Look not
+      advisory). The App check has already stopped the app: use its screenshots above, and do not open the app's
+      address or try to start it. When nothing ran, write "Look not
       seen: no running app" under What I looked at and judge the changed files with design.lint_tokens and
       design.contrast_matrix. When the changed files hold no user-facing change, say so and pass. Put anything you
       could not verify under Advisory, never NEEDS OPERATOR. With a FAIL, write CAUSE: code.

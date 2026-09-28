@@ -278,7 +278,10 @@ planner and implementer prompts. Also callable as `environment.discover`.
 commands owned by a task: a port already in use is reported with its owner
 instead of fought over; readiness is an HTTP poll; child pids are learned
 (Win32_Process on Windows, `ps` parent links elsewhere) so "is this pid ours"
-covers the real server under a shell. Processes stop as a
+covers the real server under a shell. What an agent stage starts (a dev
+server to look at) stops when that stage ends — `stopForStage`, with a
+`PROCESS_STOPPED` event naming them — so the App check never finds its port
+taken (TASK-0024, 2026-09-28). Processes stop as a
 tree when the task's loop exits in any state other than running/queued, on
 completion and cancel, and at shutdown. After a crash, rows still marked live
 are killed only if the pid's creation time (Win32_Process, or `ps -o lstart`)
@@ -354,4 +357,4 @@ credential, checkpoint and session routes in their own docs. Realtime:
 
 Tools detected in a folder are cached 10 minutes; when a worktree's background dependency install ends, `ToolService.forgetFolder(cwd)` drops that folder's entries, so a tool (a local Wrangler) found missing during the install is found afterwards ([checkpoints.md](checkpoints.md)).
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

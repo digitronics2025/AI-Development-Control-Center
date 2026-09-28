@@ -10,6 +10,39 @@ import type { TaskProcessRecord, ToolStore } from './store.js';
 
 const execFileAsync = promisify(execFile);
 
+interface FamilyRow {
+  pid: number;
+  ppid: number;
+  created: string;
+}
+
+/** Windows: the processes listening on a TCP port, from `netstat` (needs no PowerShell module). */
+async function listeners(port: number): Promise<number[]> {
+  try {
+    const { stdout } = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], { timeout: 20_000, windowsHide: true });
+    const pids = new Set<number>();
+    for (const line of stdout.split('\n')) {
+      const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+      if (m && Number(m[1]) === port) pids.add(Number(m[2]));
+    }
+    return [...pids];
+  } catch {
+    return [];
+  }
+}
+
+/** The port of an http(s) address; null when it has none. */
+function portOf(url: string | null): number | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
 const LIVE: readonly TaskProcessStatus[] = ['starting', 'running', 'healthy', 'unhealthy'];
 const LOG_LINES = 2000;
 
@@ -78,6 +111,67 @@ export class ProcessManager {
       if (this.live.get(r.id)?.descendants.has(pid)) return true;
     }
     return false;
+  }
+
+  /**
+   * A process that ended left something it started running. A server started
+   * for a port may not listen yet when its wrapper ends, so that case looks
+   * again for a few seconds before deciding the process is gone.
+   */
+  private async familyOutlives(record: TaskProcessRecord): Promise<boolean> {
+    const waits = record.port || record.url ? [0, 1500, 4000] : [0];
+    for (const ms of waits) {
+      if (ms) await new Promise((r) => setTimeout(r, ms));
+      if ((await this.liveFamily(record)).length) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Every process still running that a task process started: its descendants
+   * by parent links (Windows keeps an orphan's parent id, but forgets a parent
+   * that ended, so a chain through an ended wrapper breaks), plus whatever
+   * listens on the port it was started for. Only processes created after it
+   * was started count, and a child only when created after its (still
+   * running) parent, so a reused process id never pulls in an unrelated
+   * program. Linux and macOS stop the whole process group instead: empty there.
+   */
+  private async liveFamily(record: Pick<TaskProcessRecord, 'pid' | 'processStartedAt' | 'port' | 'url'>): Promise<number[]> {
+    const { pid: rootPid, processStartedAt: since } = record;
+    if (process.platform !== 'win32' || !since || !rootPid) return [];
+    const port = record.port ?? portOf(record.url);
+    const shell = await resolveShell('powershell');
+    if (!shell) return [];
+    const sinceMs = new Date(since).getTime() - 2000;
+    try {
+      const rows = await powershellJson<Array<FamilyRow> | FamilyRow | null>(
+        shell,
+        // Only processes started since (the whole table can outgrow what a PowerShell answer may hold).
+        `$since = [datetime]::Parse('${new Date(sinceMs).toISOString()}').ToUniversalTime(); Get-CimInstance Win32_Process | Where-Object { $_.CreationDate.ToUniversalTime() -ge $since } | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; created = $_.CreationDate.ToUniversalTime().ToString('o') } } | ConvertTo-Json -Compress`,
+        { timeoutMs: 30_000 },
+      );
+      const all = Array.isArray(rows) ? rows : rows ? [rows] : [];
+      const created = new Map(all.map((r) => [r.pid, new Date(r.created).getTime()]));
+      const children = new Map<number, number[]>();
+      for (const r of all) if (r.pid !== r.ppid) children.set(r.ppid, [...(children.get(r.ppid) ?? []), r.pid]);
+      const found: number[] = [];
+      const queue = [rootPid];
+      while (queue.length) {
+        const parent = queue.shift()!;
+        for (const child of children.get(parent) ?? []) {
+          const at = created.get(child)!;
+          const parentAt = created.get(parent);
+          if (at < sinceMs || (parentAt !== undefined && at < parentAt) || found.includes(child)) continue;
+          found.push(child);
+          queue.push(child);
+        }
+      }
+      // The port's listener, when it started after this process did: an orphan whose parent chain is gone.
+      for (const pid of port ? await listeners(port) : []) if (pid !== rootPid && (created.get(pid) ?? 0) >= sinceMs && !found.includes(pid)) found.push(pid);
+      return found;
+    } catch {
+      return [];
+    }
   }
 
   /** Refresh the set of child processes (a shell's dev server is its child, and holds the port). */
@@ -181,10 +275,13 @@ export class ProcessManager {
     this.publish(record);
 
     let exited = false;
-    void handle.done.then((result) => {
+    void handle.done.then(async (result) => {
+      const current = this.store.process(id);
+      // A wrapper (`npm run dev` on Windows) can end while the server it started runs on: the task still owns a
+      // live server, so it stays live — and is stopped as a whole family later (TASK-0027 left two Vite servers).
+      if (!result.cancelled && current?.pid && LIVE.includes(current.status) && (await this.familyOutlives(current))) return;
       exited = true;
       this.live.delete(id);
-      const current = this.store.process(id);
       if (current && LIVE.includes(current.status)) {
         this.publish(this.store.updateProcess(id, { status: result.cancelled ? 'stopped' : 'exited', exitCode: result.exitCode, stoppedAt: now(), stopReason: result.cancelled ? current.stopReason : `exited with ${result.exitCode}` }));
       }
@@ -211,8 +308,12 @@ export class ProcessManager {
     const live = this.live.get(id);
     if (live && LIVE.includes(current.status)) {
       this.store.updateProcess(id, { stopReason: reason });
+      // Read the family first: a tree kill from a wrapper that already ended reaches none of what it started.
+      const family = await this.liveFamily(current);
       await live.handle.cancel();
       await Promise.race([live.handle.done, new Promise((r) => setTimeout(r, 5000))]);
+      for (const pid of family) await this.killTree(pid);
+      this.live.delete(id);
     }
     const after = this.store.process(id)!;
     if (LIVE.includes(after.status)) return this.store.updateProcess(id, { status: 'stopped', stoppedAt: now(), stopReason: reason });

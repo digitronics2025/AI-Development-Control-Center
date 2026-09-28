@@ -77,16 +77,20 @@ agent's report; the other built-ins keep the fast default.
 
 A task sees each repository through `taskRepositoryView`
 ([task-checks.ts](../../apps/orchestrator/src/engine/task-checks.ts)): the
-stored commands plus the checks **the task added** — detected
-(`detectToolingSync`) in its worktree but not in the repository's own folder —
-and a `dev` start command the same way when none is stored. A script the
-repository already has stays the operator's to configure (removed, replaced or
-disabled stays so); a task in the operator's own folder adds nothing; nothing
-is written back. So a new app's first `test`/`build`/`dev` scripts gate the
-task that wrote them without a Re-detect: the stage announces them ("checks
-found in this task's own files"), and their failure is `new` without a baseline
-run (`addedByTask`). With no checks at all, `{{verification_commands}}` tells
-the builder to add them, and Tests still asks `skip_tests` if none appear.
+stored commands plus the checks `detectToolingSync` finds in its worktree that
+the stored settings lack, and a `dev` start command the same way when none is
+stored. Stored ids win (disabled stays disabled); a check the repository's own
+folder has is left out when the stored settings were detected with that
+toolchain present (`leftOutOnPurpose`: the operator removed it) and counts when
+they predate it (registered empty). Nothing is written back. So a new app's
+first `test`/`build`/`dev` scripts gate the task that wrote them and the tasks
+after it without a Re-detect. The stage announces each by origin
+(`checkOrigin`): "found in this task's own files" (failure is `new` with no
+baseline run, `addedByTask`) or "found in the repository's files that its
+settings do not list yet" (baseline as usual; Re-detect keeps them). A node
+repository that later gains a script it never had still needs a Re-detect for
+that script. With no checks at all, `{{verification_commands}}` tells the
+builder to add them, and Tests still asks `skip_tests` if none appear.
 
 A repository with no commits gets an empty first commit on its unborn branch
 before its worktree is made (`ensureFirstCommit` in

@@ -444,8 +444,12 @@ export class ContextBuilder {
   private testResults(task: TaskRecord): string {
     const runs = this.store.listTestRuns(task.id);
     if (!runs.length) return '';
+    // The latest result of every check, whichever stage ran it: an App check after Test must not hide the Test
+    // stage's results, or a reviewer reads them as the implementer's claims (TASK-0027).
+    const byCheck = new Map<string, (typeof runs)[number]>();
+    for (const r of runs) byCheck.set(`${r.repositoryId ?? ''}\n${r.name}`, r);
+    const latest = [...byCheck.values()];
     const lastStage = runs.at(-1)!.stageId;
-    const latest = runs.filter((r) => r.stageId === lastStage);
     const line = (r: (typeof runs)[number]) => `- ${r.name}: ${r.status}${r.exitCode !== null ? ` (exit ${r.exitCode})` : ''}${r.summary ? ` — ${r.summary}` : ''}`;
     const old = latest.filter((r) => r.status === 'failed' && r.classification === 'preexisting');
     const lines = latest.filter((r) => !old.includes(r)).map(line);

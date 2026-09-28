@@ -253,6 +253,20 @@ describe('task processes', () => {
     expect(await t.services.processes.stopForTask('TASK-S', 'test')).toBe(2);
   }, 90_000);
 
+  it('stops the server a wrapper started even when the wrapper itself has already exited (TASK-0027)', async () => {
+    // `npm run preview` on Windows: the wrapper can end while the server it started keeps the output pipe open,
+    // so the process still looks live, and a tree kill from the dead wrapper reaches nothing.
+    const port = 20_000 + Math.floor(Math.random() * 20_000);
+    const server = path.join(repoPath, 'orphan-server.cjs');
+    writeFileSync(server, "require('http').createServer((q, s) => s.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');\n");
+    const wrapper = path.join(repoPath, 'wrapper.cjs');
+    writeFileSync(wrapper, `require('child_process').spawn(process.execPath, [${JSON.stringify(server)}], { stdio: 'inherit', detached: true, windowsHide: true }).unref();\n`);
+    const proc = await t.services.processes.start({ taskId: 'TASK-W', stageId: 'STAGE-IMPLEMENT', name: 'wrapped server', command: `node "${wrapper}"`, cwd: repoPath, port, readyTimeoutSec: 30 });
+    expect(proc.status).toBe('healthy');
+    expect(await t.services.processes.stopForStage('TASK-W', 'STAGE-IMPLEMENT', 'Implement ended')).toEqual(['wrapped server']);
+    await waitFor(async () => (await fetch(`http://127.0.0.1:${port}`).then(() => 'up', () => 'down')), (v) => v === 'down', 15_000, 'orphaned server to stop');
+  }, 90_000);
+
   it("closes the terminals one stage's agent opened when that stage ends, and no other stage's", async () => {
     const one = await t.services.terminals.host('TASK-T', 2, [], 'STAGE-IMPLEMENT').start({ shell: process.platform === 'win32' ? 'powershell' : 'bash', cwd: repoPath });
     const two = await t.services.terminals.host('TASK-T', 2, [], 'STAGE-OTHER').start({ shell: process.platform === 'win32' ? 'powershell' : 'bash', cwd: repoPath });

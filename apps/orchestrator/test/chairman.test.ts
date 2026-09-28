@@ -263,7 +263,7 @@ describe('supervised recovery (plan §7.2)', () => {
     const bad = await createTask(t, await addRepo(t, await repoWith("const f = 6 - n; if (f > 0) { console.log(f + ' failed'); process.exit(1); } console.log('ok');")), 'Bad JSON [sim:chairman-bad-json]');
     await waitForStatus(t, bad, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
     expect(decisions(bad)[0]).toMatchObject({ reasoner: 'model' });
-  });
+  }, 180_000); // two tasks with full recovery cycles: ~26 s alone, over 60 s whenever the whole suite shares the machine
 });
 
 describe('strategy runs', () => {

@@ -45,7 +45,7 @@ import { targetedCommand, testFilesOf } from './targeted-tests.js';
 import { selectTests, type PathChange, type Selection } from './test-selection.js';
 import type { EngineTooling } from './tooling.js';
 import { agentWorkdir, inFolder, taskRepositories } from './task-repositories.js';
-import { addedByTask, devCommandAddedByTask, taskRepositoryView } from './task-checks.js';
+import { addedByTask, checkOrigin, devCommandDetected, taskRepositoryView } from './task-checks.js';
 import { taskWorkdir } from './workdir.js';
 
 /** redirect = stop and apply a new plan (Chairman or user redirect); watchdog = stuck or dead worker. */
@@ -740,15 +740,14 @@ export class StageRunners {
     const configured = units.flatMap((unit) => stageCommands(def, unit.repo, extra).map((command) => ({ unit, command, name: unitLabel(unit, command.name) })));
     const jobs = await this.withSelections(def, configured.filter((j) => !waived.has(j.command.kind)));
     const commands = jobs.map((j) => j.command);
-    const ownChecks = jobs.filter((j) => addedByTask(store, j.unit.repo, j.command));
-    if (ownChecks.length) {
-      publisher.event(
-        task.id,
-        'TEST_STARTED',
-        `${def.name}: checks found in this task's own files — ${ownChecks.map((j) => `${j.name} (\`${j.command.command}\`)`).join(', ')}. Their base commit has none, so every failure counts as this task's.`,
-        { addedByTask: ownChecks.map((j) => j.command.id) },
-        stage.id,
-      );
+    // Checks the stored settings do not have yet, announced by where they come from.
+    const origins = jobs.map((j) => ({ j, origin: checkOrigin(store, j.unit.repo, j.command) }));
+    const listed = (o: 'repository' | 'task') => origins.filter((x) => x.origin === o).map(({ j }) => `${j.name} (\`${j.command.command}\`)`);
+    if (listed('task').length) {
+      publisher.event(task.id, 'TEST_STARTED', `${def.name}: checks found in this task's own files — ${listed('task').join(', ')}. Their base commit has none, so every failure counts as this task's.`, { addedByTask: origins.filter((x) => x.origin === 'task').map(({ j }) => j.command.id) }, stage.id);
+    }
+    if (listed('repository').length) {
+      publisher.event(task.id, 'TEST_STARTED', `${def.name}: checks found in the repository's files that its settings do not list yet — ${listed('repository').join(', ')}. Re-detect tooling in Repositories to keep them.`, { detectedInRepository: origins.filter((x) => x.origin === 'repository').map(({ j }) => j.command.id) }, stage.id);
     }
     // One-shot requests are consumed by the stage that runs them.
     if (def.kind === 'tests' && task.extraCheckKinds.length) store.updateTask(task.id, { extraCheckKinds: [] });
@@ -1448,8 +1447,8 @@ export class StageRunners {
     }
     for (const unit of units) {
       if (!unit.repo.runtime.devCommand) continue;
-      if (devCommandAddedByTask(this.d.store, unit.repo)) {
-        publisher.event(task.id, 'TEST_STARTED', `${def.name}: ${unitLabel(unit, 'how to start the app')} was found in this task's own files (\`${unit.repo.runtime.devCommand}\`)`, { devCommandAddedByTask: true }, stage.id);
+      if (devCommandDetected(this.d.store, unit.repo)) {
+        publisher.event(task.id, 'TEST_STARTED', `${def.name}: ${unitLabel(unit, 'how to start the app')} was found in the files, not the repository's settings (\`${unit.repo.runtime.devCommand}\`)`, { devCommandDetected: true }, stage.id);
       }
       const blocked = this.gateCommand(task, def, stage, unit.repo, unitLabel(unit, 'start the app'), unit.repo.runtime.devCommand, unit.workdir);
       if (blocked) return blocked;

@@ -351,7 +351,12 @@ server to look at) stops when that stage ends — `stopForStage`, with a
 with it (`TerminalService.closeForStage`; which stage opened each is held in
 memory, as a terminal does not outlive a restart), so a later stage, the App
 check among them, does not find a port the stage left taken (TASK-0024,
-2026-09-28). A server started by other means (a detached shell command) is not
+2026-09-28). A stop also ends the process's live family, read before the
+tree kill (`liveFamily`): descendants by parent links plus the listener on its
+port, each created after it started — so a server whose wrapper already ended
+(`npm run dev` on Windows) is still stopped, and a wrapper that ends while its
+server runs keeps the process live instead of `exited` (TASK-0027 left two Vite
+servers holding its worktree). A server started by other means (a detached shell command) is not
 tracked and still ends only with the task. Processes stop as a
 tree when the task's loop exits in any state other than running/queued, on
 completion and cancel, and at shutdown. After a crash, rows still marked live

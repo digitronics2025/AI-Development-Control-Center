@@ -291,6 +291,27 @@ describe('check costs', () => {
     return (await t.services.context.build(task, def, { id: 'x', createdAt: new Date().toISOString() } as never)).prompt;
   };
 
+  it("give the review every check's latest result, not only the last stage's (an App check after Test)", async () => {
+    const repo = await addRepo(t, await makeRepo());
+    const id = await createTask(t, repo, 'Build it', { start: false });
+    const at = (stageId: string, kind: CommandKind, name: string, ago: number, extra: Partial<TestRun> = {}) => run(id, kind, `npm run ${kind}`, 1_000, ago, { stageId, name, ...extra });
+    for (const r of [
+      at('st-test-1', 'test', 'unit tests', 30, { status: 'failed', exitCode: 1 }),
+      at('st-test-1', 'lint', 'lint', 30),
+      at('st-test-2', 'test', 'unit tests', 20),
+      at('st-test-2', 'lint', 'lint', 20),
+      at('st-app', 'e2e', 'Browser verification', 10),
+    ])
+      t.services.store.insertTestRun(r);
+
+    const review = await promptFor(id, 'review');
+    expect(review).toContain('- unit tests: passed');
+    expect(review).toContain('- lint: passed');
+    expect(review).toContain('- Browser verification: passed');
+    // The earlier failing attempt is superseded by the later pass.
+    expect(review).not.toContain('- unit tests: failed');
+  });
+
   it("tell the implementer, fixer and planner to leave a suite the repository's records show is slow to the Test stage", async () => {
     const scripts = { lint: 'node -e "0"', test: 'node -e "0"', build: 'node -e "0"', 'test:e2e': 'node -e "0"' };
     const repo = await addRepo(t, await makeRepo({ scripts }));

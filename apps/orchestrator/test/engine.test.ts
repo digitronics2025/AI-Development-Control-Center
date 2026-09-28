@@ -483,6 +483,21 @@ describe('failure handling', () => {
       expect(run!.summary ?? '').not.toContain('checking the baseline commit');
     });
 
+    it('runs the checks a repository gained after it was registered empty, and says to re-detect', async () => {
+      const repoPath = await makeRepo({ noCommits: true });
+      const repoId = await addRepoTo(t, repoPath);
+      // The first task's app landed on main: the repository now has a test script its settings never saw.
+      writeFileSync(path.join(repoPath, 'package.json'), JSON.stringify({ name: 'landed', private: true, scripts: { test: 'node -e "console.log(\'3 passed\')"' } }));
+      for (const args of [['add', 'package.json'], ['commit', '-m', 'app']]) expect((await git(repoPath, args)).code).toBe(0);
+      const id = await createTask(t, repoId, 'Follow-up change');
+      const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER']);
+
+      expect(task.status).toBe('COMPLETED');
+      expect(t.services.store.listTestRuns(id).map((r) => `${r.name}:${r.status}`)).toEqual(['unit tests:passed']);
+      expect(eventMessages(id).some((m) => /checks found in the repository's files that its settings do not list yet — unit tests/.test(m))).toBe(true);
+      expect(eventMessages(id).some((m) => m.includes("checks found in this task's own files"))).toBe(false);
+    });
+
     it("never brings back a check the repository already had and the operator removed", async () => {
       const repoPath = await makeRepo({ scripts: { test: 'node -e "process.exit(1)"' } });
       const repoId = await addRepoTo(t, repoPath);

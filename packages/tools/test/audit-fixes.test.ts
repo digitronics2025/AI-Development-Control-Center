@@ -208,6 +208,28 @@ describe('F-02: pages the tools drive never load the Control Center', async () =
       app.server.close();
     }
   }, 60_000);
+
+  it('refuses the listen address over the network, and the data folder over other schemes, not a page that only names a word (SEC-1)', async () => {
+    const { browserRequestRefused } = await import('../src/index.js');
+    const { setSelfReferences } = await import('@acc/security');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dataDir = path.join(os.tmpdir(), 'acc-browser-guard-data');
+    setSelfReferences({ dataDir, port: 4399 });
+    try {
+      const fileUrl = (p: string) => new URL(`file:///${p.replace(/\\/g, '/').replace(/^\//, '')}`);
+      for (const refused of ['http://127.0.0.1:4399/', 'http://127.1:4399/api', 'http://2130706433:4399/', 'ws://localhost:4399/ws']) {
+        expect(browserRequestRefused(new URL(refused)), refused).toBe(true);
+      }
+      expect(browserRequestRefused(fileUrl(path.join(dataDir, 'auth-token')))).toBe(true);
+      expect(browserRequestRefused(fileUrl(path.join(os.tmpdir(), 'x', 'auth-token')))).toBe(true);
+      for (const allowed of ['http://127.0.0.1:9/octokit/auth-token.js', 'https://example.com/docs/auth-token', 'http://127.0.0.1:4400/']) {
+        expect(browserRequestRefused(new URL(allowed)), allowed).toBe(false);
+      }
+    } finally {
+      setSelfReferences({});
+    }
+  });
 });
 
 describe('F-14: production is decided by the resource, not by a label the caller picks', () => {

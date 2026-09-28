@@ -196,6 +196,9 @@ Verified against the operator's account on 2026-09-24.
   4 MB (`web.search`); curl has `--max-filesize`.
 - Every browser context the tools create aborts any request to the Control
   Center's own address (`guardBrowserContext`, in any of the spellings above):
-  its dashboard page carries the local token.
+  its dashboard page carries the local token. Over http(s) and ws(s) only the
+  address counts (`browserRequestRefused`), as in `guardedFetch`: a page on
+  another server whose path merely says `auth-token` loads. Any other scheme
+  (`file:`) is aborted when it names the data folder, the token or a key file.
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

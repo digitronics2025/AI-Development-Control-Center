@@ -106,10 +106,21 @@ export async function readCapped(res: Response, max = MAX_RESPONSE_BYTES): Promi
 }
 
 /**
+ * Whether a browser a tool drives must not make this request: over the
+ * network, only the Control Center's own address in any spelling (SEC-1) — as
+ * in `guardedFetch`, a page on another server whose path merely says
+ * `auth-token` is someone else's; any other scheme (`file:`…) when it names
+ * the data folder, the token or a key file.
+ */
+export function browserRequestRefused(url: URL): boolean {
+  return /^(https?|wss?):$/.test(url.protocol) ? urlIsSelfAddress(url) : referencesSelf(url.href);
+}
+
+/**
  * Pages a tool drives never load the Control Center itself: its dashboard
  * page carries the local token (audit F-02). Applied to every browser context
  * the tools create.
  */
 export async function guardBrowserContext(context: BrowserContext): Promise<void> {
-  await context.route((url) => referencesSelf(url.href), (route) => route.abort('blockedbyclient'));
+  await context.route(browserRequestRefused, (route) => route.abort('blockedbyclient'));
 }

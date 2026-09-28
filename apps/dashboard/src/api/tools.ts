@@ -120,12 +120,14 @@ export function useCredentialMutations() {
   const refresh = () => void qc.invalidateQueries({ queryKey: keys.credentials });
   return {
     create: useMutation({
-      mutationFn: (input: { name: string; kind: string; envVar?: string | null; description?: string; repositoryIds?: string[] | null; value: string }) => api.post<CredentialView>('/api/credentials', input),
+      mutationFn: (input: { name: string; kind: string; envVar?: string | null; description?: string; repositoryIds?: string[] | null; audience?: string[] | null; value: string }) => api.post<CredentialView>('/api/credentials', input),
       onSuccess: refresh,
     }),
     replace: useMutation({ mutationFn: ({ id, value }: { id: string; value: string }) => api.patch<CredentialView>(`/api/credentials/${id}`, { value }), onSuccess: refresh }),
     /** null = every repository; [] = none. */
     scope: useMutation({ mutationFn: ({ id, repositoryIds }: { id: string; repositoryIds: string[] | null }) => api.patch<CredentialView>(`/api/credentials/${id}`, { repositoryIds }), onSuccess: refresh }),
+    /** Where http.request may send it (SEC-4): null = its kind's hosts; [] = none. */
+    hosts: useMutation({ mutationFn: ({ id, audience }: { id: string; audience: string[] | null }) => api.patch<CredentialView>(`/api/credentials/${id}`, { audience }), onSuccess: refresh }),
     resolve: useMutation({ mutationFn: ({ id, action }: { id: string; action: VaultResolveAction }) => api.post<CredentialView>(`/api/credentials/${id}/vault-resolve`, { action }), onSuccess: refresh }),
     /** Through the real tool layer (`credential.generate`): the value is made and sealed in the orchestrator, never here. */
     generate: useMutation({

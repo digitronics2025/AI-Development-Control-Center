@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Skills an agent CLI can run (docs/systems/agents.md#skills). Names are what the
+ * Skills an agent CLI can run (docs/systems/agents-skills.md#skills). Names are what the
  * CLI invokes: `fix-bug` for a repository or user skill, `plugin:skill` for a
  * plugin's. Picked skills live in the task description as `/name` text.
  */

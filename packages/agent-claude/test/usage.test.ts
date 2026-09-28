@@ -23,7 +23,8 @@ function input(env: NodeJS.ProcessEnv = {}): AgentExecutionInput {
     permissionLevel: 1,
     timeoutMs: 20_000,
     billingMode: 'subscription',
-    baseEnv: { ...process.env, ...env },
+    // A subscription login: the init event says the credentials are no API key.
+    baseEnv: { ...process.env, FAKE_CLAUDE_APIKEY_SOURCE: 'none', ...env },
     executablePath: fake,
   };
 }

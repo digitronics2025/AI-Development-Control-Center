@@ -126,8 +126,18 @@ Usage & Costs (`/usage`: Overview, Tasks, Models, Agents, Providers, Budgets,
 Attempts; `/usage/tasks/:id` cost ledger; a live Usage panel in the task
 inspector; Overview's **Paid media generation** panel, [MediaPanel.tsx](../../apps/dashboard/src/pages/usage/MediaPanel.tsx),
 is refetched after a `media.*` tool event and a settings broadcast (`sync.ts`)
-and every 60 s; Budgets offers a Paid media generation scope with no scope id
-— see [usage.md](usage.md)), Settings (14 sections, 11 in cloud mode, including Repositories; Media
+and every 60 s; Budgets offers a Paid media generation scope with no scope id;
+provider names come from `GET /api/agents` — each agent's declared
+`capabilities.providerLabel` for its `provider` (`useProviderLabel`,
+`providerOptions` in [common.tsx](../../apps/dashboard/src/pages/usage/common.tsx)),
+never a list in the dashboard: a provider no agent names shows its key, and a
+Provider budget offers the registered agents' providers
+— see [usage.md](usage.md)), Settings (14 sections, 11 in cloud mode, including Repositories; Agents &
+Models ends with **Installed versions**, each agent's detected CLI version and,
+when `AgentInfo.compat` puts it outside the versions the Control Center was tested
+with, an **Unverified** badge (the neutral `Badge` with a warning icon) and the
+tested range in words — [agent-versions.tsx](../../apps/dashboard/src/components/agent-versions.tsx),
+[agents-contract.md](agents-contract.md#tested-cli-versions); Media
 generation holds **Allow paid generation** and **Budget per task** in dollars,
 whole cents allowed (`LimitField` with `cents`; empty is invalid, not $0),
 see [design-agent.md](design-agent.md#spend-gate); Workflows
@@ -276,7 +286,10 @@ the orchestrator it spawned, which would hold the port for the next run.
 
 The same build runs in two modes ([mode.ts](../../apps/dashboard/src/app/mode.ts)):
 **local** when the page carries the `acc-token` meta tag (orchestrator, VS Code
-webview), **cloud** when served by the cloud Worker without it. `ApiConfig.auth`
+webview), **cloud** when served by the cloud Worker without it. With agent
+isolation on, the orchestrator adds the tag only for a launcher's one-time
+`?ticket=`, which [main.tsx](../../apps/dashboard/src/main.tsx) then removes
+from the address bar ([security.md](security.md#agent-os-boundary)). `ApiConfig.auth`
 is `{kind:'local', token}` or `{kind:'cloud', node()}`; cloud requests send
 `x-acc-node` and an `Idempotency-Key`, and a command still running surfaces as
 `REMOTE_PENDING` (decided by `x-acc-command-status`, not the 202). Cloud mode adds

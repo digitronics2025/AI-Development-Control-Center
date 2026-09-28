@@ -1,5 +1,6 @@
 // Bundles the orchestrator and its internal workspace packages into one ESM
-// file, plus the stdio MCP bridge agents launch (dist/acc-mcp.js). Native
+// file, plus the stdio MCP bridge agents launch (dist/acc-mcp.js) and the
+// hook that prechecks Claude Code's native shell (dist/acc-shell-guard.mjs). Native
 // addons (better-sqlite3, node-pty) and packages that locate their own files
 // at run time (playwright-core, axe-core) stay external.
 import { execFileSync } from 'node:child_process';
@@ -44,3 +45,6 @@ const common = {
 
 await build({ ...common, entryPoints: ['src/main.ts'], outfile: 'dist/main.js' });
 await build({ ...common, entryPoints: ['../../packages/mcp/src/bin.ts'], outfile: 'dist/acc-mcp.js' });
+// The native precheck hook Claude Code runs before each Bash, Read, Grep and Glob call (SEC-3, SHELL_GUARD_SCRIPT):
+// .mjs, so it loads as ESM whatever package.json says.
+await build({ ...common, entryPoints: ['../../packages/agent-claude/src/shell-guard-hook.ts'], outfile: 'dist/acc-shell-guard.mjs' });

@@ -36,7 +36,7 @@ never through argv:
 - WSL: the script on stdin to `wsl -e bash --noprofile --norc -s`.
 
 Streaming lines, stdin, timeout, cancellation and tree kill come from
-`runProcess` ([agents.md](agents.md)). `powershellJson()` runs a script ending
+`runProcess` ([agents-contract.md](agents-contract.md)). `powershellJson()` runs a script ending
 in `ConvertTo-Json -Compress` with `$ErrorActionPreference = 'Stop'` and parses
 the result; the Windows pack (processes, services, ports, system information,
 scheduled tasks, tool locations, network configuration) is built on it.

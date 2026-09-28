@@ -18,11 +18,14 @@ import {
   type ProviderUsageCapabilities,
   type StreamParser,
 } from '@acc/agent-sdk';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PRODUCTION_BRANCH_NAMES, type AgentCapabilities, type ModelDescriptor, type PermissionLevel, type SkillInfo } from '@acc/shared';
+import { GUARDED_FILE_TOOLS } from './shell-guard.js';
+
+export { GUARDED_FILE_TOOLS, type GuardedFileTool } from './shell-guard.js';
 
 /** Skill names and plugin folders from a `claude -p` init event; null when none was printed. */
 export function readInitEvent(stdout: string): { skills: string[]; plugins: Array<{ name: string; path: string }> } | null {
@@ -40,6 +43,29 @@ export function readInitEvent(stdout: string): { skills: string[]; plugins: Arra
     }
   }
   return null;
+}
+
+/** How a run's first log line says the init event carried no `apiKeySource`. */
+const API_KEY_SOURCE_MISSING = '(not reported)';
+const API_KEY_SOURCE_MISSING_REASON =
+  "Claude Code did not say where its credentials come from (its init event has no apiKeySource), so Subscription Only mode cannot confirm the run uses your subscription and stopped it. Run `pnpm verify:agents --run --only claude` to see what the installed CLI reports";
+const NO_INIT_EVENT_REASON =
+  "Claude Code sent no init event, the event that says where its credentials come from, so Subscription Only mode cannot confirm the run uses your subscription and did not accept it. Run `pnpm verify:agents --run --only claude` to see what the installed CLI reports";
+/** Events of a model turn: in a run, each comes after the init event. */
+const TURN_EVENTS = new Set(['assistant', 'user', 'result', 'rate_limit_event']);
+
+/**
+ * What a run's first log line (the init event's summary) says about
+ * `apiKeySource`: its value, null when the event carried none, undefined when
+ * no such line was logged (the CLI printed no init event).
+ */
+export function loggedApiKeySource(lines: string[]): string | null | undefined {
+  for (const line of lines) {
+    if (!line.startsWith('Claude Code')) continue;
+    const value = / · apiKeySource (.+?)(?: · \d+ skills)?$/.exec(line)?.[1];
+    if (value !== undefined) return value === API_KEY_SOURCE_MISSING ? null : value;
+  }
+  return undefined;
 }
 
 /** True when a lookup's result event shows no model turn and no cost; a missing result counts as free (nothing was sent). */
@@ -159,6 +185,50 @@ function releaseDenied(releases: AgentExecutionInput['releaseBranches']): string
 const BASE_TOOLS = ['Read', 'Grep', 'Glob', 'Skill', 'ToolSearch', 'TodoWrite'];
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
+/** A path as a permission rule names it (`//` absolute): the CLI's POSIX form on Windows, `//c/Users/x` for `C:\Users\x`. */
+export function rulePath(p: string): string {
+  const posix = path.resolve(p).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}`);
+  return `/${posix.replace(/\/+$/, '')}`;
+}
+
+/**
+ * Native rules for the Control Center itself (SEC-3), at every level. Its
+ * token, database and key files can be neither read nor written by Claude's
+ * own tools (Read and Edit rules also cover the file commands the CLI
+ * recognises in Bash and Bash redirection targets); Bash may not name the
+ * token or the listen port; a folder agents may read but never write (the
+ * learned plugins) gets an Edit rule; and Claude Code's own settings files
+ * cannot be edited, so a run cannot switch its hooks off. The files only, not
+ * the whole data folder: its learned plugins and task attachments are read.
+ * Few rules on purpose (cmd.exe's line limit, `releaseDenied`), and lexical
+ * like every rule: a command that computes a path is not seen — the precheck
+ * hook reads more (from Level 2 it also judges Read, Grep and Glob, and there
+ * these Read rules become `ask` rules behind it; at Level 1 they are the only
+ * guard), and only an OS boundary is a boundary.
+ */
+export function controlCenterDenied(cc: AgentRuntimeOptions['controlCenter']): string[] {
+  const rules = ['Edit(**/.claude/settings*.json)', 'Write(**/.claude/settings*.json)', 'Edit(~/.claude/settings*.json)', 'Bash(*auth-token*)'];
+  if (!cc) return rules;
+  const data = rulePath(cc.dataDir);
+  for (const file of ['auth-token', '*.db*', 'credential-key*', 'privileged-key*']) rules.push(`Read(${data}/${file})`);
+  // Writes: every file at the data folder's top (the four above, runtime.json) in one rule; its folders are not files.
+  rules.push(`Edit(${data}/*)`);
+  for (const dir of cc.readOnly ?? []) rules.push(`Edit(${rulePath(dir)}/**)`);
+  if (cc.port) rules.push(`Bash(*127.0.0.1:${cc.port}*)`, `Bash(*localhost:${cc.port}*)`);
+  return rules;
+}
+
+/**
+ * The shell check's own folder is read-only for the run it guards (SEC-3): a
+ * run that could rewrite, replace or remove the hook's script would switch the
+ * check off for itself and every later run. One Edit rule per folder of the
+ * guard's script (it covers Bash redirection targets too); the precheck
+ * refuses the other commands that name it.
+ */
+export function shellGuardDenied(guard: NonNullable<AgentExecutionInput['shellGuard']>): string[] {
+  return [...new Set(guard.args.filter((part) => path.isAbsolute(part)).map((part) => `Edit(${rulePath(path.dirname(part))}/**)`))];
+}
+
 /**
  * Map a stage permission level to Claude Code's permission mode and tool policy.
  *
@@ -169,17 +239,100 @@ const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
  * Level 2 every limit is a deny rule and Bash and edits are already allowed, so
  * such a rule widens nothing. Level 1's limit — read-only commands only — cannot
  * be written as deny rules, so Level 1 has no shell at all: it reads Git through
- * the Control Center's own `git.*` tools, which ToolService judges.
+ * the Control Center's own `git.*` tools, which ToolService judges. `shell:
+ * false` takes the shell away from Level 2 and up too (its precheck cannot run:
+ * `nativeShellRefusal`); `controlCenter` adds `controlCenterDenied`, and `guard`
+ * (with the shell on) `shellGuardDenied`.
  */
-export function claudeToolPolicy(level: PermissionLevel, releases?: AgentExecutionInput['releaseBranches']): { mode: string; tools: string[]; allowed: string[]; denied: string[] } {
+export function claudeToolPolicy(
+  level: PermissionLevel,
+  releases?: AgentExecutionInput['releaseBranches'],
+  opts: { shell?: boolean; controlCenter?: AgentRuntimeOptions['controlCenter']; guard?: AgentExecutionInput['shellGuard'] } = {},
+): { mode: string; tools: string[]; allowed: string[]; denied: string[]; asked: string[] } {
+  const own = controlCenterDenied(opts.controlCenter);
   if (level <= 1) {
-    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill'], denied: ['Bash', ...WRITE_TOOLS] };
+    // No shell and no edits: only the read rules add anything.
+    return { mode: 'dontAsk', tools: [...BASE_TOOLS], allowed: [...READ_TOOLS, 'Skill'], denied: ['Bash', ...WRITE_TOOLS, ...own.filter((r) => r.startsWith('Read('))], asked: [] };
   }
-  const tools = [...BASE_TOOLS, 'Bash', ...EDIT_TOOLS];
-  const allowed = [...READ_TOOLS, ...WRITE_TOOLS, 'Bash', 'Skill'];
-  if (level === 2) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY] };
-  if (level === 3) return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...DEPLOY, ...releaseDenied(releases)] };
-  return { mode: 'acceptEdits', tools, allowed, denied: [...ALWAYS_DENIED, ...releaseDenied(releases)] };
+  const shell = opts.shell !== false;
+  const tools = [...BASE_TOOLS, ...(shell ? ['Bash'] : []), ...EDIT_TOOLS];
+  const allowed = [...READ_TOOLS, ...WRITE_TOOLS, ...(shell ? ['Bash'] : []), 'Skill'];
+  const bash = !shell
+    ? ['Bash']
+    : level === 2
+      ? [...ALWAYS_DENIED, ...GIT_WRITE, ...DEPLOY]
+      : level === 3
+        ? [...ALWAYS_DENIED, ...DEPLOY, ...releaseDenied(releases)]
+        : [...ALWAYS_DENIED, ...releaseDenied(releases)];
+  const hooked = shell && Boolean(opts.guard);
+  const guarded = hooked ? shellGuardDenied(opts.guard!) : [];
+  // With the precheck hook, the data folder's Read rules are `ask`, not `deny`: the CLI applies a
+  // Read deny rule before the hook (measured on 2.1.283), so the refusal would carry neither the
+  // Control Center's reason nor its audit row. An `ask` rule lets the hook refuse first, and if the
+  // hook cannot start, `--permission-prompts none` still refuses what would ask (see shellGuardSettings).
+  const reads = own.filter((r) => r.startsWith('Read('));
+  const kept = own.filter((r) => (shell || !r.startsWith('Bash(')) && !(hooked && r.startsWith('Read(')));
+  return { mode: 'acceptEdits', tools, allowed, denied: [...bash, ...kept, ...guarded], asked: hooked ? reads : [] };
+}
+
+/**
+ * The built native shell precheck hook (`shell-guard-hook.ts`), beside the
+ * orchestrator's bundle. `.mjs`: Node loads it as ESM whatever a package.json
+ * above it says, so no file outside its own (read-only) folder decides whether it runs.
+ */
+export const SHELL_GUARD_SCRIPT = 'acc-shell-guard.mjs';
+/** Seconds the CLI waits for the hook; the hook refuses on its own well before (`SHELL_GUARD_DEADLINE_MS`). */
+const SHELL_GUARD_TIMEOUT_S = 60;
+
+/**
+ * Characters cmd.exe reads as operators. An npm-installed `claude` is
+ * `claude.cmd`, which reads its arguments again (`%*`) outside cross-spawn's
+ * escaping: a bare `|` in the JSON ran the rest of it as a command (measured).
+ * In JSON they only ever sit inside a string, where a `\u` escape reads the same.
+ */
+const CMD_OPERATORS = /[|&<>^]/g;
+
+/**
+ * `--settings` from Level 2 (SEC-3): one PreToolUse command hook on
+ * `Bash|Read|Grep|Glob` (`GUARDED_FILE_TOOLS`) that asks the Control Center
+ * about each native shell command and each native file read before it runs,
+ * and `disableAllHooks: false` beside it, so hooks stay on (the operator's own
+ * guards with them) wherever the flag's settings decide. One entry, not one
+ * per tool: the command line has a length limit (`releaseDenied`). A command
+ * hook, not an `http` one: the CLI lets a call through when an http hook
+ * fails, and the script refuses on every error. Inline JSON, never a file an
+ * agent could edit, with cmd.exe's operators escaped (`CMD_OPERATORS`).
+ * `ask` holds the data folder's Read rules (`claudeToolPolicy`): the hook
+ * refuses such a read with the Control Center's reason and row, and should the
+ * hook fail to start, the rule asks, which `--permission-prompts none` refuses.
+ */
+export function shellGuardSettings(guard: NonNullable<AgentExecutionInput['shellGuard']>, ask: string[] = []): string {
+  const command = [guard.command, ...guard.args].map((part) => `"${part.replace(/\\/g, '/')}"`).join(' ');
+  const settings = {
+    disableAllHooks: false,
+    hooks: { PreToolUse: [{ matcher: ['Bash', ...GUARDED_FILE_TOOLS].join('|'), hooks: [{ type: 'command', command, timeout: SHELL_GUARD_TIMEOUT_S }] }] },
+    ...(ask.length ? { permissions: { ask } } : {}),
+  };
+  return JSON.stringify(settings).replace(CMD_OPERATORS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
+ * Why a Level 2+ run gets no native shell, or null when it does (SEC-3). The
+ * shell is there only with its precheck: without a guard (tools not built
+ * here), with the guard's program missing (the CLI lets a call through when a
+ * hook fails to start), or in a repository whose settings set
+ * `disableAllHooks` — which would switch the hook off (and the operator's own
+ * hooks with it) — the run fails closed: no Bash, edits and reads as usual.
+ */
+export function nativeShellRefusal(input: Pick<AgentExecutionInput, 'permissionLevel' | 'shellGuard' | 'cwd'>): string | null {
+  if (input.permissionLevel <= 1) return null;
+  const guard = input.shellGuard;
+  if (!guard) return "No native shell in this run: the Control Center's check of shell commands is not available here (the orchestrator is not built, or not listening yet).";
+  const missing = [guard.command, ...guard.args].find((part) => path.isAbsolute(part) && !existsSync(part));
+  if (missing) return `No native shell in this run: the Control Center's shell check program is missing (${missing}).`;
+  const switches = repositoryHookSwitches(input.cwd);
+  if (switches.length) return `No native shell in this run: this repository's ${switches.join(' and ')} sets disableAllHooks, which would switch off the Control Center's check of shell commands (and your own Claude Code hooks). Remove that setting to give agents a shell again.`;
+  return null;
 }
 
 /**
@@ -192,8 +345,10 @@ const NO_HOOKS = JSON.stringify({ disableAllHooks: true });
 /**
  * The repository's own settings files that set `disableAllHooks: true`. Such a
  * file switches off every hook of the run, the operator's own included (their
- * secret guards), for the same reason a repository cannot undo `NO_HOOKS`. A file
- * that does not parse is skipped, as the CLI skips it.
+ * secret guards), for the same reason a repository cannot undo `NO_HOOKS` — and
+ * the Control Center's shell precheck with them, so a Level 2+ run there gets no
+ * native shell (`nativeShellRefusal`). A file that does not parse is skipped, as
+ * the CLI skips it.
  */
 export function repositoryHookSwitches(cwd: string): string[] {
   return ['settings.json', 'settings.local.json']
@@ -347,6 +502,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
   readonly displayName = 'Claude Code';
   /** Set when a `/skills` lookup used a model turn; listing then stays off (see listSkills). */
   private skillLookupSpends = false;
+  /** Why a run launched without a native shell (`nativeShellRefusal`), for its log; by execution. */
+  private readonly noShell = new Map<string, string>();
   readonly usageCapabilities: ProviderUsageCapabilities = {
     provider: 'anthropic',
     tokenUsage: true,
@@ -408,6 +565,10 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
       nonInteractive: true,
       modelSelection: true,
       effortSelection: true,
+      // --plugin-dir per folder (buildArgs).
+      pluginDirs: true,
+      providerLabel: 'Anthropic (Claude Code)',
+      maxPermissionLevel: 5,
     };
   }
 
@@ -464,13 +625,15 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
   /**
    * MCP config for the Control Center tools. The file names the environment
    * variables (`${VAR}`), never their values: the session token stays in the
-   * process environment only.
+   * process environment only. A run as the agent account (`runAs`) gets the
+   * same JSON inline instead: that account cannot open the operator's temp folder.
    */
   private mcpConfigFile(input: AgentExecutionInput): string | null {
     const bridge = input.toolBridge;
     if (!bridge) return null;
     const env = Object.fromEntries(Object.keys(bridge.env).map((k) => [k, `\${${k}}`]));
     const config = { mcpServers: { [bridge.name]: { type: 'stdio', command: bridge.command, args: bridge.args, env } } };
+    if (input.runAs) return JSON.stringify(config);
     const file = path.join(os.tmpdir(), `acc-mcp-${input.executionId}.json`);
     writeFileSync(file, JSON.stringify(config), { mode: 0o600 });
     this.executionFiles.set(input.executionId, [...(this.executionFiles.get(input.executionId) ?? []), file]);
@@ -478,7 +641,10 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
   }
 
   protected buildArgs(input: AgentExecutionInput): string[] {
-    const policy = claudeToolPolicy(input.permissionLevel, input.releaseBranches);
+    // From Level 2 the native shell exists only with the Control Center's precheck hook (SEC-3).
+    const noShell = nativeShellRefusal(input);
+    if (noShell) this.noShell.set(input.executionId, noShell);
+    const policy = claudeToolPolicy(input.permissionLevel, input.releaseBranches, { shell: !noShell, controlCenter: input.controlCenter, guard: input.shellGuard });
     const mcpConfig = this.mcpConfigFile(input);
     // Every tool of the Control Center server is allowed here; the Control Center applies its own policy per call.
     if (mcpConfig) policy.allowed.push(`mcp__${input.toolBridge!.name}`);
@@ -505,8 +671,11 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     // Level 1 runs no hooks. A repository's hooks — its settings files, its skills, or one an
     // earlier stage wrote — are shell commands outside every permission rule, and `-p` runs them
     // in trusted and untrusted folders alike. From Level 2 the agent has a shell anyway, and the
-    // switch would also take the operator's own hooks (their secret guards) away.
+    // switch would also take the operator's own hooks (their secret guards) away; instead the
+    // Control Center's own hook checks every native shell command and file read. Level 1 cannot
+    // have it without the repository's hooks, so its reads keep only the deny rules.
     if (input.permissionLevel <= 1) args.push('--settings', NO_HOOKS);
+    else if (!noShell && input.shellGuard) args.push('--settings', shellGuardSettings(input.shellGuard, policy.asked));
     // Personal MCP servers never join a run: their tools would skip the Control Center's policy.
     // Only the Control Center's own server (--mcp-config) is loaded.
     args.push('--strict-mcp-config');
@@ -521,12 +690,15 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
     let sessionId: string | null = null;
     let usageLimited = false;
     let initModel: string | null = null;
+    let initSeen = false;
     let usage: AgentUsageReport | null = null;
     const capacity = new CapacityCollector();
     const failureMessages: string[] = [];
     const filesChanged = new Set<string>();
-    // Only where the operator's hooks would otherwise load: Level 1 has none, and with user config off they are not loaded.
-    const hookSwitches = input.permissionLevel >= 2 && input.loadUserConfig !== false ? repositoryHookSwitches(input.cwd) : [];
+    // The run started without a shell (SEC-3): say why, first thing in its log.
+    const noShell = this.noShell.get(input.executionId);
+    this.noShell.delete(input.executionId);
+    if (noShell) emit('system', noShell);
 
     return {
       onStdout(line) {
@@ -537,20 +709,28 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           if (line.trim()) emit('stdout', line);
           return;
         }
+        // The tripwire below never ran: a turn without an init event is stopped like one without apiKeySource.
+        if (input.billingMode === 'subscription' && !initSeen && TURN_EVENTS.has(event.type)) abort(NO_INIT_EVENT_REASON);
         switch (event.type) {
           case 'system':
             if (event.subtype === 'init') {
+              initSeen = true;
               sessionId = event.session_id ?? null;
               initModel = typeof event.model === 'string' ? event.model : null;
-              const skills = Array.isArray(event.skills) ? ` · ${event.skills.length} skills` : '';
-              emit('system', `Claude Code ${event.claude_code_version ?? ''} · model ${event.model ?? 'default'} · ${event.permissionMode ?? ''}${skills}`.trim());
-              if (hookSwitches.length) {
-                emit('system', `Warning: this repository's ${hookSwitches.join(' and ')} sets disableAllHooks, which also switches off your own Claude Code hooks (your secret guards included) for this run.`);
-              }
-              // Runtime tripwire: the CLI itself says where its credentials came from.
-              const source = event.apiKeySource;
-              if (input.billingMode === 'subscription' && source && source !== 'none') {
-                abort(`Claude Code reported API key billing (apiKeySource=${source}); Subscription Only mode stopped the run`);
+              const source = typeof event.apiKeySource === 'string' && event.apiKeySource ? event.apiKeySource : null;
+              const facts = [
+                `Claude Code ${event.claude_code_version ?? ''}`.trim(),
+                `model ${event.model ?? 'default'}`,
+                typeof event.permissionMode === 'string' ? event.permissionMode : '',
+                `apiKeySource ${source ?? API_KEY_SOURCE_MISSING}`,
+                Array.isArray(event.skills) ? `${event.skills.length} skills` : '',
+              ];
+              emit('system', facts.filter(Boolean).join(' · '));
+              // Runtime tripwire: the CLI itself says where its credentials came from ('none' is the subscription
+              // login). It fails closed: a CLI that stops saying so cannot be told apart from one billing an API key.
+              if (input.billingMode === 'subscription') {
+                if (!source) abort(API_KEY_SOURCE_MISSING_REASON);
+                else if (source !== 'none') abort(`Claude Code reported API key billing (apiKeySource=${source}); Subscription Only mode stopped the run`);
               }
             }
             break;
@@ -618,6 +798,8 @@ export class ClaudeCodeAdapter extends CliAgentAdapter {
           sessionId,
           usageLimited,
           guardViolation: null,
+          // An exit 0 with no event at all is not a success either (a run that failed keeps its own class).
+          protocolDrift: input.billingMode === 'subscription' && !initSeen ? NO_INIT_EVENT_REASON : null,
           filesChanged: [...filesChanged],
           usage,
           capacity: capacity.list(),

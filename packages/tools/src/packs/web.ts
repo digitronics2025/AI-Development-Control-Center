@@ -137,6 +137,7 @@ export function webProvider(): ToolProvider {
         }),
         level: 1,
         classify: () => ({ effects: ['network'], reasons: ['Sends the query to DuckDuckGo'] }),
+        outbound: (input) => [{ url: SEARCH_URL, body: [input.query, input.site ?? ''] }],
         run: (input, ctx) => search(input, ctx.signal),
       }),
       operation({
@@ -146,6 +147,7 @@ export function webProvider(): ToolProvider {
         input: z.object({ url: httpUrl, maxChars: z.number().int().min(500).max(60_000).default(20_000), links: z.boolean().default(true), timeoutSec: z.number().int().min(5).max(90).default(30) }),
         level: 1,
         classify: (input) => ({ effects: isLoopback(input.url) ? [] : ['network'] }),
+        outbound: (input) => [{ url: input.url }],
         async run(input, ctx) {
           let res: Response;
           let answeredBy: string;

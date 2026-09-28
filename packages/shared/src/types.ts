@@ -572,12 +572,37 @@ export interface AgentCapabilities {
   nonInteractive: boolean;
   modelSelection: boolean;
   effortSelection: boolean;
+  /**
+   * The CLI loads the skill plugin folders a run is given
+   * (`AgentExecutionInput.pluginDirs`), so a learned skill is loaded for it;
+   * an agent without it is pointed at the skill's file instead.
+   */
+  pluginDirs: boolean;
+  /** How the dashboard names the usage provider this agent's runs are recorded under, e.g. "Anthropic (Claude Code)". */
+  providerLabel: string;
+  /** The highest permission level the adapter can enforce: a run above it is refused before it starts, and the Chairman never hands such a stage to it. */
+  maxPermissionLevel: PermissionLevel;
+}
+
+/**
+ * The detected CLI version against the versions its adapter was tested with
+ * (packages/agent-sdk/agents.compat.json).
+ */
+export interface AgentCompat {
+  /** Inclusive range of tested CLI versions; null when the adapter declares none. */
+  tested: { min: string; max: string } | null;
+  /** `unverified`: the installed version is outside the tested range (or not a plain x.y.z version). */
+  status: 'tested' | 'unverified';
 }
 
 export interface AgentInfo {
   id: string;
   name: string;
+  /** The usage provider its runs are recorded under (`ProviderSummary.provider`); `capabilities.providerLabel` names it. */
+  provider: string;
   detection: { found: boolean; executablePath: string | null; version: string | null; error: string | null };
+  /** Null when no version was detected, or for simulated agents, which have no CLI. */
+  compat: AgentCompat | null;
   health: {
     state: AgentHealthState;
     message: string;

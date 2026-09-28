@@ -626,9 +626,15 @@ export class StageRunners {
     const adapter = agents.adapter(agentId);
     if (opts.workUnit) sink.push('system', `Stage Team work unit: ${opts.workUnit.title} (${opts.workUnit.key})`);
 
-    // The Control Center's tools, over MCP, scoped to this stage (docs/plans/tool-layer-v2) — or to a worker's own checkout.
-    const bridge = this.d.tooling.openAgentSession(task, def, stage, repo, { ...(opts.confineTools ? { root: opts.cwd } : {}), level });
+    // The Control Center's tools, over MCP, scoped to this stage (docs/plans/tool-layer-v2) — or to a worker's own checkout —
+    // and the same session's precheck of the agent's native shell commands (SEC-3).
+    const session = this.d.tooling.openAgentSession(task, def, stage, repo, { ...(opts.confineTools ? { root: opts.cwd } : {}), level });
+    const bridge = session?.bridge ?? null;
+    // The agent OS boundary (docs/systems/security.md#agent-os-boundary): with agent isolation on, the run starts as its own Windows account or not at all,
+    // and without the Control Center's tools, which run as the operator (read in the same tick as the session, so the two agree).
+    const runAs = agents.stageRunAs();
     if (bridge) sink.push('system', 'Control Center tools available to this run (MCP server "acc")');
+    else if (runAs) sink.push('system', "No Control Center tools in this run: it runs as the agent account, and the tools would run as you");
     let handle;
     try {
       handle = await agents.launch(agentId, {
@@ -642,9 +648,11 @@ export class StageRunners {
         timeoutMs: def.timeoutSec * 1000,
         onLine: sink.push,
         toolBridge: bridge ? { name: 'acc', command: bridge.command, args: bridge.args, env: bridge.env } : undefined,
+        shellGuard: session?.shellGuard ?? undefined,
         pluginDirs: await this.d.context.pluginDirs(task).catch(() => []),
         ...releaseBranches(this.d.store, task),
         ...(await this.imageAttachments(task, adapter)),
+        ...(runAs ? { runAs } : {}),
       }, {
         origin: 'stage',
         projectId: task.repositoryId,
@@ -657,7 +665,7 @@ export class StageRunners {
         mode: task.mode,
       });
     } catch (error) {
-      bridge?.close();
+      session?.close();
       const errorClass: ErrorClass = error instanceof AgentGuardError ? error.errorClass : 'PROCESS_CRASH';
       const message = (error as Error).message;
       sink.push('system', message);
@@ -681,7 +689,7 @@ export class StageRunners {
     );
 
     const result = await handle.done.finally(() => {
-      bridge?.close();
+      session?.close();
       release();
     });
     sink.flush();

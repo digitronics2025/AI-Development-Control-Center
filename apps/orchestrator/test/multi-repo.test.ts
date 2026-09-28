@@ -112,7 +112,7 @@ describe('task workspace', () => {
     await waitFor(() => t!.services.store.listEvents(id).filter((e) => e.type === 'GIT_BASELINE').length, (n) => n === 2, 30_000, 'both baselines');
     const task = t.services.store.getTask(id)!;
     const linked = t.services.store.listLinkedRepositories(id)[0]!;
-    expect(task.git.workspacePath).toBe(path.join(t.dataDir, 'workspaces', id));
+    expect(task.git.workspacePath).toBe(path.join(t.workDir, 'workspaces', id));
     expect(task.git.worktreePath).toBe(path.join(task.git.workspacePath!, task.git.folder!));
     expect(linked.git.worktreePath).toBe(path.join(task.git.workspacePath!, linked.folder));
     expect(await branchExists(apiPath, task.git.taskBranch!)).toBe(true);
@@ -249,7 +249,7 @@ describe('finishing a task across repositories', () => {
     expect(done.status, JSON.stringify(done.blocker)).toBe('COMPLETED');
     const linked = t.services.store.listLinkedRepositories(id)[0]!;
     expect(done.git.workspacePath).toBeNull();
-    expect(existsSync(path.join(t.dataDir, 'workspaces', id))).toBe(false);
+    expect(existsSync(path.join(t.workDir, 'workspaces', id))).toBe(false);
     expect(done.git.worktreePath).toBeNull();
     expect(linked.git.worktreePath).toBeNull();
     for (const [repo, branch] of [[apiPath, done.git.taskBranch!], [webPath, linked.git.taskBranch!]] as const) {
@@ -290,7 +290,7 @@ describe('finishing a task across repositories', () => {
       expect((await git(repo, ['show', `refs/acc/worktree-backup/${id}:draft.md`])).stdout).toMatch(/draft/);
       expect((await git(repo, ['worktree', 'list', '--porcelain'])).stdout.match(/^worktree /gm)).toHaveLength(1);
     }
-    expect(existsSync(path.join(t.dataDir, 'workspaces', id))).toBe(false);
+    expect(existsSync(path.join(t.workDir, 'workspaces', id))).toBe(false);
   }, 180_000);
 });
 
@@ -306,7 +306,7 @@ describe('agent prompts across repositories', () => {
     const task = t.services.store.getTask(id)!;
     const linked = t.services.store.listLinkedRepositories(id)[0]!;
     const prompt = readFileSync(path.join(t.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');
-    expect(prompt).toContain(`Working directory: ${path.join(t.dataDir, 'workspaces', id)}`);
+    expect(prompt).toContain(`Working directory: ${path.join(t.workDir, 'workspaces', id)}`);
     expect(prompt).toContain(`- ${task.git.folder}/ — ${t.services.store.getRepository(api)!.name} (primary)`);
     expect(prompt).toContain(`- ${linked.folder}/ — ${t.services.store.getRepository(web)!.name}`);
     expect(prompt).toContain(`Configured commands (run inside ${task.git.folder}/)`);

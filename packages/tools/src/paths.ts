@@ -22,7 +22,7 @@ function norm(p: string): string {
 }
 
 /** Resolve the deepest existing ancestor through symlinks, then re-append the rest. */
-function realish(p: string): string {
+export function realish(p: string): string {
   let current = path.resolve(p);
   const rest: string[] = [];
   for (;;) {

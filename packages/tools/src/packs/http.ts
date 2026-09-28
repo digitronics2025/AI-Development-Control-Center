@@ -1,17 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { isLoopbackHostname, redact, urlIsSelfAddress } from '@acc/security';
+import { isLoopbackHostname, redact, urlIsSelfAddress, type OutboundRequest } from '@acc/security';
 import { z } from 'zod';
 import { detectExecutable, run } from '../detect.js';
 import { guardedFetch, MAX_RESPONSE_BYTES, readCapped, RedirectRefused } from '../net-guard.js';
 import { resolveInside } from '../paths.js';
-import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type ToolProvider, type ToolRisk } from '../sdk.js';
+import { builtinDetection, failure, operation, type OperationContext, type OperationResult, type OutboundContext, type ToolProvider, type ToolRisk } from '../sdk.js';
 
 /**
  * Structured HTTP (V2 plan §22): requests with assertions, latency and
  * brokered authentication. Built-in `fetch` is preferred; curl is the
  * fallback provider. Reads are Level 1; writes to this machine Level 2; writes
- * to anything else Level 3.
+ * to anything else, and anything carrying a stored credential off this
+ * machine, Level 3.
  */
 
 const SENSITIVE_HEADER = /^(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api-key)$/i;
@@ -49,13 +50,67 @@ const requestInput = z.object({
 });
 type RequestInput = z.infer<typeof requestInput>;
 
-export function classifyRequest(input: Pick<RequestInput, 'method' | 'url'>): Partial<ToolRisk> {
+/**
+ * A read is Level 1 and a local change Level 2, but a call that sends a stored
+ * credential off this machine is at least Level 3 with the `credentials`
+ * effect, a read included (SEC-4): where it may go is its audience's business.
+ */
+export function classifyRequest(input: Pick<RequestInput, 'method' | 'url'> & { auth?: RequestInput['auth'] }): Partial<ToolRisk> {
   const read = ['GET', 'HEAD', 'OPTIONS'].includes(input.method);
   const local = isLoopbackUrl(input.url);
   const production = /(?:^|[./-])(?:prod|production)(?:[./-]|$)/i.test(new URL(input.url).hostname);
+  const sendsCredential = Boolean(input.auth) && !local;
+  if (read && sendsCredential) return { level: 3, reasons: ['Sends a stored credential to a remote service'], effects: ['network', 'credentials'] };
   if (read) return { level: 1, reasons: [local ? 'Reads from a local server' : 'Reads from a remote service'], effects: local ? [] : ['network'] };
   if (local) return { level: 2, reasons: ['Sends a change to a local server'], effects: ['network'] };
-  return { level: production ? 5 : 3, risk: production ? 'elevated' : 'normal', production, reasons: [production ? 'Changes a production service' : 'Changes a remote service'], effects: ['network', ...(production ? (['production'] as const) : [])] };
+  return {
+    level: production ? 5 : 3,
+    risk: production ? 'elevated' : 'normal',
+    production,
+    reasons: [`${production ? 'Changes a production service' : 'Changes a remote service'}${sendsCredential ? ' with a stored credential' : ''}`],
+    effects: ['network', ...(sendsCredential ? (['credentials'] as const) : []), ...(production ? (['production'] as const) : [])],
+  };
+}
+
+type MultipartPart = NonNullable<RequestInput['multipart']>[number];
+
+/**
+ * Each multipart file as the outbound check read it (SEC-4), keyed by its part
+ * of the parsed input, which the run gets too: the run sends these very bytes
+ * (or fails as reading it failed), so what was checked is what goes, whatever
+ * happens to the file in between.
+ */
+const checkedFiles = new WeakMap<MultipartPart, { bytes: Buffer; filename: string } | { error: unknown }>();
+
+/** What `http.request` sends (checked before it runs, SEC-4): what its caller wrote, and the content and name of each multipart file. */
+async function outboundRequest(input: RequestInput, ctx: OutboundContext): Promise<OutboundRequest> {
+  let body: unknown = input.json !== undefined ? input.json : input.body;
+  if (input.json === undefined && input.multipart) {
+    body = await Promise.all(
+      input.multipart.map(async (part) => {
+        if (!part.file) return { name: part.name, value: part.value ?? '' };
+        try {
+          const file = resolveInside(ctx.roots, ctx.cwd, part.file);
+          const read = { bytes: await readFile(file), filename: path.basename(file) };
+          checkedFiles.set(part, read);
+          return { name: part.name, filename: read.filename, content: read.bytes.toString('utf8') };
+        } catch (error) {
+          checkedFiles.set(part, { error });
+          return { name: part.name };
+        }
+      }),
+    );
+  }
+  return { url: input.url, headers: input.headers, ...(body !== undefined ? { body } : {}), ...(input.auth ? { credential: input.auth.credential } : {}) };
+}
+
+/** A multipart file's bytes: those the outbound check read, or, for a run that was not checked (a direct call in a test), the file now. */
+async function multipartFile(part: MultipartPart, requested: string, ctx: OperationContext): Promise<{ bytes: Buffer; filename: string }> {
+  const checked = checkedFiles.get(part);
+  if (checked && 'error' in checked) throw checked.error;
+  if (checked) return checked;
+  const file = resolveInside(ctx.roots, ctx.cwd, requested);
+  return { bytes: await readFile(file), filename: path.basename(file) };
 }
 
 function matches(expected: Record<string, unknown>, actual: unknown): string[] {
@@ -102,8 +157,9 @@ function assertions(input: RequestInput, status: number, text: string, json: unk
 
 async function authHeaders(input: RequestInput, ctx: OperationContext): Promise<Record<string, string> | OperationResult> {
   if (!input.auth) return {};
-  const value = await ctx.credentials?.value(input.auth.credential);
-  if (!value) return failure('AUTH_REQUIRED', `No stored credential named "${input.auth.credential}" is available to this task`);
+  // Named with its target: the broker hands it out only for a host in its audience (SEC-4).
+  const value = await ctx.credentials?.value(input.auth.credential, { targetUrl: input.url });
+  if (!value) return failure('AUTH_REQUIRED', `No stored credential named "${input.auth.credential}" is available to this task for ${new URL(input.url).host} (Tools → Credentials names the hosts each may be sent to)`);
   if (input.auth.scheme === 'header') return { [input.auth.header ?? 'x-api-key']: value };
   return { authorization: `${input.auth.scheme} ${input.auth.scheme === 'Basic' ? Buffer.from(value).toString('base64') : value}` };
 }
@@ -127,8 +183,8 @@ async function viaFetch(input: RequestInput, ctx: OperationContext): Promise<Ope
     const form = new FormData();
     for (const part of input.multipart) {
       if (part.file) {
-        const file = resolveInside(ctx.roots, ctx.cwd, part.file);
-        form.append(part.name, new Blob([await readFile(file)]), path.basename(file));
+        const { bytes, filename } = await multipartFile(part, part.file, ctx);
+        form.append(part.name, new Blob([bytes]), filename);
       } else form.append(part.name, part.value ?? '');
     }
     body = form;
@@ -260,6 +316,7 @@ export function httpProviders(): ToolProvider[] {
       level: 1,
       classify: (input) => classifyRequest(input),
       credentials: [],
+      outbound: async (input, ctx) => [await outboundRequest(input, ctx)],
       run: (input, ctx) => via(input, ctx),
     });
   return [
@@ -282,6 +339,7 @@ export function httpProviders(): ToolProvider[] {
           input: healthInput,
           level: 1,
           classify: (input) => ({ effects: isLoopbackUrl(input.url) ? [] : ['network'] }),
+          outbound: (input) => [{ url: input.url }],
           async run(input, ctx) {
             const r = await waitForHttp(input.url, { timeoutMs: input.timeoutSec * 1000, intervalMs: input.intervalMs, expectStatus: input.expectStatus, signal: ctx.signal });
             return {

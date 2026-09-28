@@ -11,6 +11,7 @@ import {
   type ChairmanStatus,
   type ChairmanStrategyOutcomeStatus,
   type ChairmanStrategyRun,
+  type PermissionLevel,
   type StageDefinition,
   type StageInstance,
   type TaskContract,
@@ -34,7 +35,7 @@ import { CheckpointService } from './checkpoints.js';
 import { ChairmanEvidenceService, describeFailure, digestOf, type ChairmanEvidencePacket, type EvidenceDeps, type EvidenceFailure } from './evidence.js';
 import { completionGate, type GateResult } from './gate.js';
 import { ActionGateway } from './gateway.js';
-import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, TRIGGER_LABEL, type RecoveryTrigger, type StrategyCandidate } from './policy.js';
+import { decideOnFailure, extendLimits, limitReached, policyDiagnosis, rankCandidates, recoveryCandidates, TRIGGER_LABEL, type CandidateContext, type RecoveryTrigger, type StrategyCandidate } from './policy.js';
 import { OutcomeEvaluator } from './outcomes.js';
 import { classifyProgress } from './progress.js';
 import { Reasoner } from './reasoner.js';
@@ -303,7 +304,7 @@ export class Chairman implements SupervisorHooks {
       // Provider blocks: hand the stage to another subscription agent if one is healthy; otherwise wait as before.
       if (!BLOCKING_PROVIDER.has(outcome.errorClass) || def.kind !== 'agent') return 'legacy';
       const candidates = recoveryCandidates({
-        ...this.candidateContext(task, 'provider_blocked', def.key, sig),
+        ...(await this.candidateContext(task, 'provider_blocked', def.key, sig)),
         // A model the CLI rejects is one stage's problem; credits, usage windows and sign-in are the whole agent's.
         providerWide: outcome.errorClass !== 'MODEL_UNAVAILABLE',
       });
@@ -352,7 +353,7 @@ export class Chairman implements SupervisorHooks {
     return true;
   }
 
-  private candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature, retryIsNoop = false) {
+  private async candidateContext(task: TaskRecord, trigger: RecoveryTrigger, failingStageKey: string, sig: FailureSignature, retryIsNoop = false): Promise<CandidateContext> {
     const assignments: Record<string, string> = {};
     for (const s of task.workflow.stages) if (s.kind === 'agent') assignments[s.key] = this.d.views.assignmentFor(task, s).agentId;
     // An agent whose last run reported it out of credits or out of its window is no escape route.
@@ -360,6 +361,9 @@ export class Chairman implements SupervisorHooks {
       .list()
       .filter((a) => a.settings.enabled && ['connected', 'unknown'].includes(a.health.state) && !a.capacityBlock)
       .map((a) => a.id);
+    // Each one's permission ceiling, from its adapter: a stage above it is never handed to that agent.
+    const maxPermissionLevel: Record<string, PermissionLevel> = {};
+    for (const id of available) maxPermissionLevel[id] = (await this.d.agents.capabilities(id)).maxPermissionLevel;
     const triedAgents: Record<string, string[]> = {};
     for (const s of this.d.store.listStages(task.id)) {
       if (!s.agentId || s.status === 'CANCELLED') continue;
@@ -375,6 +379,7 @@ export class Chairman implements SupervisorHooks {
       failureMessage: sig.message,
       assignments,
       availableAgents: available,
+      maxPermissionLevel,
       triedAgents,
       triedFingerprints: new Set(this.store.session(task.id).strategyFingerprints),
       rollbackCheckpointId: regression?.id ?? null,
@@ -462,7 +467,7 @@ export class Chairman implements SupervisorHooks {
     const noop = input.trigger === 'check_failed' && (await this.commandRetryIsNoop(task, input.failingStageKey));
     if (noop) input = { ...input, noopRetry: true };
     // Safe candidates first, then ordered by what earlier strategies achieved under this contract.
-    const candidates = rankCandidates(recoveryCandidates(this.candidateContext(task, input.trigger, input.failingStageKey, input.sig, noop)), {
+    const candidates = rankCandidates(recoveryCandidates(await this.candidateContext(task, input.trigger, input.failingStageKey, input.sig, noop)), {
       trigger: input.trigger,
       failedFamilies: this.store.failedStrategyFamilies(task.id, this.contract(task).version, input.sig.category),
       confidence: rules.confidence,

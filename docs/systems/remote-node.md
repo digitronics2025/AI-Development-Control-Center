@@ -109,7 +109,8 @@ Preconditions: `taskVersion` for `task.update/start/retry/reroute/assignments`
 sanitized view (`approvalBindingHash`) must match what the cloud mirrored.
 
 Remote guards ([guards.ts](../../apps/orchestrator/src/remote/guards.ts)) refuse
-what only the machine may decide: billing mode, raising auto-approve levels, a
+what only the machine may decide: billing mode, agent isolation (either way, or
+the account's name; [security.md](security.md#agent-os-boundary)), raising auto-approve levels, a
 more permissive policy (settings, repository, task), editing a repository's
 commands or dev command, turning on a repository's affected-tests-only setting
 (`testSelection: 'changed'`; turning it off is allowed), choosing an agent's program (`executablePath`),

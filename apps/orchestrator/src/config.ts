@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +9,8 @@ export interface OrchestratorConfig {
   host: string;
   port: number;
   dataDir: string;
+  /** Where task worktrees, task workspaces and Stage Team checkouts live: outside the data folder (`defaultWorkDir`). */
+  workDir: string;
   /** Root holding `workflows/` and `prompts/` (the repository checkout). */
   resourcesDir: string;
   /** Built dashboard to serve at `/`, or null when not built. */
@@ -37,6 +39,41 @@ export function defaultDataDir(): string {
   }
   const base = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
   return path.join(base, 'ai-control-center');
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => path.resolve(p).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+}
+
+/**
+ * Where the agents' files are (SEC-3): beside the data folder, never inside
+ * it, under a name no self-reference rule matches (`AIDevControlCenter`,
+ * `ai-control-center`, the data folder's own path as a prefix), so an agent
+ * can name its own worktree while the data folder stays refused. The default
+ * data folder gets `AccWork` (`acc-work` off Windows) beside it; any other —
+ * a demo, a test, a second instance — gets its own `acc-work-<hash of its
+ * path>` beside it, so two instances never share one, or `work-<hash>` when
+ * the data folder's name starts that one (`acc`, `a`).
+ */
+export function defaultWorkDir(dataDir: string): string {
+  const resolved = path.resolve(dataDir);
+  if (samePath(resolved, defaultDataDir())) return path.join(path.dirname(resolved), process.platform === 'win32' ? 'AccWork' : 'acc-work');
+  const tag = createHash('sha256').update(process.platform === 'win32' ? resolved.toLowerCase() : resolved).digest('hex').slice(0, 10);
+  const workDir = path.join(path.dirname(resolved), `acc-work-${tag}`);
+  // A name starting with `a` cannot also start `work-…`.
+  return startsWithDataDirPath(resolved, workDir) ? path.join(path.dirname(resolved), `work-${tag}`) : workDir;
+}
+
+/**
+ * Whether `workDir`'s path starts with the data folder's as the self-reference
+ * rule reads it (`setSelfReferences`: any case, either separator, nothing
+ * required after it): `D:\acc` starts `D:\acc-work-…` and `D:\acc2`, and every
+ * path there would then be refused to agents.
+ */
+function startsWithDataDirPath(dataDir: string, workDir: string): boolean {
+  const norm = (p: string) => path.resolve(p).replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();
+  return norm(workDir).startsWith(norm(dataDir));
 }
 
 /** Repository root: two levels up from `apps/orchestrator/{src,dist}`. */
@@ -77,10 +114,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
   }
   const port = Number(env.ACC_PORT ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid ACC_PORT: ${env.ACC_PORT}`);
+  const workDir = path.resolve(env.ACC_WORK_DIR ?? defaultWorkDir(dataDir));
+  const rel = path.relative(dataDir, workDir);
+  if (!rel || (!rel.startsWith('..') && !path.isAbsolute(rel))) throw new Error(`ACC_WORK_DIR must be outside the data folder (${dataDir}): agents are refused every path inside it.`);
+  if (startsWithDataDirPath(dataDir, workDir)) throw new Error(`ACC_WORK_DIR must not start with the data folder's path (${dataDir}): agents are refused every path that does.`);
   return {
     host,
     port,
     dataDir,
+    workDir,
     resourcesDir,
     dashboardDir: existsSync(path.join(dashboardCandidate, 'index.html')) ? dashboardCandidate : null,
     token: env.ACC_TOKEN_OVERRIDE ?? loadOrCreateToken(dataDir),

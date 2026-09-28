@@ -13,7 +13,7 @@ verified_at: 57af61a
 
 | Script | Effect |
 |---|---|
-| `start-control-center.ps1 [-NoBrowser]` | Reuses a healthy orchestrator from `runtime.json`, otherwise starts `node apps/orchestrator/dist/main.js` hidden with logs in `<data>\orchestrator.log` (rotated at 10 MB) and waits for `/healthz`; opens the dashboard |
+| `start-control-center.ps1 [-NoBrowser]` | Reuses a healthy orchestrator from `runtime.json`, otherwise starts `node apps/orchestrator/dist/main.js` hidden with logs in `<data>\orchestrator.log` (rotated at 10 MB) and waits for `/healthz`; opens the dashboard with a one-time launch ticket (`POST /api/launch-tickets` with the token; without one it opens the plain address, which carries no token while agent isolation is on: [security.md](security.md#agent-os-boundary)) |
 | `stop-control-center.ps1 [-Drain \| -Force]` | `POST /api/service/shutdown` with the token. With no switch it **refuses** while a task has a stage running: prints the task ids and stage names and exits 2. `-Drain` stops each task at its next stage boundary, then shuts down (waits up to `-DrainTimeoutMinutes`, default 180); supervised tasks resume by themselves after the next start. `-Force` interrupts running stages now and force-stops the process after 15 s — only if the PID in `runtime.json` is still a Node process started within 10 min before its `startedAt` (a reused PID is left alone) |
 | `install.ps1 [-AutoStart]` | Start-menu shortcuts (start, and stop with `-Drain`: it runs hidden, where a refusal would go unseen); `-AutoStart` adds a sign-in shortcut with `-NoBrowser`. Per-user, no admin |
 | `uninstall.ps1` | Removes those shortcuts; data is kept |
@@ -37,19 +37,22 @@ orchestrator that is running someone's stages; `-Force` is for a drain that
 cannot finish (a hung stage). A drain also waits for a worktree's dependency
 install still running beside a read-only stage; `-Force` stops it, and the
 task installs again when it next runs ([checkpoints.md](checkpoints.md#worktrees)).
-Every start empties `<data>\trash` in the background — finished worktrees on
-their way out, whose work is already on the task branch
-([orchestrator.md](orchestrator.md#data-folder)).
+Every start empties the work root's `trash` (and the data folder's old one) in
+the background — finished worktrees on their way out, whose work is already on
+the task branch ([orchestrator.md](orchestrator.md#work-root-acc_work_dir)).
 
 `privileged-helper.ps1` is not a launcher: the orchestrator starts it through
 a UAC prompt for one signed, allowlisted request and it exits
 ([autopilot.md](autopilot.md#privileged-helper)). The orchestrator itself
-never runs elevated.
+never runs elevated. `agent-relay.ps1` is not one either: the orchestrator
+starts it for each stage run while agent isolation is on
+([agents-contract.md](agents-contract.md)). The VS Code extension reads the token file itself
+and needs no ticket.
 
 ## Other scripts
 
 - `pnpm demo` ([demo.mjs](../../scripts/demo.mjs)): simulated agents, four sample repositories with tasks in every state plus `api-gateway` (a local bare `origin`, a merge, a tag, one unpushed commit, staged/unstaged/untracked work; no task ever runs there, so the Source Control e2e can rely on it); sets `ACC_REPOSITORY_AUTOMATION=0` so it never scans or fetches your real repositories; writes `<base>/ready` when seeded and keeps `<base>/orchestrator.log`. Used by the Playwright suite.
-- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills] [--images] [--permissions] [--mcp [--codex-mcp-repo <repo>]]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; `--permissions` runs 3 real runs (a control, Level 1, Level 2; 8 checks) proving a repository whose settings allow `Bash(*)` and carry hooks cannot widen Level 1 or 2 (Level 1 runs none of its hooks); run both after every Claude Code update ([agents.md](agents.md#skills)). `--images` asks each CLI for the colour of a solid red 64×64 PNG built in memory: Claude Code reading it from disk, Codex given it with `-i`, and Claude Code shown it as an MCP image block from `packages/mcp/test/fixtures/red-picture-server.mjs`; run it after a CLI update ([design-agent.md](design-agent.md)). `--mcp` runs 2 real Codex runs (3 with `--codex-mcp-repo`) proving only the Control Center's MCP server starts; run it after every Codex update ([agents.md](agents.md#mcp-servers-in-a-codex-run)).
+- `pnpm verify:agents [--run] [--only codex|claude] [--codex-model …] [--claude-model …] [--skills] [--images] [--permissions] [--mcp [--codex-mcp-repo <repo>]]` ([verify-agents.ts](../../scripts/verify-agents.ts)). `--skills` runs 5 real Claude Code probes proving skills stay inside a stage's limits; `--permissions` runs 3 real runs (a control, Level 1, Level 2; 8 checks) proving a repository whose settings allow `Bash(*)` and carry hooks cannot widen Level 1 or 2 (Level 1 runs none of its hooks); run both after every Claude Code update ([agents-skills.md](agents-skills.md#skills)). `--images` asks each CLI for the colour of a solid red 64×64 PNG built in memory: Claude Code reading it from disk, Codex given it with `-i`, and Claude Code shown it as an MCP image block from `packages/mcp/test/fixtures/red-picture-server.mjs`; run it after a CLI update ([design-agent.md](design-agent.md)). `--mcp` runs 2 real Codex runs (3 with `--codex-mcp-repo`) proving only the Control Center's MCP server starts; run it after every Codex update ([agents-codex.md](agents-codex.md#mcp-servers-in-a-codex-run)).
 
 ## Phone alerts
 

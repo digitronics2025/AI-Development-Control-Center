@@ -4,10 +4,7 @@ import { Badge, Button, EmptyState, Panel, RelativeTime, Skeleton, StatusChip, C
 import { CONFIDENCE_LABEL, USAGE_BILLING_LABEL, formatUsd, type BudgetStatus, type ProviderSummary } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useBudgets, useUsageMutations, useUsageProviders } from '../../api/usage';
-import { Tokens, costWithGaps, unpricedNote, type UsageState } from './common';
-
-const PROVIDER_LABEL: Record<string, string> = { anthropic: 'Anthropic (Claude Code)', openai: 'OpenAI (Codex)', simulated: 'Simulated agents' };
-export const providerLabel = (provider: string) => PROVIDER_LABEL[provider] ?? provider;
+import { Tokens, costWithGaps, unpricedNote, useProviderLabel, type UsageState } from './common';
 
 function Row({ label, children, confidence }: { label: string; children: ReactNode; confidence?: string }) {
   return (
@@ -88,6 +85,7 @@ export function ProvidersTab({ state }: { state: UsageState }) {
   const budgets = useBudgets();
   const { refreshCapacity } = useUsageMutations();
   const { toast } = useFeedback();
+  const providerLabel = useProviderLabel();
   if (providers.isLoading) return <Skeleton className="h-64" />;
   const list = providers.data ?? [];
   if (!list.length) return <EmptyState title="No providers" description="No agent is installed and no run has been recorded yet." />;

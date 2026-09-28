@@ -155,6 +155,12 @@ export const ERROR_CLASSES = [
   'PERMISSION_DENIED',
   /** A verdict stage passed without accounting for every changed file it was not shown. */
   'REVIEW_INCOMPLETE',
+  /**
+   * An agent CLI's output did not follow the protocol its adapter knows — a run
+   * that exited 0 without the events every successful run has — so it is not
+   * counted as a success (likely a CLI update the adapter does not read yet).
+   */
+  'PROTOCOL_DRIFT',
   'UNKNOWN',
 ] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];

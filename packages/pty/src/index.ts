@@ -1,8 +1,16 @@
 import { spawn as spawnProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ShellInfo } from '@acc/executor';
-import { redact } from '@acc/security';
+import { streamRedactor } from '@acc/security';
 import type { IPty } from 'node-pty';
+
+/**
+ * The line in progress is held back, at most this much of it, so a secret
+ * the pseudo-terminal splits across two chunks is redacted whole (SEC-3)…
+ */
+const HOLD_CHARS = 8 * 1024;
+/** …and shown this long after it started arriving, whether or not more comes (a prompt, an echoed key). */
+const HOLD_MS = 40;
 
 /**
  * Interactive terminals (V2 plan §12). A real pseudo-terminal (ConPTY on
@@ -72,6 +80,11 @@ export class PtySession {
   private rows: number;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly listeners = new Set<(event: PtyEvent) => void>();
+  /** Output received but not yet redacted and shown: the line in progress (`HOLD_CHARS`). */
+  private held = '';
+  private holdTimer: NodeJS.Timeout | null = null;
+  /** Redaction that carries a private key block across pieces. */
+  private readonly scrub = streamRedactor();
 
   constructor(
     private readonly pty: IPty,
@@ -112,9 +125,38 @@ export class PtySession {
     for (const l of this.listeners) l(event);
   }
 
+  /**
+   * Output from the terminal: whole lines are redacted and shown at once; the
+   * line in progress waits (at most `HOLD_CHARS` of it, at most `HOLD_MS`)
+   * so it is redacted together with the chunk that completes it.
+   */
   private push(raw: string): void {
     this.lastActivity = Date.now();
-    const text = redact(raw);
+    this.held += raw;
+    let cut = this.held.lastIndexOf('\n') + 1;
+    if (this.held.length - cut > HOLD_CHARS) cut = this.held.length - HOLD_CHARS;
+    if (cut > 0) {
+      this.release(cut);
+      // What is left is a new line in progress: its own wait starts now.
+      if (this.holdTimer) clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    if (this.held && !this.holdTimer) {
+      this.holdTimer = setTimeout(() => {
+        this.holdTimer = null;
+        this.release(this.held.length);
+      }, HOLD_MS);
+      this.holdTimer.unref?.();
+    }
+  }
+
+  /** Redact and show the first `cut` characters held back. */
+  private release(cut: number): void {
+    const piece = this.held.slice(0, cut);
+    this.held = this.held.slice(cut);
+    if (!piece) return;
+    const text = this.scrub(piece);
+    if (!text) return;
     const start = this.cursorValue;
     this.cursorValue += text.length;
     this.chunks.push({ start, text });
@@ -126,6 +168,10 @@ export class PtySession {
 
   private finish(exitCode: number | null): void {
     if (this.exitedValue) return;
+    // The last line in progress is shown before the exit.
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    this.release(this.held.length);
     this.exitedValue = true;
     this.exitCodeValue = exitCode;
     for (const t of this.timers) clearTimeout(t);

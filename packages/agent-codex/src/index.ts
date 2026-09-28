@@ -92,8 +92,23 @@ export function codexUsage(turns: CodexTurnUsage[], threadId: string | null, req
 }
 
 /**
+ * Why a Codex run's output does not read as a finished run, or null when it
+ * does. Every successful `codex exec --json` run starts a thread
+ * (`thread.started`) and ends each turn with `turn.completed`, which also
+ * carries its usage; a run that exited 0 without a completed turn produced
+ * output this adapter does not understand (a changed event format), so it is
+ * not counted as a success (`PROTOCOL_DRIFT`, applied only when nothing else
+ * failed). The thread alone is not enough: it holds no turn.
+ */
+export function codexProtocolDrift(sawThread: boolean, sawCompletedTurn: boolean): string | null {
+  if (sawCompletedTurn) return null;
+  const seen = sawThread ? 'it started a thread but no turn.completed event followed' : 'neither thread.started nor turn.completed was seen';
+  return `Codex finished without reporting a completed turn (${seen}): its --json output is not what the Control Center reads, so the run is not counted as a success. Check the Codex version in Settings → Agents & Models.`;
+}
+
+/**
  * Features that add MCP servers to a run on their own, measured on Codex
- * 0.156.1 (docs/systems/agents.md#mcp-servers-in-a-codex-run): `apps` starts
+ * 0.156.1 (docs/systems/agents-codex.md#mcp-servers-in-a-codex-run): `apps` starts
  * `codex_apps` (ChatGPT connectors); `plugins` starts plugin servers, including
  * those of plugins installed on the ChatGPT account, which load even with
  * --ignore-user-config; `skill_mcp_dependency_install` installs and enables
@@ -184,6 +199,10 @@ export class CodexAdapter extends CliAgentAdapter {
       nonInteractive: true,
       modelSelection: true,
       effortSelection: true,
+      // Codex has no plugin folders: a learned skill reaches it as a file to read.
+      pluginDirs: false,
+      providerLabel: 'OpenAI (Codex)',
+      maxPermissionLevel: 5,
     };
   }
 
@@ -280,6 +299,7 @@ export class CodexAdapter extends CliAgentAdapter {
   protected createParser({ emit, input }: ParserContext): StreamParser {
     let finalMessage: string | null = null;
     let sessionId: string | null = null;
+    let threadStarted = false;
     const turns: CodexTurnUsage[] = [];
     const failureMessages: string[] = [];
     const filesChanged = new Set<string>();
@@ -296,6 +316,7 @@ export class CodexAdapter extends CliAgentAdapter {
         const item = event.item as Record<string, any> | undefined;
         switch (event.type) {
           case 'thread.started':
+            threadStarted = true;
             sessionId = event.thread_id ?? null;
             break;
           case 'turn.completed': {
@@ -362,6 +383,7 @@ export class CodexAdapter extends CliAgentAdapter {
           sessionId,
           usageLimited: false,
           guardViolation: null,
+          protocolDrift: codexProtocolDrift(threadStarted, turns.length > 0),
           filesChanged: [...filesChanged],
           usage: codexUsage(turns, sessionId, input.model),
           capacity: capacity.list(),

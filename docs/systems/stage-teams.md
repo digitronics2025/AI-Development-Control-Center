@@ -15,7 +15,7 @@ One agent stage run by a bounded team of Control Center workers
 the team: every worker is its own agent run through `AgentRegistry.launch`
 (subscription guard, usage ledger), with its own execution, log, tool session
 and artifact. Provider-native sub-agents stay off (Claude Code's `Agent` tool
-is not in the closed tool set, [agents.md](agents.md)); a worker never starts
+is not in the closed tool set, [agents-claude-code.md](agents-claude-code.md)); a worker never starts
 another worker. The stage still returns one `StageOutcome`, so transitions,
 fix cycles, approvals, the Chairman and the completion gate work as before.
 
@@ -168,7 +168,8 @@ package installs, no sub-agents; primary vs specialist reviewer).
   and attributes, parent = the task's HEAD), plus the byte-exact tree of the
   same files (`workingTreeTree`, kept in memory as `exactTree`). Each worker
   gets a detached child checkout of that commit
-  (`<dataDir>/team-worktrees/<task>/<stage8>-<unit>`, checked out with the
+  (`<workDir>/team-worktrees/<task>/<stage8>-<unit>`, in the work root outside
+  the data folder, checked out with the
   repository's normal line-ending settings) as its cwd and only tool root.
   Every spelling of the task folder **and of the operator's checkout** in the
   prompt is rewritten to the child's (`rewritePaths`, one pass, longest
@@ -293,7 +294,8 @@ the lead "Integration finished · no changes" / "· N files changed" (or
 - **Restart:** `engine.recover()` marks `RUNNING` units `FAILED`/`INTERRUPTED`
   and `QUEUED` ones `CANCELLED`; leftover processes are stopped by the
   existing leftover-execution pass; `team.sweep()` deletes every child checkout
-  under `team-worktrees` (links first) and prunes worktrees. A partial checkout
+  under `team-worktrees` — the work root's, and the data folder's from before
+  it existed — (links first) and prunes worktrees. A partial checkout
   is never integrated.
 - **Cleanup:** completion and cancel delete `refs/acc/team/<task>/` and the
   task's child folder.

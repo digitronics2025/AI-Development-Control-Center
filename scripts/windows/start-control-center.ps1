@@ -57,4 +57,16 @@ if (-not $url) {
   Write-Host "AI Development Control Center is already running at $url"
 }
 
-if (-not $NoBrowser) { Start-Process $url }
+if (-not $NoBrowser) {
+  # A one-time launch ticket: while agents run under their own Windows account, the dashboard
+  # hands its token only to a page opened with one (docs/systems/security.md#agent-os-boundary).
+  $open = $url
+  try {
+    $token = (Get-Content -LiteralPath (Join-Path $dataDir 'auth-token') -Raw).Trim()
+    $ticket = Invoke-RestMethod -Method Post -Uri "$url/api/launch-tickets" -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body '{}' -TimeoutSec 5
+    if ($ticket.path -match '^/\?ticket=[A-Za-z0-9_-]+$') { $open = "$url$($ticket.path)" }
+  } catch {
+    Write-Warning "Opening the dashboard without a launch ticket: $($_.Exception.Message)"
+  }
+  Start-Process $open
+}

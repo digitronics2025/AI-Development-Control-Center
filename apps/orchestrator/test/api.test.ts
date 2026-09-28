@@ -3,11 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { SimulatedAgentAdapter } from '@acc/agent-sdk';
+import { SimulatedAgentAdapter, TESTED_CLI_VERSIONS } from '@acc/agent-sdk';
 import { git } from '@acc/git';
 import { ClaudeCodeAdapter } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
-import type { ServerMessage } from '@acc/shared';
+import type { AgentInfo, ServerMessage } from '@acc/shared';
 import { addRepo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 let t: TestApp;
@@ -320,7 +320,8 @@ describe('real adapters through the engine (fake CLIs)', () => {
 
   async function realApp(env: NodeJS.ProcessEnv) {
     await t.close();
-    t = await createTestApp({ adapters: [new CodexAdapter(), new ClaudeCodeAdapter()], baseEnv: { ...process.env, ...env } });
+    // FAKE_CLAUDE_APIKEY_SOURCE: a subscription login, whose init event says the credentials are no API key.
+    t = await createTestApp({ adapters: [new CodexAdapter(), new ClaudeCodeAdapter()], baseEnv: { ...process.env, FAKE_CLAUDE_APIKEY_SOURCE: 'none', ...env } });
     await t.api('PATCH', '/api/agents/codex', { executablePath: exe('fake-codex') });
     await t.api('PATCH', '/api/agents/claude', { executablePath: exe('fake-claude') });
     await t.services.agents.refresh();
@@ -349,6 +350,28 @@ describe('real adapters through the engine (fake CLIs)', () => {
     expect(report).toContain('ENV_HAS_ANTHROPIC_KEY=no');
   });
 
+  it("serves each agent's provider, its declared capabilities and whether its CLI version was tested", async () => {
+    // Simulated agents: named by their adapter, and no CLI version to judge.
+    await t.services.agents.refresh();
+    const simulated = (await t.api('GET', '/api/agents')).body as AgentInfo[];
+    expect(simulated.map((a) => [a.id, a.provider, a.capabilities.providerLabel, a.compat]).sort()).toEqual([
+      ['claude', 'simulated', 'Simulated agents', null],
+      ['codex', 'simulated', 'Simulated agents', null],
+    ]);
+
+    const tested = TESTED_CLI_VERSIONS.claude!;
+    await realApp({ FAKE_CLAUDE_VERSION: tested.max });
+    const agents = (await t.api('GET', '/api/agents')).body as AgentInfo[];
+    const claude = agents.find((a) => a.id === 'claude')!;
+    const codex = agents.find((a) => a.id === 'codex')!;
+    expect(claude).toMatchObject({ provider: 'anthropic', capabilities: { providerLabel: 'Anthropic (Claude Code)', pluginDirs: true, maxPermissionLevel: 5 } });
+    expect(codex).toMatchObject({ provider: 'openai', capabilities: { providerLabel: 'OpenAI (Codex)', pluginDirs: false, maxPermissionLevel: 5 } });
+    // Inside agents.compat.json's range, and outside it (the fake Codex says 9.9.9).
+    expect(claude.compat).toEqual({ tested, status: 'tested' });
+    expect(codex.detection.version).toBe('9.9.9');
+    expect(codex.compat).toEqual({ tested: TESTED_CLI_VERSIONS.codex, status: 'unverified' });
+  });
+
   it('refuses to run an agent signed in with API billing in Subscription Only mode', async () => {
     await realApp({ FAKE_CLAUDE_AUTH: 'apikey' });
     const claude = (await t.api('GET', '/api/agents')).body.find((a: { id: string }) => a.id === 'claude');
@@ -372,5 +395,16 @@ describe('real adapters through the engine (fake CLIs)', () => {
     expect(exec).toMatchObject({ status: 'failed', errorClass: 'USAGE_LIMIT' });
     expect(exec.command).toContain('codex exec --json');
     await waitFor(() => t.api('GET', `/api/executions/${exec.id}/logs`), (r) => r.body.some((l: { text: string }) => l.text.includes('out of credits')), 5000);
+  });
+
+  it('records a Codex run that exits 0 without a completed turn as PROTOCOL_DRIFT, not a success', async () => {
+    await realApp({ FAKE_CODEX_SCENARIO: 'drift' });
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Investigate', { supervised: false });
+    const task = await waitForStatus(t, id, ['FAILED', 'WAITING_FOR_USER', 'COMPLETED']);
+    expect(task.status).toBe('FAILED');
+    expect(task.blocker).toMatchObject({ kind: 'error', errorClass: 'PROTOCOL_DRIFT' });
+    const codexRuns = t.services.store.listExecutions(id).filter((e) => e.agentId === 'codex');
+    expect(codexRuns.length).toBeGreaterThan(0);
+    for (const e of codexRuns) expect(e).toMatchObject({ status: 'failed', exitCode: 0, errorClass: 'PROTOCOL_DRIFT' });
   });
 });

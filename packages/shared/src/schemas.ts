@@ -561,6 +561,23 @@ export const phoneAlertsSchema = z.object({
 });
 export type PhoneAlertSettings = z.infer<typeof phoneAlertsSchema>;
 
+/** A local Windows account name the privileged helper may create: 3–20 letters, digits, `-` or `_`, starting with a letter. */
+export const AGENT_ACCOUNT_NAME = /^[A-Za-z][A-Za-z0-9_-]{2,19}$/;
+
+/**
+ * The agent OS boundary (SEC-3, docs/systems/security.md#agent-os-boundary).
+ * `account`: every stage run starts as a separate standard Windows account the
+ * privileged helper created, which the operating system refuses the data
+ * folder, and the dashboard hands its token only to a launch ticket. `off`
+ * (default): runs start as the operator, as they always have. Changed on this
+ * machine only: the cloud can neither turn it on or off nor rename the account.
+ */
+export const agentIsolationSchema = z.object({
+  mode: z.enum(['off', 'account']).default('off'),
+  account: z.string().regex(AGENT_ACCOUNT_NAME, '3–20 letters, digits, - or _, starting with a letter').default('acc-agent'),
+});
+export type AgentIsolationSettings = z.infer<typeof agentIsolationSchema>;
+
 export const settingsSchema = z.object({
   billingMode: z.enum(BILLING_MODES).default('subscription'),
   theme: z.enum(THEMES).default('dark'),
@@ -585,6 +602,8 @@ export const settingsSchema = z.object({
   learning: learningSettingsSchema.default(learningSettingsSchema.parse({})),
   /** Paid image and video generation (docs/systems/design-agent.md). */
   media: mediaSettingsSchema.default(mediaSettingsSchema.parse({})),
+  /** Where agent stages run: as the operator, or as a separate Windows account (local only). */
+  agentIsolation: agentIsolationSchema.default(agentIsolationSchema.parse({})),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 

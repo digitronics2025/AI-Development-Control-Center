@@ -4,10 +4,9 @@ import { formatRatio, formatUsd, type UsageBreakdownRow } from '@acc/shared';
 import { useWorkflows } from '../../api/hooks';
 import { useUsageBreakdown } from '../../api/usage';
 import { PricingPanel } from './PricingPanel';
-import { providerLabel } from './ProvidersTab';
-import { Tokens, costWithGaps, unpricedNote, type UsageState } from './common';
+import { Tokens, costWithGaps, unpricedNote, useProviderLabel, type UsageState } from './common';
 
-function columns(dimension: 'model' | 'role' | 'agent'): Column<UsageBreakdownRow>[] {
+function columns(dimension: 'model' | 'role' | 'agent', providerLabel: (provider: string) => string): Column<UsageBreakdownRow>[] {
   const name = dimension === 'model' ? 'Model' : dimension === 'role' ? 'Role' : 'Agent';
   return [
     {
@@ -83,6 +82,7 @@ export function BreakdownTab({ state, dimension }: { state: UsageState; dimensio
   const effective = dimension === 'model' ? 'model' : agentView;
   const rows = useUsageBreakdown(effective, state.query);
   const workflows = useWorkflows();
+  const providerLabel = useProviderLabel();
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -112,7 +112,7 @@ export function BreakdownTab({ state, dimension }: { state: UsageState; dimensio
       ) : (
         <DataTable
           caption={dimension === 'model' ? 'Usage by model' : `Usage by ${agentView}`}
-          columns={columns(effective)}
+          columns={columns(effective, providerLabel)}
           rows={rows.data ?? []}
           rowKey={(r) => r.key}
           stackedBelow={1200}

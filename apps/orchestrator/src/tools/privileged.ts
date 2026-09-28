@@ -14,7 +14,22 @@ export class PrivilegedHelper implements PrivilegedHost {
   constructor(
     private readonly dataDir: string,
     private readonly scriptPath: string,
+    /**
+     * The agent account operations' parameters (SEC-3): the account Settings
+     * names, the work root, and the folders it must read to run agents
+     * (`agentAccountGrants`). They fill in whatever a request leaves out; the
+     * helper validates every one of them itself.
+     */
+    private readonly agentAccount?: () => { account: string; workDir: string; readFolders: string[] },
   ) {}
+
+  private withDefaults(operation: string, params: Record<string, unknown>): Record<string, unknown> {
+    if ((operation !== 'agent_account_create' && operation !== 'agent_account_remove') || !this.agentAccount) return params;
+    const own = this.agentAccount();
+    const defaults: Record<string, unknown> = { account: own.account, workDir: own.workDir };
+    if (operation === 'agent_account_create') own.readFolders.slice(0, 6).forEach((folder, i) => (defaults[`read${i + 1}`] = folder));
+    return { ...defaults, ...params };
+  }
 
   private key(): Buffer {
     const file = path.join(this.dataDir, 'privileged-key');
@@ -57,11 +72,11 @@ export class PrivilegedHelper implements PrivilegedHost {
   /** Check a request with the helper's own validation, without elevation or effects. */
   validate(operation: string, params: Record<string, unknown>): Promise<{ ok: boolean; message: string }> {
     if (process.platform !== 'win32') return Promise.resolve({ ok: false, message: 'The privileged helper exists on Windows only' });
-    return this.execute(this.prepare(operation, params), true, false);
+    return this.execute(this.prepare(operation, this.withDefaults(operation, params)), true, false);
   }
 
   run(operation: string, params: Record<string, unknown>): Promise<{ ok: boolean; message: string }> {
     if (process.platform !== 'win32') return Promise.resolve({ ok: false, message: 'The privileged helper exists on Windows only' });
-    return this.execute(this.prepare(operation, params), false, true);
+    return this.execute(this.prepare(operation, this.withDefaults(operation, params)), false, true);
   }
 }

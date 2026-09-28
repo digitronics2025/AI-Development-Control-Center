@@ -241,9 +241,10 @@ export function hostedProviders(): ToolProvider[] {
         operation({
           id: 'system.privileged',
           title: 'Administrator operation (allowlisted)',
-          description: 'Install an allowlisted package with winget, add/remove an ACC firewall rule for a TCP port, or start/stop an allowlisted service. Always needs your approval and a UAC prompt.',
+          description:
+            "Install an allowlisted package with winget, add/remove an ACC firewall rule for a TCP port, start/stop an allowlisted service, or set up / remove the Windows account agent stages run as (agent_account_create / agent_account_remove: the account in Settings, the Control Center's own folders). Always needs your approval and a UAC prompt.",
           input: z.object({
-            operation: z.enum(['install_package', 'firewall_allow_port', 'firewall_remove_rule', 'service_start', 'service_stop', 'service_restart']),
+            operation: z.enum(['install_package', 'firewall_allow_port', 'firewall_remove_rule', 'service_start', 'service_stop', 'service_restart', 'agent_account_create', 'agent_account_remove']),
             params: z.record(z.string(), z.union([z.string().max(200), z.number()])).default({}),
           }),
           level: 5,

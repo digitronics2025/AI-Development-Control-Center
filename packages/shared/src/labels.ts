@@ -101,6 +101,7 @@ export const ERROR_CLASS_LABEL: Record<ErrorClass, string> = {
   CONTEXT_FAILURE: 'Context could not be built',
   PERMISSION_DENIED: 'Permission denied',
   REVIEW_INCOMPLETE: 'Review left changed files unread',
+  PROTOCOL_DRIFT: 'Agent output not recognised',
   UNKNOWN: 'Unknown error',
 };
 

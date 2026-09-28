@@ -1,9 +1,35 @@
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { Badge, Tooltip, cn } from '@acc/ui';
-import { COST_SOURCE_HELP, COST_SOURCE_LABEL, formatTokens, formatUsd, type CostSource, type UsageTotals } from '@acc/shared';
+import { COST_SOURCE_HELP, COST_SOURCE_LABEL, formatTokens, formatUsd, type AgentInfo, type CostSource, type UsageTotals } from '@acc/shared';
+import { useAgents } from '../../api/hooks';
 
 export type RangeKey = 'today' | '7d' | 'month' | 'custom';
+
+/**
+ * Each usage provider with the name its agents' adapters declare
+ * (GET /api/agents → `capabilities.providerLabel`), in the agents' order.
+ * A provider no agent names yet (not health-checked) is left out.
+ */
+export function providerOptions(agents: readonly AgentInfo[]): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = [];
+  for (const a of agents) {
+    if (a.capabilities.providerLabel && !options.some((o) => o.value === a.provider)) options.push({ value: a.provider, label: a.capabilities.providerLabel });
+  }
+  return options;
+}
+
+/** A provider key's name from the agents; the key itself for one no agent names (e.g. usage recorded by an agent since removed). */
+export function providerLabels(agents: readonly AgentInfo[]): (provider: string) => string {
+  const labels = new Map(providerOptions(agents).map((o) => [o.value, o.label]));
+  return (provider) => labels.get(provider) ?? provider;
+}
+
+/** `providerLabels` over the live agent list. */
+export function useProviderLabel(): (provider: string) => string {
+  const agents = useAgents();
+  return useMemo(() => providerLabels(agents.data ?? []), [agents.data]);
+}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** A local date as `YYYY-MM-DD` (the value of a date input). */

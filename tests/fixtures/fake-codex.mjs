@@ -1,13 +1,61 @@
 #!/usr/bin/env node
 // Test double for the Codex CLI. Behaviour is chosen by environment variables:
-//   FAKE_CODEX_AUTH      chatgpt | apikey | none
-//   FAKE_CODEX_SCENARIO  ok | usage | model | hang | secret
-//   FAKE_CODEX_MCP_LIST  JSON printed by `mcp list --json` (default []), or `fail`
-//   FAKE_MCP_ARGS_FILE   where `mcp list` records its argv and cwd
-import { writeFileSync } from 'node:fs';
+//   FAKE_CODEX_AUTH        chatgpt | apikey | none
+//   FAKE_CODEX_SCENARIO    ok | usage | auth | model | hang | secret | drift | thread-only
+//   FAKE_CODEX_MCP_LIST    JSON printed by `mcp list --json` (default []), or `fail`
+//   FAKE_CODEX_PLUGIN_MCP  JSON list of MCP servers the account's plugins add (default none)
+//   FAKE_MCP_ARGS_FILE     where `mcp list` records its argv and cwd
+//   FAKE_ARGS_FILE         where a run writes its launch record (the conformance kit's LaunchRecord)
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const out = (event) => process.stdout.write(JSON.stringify(event) + '\n');
+const after = (flag) => {
+  const i = args.indexOf(flag);
+  return i === -1 ? null : (args[i + 1] ?? '');
+};
+
+/**
+ * What this run was given, and what the real CLI would make of it
+ * (packages/agent-sdk/test-kit; docs/systems/agents-codex.md#mcp-servers-in-a-codex-run):
+ * the MCP servers it would load and whether it could change files.
+ */
+function launchRecord(prompt) {
+  const files = {};
+  for (const arg of args) {
+    try {
+      if (statSync(arg).isFile()) files[arg] = readFileSync(arg, 'utf8');
+    } catch {
+      // not a file
+    }
+  }
+  const overrides = args.flatMap((arg, i) => (arg === '-c' ? [args[i + 1] ?? ''] : []));
+  const features = args.flatMap((arg, i) => (arg === '--disable' ? [args[i + 1] ?? ''] : []));
+  let configured = [];
+  try {
+    configured = JSON.parse(process.env.FAKE_CODEX_MCP_LIST ?? '[]').map((server) => server.name);
+  } catch {
+    // an unreadable listing: the adapter refuses before a run
+  }
+  const off = new Set(overrides.map((o) => /^mcp_servers\.([A-Za-z0-9_-]+)=\{enabled=false,/.exec(o)?.[1]).filter(Boolean));
+  const added = overrides.map((o) => /^mcp_servers\.([A-Za-z0-9_-]+)\.command=/.exec(o)?.[1]).filter(Boolean);
+  const loaded = [
+    ...[...configured, ...added].filter((name) => !off.has(name)),
+    // The account's ChatGPT connectors and plugin servers load unless their features are off.
+    ...(features.includes('apps') ? [] : ['codex_apps']),
+    ...(features.includes('plugins') ? [] : JSON.parse(process.env.FAKE_CODEX_PLUGIN_MCP ?? '[]')),
+  ];
+  return {
+    args,
+    cwd: process.cwd(),
+    env: Object.keys(process.env),
+    stdin: prompt,
+    files,
+    mcpServers: [...new Set(loaded)],
+    // Writes: any sandbox but read-only, or execpolicy rules loaded (an `allow` rule runs a command outside the sandbox).
+    canWrite: after('--sandbox') !== 'read-only' || !args.includes('--ignore-rules') || args.includes('--dangerously-bypass-approvals-and-sandbox'),
+  };
+}
 
 if (args[0] === '--version') {
   console.log('codex-cli 9.9.9');
@@ -41,12 +89,29 @@ if (args[0] === 'exec') {
   process.stdin.on('data', (chunk) => (prompt += chunk));
   process.stdin.on('end', () => {
     const scenario = process.env.FAKE_CODEX_SCENARIO ?? 'ok';
-    if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd() }));
+    if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify(launchRecord(prompt)));
+    if (scenario === 'drift') {
+      // A future CLI that renamed its events: an answer, exit 0, none of the events a run always has.
+      out({ type: 'session.created', session_id: 'thread-123' });
+      out({ type: 'item.completed', item: { id: 'm', type: 'agent_message', text: 'PONG' } });
+      out({ type: 'response.completed', usage: { input_tokens: 10, output_tokens: 2 } });
+      process.exit(0);
+    }
     out({ type: 'thread.started', thread_id: 'thread-123' });
+    if (scenario === 'thread-only') {
+      // A thread, an answer and exit 0, but its turn never completes.
+      out({ type: 'item.completed', item: { id: 'm', type: 'agent_message', text: 'PONG' } });
+      process.exit(0);
+    }
     out({ type: 'turn.started' });
     out({ type: 'item.completed', item: { id: 'w', type: 'error', message: 'failed to parse hooks config' } });
     if (scenario === 'usage') {
       out({ type: 'turn.failed', error: { message: 'Your workspace is out of credits. Add credits to continue.' } });
+      process.exit(1);
+    }
+    if (scenario === 'auth') {
+      // The ChatGPT session was signed out or expired mid-run.
+      out({ type: 'turn.failed', error: { message: 'unexpected status 401 Unauthorized: Your authentication token has expired. Please sign in again.' } });
       process.exit(1);
     }
     if (scenario === 'model') {

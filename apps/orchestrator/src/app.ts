@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { SimulatedAgentAdapter, type AgentAdapter } from '@acc/agent-sdk';
-import { ClaudeCodeAdapter } from '@acc/agent-claude';
+import { ClaudeCodeAdapter, SHELL_GUARD_SCRIPT } from '@acc/agent-claude';
 import { CodexAdapter } from '@acc/agent-codex';
 import { AskService } from './ask/service.js';
 import { AskStore } from './ask/store.js';
@@ -18,6 +19,7 @@ import { TaskEngine } from './engine/engine.js';
 import type { Probe } from './release/service.js';
 import { TaskViews } from './engine/views.js';
 import { LearningService } from './learning/service.js';
+import { learnedPluginsRoot } from './learning/skills.js';
 import { AlertService, type AlertServiceDeps } from './services/alerts.js';
 import { SkillCatalog } from './services/skills.js';
 import { AgentRegistry } from './services/agents.js';
@@ -48,6 +50,7 @@ import { MediaSpendGate } from './usage/media.js';
 import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
 import { ConnectedAppService } from './connected-apps/service.js';
 import { ConnectedAppStore } from './connected-apps/store.js';
+import { agentAccountFile, agentAccountGrants, agentRelayScript } from './services/agent-isolation.js';
 
 export interface AppServices {
   config: OrchestratorConfig;
@@ -82,7 +85,7 @@ export interface AppServices {
   /** MyVault bridge sessions (memory only) and trusted origins. */
   vaultBridge: VaultBridgeService;
   mcp: McpService;
-  /** Skills the enabled agents would load, per repository (docs/systems/agents.md#skills). */
+  /** Skills the enabled agents would load, per repository (docs/systems/agents-skills.md#skills). */
   skills: SkillCatalog;
   tooling: EngineTooling;
   privileged: PrivilegedHelper;
@@ -130,6 +133,10 @@ export function createServices(
   const usage = new UsageService({ db, store, bus, dataDir: config.dataDir, simulated: config.simulatedAgents });
   const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env, usage.recorder);
   usage.attachAdapters(() => agents.ids().map((id) => agents.adapter(id)));
+  // Native permission rules of every run deny these (SEC-3); main.ts sets the port the server really listens on.
+  agents.setControlCenter({ dataDir: config.dataDir, port: config.port || null, readOnly: [learnedPluginsRoot(config.dataDir)] });
+  // Stage runs start as the agent account while agent isolation is on (docs/systems/security.md#agent-os-boundary).
+  agents.setIsolation({ credentialFile: agentAccountFile(config.dataDir), relay: agentRelayScript(config.resourcesDir) });
   const repositories = new RepositoryService(store, bus, settings);
   const workflows = new WorkflowService(store, bus);
   const prompts = new PromptService(store, path.join(config.resourcesDir, 'prompts'));
@@ -157,25 +164,32 @@ export function createServices(
   const processes = new ProcessManager(toolStore, bus, executionEnv);
   const terminals = new TerminalService(toolStore, bus, { enabled: () => settings.get().execution.terminals, loopbackOnly: ['127.0.0.1', 'localhost', '::1'].includes(config.host), env: executionEnv });
   const spend = new MediaSpendGate(db, usage.media, { stopping: () => usage.budgets.stoppingMediaBudgets() }, () => settings.get().media);
-  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv });
+  // The native shell precheck hook (SEC-3), built beside the bridge; the precheck keeps it out of agents' reach.
+  const shellGuard = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', SHELL_GUARD_SCRIPT);
+  const tools = new ToolService({ toolStore, bus, settings, artifacts, processes, terminals, credentials, deposits: vaultBridge.deposits, spend, dataDir: config.dataDir, baseEnv, shellGuardPath: shellGuard, localToken: config.token });
   const mcp = new McpService(toolStore, bus, tools, credentials, config.port || DEFAULT_PORT);
-  const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'));
+  const privileged = new PrivilegedHelper(config.dataDir, path.join(config.resourcesDir, 'scripts', 'windows', 'privileged-helper.ps1'), () => ({
+    account: settings.get().agentIsolation.account,
+    workDir: config.workDir,
+    readFolders: agentAccountGrants({ home: os.homedir(), buildDir: path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist'), nodePath: process.execPath, executables: agents.list().map((a) => a.detection.executablePath) }),
+  }));
   const bridge = path.join(config.resourcesDir, 'apps', 'orchestrator', 'dist', 'acc-mcp.js');
   const skills = new SkillCatalog(agents);
-  const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, bridgePath: existsSync(bridge) ? bridge : null });
+  const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, workDir: config.workDir, bridgePath: existsSync(bridge) ? bridge : null, shellGuardPath: existsSync(shellGuard) ? shellGuard : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
   const baselines = new BaselineChecks({ store, bus, tooling, dataDir: config.dataDir });
-  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, dataDir: config.dataDir, baseEnv: options.baseEnv, release: options.release });
+  const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, dataDir: config.dataDir, workDir: config.workDir, baseEnv: options.baseEnv, release: options.release });
   const gitOperations = new GitOperationStore(db);
   const sourceControl = new SourceControlService({ store, operations: gitOperations, repositories, coordinator, bus });
-  const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, tools, excludedFolders: [config.dataDir] });
+  const repositoryAutomation = new RepositoryAutomation({ settings, repositories, sourceControl, store, bus, tools, excludedFolders: [config.dataDir, config.workDir] });
   const sourceControlAssist = new SourceControlAssist({ sourceControl, repositories, agents, settings, engine, artifacts, store, views });
   const chairman = new Chairman({ store, bus, engine, views, agents, settings, artifacts, repositories, context, toolStore, coordinator });
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
   const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir, tools, toolStore, tooling, credentials });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
-  context.lessons = (task, def, stage) => learning.promptSection(task, def, stage);
+  // The adapter's declaration decides whether the run loads a learned skill or is pointed at its file.
+  context.lessons = async (task, def, stage) => learning.promptSection(task, def, stage, stage.agentId && agents.has(stage.agentId) ? (await agents.capabilities(stage.agentId)).pluginDirs : false);
   context.pluginDirs = (task) => learning.pluginDirs(task);
   tools.registerProvider(environmentProvider({ store, repositories, tooling }));
   tools.registerProvider(controlCenterProvider({ store, views, chairman, usage, learning }));
@@ -253,6 +267,10 @@ export function createServices(
       await processes.reconcileAfterRestart().catch(() => undefined);
       // Before the engine marks them interrupted (and the Chairman resumes the task): stop what they left running.
       await processes.stopLeftoverExecutions(store.executionsWithStatus('running')).catch(() => 0);
+      // Once: worktrees and workspaces still in the data folder move to the work root (SEC-3), before anything runs in them.
+      const relocated = await tooling.relocateLegacyWorkFolders().catch((error: unknown) => ({ moved: [], kept: [{ taskId: '*', reason: (error as Error).message }] }));
+      if (relocated.moved.length) console.info(`[work folders] moved to ${config.workDir}: ${relocated.moved.join(', ')}`);
+      for (const k of relocated.kept) console.warn(`[work folders] ${k.taskId} keeps its folder in the data folder: ${k.reason}`);
       const result = engine.recover();
       // A release a restart cut short is resolved from the remote, never pushed again (RELEASE_STAGE_PLAN §5).
       void engine.release.recover().catch(() => 0);

@@ -50,6 +50,10 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
   last delivery and last error; `vault_deposits` — each secret left in a box
   (`sending` / `stored` / `collected` / `refused`, receipt status, redacted
   detail), deleted with its credential.
+- Migration 24: `credential_references.audience` — the hosts `http.request` may
+  send the credential to, as a JSON list ([Audience](#audience)). NULL = its
+  kind's hosts; rows of kinds naming no host (`http`, `other`, `postgres`,
+  `mysql`) saved before it were set to `["*"]`: any host, as before, for review.
 - The 32-byte key: on Windows `<data>/credential-key.dpapi`, protected with
   DPAPI for the current user; elsewhere `<data>/credential-key` with mode 600.
   Loaded lazily; unavailable → `KEY_UNAVAILABLE`, and nothing is imported,
@@ -57,9 +61,9 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
 
 ## Flow
 
-1. `POST /api/credentials {name, kind, envVar?, description, repositoryIds?, value}`
+1. `POST /api/credentials {name, kind, envVar?, description, repositoryIds?, audience?, value}`
    — the value is write-only; no endpoint returns it (`PATCH` replaces it or
-   changes `repositoryIds`). `repositoryIds: null` = every repository, `[]` = none.
+   changes `repositoryIds` or `audience`). `repositoryIds: null` = every repository, `[]` = none.
 2. A tool call that declares credential kinds (Cloudflare → `cloudflare`) gets
    `envFor(kinds)`: the first in-scope credential of each kind injected as its
    variable (`CREDENTIAL_KIND_ENV`), plus `CLOUDFLARE_ACCOUNT_ID` when stored.
@@ -80,7 +84,8 @@ plain text. MyVault can feed it, and it can generate secrets MyVault then keeps
    provider key there never sends it anywhere. Where alerts go and with which
    token is local-only: a cloud `settings.update` that changes it is refused
    ([remote-node.md](remote-node.md)). `heldForVault` still applies.
-   `http.request {auth: {credential}}` uses one by name as a header.
+   `http.request {auth: {credential}}` uses one by name as a header, only to a
+   host in its [audience](#audience).
    A read-only session (Ask, [ask.md](ask.md)) uses `envForPinned` instead:
    exactly the credential named in Settings → Ask for each kind, whatever its
    repository scope (choosing it there is its scope), still held back while
@@ -103,8 +108,43 @@ A credential saved by hand may not take a billing variable
 (`API_BILLING_ENV_VARS`: `OPENAI_API_KEY`, `GEMINI_API_KEY` …; also
 reserved for generated and imported ones): the broker strips a credential's
 variable everywhere, so it would stand in for the agent CLIs' own billing selection.
-`GET /api/credentials` adds `source` (`manual` / `myvault` / `generated`) and
-`vault` (the link, no value). `GET /api/credentials/:id/events` is the audit.
+`GET /api/credentials` adds `source` (`manual` / `myvault` / `generated`),
+`vault` (the link, no value) and `audience` (`{hosts, anyHost, fromKind}`).
+`GET /api/credentials/:id/events` is the audit (`hosts` records an audience change).
+
+## Audience
+
+Where `http.request` may send a credential (SEC-4): exact hosts, or `*.name`
+for a name's subdomains (never the name itself). Entries are normalised with
+WHATWG URL parsing (`normalizeHostEntry` in [tools.ts](../../packages/shared/src/tools.ts):
+lower case, punycode, `127.1` → `127.0.0.1`, no trailing dot); a scheme, port,
+path, user, `*` alone or a wildcard over one label (`*.com`) is refused (400).
+With none of its own a credential takes its kind's (`CREDENTIAL_KIND_HOSTS`):
+`github` → `api.github.com`, `uploads.github.com`, `github.com`; `cloudflare` →
+`api.cloudflare.com`; `npm` → `registry.npmjs.org`; every other kind none —
+sent nowhere until the operator names hosts (so a generated or MyVault-imported
+`http` secret starts with none). GitHub Enterprise hosts are the operator's to
+add. A credential of a kind naming no host that existed before migration 24 is
+`anyHost`: sent to any host exactly as before, shown as **Any host · review**
+with a banner on the Credentials tab until its hosts are named (`["*"]` is
+never accepted as input). Media keys never reach `http.request`, so they have
+no hosts to review.
+
+`value(name, repositoryId, {targetUrl})` — what `http.request` asks, naming
+its URL — returns null for a host outside the audience unless `approvedSend`
+(ToolService sets it only for a call the operator approved after being asked).
+Before a call runs, `outsideAudience()` tells ToolService that a named
+credential would go outside its audience, so an agent is refused and an
+operator asked ([tool-system.md](tool-system.md#the-execution-door-servicets));
+it says nothing about a credential `value()` would not hand out anyway.
+`outboundSecrets(repositoryId)` gives the outbound check every stored value,
+labelled `<kind> credential "<name>"`, each exempt only on its own audience
+hosts and only where that repository may use it, and teaches the redactor each
+one (so a call the check stops records none, even one not opened since
+startup). It throws when the key will not load, and the check then fails
+closed; a record sealed under another key is skipped, as `primeRedactor`
+skips it. Other readers (`envFor`, a
+secret put, the media tools, an MCP server's variables) name no target.
 
 ## Generated secrets (`credential.generate`)
 
@@ -198,8 +238,9 @@ dashboard's `/vault-bridge` page as a popup and the two ends talk through it.
   can only relay ciphertext, and a program squatting the port is refused. In
   the other direction the orchestrator does not authenticate MyVault: anything
   holding the local API token can open a session as a trusted origin and be
-  sent pending generated secrets — no wider than that token's existing reach,
-  since it can already send any in-scope credential with `http.request`.
+  sent pending generated secrets — no wider than that token's existing reach:
+  it acts as the operator, who may approve an `http.request` that sends a
+  credential outside its [audience](#audience). An agent cannot.
 - **Sessions** ([vault-bridge.ts](../../apps/orchestrator/src/tools/vault-bridge.ts)):
   memory only (a restart drops them all), one per origin (reconnect replaces),
   4 at most, 10 min idle / 30 min absolute, 512 KiB per message, 100 pushes and
@@ -313,7 +354,12 @@ argv/output hygiene; every session's identity signature verifies, is bound to
 its session, uses one key that survives a restart, and no PKCS#8 appears in the
 row or any answer. Playwright ([vault-bridge.spec.ts](../../apps/dashboard/e2e/vault-bridge.spec.ts))
 drives the popup with a Web Crypto stand-in for MyVault that verifies the
-signature. Real cross-app runs (MyVault app + this orchestrator in Chromium) are
+signature. Audiences ([outbound-secrets.test.ts](../../apps/orchestrator/test/outbound-secrets.test.ts)):
+an agent's github credential to another host refused, the operator asked and
+the approved send delivered, the same call to `api.github.com` run, a
+credential of a pre-24 database still working and marked for review;
+[tools.spec.ts](../../apps/dashboard/e2e/tools.spec.ts) drives the review and
+the hosts editor in both themes. Real cross-app runs (MyVault app + this orchestrator in Chromium) are
 recorded in both plans' Ledgers.
 
 ## Gotchas

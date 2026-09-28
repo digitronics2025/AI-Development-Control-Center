@@ -126,9 +126,11 @@ function categoryOf(input: FailureInput): FailureCategory {
           return 'ENVIRONMENT';
         case 'CONTEXT_FAILURE':
           return 'WORKFLOW_STATE';
+        // PROTOCOL_DRIFT: the CLI answered in a form its adapter does not read — the agent's tooling failed, not the code.
         case 'PROCESS_CRASH':
         case 'TIMEOUT':
         case 'REVIEW_INCOMPLETE':
+        case 'PROTOCOL_DRIFT':
           return 'WORKER_OR_TOOL';
         default:
           return 'UNKNOWN';

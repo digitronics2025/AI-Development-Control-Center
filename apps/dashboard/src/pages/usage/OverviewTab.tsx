@@ -18,8 +18,8 @@ import {
 import { formatRatio, formatTokens, formatUsd, type UsageOverview } from '@acc/shared';
 import { useUsageOverview } from '../../api/usage';
 import { MediaPanel } from './MediaPanel';
-import { providerLabel, CapacityList } from './ProvidersTab';
-import { bucketLabel, costWithGaps, unpricedNote, type UsageState } from './common';
+import { CapacityList } from './ProvidersTab';
+import { bucketLabel, costWithGaps, unpricedNote, useProviderLabel, type UsageState } from './common';
 
 function Kpis({ data }: { data: UsageOverview }) {
   const t = data.totals;
@@ -89,6 +89,7 @@ function Trend({ data }: { data: UsageOverview }) {
 
 export function OverviewTab({ state }: { state: UsageState }) {
   const overview = useUsageOverview(state.query);
+  const providerLabel = useProviderLabel();
   if (overview.isLoading) {
     return (
       <div className="flex flex-col gap-4">

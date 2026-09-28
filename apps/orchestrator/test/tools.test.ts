@@ -189,8 +189,10 @@ describe('credential broker', () => {
 
   it('stores values sealed, never returns them, injects them into one call and redacts echoes', async () => {
     const value = ['brokered', 'secret', 'value', '0042'].join('-');
-    const created = await t.api('POST', '/api/credentials', { name: 'test-api', kind: 'http', value, description: 'fixture' });
+    // An http credential names the hosts it may be sent to (SEC-4): here the fixture server's.
+    const created = await t.api('POST', '/api/credentials', { name: 'test-api', kind: 'http', value, description: 'fixture', audience: ['127.0.0.1'] });
     expect(created.status).toBe(201);
+    expect(created.body.audience).toEqual({ hosts: ['127.0.0.1'], anyHost: false, fromKind: false });
     expect(JSON.stringify(created.body)).not.toContain(value);
     expect(created.body.fingerprint).toMatch(/^[0-9a-f]{8}$/);
     const listed = await t.api('GET', '/api/credentials');
@@ -205,6 +207,13 @@ describe('credential broker', () => {
     expect(JSON.stringify(call.body)).not.toContain(value);
     const missing = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'http.request', input: { url, auth: { credential: 'nope' } } });
     expect(missing.body.result.error.code).toBe('AUTH_REQUIRED');
+    // One saved without hosts is sent nowhere until the operator approves the send.
+    seen = 'untouched';
+    await t.api('POST', '/api/credentials', { name: 'test-api-nowhere', kind: 'http', value: `${value}-2` });
+    const asked = await t.api('POST', '/api/tools/call', { repositoryId: repoId, capability: 'http.request', input: { url, auth: { credential: 'test-api-nowhere' } } });
+    expect(asked.body.decision).toBe('approval');
+    expect(asked.body.result.summary).toContain('Sends http credential "test-api-nowhere" to 127.0.0.1');
+    expect(seen).toBe('untouched');
   }, 60_000);
 });
 
@@ -564,10 +573,10 @@ describe('MCP servers', () => {
     const def = (role: 'designer' | 'implementer' | 'reviewer', toolProfile?: 'frontend-design') => ({ key: 'build', name: 'Build', role, kind: 'agent' as const, permissionLevel: 2 as const, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...(toolProfile ? { toolProfile } : {}) });
     const tokenOf = (bridge: { env: Record<string, string> } | null) => bridge!.env.ACC_TOOL_SESSION!;
     for (const [role, profile, refused] of [['designer', undefined, true], ['reviewer', 'frontend-design', true], ['implementer', undefined, false]] as const) {
-      const bridge = t.services.tooling.openAgentSession(task, def(role, profile), stage, repo);
-      const result = await call(tokenOf(bridge));
+      const session = t.services.tooling.openAgentSession(task, def(role, profile), stage, repo);
+      const result = await call(tokenOf(session?.bridge ?? null));
       expect(result.body.ok, `${role} ${profile ?? ''}`).toBe(!refused);
-      bridge!.close();
+      session!.close();
     }
     await t.api('POST', `/api/tasks/${taskId}/cancel`);
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);

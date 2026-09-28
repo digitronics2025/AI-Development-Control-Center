@@ -1,5 +1,5 @@
 import type { ShellInfo, ShellKind, StreamName } from '@acc/executor';
-import type { CommandEffect } from '@acc/security';
+import type { CommandEffect, OutboundRequest } from '@acc/security';
 import { PRODUCTION_BRANCH_NAMES, type CommandRisk, type PermissionLevel } from '@acc/shared';
 import type { z } from 'zod';
 
@@ -132,8 +132,10 @@ export interface CredentialHost {
    * Plaintext of a named credential, for injection into one child process. Never returned to a model.
    * With `kind`, only a credential of that kind is returned (the media tools read only `media` keys,
    * so an agent cannot have another secret sent to a vendor by naming it).
+   * With `targetUrl` (a tool that sends it there as a header: `http.request`), only a credential whose
+   * audience holds that URL's host is returned, unless the operator approved this very send (SEC-4).
    */
-  value(name: string, opts?: { kind?: 'media' }): Promise<string | null>;
+  value(name: string, opts?: { kind?: 'media'; targetUrl?: string }): Promise<string | null>;
   /** Environment for credential kinds (e.g. `cloudflare` → CLOUDFLARE_API_TOKEN). */
   envFor(kinds: readonly string[]): Promise<Record<string, string>>;
   /**
@@ -165,6 +167,9 @@ export interface GeneratedSecret {
 export interface PrivilegedHost {
   run(operation: string, params: Record<string, unknown>): Promise<{ ok: boolean; message: string }>;
 }
+
+/** Where an operation's `outbound()` reads a file the call will send: the call's own folder and roots. */
+export type OutboundContext = Pick<OperationContext, 'cwd' | 'roots'>;
 
 export interface OperationContext {
   executionId: string;
@@ -272,6 +277,19 @@ export interface ToolOperation<I = any, O = any> {
    * or the estimate does not fit a media budget (docs/systems/design-agent.md).
    */
   estimateCost?(input: I, prices: Readonly<Record<string, number>>): CostEstimate;
+  /**
+   * What the call sends that its caller wrote, wherever it goes (SEC-4): the URL,
+   * headers and body of `http.*`, the page `web.read` loads, the query
+   * `web.search` sends, an outside MCP tool's arguments, and a credential it
+   * attaches by name. Before the run, ToolService refuses an agent (and asks an
+   * operator) when one carries a known secret, raw or encoded, to a host that
+   * secret may not reach (a loopback one too: a local server can pass it on),
+   * carries a token of a known format off this machine, or attaches a
+   * credential outside its audience (docs/systems/tool-system.md). What the run
+   * reads from disk and sends (`http.request`'s multipart files) is read here,
+   * inside `ctx.roots`, and the run sends the bytes this check read.
+   */
+  outbound?(input: I, ctx: OutboundContext): OutboundRequest[] | Promise<OutboundRequest[]>;
   run(input: I, ctx: OperationContext): Promise<OperationResult<O>>;
 }
 

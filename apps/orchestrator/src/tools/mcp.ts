@@ -267,6 +267,9 @@ export class McpService {
         ...(t.readOnlyHint === true && !destructive ? { readOnly: true } : {}),
         level: (destructive ? Math.max(3, s.permissionLevel) : s.permissionLevel) as PermissionLevel,
         classify: () => ({ reasons: [`MCP server ${s.name}${destructive ? ' (the server marks this tool destructive)' : ''}`], risk: destructive ? 'elevated' : 'normal', effects: ['network'] }),
+        // Its arguments are checked for secrets before callTool (SEC-4). An HTTP server is judged by its URL's host, as any
+        // request there (a stored credential whose audience holds that host is exempt); a stdio server has no host, so none is.
+        outbound: (input) => [{ ...(s.transport === 'http' && s.url ? { url: s.url } : { target: `the MCP server "${s.name}"` }), body: input }],
         run: async (input, ctx) => {
           const current = this.store.mcpServer(s.id);
           if (!current?.enabled) return failure('UNAVAILABLE', `MCP server ${s.name} is disabled`);

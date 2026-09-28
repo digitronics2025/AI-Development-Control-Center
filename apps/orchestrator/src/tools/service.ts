@@ -1,17 +1,38 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import type { GuardedFileTool } from '@acc/agent-claude';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, relativizeOwnRoots, sanitizeEnv } from '@acc/security';
+import {
+  classifyCommand,
+  constantTimeEqual,
+  describeFindings,
+  inputReferencesSelf,
+  knownSecretValues,
+  maskPersonalData,
+  maskPersonalText,
+  namedHost,
+  redact,
+  REDACTED,
+  referencesSelf,
+  relativizeOwnRoots,
+  sanitizeEnv,
+  scanOutbound,
+  type OutboundFinding,
+  type OutboundSecret,
+} from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
+  classifyScript,
   decide,
   isInside,
   policyCeiling,
   PROFILES,
   profileIncludes,
   profileRank,
+  realish,
   resolveInside,
   ToolHealthCache,
   ToolRegistry,
@@ -23,11 +44,13 @@ import {
   type PolicyDecision,
   type ProfileId,
   type ToolDetection,
+  type ToolOperation,
   type ToolProvider,
   type ToolRisk,
 } from '@acc/tools';
 import { z } from 'zod';
 import type { Bus } from '../bus.js';
+import { learnedPluginsRoot } from '../learning/skills.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now } from '../store/store.js';
@@ -146,6 +169,70 @@ export interface ToolSession {
   kind: 'agent' | 'operator';
   createdAt: string;
   expiresAt: number;
+  /** Opened only for the native shell precheck (tools are off for agents): no tool route accepts it. */
+  guardOnly?: boolean;
+}
+
+/** Claude Code's settings files, through which a command could switch the precheck hook off (`disableAllHooks`). */
+const NAMES_CLAUDE_SETTINGS = /\.claude[\\/]+settings[^\\/\s"'`]*\.json/i;
+
+/** The native precheck's answer to the run's hook (SEC-3). */
+export type NativeDecision = { decision: 'allow' } | { decision: 'deny'; reason: string };
+
+/** The input fields that name what each guarded native file tool reads (Grep's `pattern` is text to find, not a path). */
+export const NATIVE_FILE_PATHS: Readonly<Record<GuardedFileTool, readonly string[]>> = { Read: ['file_path'], Grep: ['path', 'glob'], Glob: ['path', 'pattern'] };
+
+/** A native call no approval can let through: Level 5, dangerous. */
+function dangerous(reason: string, effect: ToolRisk['effects'][number]): ToolRisk {
+  return { level: 5, risk: 'dangerous', reasons: [reason], effects: [effect], production: false };
+}
+
+/** The task's own folders, which a call may name as its own (`relativizeOwnRoots`): its roots, working folder and linked repositories. */
+function ownRoots(scope: ToolScope): string[] {
+  return [...scope.roots, scope.cwd, ...(scope.repositories ?? []).map((r) => r.root)];
+}
+/** A path segment `..`: a read-only folder's mention followed by one leaves the folder. */
+const PARENT_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
+
+/**
+ * A mention of the absolute folder `root` in a command, in its own spelling or
+ * Git Bash's (`/c/Users/…` for `C:\Users\…`), with the rest of that path as
+ * group 1; null for a root that names no folder.
+ */
+function folderMention(root: string, flags: string): RegExp | null {
+  const parts = root.split(/[\\/]+/).filter(Boolean);
+  const drive = /^[A-Za-z]:$/.test(parts[0] ?? '') ? parts.shift()!.slice(0, 1) : null;
+  if (!parts.length) return null;
+  const head = drive ? `(?:${drive}:|[\\\\/]${drive}(?=[\\\\/]))` : '';
+  const body = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]+');
+  return new RegExp(`${head}[\\\\/]+${body}(?![^\\\\/\\s"'\`|;&<>])((?:[\\\\/][^\\s"'\`|;&<>]*)?)`, flags);
+}
+
+/**
+ * `command` with each mention of a folder agents may read but never write
+ * (the learned plugins, which live in the data folder) put as a neutral word,
+ * so that folder alone does not make the command a self-reference (SEC-3).
+ * The caller uses the result only for a command that then reads and nothing
+ * more; a mention followed by a `..` segment is kept as it is.
+ */
+export function excuseReadOnlyFolders(command: string, roots: readonly string[]): string {
+  let out = command;
+  for (const root of roots) {
+    const mention = folderMention(root, 'gi');
+    if (mention) out = out.replace(mention, (whole, tail: string) => (PARENT_SEGMENT.test(tail) ? whole : `learned-plugins${tail}`));
+  }
+  return out;
+}
+
+/**
+ * Whether `command` names the native shell check (SEC-3): its script by file
+ * name, whatever the path before it, or its folder by absolute path. The run's
+ * Edit rule on that folder (`shellGuardDenied`) covers the file tools and
+ * redirections; this covers the rest of a shell command's ways to change it.
+ */
+export function namesShellGuard(command: string, script: string): boolean {
+  const name = path.basename(script).replace(/\.[^.]*$/, '').toLowerCase();
+  return (name !== '' && command.toLowerCase().includes(name)) || Boolean(folderMention(path.dirname(script), 'i')?.test(command));
 }
 
 /** Capabilities agents already have natively (their own Read/Edit/Bash and git): callable, but not listed, to keep prompts small. */
@@ -154,11 +241,12 @@ const MAX_LISTED = 60;
 /** Capabilities that put a stored secret where it is used. Only a production put (Level 5, always a typed approval) may read a reserved one. */
 const SECRET_DEPLOYS: ReadonlySet<string> = new Set(['cloudflare.secret_put', 'github.secret_put']);
 
-function clipInput(input: unknown): string {
+/** A call's input as it is recorded: redacted and clipped; a string (or key) `masked` names is recorded as `[REDACTED]`. */
+function clipInput(input: unknown, masked?: (text: string) => boolean): string {
   const shrink = (v: unknown): unknown => {
-    if (typeof v === 'string') return v.length > 300 ? `[${v.length} characters]` : v;
+    if (typeof v === 'string') return v.length > 300 ? `[${v.length} characters]` : masked?.(v) ? REDACTED : v;
     if (Array.isArray(v)) return v.slice(0, 20).map(shrink);
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).slice(0, 30).map(([k, x]) => [k, shrink(x)]));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).slice(0, 30).map(([k, x]) => [masked?.(k) ? REDACTED : k, shrink(x)]));
     return v;
   };
   const text = redact(JSON.stringify(shrink(input)) ?? '');
@@ -205,6 +293,19 @@ export interface ToolServiceDeps {
   spend?: MediaSpendGate;
   dataDir: string;
   baseEnv: NodeJS.ProcessEnv;
+  /** The native shell precheck hook's script (SEC-3), which the precheck keeps agents from changing (`namesShellGuard`). */
+  shellGuardPath?: string | null;
+  /** The local API token: the outbound check names it when a request would carry it (SEC-4). */
+  localToken?: string | null;
+}
+
+/** What an outbound request would carry where it may not go (SEC-4): by kind, name and host, never a value. */
+export interface OutboundLeak {
+  reason: string;
+  /** A stored credential attached by name to a host outside its audience. */
+  audience: Array<{ kind: string; name: string; host: string }>;
+  /** Known secrets and token formats in what the caller wrote. */
+  findings: OutboundFinding[];
 }
 
 /**
@@ -493,11 +594,11 @@ export class ToolService {
     // 3. Classify this concrete call. It is judged with the task's own folders written relative to them: an isolated
     // task's worktree lives in the data folder, and its own path is not the Control Center's files. Only the judging
     // sees this form; the call runs with its input as given.
-    const judged = relativizeOwnRoots(input, [...scope.roots, scope.cwd, ...(scope.repositories ?? []).map((r) => r.root)]);
+    const judged = relativizeOwnRoots(input, ownRoots(scope));
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
     const classified = operation.classify?.(judged, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
-    const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
+    let risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
     // An agent never reaches the Control Center itself — its token, keys, data folder or API — through
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
@@ -515,10 +616,25 @@ export class ToolService {
       return refuse('denied', 'DENIED', DESIGN_MCP_REFUSAL, 'deny', risk);
     }
 
+    // 3b. What the call sends off this machine (SEC-4): a stored credential outside its audience, or a known
+    // secret (raw or encoded) or token in what the caller wrote. Refused for agents, asked of anyone else.
+    const outbound = operation.outbound ? await this.outboundCheck(operation, input, scope) : null;
+    const leak = outbound?.leak ?? null;
+    if (outbound) {
+      // Recorded again now that the check has taught the redactor every stored value; a string in which the check
+      // still reads a secret once redacted (base64 wrapped over lines, hex bytes spaced) is recorded masked whole.
+      const everywhere = outbound.secrets.map(({ hosts: _hosts, ...secret }) => secret);
+      base.inputSummary = clipInput(req.input, (text) => scanOutbound({ target: 'the record', body: redact(text) }, everywhere).length > 0);
+    }
+    if (leak) risk = { ...risk, reasons: [...risk.reasons, leak.reason], effects: [...new Set([...risk.effects, 'credentials' as const])] };
+
     // 4. Policy.
     const inProfile = profileIncludes(PROFILES[scope.profile], req.capability) || scope.escalated.has(req.capability);
-    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
+    let decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile, origin: req.origin, ...(leak ? { leak: leak.reason } : {}), ...(scope.readOnly ? { readOnly: { allowed: scope.readOnly.allow.has(req.capability) } } : {}) });
+    // The operator approved this very send: the broker may hand the credential to this call's host.
+    const approvedSend = Boolean(leak) && req.preApproved === true && req.origin !== 'agent' && decision.decision === 'approval';
     if (req.preApproved && decision.decision === 'approval') decision = { decision: 'allow', reason: `${decision.reason} — approved` };
+    if (leak) this.leakEvent(scope, req.capability, leak, decision.decision);
     if (decision.decision === 'deny') {
       this.escalate(scope, req.capability, 'denied', decision.reason, risk.level);
       return refuse('denied', 'DENIED', decision.reason, 'deny', risk);
@@ -582,7 +698,7 @@ export class ToolService {
       // In a task workspace, a Git process started by any tool stops searching for a repository at the workspaces folder.
       const ceiling = req.scope.repositories?.length ? { GIT_CEILING_DIRECTORIES: path.dirname(req.scope.roots[0]!) } : {};
       const readOnlyEnv = scope.readOnly ? { ...scope.readOnly.env, ACC_READ_ONLY: '1' } : {};
-      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine, deploysReserved: SECRET_DEPLOYS.has(req.capability) && risk.level >= 5 });
+      const ctx = this.context(scope, { executionId: execution.id, env: { ...this.env(), ...ceiling, ...credentialEnv, ...readOnlyEnv }, signal: controller.signal, timeoutMs, onLine: req.onLine, deploysReserved: SECRET_DEPLOYS.has(req.capability) && risk.level >= 5, approvedSend });
       result = missingCredential
         ? { ok: false, summary: `No read-only ${missingCredential} key is set up for this conversation (Settings → Ask).`, error: { code: 'AUTH_REQUIRED', message: `No read-only ${missingCredential} key is set up (Settings → Ask).` } }
         : await Promise.race([
@@ -640,7 +756,74 @@ export class ToolService {
     }
   }
 
-  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine']; deploysReserved: boolean }): OperationContext {
+  /**
+   * The outbound check (SEC-4) of one call, before it runs: a credential it
+   * attaches by name to a host outside that credential's audience, and the
+   * secrets the Control Center knows — stored credentials (each exempt on the
+   * hosts it may be sent to, where this repository may use it), its own token,
+   * sensitive environment values — raw or encoded, plus well-known token
+   * formats, in the URL, headers or body the caller wrote (and a multipart
+   * file's content). `leak` is null when clean; `secrets` are the values it
+   * looked for. Fails closed: a request that cannot be checked — the credential
+   * key not loading included — is reported as a leak.
+   */
+  private async outboundCheck(operation: Pick<ToolOperation, 'outbound'>, input: unknown, scope: ToolScope): Promise<{ leak: OutboundLeak | null; secrets: OutboundSecret[] }> {
+    let secrets: OutboundSecret[] = [];
+    try {
+      const requests = await operation.outbound!(input, { cwd: scope.cwd, roots: scope.roots });
+      if (!requests.length) return { leak: null, secrets };
+      const stored = await this.d.credentials.outboundSecrets(scope.repositoryId);
+      const token = this.d.localToken ?? null;
+      const labelled = new Set([...stored.map((s) => s.value), ...(token ? [token] : [])]);
+      secrets = [
+        ...stored,
+        ...(token ? [{ label: 'the Control Center token', kind: 'control-center-token', value: token }] : []),
+        ...knownSecretValues()
+          .filter((v) => !labelled.has(v))
+          .map((value) => ({ label: 'a secret the Control Center keeps', kind: 'secret', value })),
+      ];
+      // Its host named as the findings name it: never a host whose own name carries a secret.
+      const audience = requests.flatMap((r) => {
+        const outside = r.credential && r.url ? this.d.credentials.outsideAudience(r.credential, scope.repositoryId, r.url) : null;
+        return outside ? [{ ...outside, host: namedHost(r, secrets) }] : [];
+      });
+      const findings = requests.flatMap((r) => scanOutbound(r, secrets));
+      if (!audience.length && !findings.length) return { leak: null, secrets };
+      const lines = [
+        ...audience.map((a) => `Sends ${a.kind} credential "${a.name}" to ${a.host}, which is not among the hosts it may be sent to (Tools → Credentials)`),
+        ...(findings.length ? [describeFindings(findings)] : []),
+      ];
+      return {
+        leak: { reason: redact(lines.join('; ')).slice(0, 600), audience: audience.map((a) => ({ ...a, host: redact(a.host).slice(0, 200) })), findings: findings.map((f) => ({ ...f, host: redact(f.host).slice(0, 200) })) },
+        secrets,
+      };
+    } catch (error) {
+      return { leak: { reason: `The request could not be checked for secrets (${redact((error as Error).message).slice(0, 200)})`, audience: [], findings: [] }, secrets };
+    }
+  }
+
+  /** The TOOL_CALL event of a call the outbound check stopped or an operator let through: kinds, names and hosts only. */
+  private leakEvent(scope: ToolScope, capability: string, leak: OutboundLeak, decision: PolicyDecision['decision']): void {
+    if (!scope.taskId) return;
+    const verb = decision === 'deny' ? 'refused' : decision === 'approval' ? 'needs approval' : 'sent with approval';
+    this.events(
+      scope.taskId,
+      'TOOL_CALL',
+      `${capability} ${verb}: ${leak.reason}`.slice(0, 700),
+      {
+        capability,
+        ok: decision === 'allow',
+        decision,
+        outbound: [
+          ...leak.audience.map((a) => ({ kind: a.kind, name: a.name, host: a.host, reason: 'outside audience' })),
+          ...leak.findings.map((f) => ({ kind: f.kind, name: f.label, host: f.host, where: f.where, form: f.form })),
+        ],
+      },
+      scope.stageId,
+    );
+  }
+
+  private context(scope: ToolScope, run: { executionId: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; onLine?: OperationContext['onLine']; deploysReserved: boolean; approvedSend?: boolean }): OperationContext {
     const artifacts: ArtifactSink | undefined = scope.taskId
       ? {
           write: async (a) => {
@@ -669,7 +852,13 @@ export class ToolService {
       prices: this.d.spend?.prices(),
       credentials: {
         // Only a production secret deploy, which always waits for the operator's typed approval, may read a credential kept for the orchestrator (LEAD_TIME_PLAN §6).
-        value: (name, opts) => this.d.credentials.value(name, scope.repositoryId, { ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}), ...(opts?.kind ? { kind: opts.kind } : {}) }),
+        // Sent as a header to `targetUrl`: only within its audience, or as the operator just approved (SEC-4).
+        value: (name, opts) =>
+          this.d.credentials.value(name, scope.repositoryId, {
+            ...(run.deploysReserved ? { reserved: 'deploy' as const } : {}),
+            ...(opts?.kind ? { kind: opts.kind } : {}),
+            ...(opts?.targetUrl !== undefined ? { targetUrl: opts.targetUrl, approvedSend: run.approvedSend === true } : {}),
+          }),
         envFor: (kinds) => this.d.credentials.envFor(kinds, scope.repositoryId),
         // A secret generated in a task belongs to that task's repository only; the operator may widen it later.
         generate: async (input) => {
@@ -705,11 +894,131 @@ export class ToolService {
   // Sessions (agents over MCP, operators from their own MCP client)
   // ===========================================================================
 
-  openSession(scope: Omit<ToolScope, 'sessionId' | 'escalated'>, kind: 'agent' | 'operator', ttlMs = 8 * 3600_000): ToolSession {
+  openSession(scope: Omit<ToolScope, 'sessionId' | 'escalated'>, kind: 'agent' | 'operator', ttlMs = 8 * 3600_000, opts: { guardOnly?: boolean } = {}): ToolSession {
     const id = newId();
-    const session: ToolSession = { id, token: randomBytes(32).toString('base64url'), scope: { ...scope, sessionId: id, escalated: new Set() }, kind, createdAt: now(), expiresAt: Date.now() + ttlMs };
+    const session: ToolSession = { id, token: randomBytes(32).toString('base64url'), scope: { ...scope, sessionId: id, escalated: new Set() }, kind, createdAt: now(), expiresAt: Date.now() + ttlMs, ...(opts.guardOnly ? { guardOnly: true } : {}) };
     this.sessions.set(id, session);
     return session;
+  }
+
+  /**
+   * The Control Center's judgement of a command an agent is about to run in
+   * its CLI's own shell (SEC-3), asked by the run's command hook before each
+   * one: the classification and policy `shell.*` gets, at the session's level,
+   * origin `agent`, with that level counted as approved (the stage passed its
+   * gate to be running). A native command cannot wait for an approval, so anything
+   * `decide()` does not allow outright is refused, and so is a command that
+   * names the Control Center itself (`referencesSelf`), Claude Code's settings
+   * files, or — to do more than read — the hook's own script or folder
+   * (`namesShellGuard`), through which the hook could be switched off. Its learned
+   * plugins may be read (`excuseReadOnlyFolders`). Only refusals are recorded,
+   * as `native.bash` rows in tool_executions. File reads: `precheckFile`.
+   */
+  precheck(session: ToolSession, command: string): NativeDecision {
+    const refuse = (reason: string, risk: ToolRisk) => this.refuseNative(session, 'native.bash', { command }, reason, risk);
+    const { scope } = session;
+    if (NAMES_CLAUDE_SETTINGS.test(command)) {
+      const reason = "Names Claude Code's settings files, through which the Control Center's checks could be switched off";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'persistence'));
+    }
+    // The hook that asks this: changed, replaced or gone, it would let every later command through. Reading it is harmless.
+    if (this.d.shellGuardPath && namesShellGuard(command, this.d.shellGuardPath) && !classifyCommand(command).readOnly) {
+      const reason = "Changes the Control Center's check of shell commands, which would switch it off";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'persistence'));
+    }
+    // Judged with the task's own folders written relative to them, as `invoke` judges a tool call: a worktree the
+    // start could not move out of the data folder is the task's own, not the Control Center's files.
+    const judged = relativizeOwnRoots(command, ownRoots(scope));
+    // The learned plugins may be read; a command that does more than read them is judged as written.
+    const excused = excuseReadOnlyFolders(judged, [learnedPluginsRoot(this.d.dataDir)]);
+    const text = excused !== judged && classifyCommand(excused).readOnly ? excused : judged;
+    if (referencesSelf(text)) {
+      const reason = "Reaches the Control Center's own token, data folder or API";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
+    }
+    const processHost = this.d.processes.host(scope.taskId, scope.stageId);
+    const risk: ToolRisk = { ...this.baseRisk(2, 'Runs a native shell command'), ...classifyScript(text, [], { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) }) };
+    // The stage is running, so it passed its approval gate: its own level runs, as its native shell always did there.
+    const decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile: true, origin: 'agent', approvedLevel: scope.stageLevel });
+    if (decision.decision === 'allow') return { decision: 'allow' };
+    const way = session.guardOnly ? 'report it as an operator decision' : `use the Control Center's shell tool (shell.run on the "acc" server), which applies the same policy, or report it as an operator decision`;
+    return refuse(`${decision.reason.replace(/\.$/, '')}. A native shell command cannot wait for an approval: ${way}.`, risk);
+  }
+
+  /**
+   * The same hook's judgement of a native file read (SEC-3): Claude Code's
+   * `Read`, `Grep` or `Glob`, judged by the paths it reads (`NATIVE_FILE_PATHS`)
+   * — as given, with `~` and Git Bash's `/c/…` spelled out, resolved against
+   * the run's folder and the CLI's (`cwd`, which the hook reports; it only ever
+   * refuses more), and through links. Refused: a path that names the Control
+   * Center itself (`referencesSelf`: its data folder, token and key files,
+   * address), and a search whose folder holds the data folder (it would read
+   * every file in it). The learned plugins and this task's own attachments,
+   * which live in the data folder, may be read (`excuseReadOnlyFolders`); the
+   * worktree and every other path are allowed. Only refusals are recorded, as
+   * `native.read`, `native.grep` or `native.glob` rows in tool_executions.
+   */
+  precheckFile(session: ToolSession, tool: GuardedFileTool, input: Record<string, unknown>, cwd: string | null = null): NativeDecision {
+    const { scope } = session;
+    const given = Object.fromEntries(NATIVE_FILE_PATHS[tool].flatMap((field) => (typeof input[field] === 'string' && input[field] ? [[field, input[field] as string]] : [])));
+    const refuse = (reason: string) => this.refuseNative(session, `native.${tool.toLowerCase()}`, given, `${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
+    const bases = [...new Set([scope.cwd, ...(cwd && path.isAbsolute(cwd) ? [cwd] : [])])];
+    const spellings = (value: string): string[] => {
+      const out = [value];
+      if (/^~(?=[\\/]|$)/.test(value)) out.push(path.join(os.homedir(), value.slice(1)));
+      if (process.platform === 'win32' && /^\/[A-Za-z](?=\/|$)/.test(value)) out.push(`${value[1]!.toUpperCase()}:${value.slice(2) || '\\'}`);
+      return out;
+    };
+    const absolute = (value: string, from: readonly string[]) => spellings(value).flatMap((s) => from.map((base) => path.resolve(base, s)));
+    // Grep and Glob search a folder — their `path`, else the CLI's — and their glob or pattern is read inside it.
+    const roots = tool === 'Read' ? [] : given.path ? absolute(given.path, bases) : bases;
+    const candidates = new Set<string>();
+    const add = (p: string) => {
+      candidates.add(p);
+      if (path.isAbsolute(p)) candidates.add(realish(p));
+    };
+    for (const [field, value] of Object.entries(given)) for (const p of [...spellings(value), ...absolute(value, field === 'glob' || field === 'pattern' ? roots : bases)]) add(p);
+    for (const root of roots) add(root);
+    const readable = [learnedPluginsRoot(this.d.dataDir), ...(scope.taskId ? [path.join(this.d.dataDir, 'tasks', scope.taskId, 'attachments')] : [])];
+    const own = ownRoots(scope);
+    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(relativizeOwnRoots(p, own), readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
+    const data = path.resolve(this.d.dataDir);
+    if (roots.some((root) => isInside(root, data) || isInside(realish(root), realish(data)))) return refuse("Searches a folder that holds the Control Center's own data folder");
+    return { decision: 'allow' };
+  }
+
+  /** Record a refused native call (the precheck's only rows) and answer the hook with the reason. */
+  private refuseNative(session: ToolSession, capability: string, input: unknown, reason: string, risk: ToolRisk): NativeDecision {
+    const { scope } = session;
+    const at = now();
+    this.record({
+      id: newId(),
+      taskId: scope.taskId,
+      stageId: scope.stageId,
+      sessionId: scope.sessionId,
+      capability,
+      providerId: null,
+      origin: 'agent',
+      routeReason: null,
+      inputSummary: clipInput(input),
+      attempt: 1,
+      recoveryOf: null,
+      artifacts: [],
+      filesChanged: [],
+      networkTargets: [],
+      evidence: [],
+      startedAt: at,
+      finishedAt: at,
+      durationMs: 0,
+      status: 'denied',
+      decision: 'deny',
+      permissionLevel: risk.level,
+      risk: risk.risk,
+      effects: risk.effects,
+      summary: redact(reason).slice(0, 500),
+      errorCode: 'DENIED',
+    });
+    return { decision: 'deny', reason };
   }
 
   closeSession(id: string): void {

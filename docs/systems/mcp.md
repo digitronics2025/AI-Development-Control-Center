@@ -24,6 +24,10 @@ tool took a screenshot, up to three MCP `image` blocks the model looks at
 **Agent stages.** When Settings → Execution → *Give agents the Control Center
 tools* is on and the bridge is built, each agent execution gets a session
 scoped to its task, stage level and profile, closed when the execution ends.
+The same session authenticates the native shell precheck hook
+([agents-claude-code.md](agents-claude-code.md), `AgentRunSession.shellGuard`); with tools off, or
+with stage runs starting as the agent account ([security.md](security.md#agent-os-boundary)),
+it is opened for the hook alone (`guardOnly`: the tool routes answer 403).
 The token and URL travel only in the agent's environment
 (`ACC_TOOL_SESSION`, `ACC_TOOL_URL`):
 
@@ -38,7 +42,7 @@ The token and URL travel only in the agent's environment
 
 The prompt gains a "Control Center tools" section (at Level 1 it also says to read Git
 through `git__status`/`git__diff`/`git__log`/`git__show`: Claude Code has no shell there,
-[agents.md](agents.md)). Tool names are the
+[agents-claude-code.md](agents-claude-code.md)). Tool names are the
 capability id with `.` → `__` (`network__port_owner`); two meta tools,
 `acc_find_capability` and `acc_call_capability`, reach capabilities that are
 not listed (escalation, [autopilot.md](autopilot.md)).
@@ -53,7 +57,7 @@ plugins (including plugins installed on the ChatGPT account, which load even
 with `--ignore-user-config`) and skill-requested installs. If it cannot tell,
 the run is refused. Measured layers and the real-run check
 (`pnpm verify:agents --only codex --mcp`):
-[agents.md](agents.md#mcp-servers-in-a-codex-run).
+[agents-codex.md](agents-codex.md#mcp-servers-in-a-codex-run).
 To give agents an outside server, register it in the gateway below
 (Tools → MCP servers); agents reach it through `acc_call_capability`.
 
@@ -74,7 +78,16 @@ Environment variables (stdio) or headers (HTTP) are filled from named
 credentials by the broker (never a `media` key: a read that names no kind gets
 none, [credential-broker.md](credential-broker.md#flow), so a mapping that names
 one is refused when the server is saved); `allowedTools`
-narrows what is exposed.
+narrows what is exposed. Before a call reaches the server its arguments pass
+the outbound secret check (`outbound()`, SEC-4,
+[tool-system.md](tool-system.md#the-execution-door-servicets)): a known secret
+or token in them refuses an agent and asks an operator. An HTTP server is
+judged by its URL's host, as any request to that host: a stored credential
+whose audience holds it is exempt (a github token in the arguments of a server
+at `github.com`), and a loopback server may receive a token of a known format
+that is not stored. A stdio server has no host, so no stored credential is
+exempt there and no token of a known format may go to it; the check names it
+by name.
 
 **What passes through.** Text content is joined (and redacted); other content
 is named in the text (`[image image/png]`). PNG and JPEG image blocks (bytes

@@ -9,6 +9,7 @@ import {
   sanitizeEnv,
   credentialFreeEnv,
   detectAmbientCredentials,
+  streamRedactor,
 } from '../src/index.js';
 
 // Fake credentials are assembled at runtime so no credential-shaped literal
@@ -137,6 +138,20 @@ describe('Redactor', () => {
     expect(out[0]).toBe('before');
     expect(out.slice(1, 5).every((l) => l === REDACTED)).toBe(true);
     expect(out[5]).toBe('after');
+  });
+
+  it('keeps a private key hidden across the pieces of a stream, up to its END line', () => {
+    const scrub = streamRedactor();
+    const marker = (edge: string) => fake('-----', edge, ' RSA PRIVATE', ' KEY-----');
+    const first = scrub(`before\n${marker('BEGIN')}\nMIIEkey-part-one\n`);
+    expect(first.startsWith('before\n')).toBe(true);
+    expect(first).not.toContain('key-part-one');
+    expect(scrub('key-part-two\nkey-part-three\n')).toBe('');
+    expect(scrub(`key-part-four\n${marker('END')}\nafter\n`)).toBe('\nafter\n');
+    // Closed: the next piece is judged on its own again, and a block opened and closed in one piece opens nothing.
+    expect(scrub('plain\n')).toBe('plain\n');
+    expect(scrub(`${marker('BEGIN')}\nx\n${marker('END')}\n`)).not.toContain('\nx\n');
+    expect(scrub('plain again\n')).toBe('plain again\n');
   });
 
   it('redacts nested objects', () => {

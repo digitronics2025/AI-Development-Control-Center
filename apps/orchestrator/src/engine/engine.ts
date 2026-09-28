@@ -81,8 +81,10 @@ export interface EngineDeps {
   /** Failed checks compared with the task's baseline commit (AUTOPILOT_GATES_PLAN §3.B). */
   baselines: BaselineChecks;
   baseEnv?: NodeJS.ProcessEnv;
-  /** Where Stage Team workers' disposable checkouts are made (`<dataDir>/team-worktrees`). */
+  /** The data folder, where Stage Team checkouts were made before the work root existed (swept at start). */
   dataDir: string;
+  /** Where Stage Team workers' disposable checkouts are made (`<workDir>/team-worktrees`). */
+  workDir: string;
   /** Release proof reads: a stand-in for the live site in tests, and the poll interval. */
   release?: { probe?: Probe; pollSeconds?: number };
 }
@@ -154,6 +156,7 @@ export class TaskEngine {
       settings: d.settings,
       runners: this.stages,
       dataDir: d.dataDir,
+      workDir: d.workDir,
     });
     this.stages.team = this.team;
     d.tooling.attachPublisher(this.publisher);

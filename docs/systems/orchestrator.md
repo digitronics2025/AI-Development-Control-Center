@@ -21,6 +21,7 @@ hub, SQLite persistence and the workflow engine. Entry:
 | Variable | Default | Meaning |
 |---|---|---|
 | `ACC_DATA_DIR` | `%LOCALAPPDATA%\AIDevControlCenter` (Windows), `$XDG_DATA_HOME/ai-control-center` | Database, token, artifacts, `runtime.json` |
+| `ACC_WORK_DIR` | beside the data folder: `AccWork` for the default one (`acc-work` off Windows), `acc-work-<hash of its path>` for any other (`work-<hash>` when the data folder's name starts that, like `acc`) | The work root: task worktrees, task workspaces, Stage Team checkouts and their trash (`defaultWorkDir`, [config.ts](../../apps/orchestrator/src/config.ts)). Must be outside the data folder, and its path must not start with the data folder's (`D:\acc2` for `D:\acc`: the self-reference rule matches the data folder's path with nothing required after it) — refused at start otherwise; a name the self-reference rules match (`AIDevControlCenter`…) is warned about at start, because agents are refused every path in it |
 | `ACC_PORT` | `4317` | Listen port |
 | `ACC_HOST` | `127.0.0.1` | Refuses non-loopback hosts unless `ACC_ALLOW_REMOTE=1` |
 | `ACC_SIMULATED_AGENTS` | unset | `1` registers simulated agents (tests, demos) |
@@ -44,7 +45,22 @@ means restoring the pre-release `acc.db` backup together with the matching build
 | `auth-token` | Local API token (created once, mode 600) |
 | `runtime.json` | `{url, port, pid}` while running; removed on clean shutdown. Used by the extension and launchers |
 | `tasks/TASK-NNNN/` | Artifacts (`request.md`, `plan.md`, `review.md`, `final-report.md`, `git-diff.patch`, `task.json`, attachments). Outside the repository so they never appear in its diff |
-| `trash/` | Finished task worktrees waiting for deletion: renamed here at completion or cancel, after their work was committed to the task branch or kept in a backup ref, then deleted in the background (`EngineTooling.emptyTrash`, [checkpoints.md](checkpoints.md#worktrees)). Emptied again at every start. Only this folder is swept, and only while it is a plain folder: were `trash` itself a link (a junction on Windows) it is neither moved into nor emptied — checked before the sweep and before each entry — and finished worktrees are removed in place. `fs.rm` removes a link inside it without following it |
+| `learning/plugins/` | The learning loop's skill plugins ([learning.md](learning.md#skills)): the one part of the data folder agents may read — never write — by name |
+| `trash/`, `worktrees/`, `workspaces/`, `team-worktrees/` | Only from before the work root existed (SEC-3). At start, worktrees and workspaces still recorded here are moved to the work root (`EngineTooling.relocateLegacyWorkFolders`: `git worktree move`, or for a workspace one rename plus `git worktree repair` of each worktree in it, renamed back if a repair fails; Control Center installs in them are set aside to be installed again, since pnpm's links name the old folder; a task whose move fails keeps its folder, is logged, and is tried again at the next start; a move a stop cut off after the folder moved and before the records did is finished from where the folder is — a worktree Git already lists there is taken, a workspace is repaired there and taken, or left there with the reason); `trash/` is still emptied and `team-worktrees/` still swept |
+
+## Work root (`ACC_WORK_DIR`)
+
+Where the agents' files are, outside the data folder so that an agent can name
+its own worktree while every path in the data folder stays refused
+([security.md](security.md#command-classification-commandsts)). Repository
+discovery never enters it.
+
+| Path | Content |
+|---|---|
+| `worktrees/<repo>-<id>/<task>` | Task worktrees ([checkpoints.md](checkpoints.md#worktrees)) |
+| `workspaces/<task>/<folder>` | Multi-repository task workspaces ([multi-repository-tasks.md](multi-repository-tasks.md)) |
+| `team-worktrees/<task>/…` | Stage Team workers' checkouts ([stage-teams.md](stage-teams.md)) |
+| `trash/` | Finished task worktrees waiting for deletion: renamed here at completion or cancel, after their work was committed to the task branch or kept in a backup ref, then deleted in the background (`EngineTooling.emptyTrash`, [checkpoints.md](checkpoints.md#worktrees)). Emptied again at every start (with the data folder's old `trash/`). Only these folders are swept, and only while each is a plain folder: were `trash` itself a link (a junction on Windows) it is neither moved into nor emptied — checked before the sweep and before each entry — and finished worktrees are removed in place. `fs.rm` removes a link inside it without following it |
 
 ## Tables
 
@@ -124,7 +140,9 @@ Origin checks still apply): an authorization server sends the browser there,
 and only a single-use state the orchestrator issued is accepted
 ([mcp.md](mcp.md)). The built
 dashboard is served at `/` with the token injected as a `<meta>` tag and a
-strict CSP. `index.html` is re-read whenever its mtime changes and assets are
+strict CSP — with agent isolation on, only for a request carrying a one-time
+ticket from `POST /api/launch-tickets` (403 otherwise; [security.md](security.md#agent-os-boundary)).
+`index.html` is re-read whenever its mtime changes and assets are
 looked up per request, so rebuilding the dashboard needs no restart; while
 the build folder is empty the page answers 503 with `Retry-After`.
 
@@ -169,12 +187,15 @@ on a newer database) are left alone.
 `main.ts` runs `services.recover()` (tool executions left running are marked
 stopped, leftover terminals exited, leftover task processes — and agent or
 command processes of executions still marked running — killed only if still
-the same process (creation time within 15 s); then engine reconciliation, the baseline-check and
-Stage Team sweeps, and — in the background — emptying `<data>/trash`; then the Chairman resumes
+the same process (creation time within 15 s); then the one-time move of worktrees still in the
+data folder to the work root, engine reconciliation, the baseline-check and
+Stage Team sweeps, and — in the background — emptying the trash; then the Chairman resumes
 interrupted supervised tasks and answers pending chat, the learning loop and
 phone alerts start — alerts send what a restart left unsent in the last hour,
 [operations.md](operations.md#phone-alerts) — and `close()` stops alerts
-before the learning loop), gives the tool layer
+before the learning loop), gives the classifier and every agent run's native
+rules the data folder and listen port (`setSelfReferences`,
+`AgentRegistry.setControlCenter`, [agents-claude-code.md](agents-claude-code.md)), the tool layer
 its listen URL (agent tool sessions need it) and the MCP service its listen
 port (OAuth sign-ins come back to it), refreshes stale tool detection
 and loads stored credentials into the redactor in the background,

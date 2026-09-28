@@ -7,7 +7,7 @@ const TTL_MS = 60_000;
 
 /**
  * The skills the enabled agents would load in a repository
- * (docs/systems/agents.md#skills). Feeds the New Task slash picker and the
+ * (docs/systems/agents-skills.md#skills). Feeds the New Task slash picker and the
  * "Requested skills" prompt section. Each agent's list is cached per
  * repository and per its own settings, so switching "Load my CLI
  * customisations" shows the new list at once. An agent that fails to list

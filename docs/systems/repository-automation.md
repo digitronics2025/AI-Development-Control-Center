@@ -52,7 +52,8 @@ A folder containing a `.git` **directory** is a repository. A `.git` **file**
 history, and registering it twice would let two entries write the same Git
 directory. Never entered: names starting with `.`, `node_modules`, `AppData`,
 `Library`, `venv`, `__pycache__`, recycle-bin/system folders, symlinks and
-junctions (so the walk cannot loop), and the orchestrator's data folder.
+junctions (so the walk cannot loop), and the orchestrator's data folder and
+work root (its task worktrees).
 Registration goes through `RepositoryService.add` (same tool detection as a
 manual add). Name = folder name, or `parent/name` if another repository
 already has that name.

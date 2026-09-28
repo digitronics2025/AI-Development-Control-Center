@@ -37,6 +37,18 @@ const events = (id: string) => t.services.store.listEvents(id, { limit: 2000 });
 const eventTypes = (id: string) => events(id).map((e) => e.type);
 const decisions = (id: string) => t.services.chairman.store.listDecisions(id, 200);
 const actions = (id: string) => t.services.chairman.store.listActions(id, 500);
+/** How a task ended, for an assertion's message: a failure then names its cause instead of only the wrong value. */
+function endState(id: string): string {
+  const task = t.services.store.getTask(id);
+  return JSON.stringify({
+    status: task?.status,
+    finalStatus: task?.finalStatus,
+    blocker: task?.blocker?.message?.slice(0, 200),
+    stages: t.services.store.listStages(id).map((s) => `${s.stageKey}:${s.status}:${s.errorClass ?? ''}`),
+    decisions: decisions(id).map((d) => `${d.trigger}: ${d.decision}`),
+    errors: t.services.store.listExecutions(id).filter((e) => e.errorMessage).map((e) => e.errorMessage!.slice(0, 160)).slice(-3),
+  });
+}
 
 async function patchChairman(values: Record<string, unknown>) {
   const current = (await t.api('GET', '/api/settings')).body.chairman;
@@ -131,7 +143,7 @@ describe('supervised recovery (plan §7.2)', () => {
     const repo = await repoWith("console.log('FAIL test/a.test.js > adds'); console.log('2 failed, 3 passed'); process.exit(1);");
     const id = await createTask(t, await addRepo(t, repo), 'Never passes');
     const task = await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 90_000);
-    expect(task.status).toBe('WAITING_FOR_USER');
+    expect(task.status, endState(id)).toBe('WAITING_FOR_USER');
     expect(task.blocker).toMatchObject({ kind: 'limit' });
     expect(task.blocker!.message).toContain('Recovery cycle limit reached (2)');
     const recoveries = decisions(id).filter((x) => x.strategyFingerprint);
@@ -308,7 +320,10 @@ describe('strategy runs', () => {
     const repo = await repoWith("if (n < 4) { console.log('FAIL test/a.test.js > adds'); console.log('1 failed, 3 passed'); process.exit(1); } console.log('4 passed');");
     const id = await createTask(t, await addRepo(t, repo), 'Crash between the result and its evaluation');
     await waitForStatus(t, id, ['COMPLETED', 'FAILED', 'WAITING_FOR_USER'], 60_000);
-    const decision = decisions(id).find((d) => d.strategyFingerprint)!;
+    const found = decisions(id).find((d) => d.strategyFingerprint);
+    // When no strategy ran, say how the task ended instead of failing on `undefined.id` below.
+    expect(found, `no Chairman strategy ran: ${endState(id)}`).toBeDefined();
+    const decision = found!;
     // As if the orchestrator died after the tests passed but before the outcome was written.
     t.services.db.prepare("UPDATE chairman_strategy_runs SET status = 'RUNNING', outcome_summary = NULL, health_after = NULL, evaluated_at = NULL WHERE decision_id = ?").run(decision.id);
     const outcomeEvents = () => events(id).filter((e) => e.type === 'CHAIRMAN_DECISION' && (e.data as { outcome?: string }).outcome).length;
@@ -628,8 +643,15 @@ describe('watchdog (plan §16)', () => {
     expect(acted[0]).toContain('Watchdog:');
     const first = await waitFor(() => t.services.store.listStages(id)[0]!, (s) => s.status === 'FAILED', 10_000);
     expect(first.errorClass).toBe('TIMEOUT');
-    // Dead process: the recorded pid no longer exists on two consecutive checks.
-    const exec = await waitFor(() => t.services.store.listExecutions(id).find((e) => e.status === 'running'), (e) => Boolean(e), 20_000);
+    // Dead process: the recorded pid no longer exists on two consecutive checks. The retry's row is
+    // 'running' before its launch finishes, and the launch then writes the adapter's pid (null here)
+    // and registers the stop handle; its stage turns RUNNING in that same step (launchAgent), so wait
+    // for that or the pid below is overwritten and the watchdog has nothing to stop.
+    const exec = await waitFor(
+      () => t.services.store.listExecutions(id).find((e) => e.status === 'running' && Boolean(e.stageId) && t.services.store.getStage(e.stageId!)?.status === 'RUNNING'),
+      (e) => Boolean(e),
+      20_000,
+    );
     t.services.store.updateExecution(exec!.id, { pid: 999_999 });
     const { Watchdog } = await import('../src/chairman/watchdog.js');
     const dog = new Watchdog(t.services.engine, t.services.store, t.services.views, t.services.settings, t.services.chairman, () => false);
@@ -663,7 +685,7 @@ class ScriptedChairman implements AgentAdapter {
     return { state: 'connected' as const, message: 'ok', authMethod: 'test', billing: 'subscription' as const, checkedAt: new Date().toISOString() };
   }
   async getCapabilities(): Promise<AgentCapabilities> {
-    return { repositoryRead: true, repositoryWrite: false, commandExecution: false, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false };
+    return { repositoryRead: true, repositoryWrite: false, commandExecution: false, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false, pluginDirs: false, providerLabel: 'Test agents', maxPermissionLevel: 5 };
   }
   async listModels(): Promise<ModelDescriptor[]> {
     return [];

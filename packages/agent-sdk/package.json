@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Provider-independent agent adapter contract, failure classification and the CLI adapter base.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./test-kit": "./test-kit/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

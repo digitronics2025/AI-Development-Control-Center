@@ -84,6 +84,15 @@ async function contentHash(dir: string, files: string[]): Promise<string> {
   return h.digest('hex').slice(0, 32);
 }
 
+/**
+ * Where the managed plugins live: the one part of the data folder agents may
+ * read (their skills), never write — `--plugin-dir` hands it to runs, so it
+ * stays here rather than moving to the work root (SEC-3).
+ */
+export function learnedPluginsRoot(dataDir: string): string {
+  return path.join(dataDir, 'learning', 'plugins');
+}
+
 export class ManagedSkills {
   readonly root: string;
   private marketplaceCache: { at: number; skills: MarketplaceSkill[] } | null = null;
@@ -92,7 +101,7 @@ export class ManagedSkills {
     dataDir: string,
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
-    this.root = path.join(dataDir, 'learning', 'plugins');
+    this.root = learnedPluginsRoot(dataDir);
   }
 
   pluginName(scope: LearningScope): string {

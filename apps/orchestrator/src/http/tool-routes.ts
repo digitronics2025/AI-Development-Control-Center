@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { GUARDED_FILE_TOOLS } from '@acc/agent-claude';
 import {
   checkpointCreateSchema,
   checkpointRestoreSchema,
@@ -12,6 +13,7 @@ import {
   toolCallSchema,
   toolSessionOpenSchema,
   type PermissionLevel,
+  type StageStatus,
 } from '@acc/shared';
 import { policyCeiling, PROFILE_IDS, profileForRepository, type ProfileId } from '@acc/tools';
 import { redact } from '@acc/security';
@@ -22,10 +24,17 @@ import { MCP_OAUTH_CALLBACK } from '../tools/mcp.js';
 import { ToolService, type ToolScope, type ToolSession } from '../tools/service.js';
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
+/** A stage whose agent is starting or running: only its session may ask the shell precheck. */
+const ACTIVE_STAGE: readonly StageStatus[] = ['STARTING', 'RUNNING', 'RETRYING'];
 /** A model looks at a few pictures per call at most; more would crowd out the text. */
 const MAX_IMAGES_PER_CALL = 3;
 /** Query-string boolean: only the word `true` is true (z.coerce.boolean would read "false" as true). */
 const flag = z.enum(['true', 'false']).optional().transform((v) => v === 'true');
+/** What the native precheck hook asks about: a shell command, or a file tool's call and the CLI's folder. */
+const precheckBody = z.union([
+  z.object({ command: z.string().max(200_000) }),
+  z.object({ tool: z.enum(GUARDED_FILE_TOOLS), input: z.record(z.string(), z.unknown()), cwd: z.string().max(32_768).optional() }),
+]);
 
 /** Operator scope: a registered repository, the policy ceiling as the level, every capability listed. */
 export function operatorScope(s: AppServices, repositoryId: string, profile: ProfileId = 'operator'): Omit<ToolScope, 'sessionId' | 'escalated'> {
@@ -250,14 +259,38 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
     return reply.code(201).send({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), profile });
   });
 
-  const withSession = (request: FastifyRequest, reply: FastifyReply): ToolSession | null => {
+  /** The request's live tool session; a session opened only for the shell precheck opens nothing else. */
+  const withSession = (request: FastifyRequest, reply: FastifyReply, opts: { guardOnly?: boolean } = {}): ToolSession | null => {
     const session = tools.sessionByToken(bearer(request));
     if (!session) {
       void reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Missing or expired tool session' } });
       return null;
     }
+    if (session.guardOnly && !opts.guardOnly) {
+      void reply.code(403).send({ error: { code: 'FORBIDDEN', message: "The Control Center's tools are not offered to agents (Settings → Tools policy)" } });
+      return null;
+    }
     return session;
   };
+
+  /**
+   * The native precheck (SEC-3): an agent run's command hook asks here before
+   * each command its CLI's own shell runs (`{ command }`, `ToolService.precheck`)
+   * and each native file read (`{ tool, input, cwd? }` for Read, Grep and
+   * Glob, `ToolService.precheckFile`). Only the live session of an agent stage
+   * that is running may ask — never the local API token, never an operator's
+   * or Ask's session. Anything but a 200 with `allow` is a refusal to the hook.
+   */
+  app.post('/api/tool-session/precheck', async (request, reply) => {
+    const session = withSession(request, reply, { guardOnly: true });
+    if (!session) return reply;
+    const stage = session.kind === 'agent' && session.scope.stageId ? s.store.getStage(session.scope.stageId) : null;
+    if (!stage || !ACTIVE_STAGE.includes(stage.status)) {
+      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Only the agent session of a running stage may ask' } });
+    }
+    const body = precheckBody.parse(request.body);
+    return 'command' in body ? tools.precheck(session, body.command) : tools.precheckFile(session, body.tool, body.input, body.cwd ?? null);
+  });
 
   app.get('/api/tool-session/tools', async (request, reply) => {
     const session = withSession(request, reply);

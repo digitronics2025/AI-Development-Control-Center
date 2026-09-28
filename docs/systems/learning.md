@@ -135,9 +135,10 @@ Runs: `ContextBuilder.pluginDirs` → `AgentExecutionInput.pluginDirs` → Claud
 Code `--plugin-dir` per non-empty folder (measured on 2.1.280: loaded under
 `--setting-sources project,local`, zero turns). `ContextBuilder.lessons` adds
 "## Lessons from earlier tasks" after the Chairman guidance (≤ 10 lines):
-lessons, then skills — "loaded for this run" for `claude`, the SKILL.md path
-for other agents. The skills still run inside the stage's closed tool set
-([agents.md](agents.md#skills)).
+lessons, then skills — "loaded for this run" when the stage's agent declares
+`pluginDirs` (Claude Code; read from the adapter, [agents-contract.md](agents-contract.md#declared-capabilities)),
+the SKILL.md path for other agents. The skills still run inside the stage's closed tool set
+([agents-skills.md](agents-skills.md#skills)).
 
 ## Programs ([installer.ts](../../packages/tools/src/packs/installer.ts))
 
@@ -185,7 +186,7 @@ the page and the Settings section are local only.
   unrelated signal in a later test task counts as a recurrence — commit
   leftovers between test tasks.
 - Undoing an installed program does not uninstall it.
-- Only `agentId === 'claude'` is told its learned skills are loaded; any
-  other agent gets file paths.
+- Only an agent whose adapter declares `pluginDirs` is told its learned skills
+  are loaded; any other agent gets file paths.
 
 Last verified: 2026-09-24

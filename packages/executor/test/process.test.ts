@@ -1,6 +1,9 @@
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runProcess, runShell, which } from '../src/index.js';
+import { quoteWindowsArg, runProcess, runShell, which, windowsLaunch } from '../src/index.js';
 
 const node = process.execPath;
 
@@ -112,5 +115,42 @@ describe('which', () => {
   it('finds node on PATH and returns null for unknown binaries', async () => {
     expect(await which('node')).toBeTruthy();
     expect(await which('definitely-not-a-real-binary-xyz')).toBeNull();
+  });
+});
+
+describe('windows command lines (the agent relay, docs/systems/security.md#agent-os-boundary)', () => {
+  const bs = '\\';
+  const tricky = ['plain', '', 'two words', 'say "hi"', `C:${bs}dir with space${bs}`, `a${bs}${bs}"b`, '{"disableAllHooks":false,"hooks":{"x":"\\"C:/n.exe\\" \\"C:/h.js\\""}}', `trail${bs}`, 'tab\there', 'é — →'];
+
+  it('quotes only what needs it, doubling backslashes before quotes', () => {
+    expect(quoteWindowsArg('plain')).toBe('plain');
+    expect(quoteWindowsArg('')).toBe('""');
+    expect(quoteWindowsArg('two words')).toBe('"two words"');
+    expect(quoteWindowsArg('say "hi"')).toBe(`"say ${bs}"hi${bs}""`);
+    expect(quoteWindowsArg(`C:${bs}dir with space${bs}`)).toBe(`"C:${bs}dir with space${bs}${bs}"`);
+    expect(quoteWindowsArg(`C:${bs}no${bs}space`)).toBe(`C:${bs}no${bs}space`);
+    expect(quoteWindowsArg(`a${bs}${bs}"b`)).toBe(`"a${bs.repeat(5)}"b"`);
+  });
+
+  it.skipIf(process.platform !== 'win32')('reads back unchanged in the program that receives it', async () => {
+    const out: string[] = [];
+    const script = 'process.stdout.write(JSON.stringify(process.argv.slice(1)))';
+    // Verbatim: the line is exactly what quoteWindowsArg wrote, as the relay hands it to Windows.
+    const child = spawn(node, ['-e', script, ...tricky].map(quoteWindowsArg), { argv0: quoteWindowsArg(node), windowsVerbatimArguments: true, stdio: ['ignore', 'pipe', 'inherit'] });
+    child.stdout.on('data', (c: Buffer) => out.push(c.toString('utf8')));
+    await new Promise((resolve) => child.on('close', resolve));
+    expect(JSON.parse(out.join(''))).toEqual(tricky);
+  });
+
+  it.skipIf(process.platform !== 'win32')('starts what runProcess starts: a program directly, a .cmd shim through cmd.exe verbatim', () => {
+    const direct = windowsLaunch(node, ['-e', 'x y'], process.env);
+    expect(direct).toEqual({ file: node, commandLine: '-e "x y"' });
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-cmd-'));
+    const shim = path.join(dir, 'tool.cmd');
+    writeFileSync(shim, '@echo off\r\n');
+    const viaCmd = windowsLaunch(shim, ['a b', '{"k":"v"}'], process.env);
+    expect(path.basename(viaCmd.file).toLowerCase()).toBe('cmd.exe');
+    expect(viaCmd.commandLine.startsWith('/d /s /c "')).toBe(true);
+    expect(viaCmd.commandLine).toContain('tool.cmd');
   });
 });

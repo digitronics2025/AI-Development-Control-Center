@@ -174,6 +174,10 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       nonInteractive: true,
       modelSelection: true,
       effortSelection: true,
+      // Like the real CLIs: Claude Code loads skill plugin folders, Codex reads the skill's file.
+      pluginDirs: this.id === 'claude',
+      providerLabel: 'Simulated agents',
+      maxPermissionLevel: 5,
     };
   }
 

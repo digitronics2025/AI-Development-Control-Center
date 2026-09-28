@@ -41,6 +41,19 @@ describe('F-50: switches that widen what runs are turned on locally only', () =>
   });
 });
 
+describe('agent isolation is changed locally only (SEC-3, docs/systems/security.md#agent-os-boundary)', () => {
+  it('refuses turning it on, turning it off or renaming the account from the cloud; allows sending it unchanged', () => {
+    const off = ctx();
+    const on = ctx({ settings: { ...off.settings, agentIsolation: { mode: 'account', account: 'acc-agent' } } });
+    expect(guardRemoteCommand('settings.update', {}, { agentIsolation: { mode: 'account' } }, off)).toEqual({ ok: false, message: 'Agent isolation can only be changed on this machine.' });
+    expect(guardRemoteCommand('settings.update', {}, { agentIsolation: { mode: 'off' } }, on).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { agentIsolation: { account: 'other-agent' } }, on).ok).toBe(false);
+    expect(guardRemoteCommand('settings.update', {}, { agentIsolation: { mode: 'account', account: 'acc-agent' } }, on).ok).toBe(true);
+    expect(guardRemoteCommand('settings.update', {}, { agentIsolation: { mode: 'off' } }, off).ok).toBe(true);
+    expect(guardRemoteCommand('settings.update', {}, { theme: 'light' }, on).ok).toBe(true);
+  });
+});
+
 describe('paid media generation is loosened locally only (docs/systems/design-agent.md)', () => {
   it('refuses turning it on, raising the task budget or lowering a price from the cloud; allows tightening', () => {
     expect(guardRemoteCommand('settings.update', {}, { media: { allowPaidGeneration: true } }, ctx()).ok).toBe(false);

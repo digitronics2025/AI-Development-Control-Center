@@ -4,7 +4,8 @@ import { createServices } from './app.js';
 import { loadConfig } from './config.js';
 import { buildServer } from './http/server.js';
 import { reconcileGitOperations } from './source-control/reconcile.js';
-import { detectAmbientCredentials, setSelfReferences } from '@acc/security';
+import { learnedPluginsRoot } from './learning/skills.js';
+import { detectAmbientCredentials, referencesSelf, setSelfReferences } from '@acc/security';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -21,6 +22,9 @@ async function main(): Promise<void> {
 
   // Commands and tool calls that name this data folder or this port are Level 5 (audit F-02).
   setSelfReferences({ dataDir: config.dataDir, port });
+  // Every agent run's native rules deny them too (SEC-3), and their own files must not look like them.
+  services.agents.setControlCenter({ dataDir: config.dataDir, port, readOnly: [learnedPluginsRoot(config.dataDir)] });
+  if (referencesSelf(config.workDir)) app.log.warn(`The work folder ${config.workDir} is named like the Control Center's own data folder: agents are refused every path in it. Set ACC_WORK_DIR to a folder outside ${config.dataDir} with another name.`);
   // Agent stages reach the tool layer's MCP bridge through this address.
   services.tooling.setListenUrl(url);
   // MCP OAuth sign-ins come back to this port (docs/systems/mcp.md#oauth).

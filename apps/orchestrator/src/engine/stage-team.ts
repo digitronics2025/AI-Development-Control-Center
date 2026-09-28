@@ -72,7 +72,10 @@ export interface StageTeamDeps {
   context: ContextBuilder;
   settings: SettingsService;
   runners: StageRunners;
+  /** Only for the start-up sweep of `<dataDir>/team-worktrees`, where checkouts were made before the work root existed. */
   dataDir: string;
+  /** Checkouts are made under `<workDir>/team-worktrees`, outside the data folder (SEC-3). */
+  workDir: string;
 }
 
 /** A unit about to run: from the fixed worker list, or from the manifest. */
@@ -188,9 +191,9 @@ export class StageTeamRunner {
     this.slots = new WorkerSlots(() => d.settings.get().execution.teamWorkerLimit);
   }
 
-  /** Where write workers' disposable checkouts live; only this folder is ever swept. */
+  /** Where write workers' disposable checkouts live; only this folder (and its old place in the data folder, at start) is ever swept. */
   root(): string {
-    return path.join(this.d.dataDir, 'team-worktrees');
+    return path.join(this.d.workDir, 'team-worktrees');
   }
 
   /**
@@ -1485,15 +1488,17 @@ export class StageTeamRunner {
    * first (never followed), then the folder, then each repository forgets it.
    */
   async sweep(repositories: RepositoryRecord[]): Promise<number> {
-    const root = this.root();
-    if (!existsSync(root)) return 0;
     let removed = 0;
-    for (const taskDir of await readdir(root).catch(() => [] as string[])) {
-      for (const child of await readdir(path.join(root, taskDir)).catch(() => [] as string[])) {
-        unlinkDependencies(findLinks(path.join(root, taskDir, child)));
-        removed++;
+    // Also the data folder's, where checkouts were made before the work root existed (SEC-3).
+    for (const root of [this.root(), path.join(this.d.dataDir, 'team-worktrees')]) {
+      if (!existsSync(root)) continue;
+      for (const taskDir of await readdir(root).catch(() => [] as string[])) {
+        for (const child of await readdir(path.join(root, taskDir)).catch(() => [] as string[])) {
+          unlinkDependencies(findLinks(path.join(root, taskDir, child)));
+          removed++;
+        }
+        await rm(path.join(root, taskDir), { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }).catch(() => undefined);
       }
-      await rm(path.join(root, taskDir), { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }).catch(() => undefined);
     }
     if (removed) for (const repo of repositories) if (existsSync(repo.path)) await git(repo.path, ['worktree', 'prune']).catch(() => null);
     return removed;

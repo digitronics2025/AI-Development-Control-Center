@@ -87,6 +87,12 @@ export interface CandidateContext {
   assignments: Record<string, string>;
   /** Enabled, healthy agents that may take over. */
   availableAgents: string[];
+  /**
+   * The highest permission level each available agent can run (its adapter's
+   * `maxPermissionLevel`): no stage above it is handed to that agent. An agent
+   * missing from a given map can take no stage; without the map no ceiling is known.
+   */
+  maxPermissionLevel?: Record<string, number>;
   /** Agents that already ran each stage in this task: handing a stage back to one of them is not a new strategy. */
   triedAgents?: Record<string, string[]>;
   triedFingerprints: ReadonlySet<string>;
@@ -174,12 +180,14 @@ export function recoveryCandidates(ctx: CandidateContext): StrategyCandidate[] {
         const stage = ctx.trigger === 'worker_failure' || ctx.trigger === 'provider_blocked' || ctx.trigger === 'review_incomplete' ? failing : repair;
         if (!stage || stage.kind !== 'agent') break;
         const current = ctx.assignments[stage.key];
-        const alternative = ctx.availableAgents.find((a) => a !== current && !(ctx.triedAgents?.[stage.key] ?? []).includes(a));
+        const allows = (agent: string, s: StageDefinition) => !ctx.maxPermissionLevel || s.permissionLevel <= (ctx.maxPermissionLevel[agent] ?? 0);
+        const alternative = ctx.availableAgents.find((a) => a !== current && !(ctx.triedAgents?.[stage.key] ?? []).includes(a) && allows(a, stage));
         if (!alternative) break;
-        // A provider that is out for everything would stop each of its later stages in turn: move them in the same decision.
+        // A provider that is out for everything would stop each of its later stages in turn: move them in the same decision
+        // (those above the new agent's permission ceiling stay, and wait for their own recovery).
         const alsoMoved =
           ctx.trigger === 'provider_blocked' && ctx.providerWide && current
-            ? wf.stages.filter((s) => s.kind === 'agent' && s.key !== stage.key && ctx.assignments[s.key] === current)
+            ? wf.stages.filter((s) => s.kind === 'agent' && s.key !== stage.key && ctx.assignments[s.key] === current && allows(alternative, s))
             : [];
         const also = alsoMoved.length ? ` ${alsoMoved.map((s) => s.name).join(', ')} ${alsoMoved.length === 1 ? 'uses' : 'use'} the same agent and move with it.` : '';
         add('change_agent', 5, stage.key, alternative, `Hand ${stage.name} to ${alternative}`, `${current ?? 'The current agent'} has not been able to resolve this; a different agent gets the full context and the failure history.${also}`, [

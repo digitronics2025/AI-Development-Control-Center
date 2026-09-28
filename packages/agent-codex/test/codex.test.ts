@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AgentGuardError, type AgentExecutionInput } from '@acc/agent-sdk';
-import { CodexAdapter, codexMcpIsolationArgs } from '../src/index.js';
+import { CodexAdapter, codexMcpIsolationArgs, codexProtocolDrift } from '../src/index.js';
 
 const fixture = path.resolve(import.meta.dirname, '../../../tests/fixtures', process.platform === 'win32' ? 'fake-codex.cmd' : 'fake-codex');
 
@@ -200,6 +200,22 @@ describe('CodexAdapter', () => {
     const result = await (await new CodexAdapter().execute(input({ env: { FAKE_CODEX_SCENARIO: 'model' } }))).done;
     expect(result).toMatchObject({ status: 'failed', errorClass: 'MODEL_UNAVAILABLE' });
     expect(result.errorMessage).toMatch(/requires a newer version/);
+  });
+
+  it('records an exit-0 run without a completed turn as PROTOCOL_DRIFT, not a success', async () => {
+    // Renamed events: no thread.started, no turn.completed — an answer and exit 0 are not enough.
+    const renamed = await (await new CodexAdapter().execute(input({ env: { FAKE_CODEX_SCENARIO: 'drift' } }))).done;
+    expect(renamed).toMatchObject({ status: 'failed', exitCode: 0, errorClass: 'PROTOCOL_DRIFT', usage: null });
+    expect(renamed.errorMessage).toMatch(/without reporting a completed turn \(neither thread\.started nor turn\.completed was seen\)/);
+    // A thread whose turn never completes holds no turn either.
+    const turnless = await (await new CodexAdapter().execute(input({ env: { FAKE_CODEX_SCENARIO: 'thread-only' } }))).done;
+    expect(turnless).toMatchObject({ status: 'failed', errorClass: 'PROTOCOL_DRIFT', sessionId: 'thread-123' });
+    expect(turnless.errorMessage).toMatch(/started a thread but no turn\.completed event followed/);
+    // A completed turn is a success (and a failed turn keeps its own class: the USAGE_LIMIT and MODEL_UNAVAILABLE tests).
+    expect((await (await new CodexAdapter().execute(input())).done).status).toBe('succeeded');
+    expect(codexProtocolDrift(true, true)).toBeNull();
+    expect(codexProtocolDrift(false, true)).toBeNull();
+    expect(codexProtocolDrift(true, false)).toMatch(/Settings → Agents & Models/);
   });
 
   it('cancels a running execution', async () => {

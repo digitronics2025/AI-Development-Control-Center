@@ -522,22 +522,23 @@ ${text}`;
   // ===========================================================================
 
   /**
-   * The "Lessons from earlier tasks" section for a stage prompt. Claude Code
-   * runs load learned skills through `--plugin-dir`; other agents get the
-   * file to read. Empty when nothing is live for the repository.
+   * The "Lessons from earlier tasks" section for a stage prompt. A run whose
+   * agent loads skill plugin folders (`loadsPlugins`: its adapter declares
+   * `pluginDirs`, like Claude Code's `--plugin-dir`) is told the learned skill
+   * is loaded; other agents get the file to read. Empty when nothing is live
+   * for the repository.
    */
-  promptSection(task: TaskRecord, _def: StageDefinition, stage: StageInstance): string {
+  promptSection(task: TaskRecord, _def: StageDefinition, _stage: StageInstance, loadsPlugins: boolean): string {
     const live = this.store.liveFor(task.repositoryId);
     const lessons = live.filter((i) => (LESSON_KINDS as readonly string[]).includes(i.kind)).slice(0, MAX_LESSONS_PER_SCOPE);
     const skills = live.filter((i) => (SKILL_KINDS as readonly string[]).includes(i.kind) && this.managed.exists(i.scope, i.repositoryId, i.content));
     if (!lessons.length && !skills.length) return '';
-    const loads = stage.agentId === 'claude';
     const lines = [
       ...lessons.map((l) => `- ${l.content}`),
       ...skills.map((s) => {
         const invoked = this.managed.invokedName(s.scope, s.content);
         const what = s.title.includes(' — ') ? s.title.slice(s.title.indexOf(' — ') + 3) : s.title;
-        return loads ? `- Skill /${invoked} is loaded for this run: ${what}` : `- Playbook for ${what}: read ${path.resolve(this.managed.skillFile(s.scope, s.repositoryId, s.content))}`;
+        return loadsPlugins ? `- Skill /${invoked} is loaded for this run: ${what}` : `- Playbook for ${what}: read ${path.resolve(this.managed.skillFile(s.scope, s.repositoryId, s.content))}`;
       }),
     ].slice(0, MAX_PROMPT_LINES);
     return [

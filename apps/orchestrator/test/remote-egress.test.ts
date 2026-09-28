@@ -131,7 +131,7 @@ class EchoingChairman implements AgentAdapter {
     return { state: 'connected' as const, message: 'ok', authMethod: 'test', billing: 'subscription' as const, checkedAt: new Date().toISOString() };
   }
   async getCapabilities() {
-    return { repositoryRead: true, repositoryWrite: false, commandExecution: false, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false };
+    return { repositoryRead: true, repositoryWrite: false, commandExecution: false, images: false, interactive: false, nonInteractive: true, modelSelection: false, effortSelection: false, pluginDirs: false, providerLabel: 'Test agents', maxPermissionLevel: 5 as const };
   }
   async listModels() {
     return [];

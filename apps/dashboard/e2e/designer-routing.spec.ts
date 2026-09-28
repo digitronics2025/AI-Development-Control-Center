@@ -26,7 +26,7 @@ function fixtureRepo(): string {
 }
 
 async function waitForTask(page: Page, id: string): Promise<{ status: string }> {
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 1000; i++) {
     const task = await api<{ status: string }>(page, 'GET', `/api/tasks/${id}`);
     if (['COMPLETED', 'FAILED', 'WAITING_FOR_USER'].includes(task.status)) return task;
     await page.waitForTimeout(250);
@@ -41,21 +41,24 @@ let teamTask = '';
 let reviewTask = '';
 
 test.beforeAll(async ({ browser }) => {
+  // Five full Autopilot runs: each on its own repository, so they run side by side instead of queueing behind one
+  // another (one task per repository at a time); the hook gets the time a slow CI runner needs.
+  test.setTimeout(300_000);
   const page = await browser.newPage();
   await page.goto('/');
-  const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: fixtureRepo(), name: 'design-routing' });
-  backendTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Tidy the API handler.' })).id;
-  expect((await waitForTask(page, backendTask)).status).toBe('COMPLETED');
-  uiTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Restyle the card. [sim:ui]' })).id;
-  expect((await waitForTask(page, uiTask)).status).toBe('COMPLETED');
+  const start = async (name: string, mode: 'autopilot' | 'discuss', description: string) => {
+    const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: fixtureRepo(), name });
+    return (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode, description })).id;
+  };
+  backendTask = await start('design-routing-backend', 'autopilot', 'Tidy the API handler.');
+  uiTask = await start('design-routing-ui', 'autopilot', 'Restyle the card. [sim:ui]');
   // Phase 2: a plan that is all frontend work runs Implement as the designer; a team sends its frontend unit there.
-  routedTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Restyle the badge. [sim:plan-frontend]' })).id;
-  expect((await waitForTask(page, routedTask)).status).toBe('COMPLETED');
-  teamTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'autopilot', description: 'Two parts. [sim:team] [sim:team-frontend]' })).id;
-  expect((await waitForTask(page, teamTask)).status).toBe('COMPLETED');
+  routedTask = await start('design-routing-routed', 'autopilot', 'Restyle the badge. [sim:plan-frontend]');
+  teamTask = await start('design-routing-team', 'autopilot', 'Two parts. [sim:team] [sim:team-frontend]');
   // Left waiting for its plan review for the whole file; cancelled at the end.
-  reviewTask = (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode: 'discuss', description: 'Restyle the header. [sim:plan-frontend]' })).id;
-  expect((await waitForTask(page, reviewTask)).status).toBe('WAITING_FOR_USER');
+  reviewTask = await start('design-routing-review', 'discuss', 'Restyle the header. [sim:plan-frontend]');
+  const done = await Promise.all([backendTask, uiTask, routedTask, teamTask, reviewTask].map((id) => waitForTask(page, id)));
+  expect(done.map((t) => t.status)).toEqual(['COMPLETED', 'COMPLETED', 'COMPLETED', 'COMPLETED', 'WAITING_FOR_USER']);
   await page.close();
 });
 
@@ -103,16 +106,22 @@ for (const theme of ['dark', 'light'] as const) {
       expect(errors).toEqual([]);
     });
 
-    test('a stage a specialist ran names it, and so does each routed work unit', async ({ page }, testInfo) => {
+    test('a stage a specialist ran names it', async ({ page }, testInfo) => {
       const errors = trackConsoleErrors(page);
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(`/tasks/${routedTask}`);
       const implement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
       await expect(implement).toContainText('· Designer');
       await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test("a team's line names the workers a specialist ran", async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(`/tasks/${teamTask}`);
-      const teamImplement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
-      await expect(teamImplement).toContainText('Team of 2 · done · 1 as Designer');
+      const implement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
+      await expect(implement).toContainText('Team of 2 · done · 1 as Designer');
       await expectNoAxeViolations(page, testInfo);
       expect(errors).toEqual([]);
     });

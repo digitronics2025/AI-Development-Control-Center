@@ -13,6 +13,7 @@ import {
   relayLaunch,
   relayRefusal,
   runAsRefusal,
+  windowsPowerShellEnv,
   type AgentExecutionInput,
   type AgentHealth,
   type AgentRunAs,
@@ -90,14 +91,15 @@ process.stdin.setEncoding('utf8').on('data', (c) => (input += c)).on('end', () =
 /** A password record like the privileged helper writes, protected for this Windows user (DPAPI), for a made-up password. */
 async function dpapiRecord(dir: string, account: string, password = randomBytes(18).toString('base64')): Promise<string> {
   const out: string[] = [];
+  const err: string[] = [];
   const r = await runProcess({
     command: 'powershell.exe',
     args: ['-NoProfile', '-NonInteractive', '-Command', 'ConvertFrom-SecureString (ConvertTo-SecureString $env:ACC_TEST_SECRET -AsPlainText -Force)'],
     cwd: dir,
-    env: { ...process.env, ACC_TEST_SECRET: password },
-    onLine: (stream, line) => stream === 'stdout' && line.trim() && out.push(line.trim()),
+    env: { ...windowsPowerShellEnv(process.env), ACC_TEST_SECRET: password },
+    onLine: (stream, line) => (stream === 'stdout' ? line.trim() && out.push(line.trim()) : err.push(line)),
   }).done;
-  expect(r.exitCode).toBe(0);
+  expect(r.exitCode, err.join('\n')).toBe(0);
   const file = path.join(dir, 'agent-account.json');
   writeFileSync(file, JSON.stringify({ account, sid: 'S-1-5-21-0-0-0-1001', protectedSecret: out.join(''), grants: [] }));
   return file;
@@ -131,7 +133,12 @@ describe('relayLaunch', () => {
     const launch = relayLaunch({ account: 'acc-agent', credentialFile: 'C:\\data\\agent-account.json', relay: 'C:\\acc\\scripts\\windows\\agent-relay.ps1' }, process.execPath, ['-p', '{"a":"b c"}'], 'C:\\work\\t1', env);
     expect(path.basename(launch.command).toLowerCase()).toBe('powershell.exe');
     expect(launch.args).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\\acc\\scripts\\windows\\agent-relay.ps1']);
-    expect(launch.env).toMatchObject(env);
+    // The relay starts without the run's PSModulePath (PowerShell 7's would break its security module); the
+    // program it starts gets it back from the launch.
+    const { PSModulePath: _m, ...rest } = env;
+    expect(launch.env).toMatchObject(rest);
+    expect(Object.keys(launch.env).some((k) => k.toLowerCase() === 'psmodulepath')).toBe(false);
+    expect(windowsPowerShellEnv({ psmodulepath: 'x', PsModulePath: 'y', PATH: 'p' })).toEqual({ PATH: 'p' });
     const spec = JSON.parse(Buffer.from(launch.env[AGENT_RELAY_ENV]!, 'base64').toString('utf8'));
     expect(spec).toMatchObject({ account: 'acc-agent', credentialFile: 'C:\\data\\agent-account.json', cwd: 'C:\\work\\t1', restore: { PSExecutionPolicyPreference: null, PSModulePath: 'm' } });
     // The session token travels in the environment only, never in the launch.

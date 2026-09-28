@@ -38,7 +38,8 @@ export function runAsRefusal(runAs: AgentRunAs, platform: NodeJS.Platform = proc
  * still travels on stdin, which the relay copies to the program; nothing
  * secret is on either command line. `PSExecutionPolicyPreference` and
  * `PSModulePath`, which Windows PowerShell changes in its own environment, are
- * carried so the program gets the run's values back.
+ * carried so the program gets the run's values back. The relay itself starts
+ * without `PSModulePath` (`windowsPowerShellEnv`).
  */
 export function relayLaunch(runAs: AgentRunAs, executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
   const { file, commandLine } = windowsLaunch(executable, args, env);
@@ -48,8 +49,18 @@ export function relayLaunch(runAs: AgentRunAs, executable: string, args: string[
   return {
     command: path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runAs.relay],
-    env: { ...env, [AGENT_RELAY_ENV]: Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') },
+    env: { ...windowsPowerShellEnv(env), [AGENT_RELAY_ENV]: Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') },
   };
+}
+
+/**
+ * An environment for Windows PowerShell 5.1 without `PSModulePath`, which it then builds for itself. Started from
+ * PowerShell 7 (as GitHub's Windows runners run every step), it inherits 7's module folders first and cannot load
+ * its own `Microsoft.PowerShell.Security` — no `ConvertTo-SecureString`, so no DPAPI password record (CI,
+ * 2026-09-28). Windows variable names ignore case, so every spelling goes.
+ */
+export function windowsPowerShellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => k.toLowerCase() !== 'psmodulepath'));
 }
 
 /** The relay's own refusal, from the tail of a run it ended with `AGENT_RELAY_REFUSED_EXIT`. */

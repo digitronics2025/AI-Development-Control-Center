@@ -32,7 +32,11 @@ runs as the operator). `CliAgentAdapter.execute` then refuses with
 missing or the password record is missing (`runAsRefusal`,
 [run-as.ts](../../packages/agent-sdk/src/run-as.ts)); otherwise it starts
 Windows PowerShell on [agent-relay.ps1](../../scripts/windows/agent-relay.ps1)
-with the run's environment plus `ACC_AGENT_RELAY` (base64 JSON: account, record,
+with the run's environment, less `PSModulePath` (`windowsPowerShellEnv`: started
+from PowerShell 7, as on GitHub's Windows runners, Windows PowerShell inherits
+7's module folders and cannot load its own security module, so it could not read
+the password record; the program gets the run's value back), plus
+`ACC_AGENT_RELAY` (base64 JSON: account, record,
 the program and the exact command line `runProcess` would have used —
 `windowsLaunch`: cross-spawn's `cmd.exe /d /s /c` for a `.cmd` shim, libuv's
 quoting otherwise — and the folder; nothing secret). The relay starts the

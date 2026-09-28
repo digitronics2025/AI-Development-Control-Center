@@ -146,7 +146,8 @@ Provider `installer` (built-in): `software.catalog` (Level 1) and
 `software.install {toolId}` (Level 3, `elevated`, persistence + network — the
 classifier's class for `npm -g`). `toolId` is an enum of
 `INSTALLABLE_TOOLS` ([learning.ts](../../packages/shared/src/learning.ts)):
-gh, jq, yq, ripgrep, uv, adb, ffmpeg (winget,
+gh, jq, yq, ripgrep, uv, adb, ffmpeg, osv-scanner (`Google.OSVScanner`, which
+the dependency audit prefers, [tool-system.md](tool-system.md)) (winget,
 `--exact --scope user --silent`) and wrangler (`npm install -g`). Under the
 default Autopilot policy it runs on its own; under Safe it needs approval, which the page's **Do it now** gives
 (`preApproved`). Not in any agent profile except `operator`; an agent in a

@@ -9,13 +9,16 @@ import type { CommandKind } from '@acc/shared';
 export const PROJECT_TYPES = ['web', 'worker', 'android', 'python', 'library'] as const;
 export type ProjectType = (typeof PROJECT_TYPES)[number];
 
+/** Evidence the orchestrator observes itself (tool calls, verify stages) rather than a repository command. */
+export type EvidenceKind = 'browser' | 'http' | 'device' | 'security';
+
 export interface CheckRequirement {
   id: string;
   label: string;
   /** Satisfied by a passing repository command of one of these kinds… */
   commandKinds?: readonly CommandKind[];
   /** …or by orchestrator-observed evidence of this kind. */
-  evidence?: 'browser' | 'http' | 'device';
+  evidence?: EvidenceKind;
   /** Missing it lowers confidence but does not block READY. */
   advisory?: boolean;
 }
@@ -62,10 +65,12 @@ const MATRIX: Record<ProjectType, CheckRequirement[]> = {
   ],
 };
 
-const EXTRA_EVIDENCE: Record<'browser' | 'http' | 'device', CheckRequirement> = {
+const EXTRA_EVIDENCE: Record<EvidenceKind, CheckRequirement> = {
   browser: { id: 'browser', label: 'Browser check (console, network, phone width)', evidence: 'browser', advisory: true },
   http: { id: 'http', label: 'HTTP check', evidence: 'http', advisory: true },
   device: { id: 'device', label: 'Install and launch on a device', evidence: 'device', advisory: true },
+  // A security.* scan that ran to its end (VER-1): optional evidence, never required by a project type.
+  security: { id: 'security', label: 'Security scan', evidence: 'security', advisory: true },
 };
 
 export function requiredChecks(type: ProjectType): CheckRequirement[] {
@@ -76,7 +81,7 @@ export interface VerificationEvidence {
   /** Command kinds whose latest run in the last tests stage passed. */
   passedKinds: ReadonlySet<CommandKind>;
   /** Kinds of orchestrator-observed evidence that passed (from verify stages or tool calls). */
-  observed: ReadonlySet<'browser' | 'http' | 'device'>;
+  observed: ReadonlySet<EvidenceKind>;
 }
 
 export interface VerificationAssessment {

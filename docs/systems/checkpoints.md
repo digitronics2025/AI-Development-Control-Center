@@ -84,7 +84,13 @@ works in:
    the worktree. Its stages do not take the repository's writer lock, so
    Source Control stays usable while it runs.
 4. **Completed**: remaining task files are committed to the branch, the
-   branch stays for you to merge. **Cancelled**: uncommitted work is kept in
+   branch stays for you to merge. When the secret check refuses that commit
+   (a token or key in the files, a `.env`; VER-1, [git.md](git.md#commits)),
+   nothing is committed: the files are kept in `refs/acc/worktree-backup/<task>`
+   as for a cancel, a `SECRET_BLOCKED` event names each file and kind of
+   secret (never the value), and its line becomes a report limitation, so the
+   task is not READY; the `WORKTREE_REMOVED` event then names that ref, not
+   the branch, as where the files are. **Cancelled**: uncommitted work is kept in
    `refs/acc/worktree-backup/<task>` first. Then the worktree folder is
    renamed into `<work>/trash/<parent>-<folder>-<random>` (same drive: a
    rename, not a copy), `git worktree prune` drops Git's record of it,

@@ -22,50 +22,55 @@ const INSPECT = ['network.*', 'windows.processes', 'windows.port_owner', 'window
 /** Looking at pages without changing them: open, look, read logs, close. */
 const LOOK = ['browser.check_page', 'browser.screenshot', 'browser.open', 'browser.snapshot', 'browser.logs', 'browser.close', 'browser.accessibility', 'browser.visual_matrix', 'browser.render_html', 'browser.audit', 'browser.visual_diff', 'media.image.view', 'media.video.frames', 'design.contrast_matrix', 'design.lint_tokens'];
 const DEVELOP = ['shell.*', 'process.*', 'terminal.*', 'node.*', 'checkpoint.*', 'git.*', 'editor.*'];
+/**
+ * The read-only security scans (VER-1), in every profile. Last in each list: a list over the cap keeps the front,
+ * and a stage's own working tools matter more there; a scan left off the list is still callable by id.
+ */
+const SCANS = ['security.*'];
 
 export const PROFILES: Record<ProfileId, CapabilityProfile> = {
   analysis: {
     id: 'analysis',
     title: 'Analysis',
     description: 'Read the repository and inspect the environment; nothing that changes state.',
-    include: [...CORE, ...INSPECT, 'github.pr_list', 'github.pr_view', 'github.issue_list', 'github.issue_view', 'github.run_list', ...LOOK],
+    include: [...CORE, ...INSPECT, 'github.pr_list', 'github.pr_view', 'github.issue_list', 'github.issue_view', 'github.run_list', ...LOOK, ...SCANS],
   },
   general: {
     id: 'general',
     title: 'General development',
     description: 'Files, Git, shells and local processes for any repository.',
-    include: [...CORE, ...INSPECT, ...DEVELOP, ...LOOK, 'github.*', 'python.*'],
+    include: [...CORE, ...INSPECT, ...DEVELOP, ...LOOK, 'github.*', 'python.*', ...SCANS],
   },
   'web-development': {
     id: 'web-development',
     title: 'Web development',
     description: 'Node tooling, local servers, browser checks and HTTP tests.',
-    include: ['browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*', ...SCANS],
   },
   'frontend-design': {
     id: 'frontend-design',
     title: 'Frontend design',
     description: 'Media (view, fetch, optimise, generate through the spend gate), browser checks at every width and theme, and app verification (docs/systems/design-agent.md).',
     // The design tools first: a list over the cap keeps the front. No outside generation server: only media.* calls pass the spend gate.
-    include: ['media.*', 'browser.*', 'design.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['media.*', 'browser.*', 'design.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*', ...SCANS],
   },
   'cloudflare-worker': {
     id: 'cloudflare-worker',
     title: 'Cloudflare Worker',
     description: 'Node tooling plus Wrangler, D1, R2 and HTTP checks.',
-    include: ['cloudflare.*', 'credential.generate', 'database.*', 'browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['cloudflare.*', 'credential.generate', 'database.*', 'browser.*', 'verify.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*', ...SCANS],
   },
   'android-development': {
     id: 'android-development',
     title: 'Android development',
     description: 'Gradle, ADB, logcat and device screenshots.',
-    include: ['android.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['android.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*', ...SCANS],
   },
   python: {
     id: 'python',
     title: 'Python',
     description: 'Python and pip/uv tooling with the usual file and Git tools.',
-    include: ['python.*', 'database.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*'],
+    include: ['python.*', 'database.*', ...CORE, ...INSPECT, ...DEVELOP, 'github.*', ...SCANS],
   },
   operator: {
     id: 'operator',

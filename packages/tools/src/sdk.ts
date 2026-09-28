@@ -178,6 +178,11 @@ export interface OperationContext {
   cwd: string;
   /** Filesystem roots this call may touch; every path is confined to them. */
   roots: string[];
+  /**
+   * The commit the task started from in `cwd`'s repository, for tools that
+   * compare against it (`security.*`); null or absent outside a task or without Git.
+   */
+  baseline?: string | null;
   /** Sanitized environment plus any brokered credentials for this call. */
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;

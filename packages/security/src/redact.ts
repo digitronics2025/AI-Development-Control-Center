@@ -254,6 +254,38 @@ export class Redactor {
 }
 
 /**
+ * How a finding names each format `detectSecrets` reports ("contains what
+ * looks like a GitHub token"): the commit and push preflights and the
+ * `security.secret_scan` tool word it the same way.
+ */
+export const SECRET_LABEL: Readonly<Record<string, string>> = {
+  anthropic: 'an Anthropic API key',
+  openai: 'an OpenAI API key',
+  github: 'a GitHub token',
+  gitlab: 'a GitLab token',
+  slack: 'a Slack token',
+  'aws-access-key': 'an AWS access key',
+  'google-api-key': 'a Google API key',
+  stripe: 'a Stripe key',
+  npm: 'an npm token',
+  huggingface: 'a Hugging Face token',
+  pypi: 'a PyPI token',
+  sendgrid: 'a SendGrid API key',
+  shopify: 'a Shopify token',
+  supabase: 'a Supabase token',
+  sentry: 'a Sentry token',
+  linear: 'a Linear API key',
+  telegram: 'a Telegram bot token',
+  'url-credentials': 'a password inside a URL',
+  'private-key': 'a private key',
+};
+
+/** The words for one `detectSecrets` rule name; an unlabelled rule is named as it is. */
+export function secretLabel(rule: string): string {
+  return SECRET_LABEL[rule] ?? rule;
+}
+
+/**
  * Names of the high-confidence credential formats found in `text` (provider
  * keys, credentials in URLs, private key blocks). Used by the Source Control
  * preflight before a commit or push; the values themselves are never returned.

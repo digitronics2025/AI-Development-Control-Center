@@ -1658,7 +1658,9 @@ export class TaskEngine {
     // After the final commit, so the patch is what the task branch holds (a formatting hook included).
     await this.writePatch(task, repo, multi);
     const testRuns = this.d.store.listTestRuns(task.id);
-    gateLimitations = [...gateLimitations, ...optionalFailures(this.d.store.listEvents(task.id, { limit: 5000 }), stages)];
+    const events = this.d.store.listEvents(task.id, { limit: 5000 });
+    // Files the secret check kept off the task branch at the final commit (VER-1) are not ready, whatever passed.
+    gateLimitations = [...gateLimitations, ...optionalFailures(events, stages), ...secretHoldBacks(events)];
     const verification = this.d.tooling.verificationCoverage(task, repo, stages, testRuns);
     const repositories = multi ? taskRepositories(this.d.store, task).map((u) => ({ name: u.repo.name, path: u.repo.path, folder: u.folder, git: u.git })) : undefined;
     // Measured up to now, the moment the task completes (LEAD_TIME_PLAN §3.3); it never throws.
@@ -1792,6 +1794,16 @@ export class TaskEngine {
     this.d.tooling.abortInstalls();
     await Promise.all([...this.runners.keys()].map((id) => this.stop(id, 'shutdown')));
   }
+}
+
+/** What the secret check kept off a task branch at its final commit: the limitation each `SECRET_BLOCKED` event carries. */
+export function secretHoldBacks(events: Array<{ type: string; data?: Record<string, unknown> | null }>): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    const limitation = e.type === 'SECRET_BLOCKED' ? (e.data?.limitation as string | undefined) : undefined;
+    if (limitation && !out.includes(limitation)) out.push(limitation);
+  }
+  return out;
 }
 
 /** Optional stages whose latest run failed, as report limitations (a later success clears one). */

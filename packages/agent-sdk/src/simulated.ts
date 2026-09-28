@@ -57,6 +57,11 @@ import type {
  *   [sim:assets-bad-hash]    ...with a manifest whose SHA-256 for hero-2.png is wrong
  *   [sim:judge-last]         a variants judge keeps the last variant listed (default: the first)
  *   [sim:judge-none]         ...or names none
+ *   [sim:writes-token]       the implementer writes a GitHub-token-shaped string into sim-config.ts; the fixer
+ *                            replaces it with an environment read (the secret check at every commit, VER-1)
+ *   [sim:tool-commit]        the implementer and fixer also commit the files they wrote with the git.commit tool,
+ *                            through the run's tool session, and report what it answered
+ *   [sim:adds-dependency]    the implementer adds sim-vulnerable@1.0.0 to pnpm-lock.yaml (the dependency audit)
  *
  * Role `art-director` answers like the planner (a plan) and `visual-critic` like the reviewer (a verdict).
  *
@@ -366,6 +371,21 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             emit(`[file] update ${ui}`);
             files.push(ui);
           }
+          // VER-1: a credential written into a source file. The token is assembled here, never a literal in this file.
+          if (has('writes-token') && !unitFile && (role === 'implementer' || role === 'fixer')) {
+            const config = folders.length ? `${folders[0]}/sim-config.ts` : 'sim-config.ts';
+            const token = ['gh', 'p_', 'S1mT0k3n'.repeat(4), 'Zz9Y'].join('');
+            const body = role === 'fixer' ? "export const githubToken = process.env.GITHUB_TOKEN ?? '';\n" : `export const githubToken = '${token}';\n`;
+            await writeFile(path.join(input.cwd, config), body, 'utf8');
+            emit(`[file] update ${config}`);
+            files.push(config);
+          }
+          if (has('adds-dependency') && role === 'implementer' && !unitFile) {
+            const lockfile = folders.length ? `${folders[0]}/pnpm-lock.yaml` : 'pnpm-lock.yaml';
+            await appendFile(path.join(input.cwd, lockfile), '\n  sim-vulnerable@1.0.0:\n    resolution: {tarball: sim-vulnerable-1.0.0.tgz}\n', 'utf8');
+            emit(`[file] update ${lockfile}`);
+            files.push(lockfile);
+          }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {
               const name = folders.length ? `${folders[0]}/${file}` : file;
@@ -378,6 +398,10 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             role === 'designer'
               ? `## Summary\n\nSimulated designer run: restyled sim-output.md.\n\n## Design decisions\n\n- Kept the existing tokens.\n\n## Changes\n\n- Updated sim-output.md\n\n## Visual verification\n\nNot run (simulated).`
               : `## Changes\n\n- Updated sim-output.md\n\n## Notes\n\nSimulated ${role} run.`;
+          if (has('tool-commit') && role !== 'designer') {
+            const r = await callTool(input.toolBridge?.env, 'git.commit', { paths: files, message: `${taskId}: simulated ${role} commit` });
+            output += `\n\n## Tool calls\n\n- git.commit: ${r.ok ? 'OK' : 'REFUSED'} ${r.summary}`;
+          }
           break;
         }
         case 'judge': {
@@ -456,13 +480,8 @@ export class SimulatedAgentAdapter implements AgentAdapter {
               lookups.push(`- No tools for ${m[1]}`);
               continue;
             }
-            const res = await fetch(`${bridge.ACC_TOOL_URL}/api/tool-session/call`, {
-              method: 'POST',
-              headers: { authorization: `Bearer ${bridge.ACC_TOOL_SESSION}`, 'content-type': 'application/json' },
-              body: JSON.stringify({ capability: m[1], input: m[2] ? JSON.parse(m[2]) : {} }),
-            }).catch(() => null);
-            const r = (await res?.json().catch(() => null)) as { ok?: boolean; summary?: string } | null;
-            lookups.push(`- ${m[1]}: ${r?.ok ? 'OK' : 'REFUSED'} ${r?.summary ?? `HTTP ${res?.status ?? 'error'}`}`);
+            const r = await callTool(bridge, m[1]!, m[2] ? JSON.parse(m[2]) : {});
+            lookups.push(`- ${m[1]}: ${r.ok ? 'OK' : 'REFUSED'} ${r.summary}`);
           }
           output = [`Simulated answer to: ${question}`, '', `- Repository: ${repo ?? 'none'}`, ...(task ? [`- Looked up ${task}`] : []), ...lookups].join('\n');
           break;
@@ -503,6 +522,18 @@ export class SimulatedAgentAdapter implements AgentAdapter {
       capacity: raw.capacity,
     };
   }
+}
+
+/** Call a Control Center tool through the run's tool session, as a real agent does over MCP. */
+async function callTool(bridge: Record<string, string> | undefined, capability: string, toolInput: unknown): Promise<{ ok: boolean; summary: string }> {
+  if (!bridge?.ACC_TOOL_URL || !bridge.ACC_TOOL_SESSION) return { ok: false, summary: `No tools for ${capability}` };
+  const res = await fetch(`${bridge.ACC_TOOL_URL}/api/tool-session/call`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${bridge.ACC_TOOL_SESSION}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ capability, input: toolInput }),
+  }).catch(() => null);
+  const r = (await res?.json().catch(() => null)) as { ok?: boolean; summary?: string } | null;
+  return { ok: Boolean(r?.ok), summary: r?.summary ?? `HTTP ${res?.status ?? 'error'}` };
 }
 
 /** The work units a simulated planner or decomposer proposes for `stage`: two by default, steered by markers. */

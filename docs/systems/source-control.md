@@ -135,7 +135,9 @@ what the remote it pushes to already has (`--remotes=<remote>` when it has no
 remote-tracking branch), never what another remote has. A release holds the repository writer lock while
 it checks and pushes, so Source Control mutations refuse meanwhile
 (`BLOCKED_BY_TASK`); its push moves only the remote branch, and the automatic
-fast-forward later brings the local branch up to date.
+fast-forward later brings the local branch up to date. Every commit of task
+work runs the commit check too, on the staged diff of the task's own paths
+(VER-1, [git.md](git.md#commits)).
 
 File names: a push takes its file list from `git log --name-only -z` (merge
 commits the same way), so no name is quoted or split. Patch headers are read by `patchHeaderPath`

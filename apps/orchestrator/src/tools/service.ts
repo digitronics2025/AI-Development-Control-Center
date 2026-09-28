@@ -78,11 +78,17 @@ export interface ToolScope {
   escalated: Set<string>;
   protectedPaths: string[];
   /**
-   * A task across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md): its
-   * repositories and their folders in the workspace. Each call is narrowed
-   * to the repository its folder names (`narrowToRepository`).
+   * The commit the task started from in this scope's repository (its baseline),
+   * for tools that compare against it (`security.*`, VER-1); absent outside a
+   * task or without Git.
    */
-  repositories?: Array<{ id: string; root: string }>;
+  baseline?: string | null;
+  /**
+   * A task across repositories (docs/plans/MULTI_REPO_TASKS_PLAN.md): its
+   * repositories, their folders in the workspace and each one's baseline
+   * commit. Each call is narrowed to the repository its folder names (`narrowToRepository`).
+   */
+  repositories?: Array<{ id: string; root: string; baseline?: string | null }>;
   /**
    * A read-only session (docs/systems/ask.md). Only capabilities on `allow`
    * run, and only calls that cannot change anything; everything else is
@@ -137,8 +143,8 @@ export function narrowToRepository(scope: ToolScope, rawInput: unknown): { scope
     }
   }
   const repo = scope.repositories.find((r) => isInside(r.root, target));
-  if (!repo) return { scope: { ...scope, repositoryId: null }, input: rawInput };
-  return { scope: { ...scope, repositoryId: repo.id, cwd: repo.root, roots: [repo.root] }, input: field ? { ...raw, [field]: target } : rawInput };
+  if (!repo) return { scope: { ...scope, repositoryId: null, baseline: null }, input: rawInput };
+  return { scope: { ...scope, repositoryId: repo.id, cwd: repo.root, roots: [repo.root], baseline: repo.baseline ?? null }, input: field ? { ...raw, [field]: target } : rawInput };
 }
 
 export interface ToolCallRequest {
@@ -837,6 +843,7 @@ export class ToolService {
       taskId: scope.taskId,
       cwd: scope.cwd,
       roots: scope.roots,
+      baseline: scope.baseline ?? null,
       env: run.env,
       signal: run.signal,
       timeoutMs: run.timeoutMs,

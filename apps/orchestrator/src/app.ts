@@ -177,6 +177,7 @@ export function createServices(
   const skills = new SkillCatalog(agents);
   const tooling = new EngineTooling({ store, bus, tools, toolStore, processes, terminals, settings, artifacts, agents, mcp, skills, dataDir: config.dataDir, workDir: config.workDir, bridgePath: existsSync(bridge) ? bridge : null, shellGuardPath: existsSync(shellGuard) ? shellGuard : null });
   context.toolSections = (task, def, repo) => tooling.promptSections(task, def, repo);
+  context.securityFindings = (task, repo, stage) => tooling.securityFindings(task, repo, stage);
   const baselines = new BaselineChecks({ store, bus, tooling, dataDir: config.dataDir });
   const engine = new TaskEngine({ store, bus, views, agents, repositories, workflows, artifacts, context, settings, coordinator, tooling, baselines, dataDir: config.dataDir, workDir: config.workDir, baseEnv: options.baseEnv, release: options.release });
   const gitOperations = new GitOperationStore(db);

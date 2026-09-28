@@ -11,6 +11,7 @@ const TONE: Partial<Record<EventType, string>> = {
   STAGE_FAILED: 'text-danger',
   TEST_FAILED: 'text-danger',
   REVIEW_FAILED: 'text-danger',
+  SECRET_BLOCKED: 'text-danger',
   TASK_COMPLETED: 'text-success',
   TEST_PASSED: 'text-success',
   REVIEW_PASSED: 'text-success',

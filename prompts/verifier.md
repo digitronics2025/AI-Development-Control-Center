@@ -42,6 +42,10 @@ A diff that does not show every changed file is not the whole change. Before you
 
 {{verification_report}}
 
+## Security scans (run by the orchestrator on this change)
+
+{{security_findings}}
+
 ## Screenshots the Control Center kept (open them)
 
 {{screenshots}}
@@ -59,6 +63,7 @@ A diff that does not show every changed file is not the whole change. Before you
 - Take each criterion in turn and look for evidence in this order: the recorded check results and app check; a test in the diff that exercises it; the code itself, read far enough to be sure; a Level 1 check you can run when this run lists Control Center tools and the app is already running (an HTTP request, a browser page check). You cannot start the app or run the test suite at this level: say so instead of guessing.
 - A criterion is `met` only with evidence you can name. `unverified` means no evidence exists either way; `not met` means the evidence shows it fails.
 - Check that the review's blocking issues are resolved in the diff.
+- A secret in the security scans above keeps the change from being committed: a criterion that needs the change delivered is not met while it is there. A new dependency advisory the review did not settle goes under Remaining limitations with its fixed-in version.
 - A visual criterion (a layout, both themes, a width, an image) is met only by a screenshot above or a browser check that shows it; name the picture.
 - Check the completion requirements among the directives above (marked "completion requirement") against the recorded results.
 - A failed or not-run check that a criterion depends on leaves that criterion not met.

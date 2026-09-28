@@ -354,6 +354,15 @@ describe('tool calls across repositories', () => {
     expect('scope' in atRoot && atRoot.scope.repositoryId).toBeNull();
     expect('error' in narrowToRepository(scope, { cwd: '..' })).toBe(true);
     expect('error' in narrowToRepository(scope, { directory: path.dirname(workspace) })).toBe(true);
+    // A call compares against its own repository's baseline commit (security.*, VER-1); the workspace root has none.
+    const built = t.services.tooling.scope(task, t.services.store.getRepository(api)!, { level: 1, stageId: null });
+    const webBaseline = t.services.tooling.baselineCommit(linked.git);
+    expect(webBaseline).toMatch(/^[0-9a-f]{40}$/);
+    expect(built.baseline).toBeNull();
+    const narrowed = narrowToRepository(built, { cwd: linked.folder });
+    expect('scope' in narrowed && narrowed.scope.baseline).toBe(webBaseline);
+    const unnarrowed = narrowToRepository(built, {});
+    expect('scope' in unnarrowed && unnarrowed.scope.baseline).toBeNull();
 
     const call = (capability: string, input: unknown) => t!.services.tools.invoke({ capability, input, origin: 'agent', scope: { ...scope, escalated: new Set() } });
     // Git runs in the folder named; the workspace root is not a repository; outside is refused.

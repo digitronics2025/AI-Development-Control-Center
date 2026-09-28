@@ -41,6 +41,28 @@ hook's message under its test results, and the checkpoint runs again after
 test, review and verify. Git's line-ending notices are dropped from failure
 text (`failureText`) so the hook's own words are what the fixer reads.
 
+Every commit of task work is checked for secrets first (VER-1): the
+checkpoint and a worktree's final commit (`commitPaths`) and the `git.commit`
+tool stage the paths, then `assertNoStagedSecrets` runs the secret preflight
+([source-control.md](source-control.md#secret-preflight)) on the staged diff
+of exactly those paths (`scanStaged`, the commit's own pathspec semantics).
+Its diff reads attributes from the empty tree (`GIT_ATTR_SOURCE`, Git 2.42+;
+SHA-1 repositories), so a `.gitattributes` line such as `config.ts -diff` or
+`*.json binary` — the change's own or a committed one — cannot hide a text
+file as "Binary files differ"; only a NUL byte makes a file binary there.
+A staged deletion is left out (`--diff-filter=d`, as `scripts/secret-scan.ts`
+does), so deleting a committed `.env` or key file commits (`scanSince` leaves
+deletions out too). Editing a file with
+a sensitive name (`.npmrc`) is still refused, as Source Control's commit does.
+A finding — or a change over 20 MB — unstages the paths again and throws
+`SecretCommitError` ("Secret check refused the commit: `<file>` contains what
+looks like a GitHub token …"; file and kind, never the value). There is no
+inline allow marker. The checkpoint treats it like a hook rejection: with
+`onFail` the fixer reads it under its test results as "refused by the
+Control Center's secret check", and the `STAGE_FAILED` event carries the
+findings. A worktree's final commit keeps the files in its backup ref instead
+([checkpoints.md](checkpoints.md)); `git.commit` returns `DENIED`.
+
 ## Releases
 
 A release ([release.md](release.md)) is the one path that sends a task's
@@ -164,7 +186,12 @@ force) live in [source-control.ts](../../packages/git/src/source-control.ts)
 and are documented in [source-control.md](source-control.md), as is the secret
 preflight in [preflight.ts](../../packages/git/src/preflight.ts)
 (`scanOutgoing`, `preflightFindings`), which Source Control, a release and the
-`git.push` tool share; `outgoingPatch` and `outgoingFiles` read merge commits'
+`git.push` tool share, with `scanStaged` / `assertNoStagedSecrets` for task
+commits ([Commits](#commits)) and `scanSince` (tracked changes and untracked
+files since a commit) and `scanFiles` (whole files) for `security.secret_scan`
+([tool-system.md](tool-system.md)); the labels ("a GitHub token") are
+`SECRET_LABEL` in [redact.ts](../../packages/security/src/redact.ts), beside
+the rules they name. `outgoingPatch` and `outgoingFiles` read merge commits'
 own changes (`--diff-merges=remerge`, `-m` before Git 2.36). `git()` takes
 `maxOutputBytes` (stops Git at the bound, sets `truncated`) and keeps at most
 64 KB of stderr. `fetchRemote(…, { unattended: true })` adds

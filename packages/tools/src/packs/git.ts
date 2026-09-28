@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runShell } from '@acc/executor';
-import { addDetachedWorktree, git, scanOutgoing, type GitError, type GitResult } from '@acc/git';
+import { addDetachedWorktree, assertNoStagedSecrets, git, scanOutgoing, SecretCommitError, type GitError, type GitResult } from '@acc/git';
 import { classifyCommand, redact } from '@acc/security';
 import { z } from 'zod';
 import { clip, detectExecutable } from '../detect.js';
@@ -261,7 +261,7 @@ export function gitProvider(): ToolProvider {
       operation({
         id: 'git.commit',
         title: 'Commit paths',
-        description: 'Commit exactly the listed paths with a message (hooks run). Never commits your own pre-existing changes.',
+        description: 'Commit exactly the listed paths with a message (hooks run). Never commits your own pre-existing changes. Refused, with nothing committed, when what it would commit holds a secret (a token, a key, a .env file).',
         input: z.object({ paths: paths.min(1), message: z.string().min(3).max(5000) }),
         level: 3,
         async run(input, ctx) {
@@ -269,6 +269,14 @@ export function gitProvider(): ToolProvider {
           if (hits.length) return failure('PROTECTED_PATH', `Refusing to commit your own uncommitted work: ${hits.join(', ')}`);
           const add = await git(ctx.cwd, [LITERAL, 'add', '--', ...input.paths]);
           if (add.code !== 0) return out(add, 'git add failed');
+          // What would be committed is checked for secrets first, like every commit of task work (VER-1); a finding
+          // unstages the paths again and commits nothing. There is no inline allow marker.
+          try {
+            await assertNoStagedSecrets(ctx.cwd, input.paths, { literal: true });
+          } catch (error) {
+            if (error instanceof SecretCommitError) return failure('DENIED', error.message, { output: { findings: error.findings } });
+            return failure('FAILED', `Could not check the staged changes for secrets: ${redact((error as Error).message).slice(0, 300)}`);
+          }
           const r = await git(ctx.cwd, [LITERAL, 'commit', '-m', input.message, '--', ...input.paths], { timeoutMs: 300_000 });
           if (r.code !== 0) return out(r, '');
           const sha = (await git(ctx.cwd, ['rev-parse', 'HEAD'])).stdout.trim();

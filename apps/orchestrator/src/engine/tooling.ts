@@ -2,10 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, status, taskBranchName } from '@acc/git';
+import { addWorktree, changesSince, commitPaths, createCheckpoint, deleteBranchIfAt, EMPTY_TREE, findingsText, git, headCommit, isGitRepository, removeWorktree, repositoryStatus, SecretCommitError, status, taskBranchName } from '@acc/git';
 import { redact } from '@acc/security';
 import { DEFAULT_AUTO_APPROVE_LEVEL, requestedSkills, SKILL_TOKEN, type CommandKind, type EventType, type PermissionLevel, type PolicyMode, type StageDefinition, type StageInstance, type TestRun, roleClass } from '@acc/shared';
 import {
+  advisoryLine,
   assessVerification,
   classifyFailure,
   closeBrowserPages,
@@ -13,12 +14,15 @@ import {
   declaredDependencies,
   environmentMarkdown,
   FAILURE_LABEL,
+  isLockfile,
   packageManager,
   planRepair,
   policyCeiling,
   profileForRepository,
   type ProfileId,
   projectType,
+  type Advisory,
+  type EvidenceKind,
   type FailureClassification,
   type RepairPlan,
   type RepairStrategy,
@@ -156,6 +160,8 @@ export class EngineTooling {
   private readonly installs = new Map<string, { done: Promise<void>; controller: AbortController }>();
   /** Worktrees already told they have no lockfile: every loop of a task checks its install again. */
   private readonly noLockfileAnnounced = new Set<string>();
+  /** `{{security_findings}}` per stage run: every prompt one verdict stage builds reads the same scan (`securityFindings`). */
+  private readonly securityMemo = new Map<string, Promise<string>>();
   /** The trash sweep in flight, and whether another was asked for meanwhile (`emptyTrash`). */
   private trashSweep: Promise<number> | null = null;
   private trashAgain = false;
@@ -212,8 +218,15 @@ export class EngineTooling {
       profile: stage.profile ?? profileForRepository(multi ? [...new Set(units.flatMap((u) => u.repo.tooling))] : repo.tooling, stage.level),
       escalated: new Set(),
       protectedPaths: task.git.isolated ? [] : task.git.preexistingChanges,
-      ...(multi ? { repositories: units.map((u) => ({ id: u.repo.id, root: u.workdir })) } : {}),
+      // The commit each repository started from, for tools that compare against it (security.*, VER-1).
+      ...(multi ? { baseline: null, repositories: units.map((u) => ({ id: u.repo.id, root: u.workdir, baseline: this.baselineCommit(u.git) })) } : { baseline: this.baselineCommit(task.git) }),
     };
+  }
+
+  /** The commit a task (or one repository of it) started from: its baseline snapshot's HEAD, the empty tree for a repository with no commits yet, null without a baseline. */
+  baselineCommit(gitRecord: TaskRecord['git']): string | null {
+    const snapshot = gitRecord.baselineSnapshotId ? this.d.store.getSnapshot(gitRecord.baselineSnapshotId) : null;
+    return snapshot ? (snapshot.head ?? EMPTY_TREE) : null;
   }
 
   /**
@@ -419,6 +432,74 @@ export class EngineTooling {
     const attempt = this.d.toolStore.finishRecovery(id, ok ? 'succeeded' : 'failed', redact(detail).slice(0, 500));
     this.d.bus.publish({ type: 'recovery', attempt });
     return attempt;
+  }
+
+  /**
+   * `{{security_findings}}` (VER-1): the secret scan of the task's change and,
+   * when the change touched a lockfile, the dependency advisories it brought in
+   * (not those already on the baseline lockfile). Both run through ToolService
+   * as the engine, so each is recorded — and counts as "Security scan" evidence.
+   * A stage run's prompts share one scan; a repository without a Git baseline
+   * is left out ('' for all of them renders "(none)").
+   */
+  securityFindings(task: TaskRecord, repo: RepositoryRecord, stage: StageInstance): Promise<string> {
+    const cached = this.securityMemo.get(stage.id);
+    if (cached) return cached;
+    const pending = this.runSecurityScans(task, repo, stage).catch((error: Error) => `Security scans could not run: ${redact(error.message).slice(0, 200)}`);
+    this.securityMemo.set(stage.id, pending);
+    // Only the latest runs are worth keeping: a verdict stage builds its prompts within minutes.
+    if (this.securityMemo.size > 20) this.securityMemo.delete(this.securityMemo.keys().next().value!);
+    return pending;
+  }
+
+  private async runSecurityScans(task: TaskRecord, repo: RepositoryRecord, stage: StageInstance): Promise<string> {
+    const units = taskRepositories(this.d.store, task);
+    const parts: string[] = [];
+    for (const unit of units) {
+      const snapshot = unit.git.baselineSnapshotId ? this.d.store.getSnapshot(unit.git.baselineSnapshotId) : null;
+      if (!snapshot || !existsSync(unit.workdir)) continue;
+      const scope = this.scope(task, repo, { level: 1, stageId: stage.id, cwd: unit.workdir });
+      const call = (capability: string, input: unknown, timeoutMs: number) => this.d.tools.invoke({ capability, input, origin: 'engine', scope, preApproved: true, timeoutMs });
+      const lines: string[] = [];
+      // The task's own change: files it created or changed on top of your work; your untouched work is not its finding.
+      const changed = (await changesSince(unit.workdir, { branch: snapshot.branch, head: snapshot.head, files: snapshot.files })).filter((f) => f.origin !== 'preexisting');
+      const own = new Set(changed.map((f) => f.path));
+      const secret = await call('security.secret_scan', { scope: 'task' }, 120_000);
+      const findings = ((secret.result.output as { findings?: Array<{ path: string; reason: string }> } | undefined)?.findings ?? []).filter((f) => own.has(f.path));
+      if (!secret.result.ok) lines.push(`- Secret scan: not run — ${secret.result.summary}`);
+      else if (findings.length) lines.push(`- Secret scan: ${findings.length} file(s) hold secret material; no commit of this task takes them until it is removed:`, ...findings.map((f) => `  - ${f.path} ${f.reason}`));
+      else lines.push(`- Secret scan: no secret material in the ${own.size} file(s) this task changed.`);
+      const lockfiles = changed.filter((f) => f.status !== 'deleted' && isLockfile(f.path)).map((f) => f.path);
+      if (!lockfiles.length) {
+        lines.push('- Dependency audit: no lockfile changed since the baseline, so the change brings in no new advisory.');
+      } else {
+        const audit = await call('security.dependency_audit', { lockfiles }, 10 * 60_000);
+        const out =
+          (audit.result.output as
+            | { newAdvisories?: Advisory[]; advisories?: Advisory[]; lockfiles?: Array<{ path: string; scanner: string; baseline: string; note?: string }>; notAudited?: Array<{ path: string; reason: string }> }
+            | undefined) ?? {};
+        if (!audit.result.ok) {
+          lines.push(`- Dependency audit (${lockfiles.join(', ')}): unverified — ${audit.result.summary}`);
+        } else {
+          const fresh = out.newAdvisories ?? [];
+          const before = (out.advisories?.length ?? 0) - fresh.length;
+          const audited = (out.lockfiles ?? []).map((l) => l.path);
+          const by = [...new Set((out.lockfiles ?? []).map((l) => l.scanner))].join(', ');
+          lines.push(
+            fresh.length
+              ? `- Dependency audit (${by}): ${fresh.length} advisor${fresh.length === 1 ? 'y' : 'ies'} this change brings in, not on the baseline lockfile:`
+              : `- Dependency audit (${by}): the change brings in no new advisory (${audited.join(', ')}).`,
+            ...fresh.map((a) => `  - ${advisoryLine(a)}`),
+          );
+          if (before > 0) lines.push(`  ${before} advisor${before === 1 ? 'y was' : 'ies were'} already on the baseline lockfile and ${before === 1 ? 'is' : 'are'} not listed.`);
+          for (const l of out.lockfiles ?? []) if (l.baseline === 'unknown') lines.push(`  ${l.path}: ${l.note ?? 'the baseline could not be audited'}, so every advisory in it is listed.`);
+          // A changed lockfile no scanner read (no osv-scanner, and no pnpm or npm audit for its kind) is unverified, never counted as clean.
+          for (const l of lockfiles.filter((f) => !audited.includes(f))) lines.push(`- Dependency audit (${l}): unverified — ${out.notAudited?.find((n) => n.path === l)?.reason ?? 'no scanner could read it'}`);
+        }
+      }
+      parts.push(units.length > 1 ? `### ${unit.folder ?? unit.repo.name}\n\n${lines.join('\n')}` : lines.join('\n'));
+    }
+    return parts.join('\n\n');
   }
 
   /** Extra prompt sections: the environment report (first stages), skills, and the tools this run has. */
@@ -783,13 +864,28 @@ export class EngineTooling {
       const baseline = git.baselineSnapshotId ? this.d.store.getSnapshot(git.baselineSnapshotId) : null;
       const files = baseline && existsSync(dir) ? await changesSince(dir, baseline) : [];
       const pending = files.filter((f) => f.origin === 'task').map((f) => f.path);
+      let refused: SecretCommitError | null = null;
       if (pending.length && outcome === 'completed') {
-        const commit = await commitPaths(dir, pending, `${task.id}: ${task.title}\n\nRemaining changes, committed when the task completed (AI Development Control Center).`);
-        if (commit) {
-          patch.commits = [...git.commits, commit];
-          this.event(task.id, 'GIT_COMMIT', `${who}Committed ${pending.length} remaining file(s) on ${git.taskBranch} (${commit.slice(0, 10)})`, { commit, files: pending, repositoryId: repo.id });
+        try {
+          const commit = await commitPaths(dir, pending, `${task.id}: ${task.title}\n\nRemaining changes, committed when the task completed (AI Development Control Center).`);
+          if (commit) {
+            patch.commits = [...git.commits, commit];
+            this.event(task.id, 'GIT_COMMIT', `${who}Committed ${pending.length} remaining file(s) on ${git.taskBranch} (${commit.slice(0, 10)})`, { commit, files: pending, repositoryId: repo.id });
+          }
+        } catch (error) {
+          if (!(error instanceof SecretCommitError)) throw error;
+          refused = error;
         }
-      } else if (pending.length) {
+      }
+      if (refused) {
+        // The secret check refused the final commit (VER-1): nothing reaches the branch, and the files are kept in
+        // the backup ref, as a cancelled task's are, before the worktree goes.
+        const ref = `refs/acc/worktree-backup/${task.id}`;
+        const cp = await createCheckpoint(dir, ref, `${task.id}: uncommitted work the secret check refused to commit`);
+        // Worded so no "name: value" pair forms: a branch name ending in "token" before a path would read as a secret to redaction.
+        const limitation = `${who}The secret check kept ${pending.length} file(s) off ${git.taskBranch}. ${findingsText(refused.findings) || 'The changes were too large to check for secrets'}. They are kept in ${ref} (${cp.commit.slice(0, 10)}); remove the secret before taking them.`;
+        this.event(task.id, 'SECRET_BLOCKED', redact(limitation), { ref, commit: cp.commit, files: pending, findings: refused.findings, repositoryId: repo.id, limitation: redact(limitation) });
+      } else if (pending.length && outcome !== 'completed') {
         const ref = `refs/acc/worktree-backup/${task.id}`;
         const cp = await createCheckpoint(dir, ref, `${task.id}: uncommitted work when the task was cancelled`);
         this.event(task.id, 'CHECKPOINT_CREATED', `${who}Kept ${pending.length} uncommitted file(s) in ${ref} (${cp.commit.slice(0, 10)}) before removing the worktree`, { ref, commit: cp.commit });
@@ -798,7 +894,11 @@ export class EngineTooling {
       const removed = (await this.moveToTrash(repo.path, dir, force)) || (await removeWorktree(repo.path, dir, { force }));
       if (removed) {
         patch.worktreePath = null;
-        this.event(task.id, 'WORKTREE_REMOVED', `${who}Worktree removed; the work is on branch ${git.taskBranch}${outcome === 'completed' ? ' — merge it from Source Control' : ''}`, { branch: git.taskBranch, repositoryId: repo.id });
+        // After a refused final commit the remaining files are in the backup ref, not on the branch: never tell you to merge it for them.
+        const where = refused
+          ? `the files the secret check refused are in refs/acc/worktree-backup/${task.id}, not on branch ${git.taskBranch}`
+          : `the work is on branch ${git.taskBranch}${outcome === 'completed' ? ' — merge it from Source Control' : ''}`;
+        this.event(task.id, 'WORKTREE_REMOVED', `${who}Worktree removed; ${where}`, { branch: git.taskBranch, repositoryId: repo.id });
       }
     } catch (error) {
       this.event(task.id, 'WORKTREE_REMOVED', `${who}The worktree could not be cleaned up: ${redact((error as Error).message).slice(0, 200)}. It is kept at ${dir}.`, {});
@@ -937,11 +1037,13 @@ export class EngineTooling {
   verificationCoverage(task: TaskRecord, repo: RepositoryRecord, stages: StageInstance[], testRuns: TestRun[]): { type: string; satisfied: string[]; missing: string[] } {
     const lastTests = [...stages].reverse().find((s) => s.kind === 'tests');
     const passedKinds = new Set<CommandKind>(testRuns.filter((r) => r.status === 'passed' && (r.stageId === lastTests?.id || r.kind === 'e2e')).map((r) => r.kind));
-    const observed = new Set<'browser' | 'http' | 'device'>();
+    const observed = new Set<EvidenceKind>();
     const ok = (prefix: string) => this.d.toolStore.listExecutions({ taskId: task.id, limit: 1000 }).some((e) => e.capability.startsWith(prefix) && e.status === 'succeeded');
     if (ok('verify.web') || ok('browser.check_page') || ok('browser.run_flow') || ok('browser.visual_matrix') || ok('browser.accessibility')) observed.add('browser');
     if (ok('http.') || ok('verify.web')) observed.add('http');
     if (ok('android.launch')) observed.add('device');
+    // A secret scan or dependency audit that ran to its end, whoever asked for it (VER-1); an unverified audit fails and does not count.
+    if (ok('security.')) observed.add('security');
     const units = taskRepositories(this.d.store, task);
     if (units.length <= 1) {
       const type = projectType(repo.tooling);

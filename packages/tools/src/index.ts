@@ -19,6 +19,7 @@ import { ffmpegProvider } from './packs/media-ffmpeg.js';
 import { designProvider } from './packs/design.js';
 import { networkProviders } from './packs/network.js';
 import { runtimeProviders } from './packs/runtime.js';
+import { securityProvider } from './packs/security.js';
 import { shellProviders } from './packs/shell.js';
 import { verifyProvider } from './packs/verify.js';
 import { webProvider } from './packs/web.js';
@@ -52,6 +53,7 @@ export { dimensions, sanitizeSvg, sniff, type MediaKind } from './packs/media-fi
 export { contrastRatio, lintLine, parseColor, readThemeTokens } from './packs/design.js';
 export { DEFAULT_MEDIA_PRICES, decodeJob, encodeJob, estimate as estimateMediaCost, type MediaPriceUnit } from './packs/media-fal.js';
 export { refreshedPath, locateInstalled } from './packs/installer.js';
+export { advisoryLine, isLockfile, LOCKFILE_NAMES, type Advisory } from './packs/security.js';
 export { resetCloudflareCatalog } from './packs/cloudflare-api.js';
 
 /** Every built-in provider (V2 plan §6). MCP servers are added at runtime by the gateway. */
@@ -76,6 +78,7 @@ export function builtinProviders(): ToolProvider[] {
     ...androidProviders(),
     ...hostedProviders(),
     verifyProvider(),
+    securityProvider(),
     installerProvider(),
     mediaProvider(),
     falMediaProvider(),

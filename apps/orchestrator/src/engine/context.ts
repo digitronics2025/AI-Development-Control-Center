@@ -270,6 +270,8 @@ export class ContextBuilder {
   lessons: (task: TaskRecord, def: StageDefinition, stage: StageInstance) => Promise<string> = async () => '';
   /** Managed skill plugins a stage run loads (`--plugin-dir`), set once the learning loop exists. */
   pluginDirs: (task: TaskRecord) => Promise<string[]> = async () => [];
+  /** `{{security_findings}}`: the security scans of the change, set once the tool layer exists (VER-1). */
+  securityFindings: (task: TaskRecord, repo: RepositoryRecord, stage: StageInstance) => Promise<string> = async () => '';
 
   constructor(
     private readonly store: Store,
@@ -455,13 +457,14 @@ export class ContextBuilder {
       const tail = this.store.tailLogLines(failed.executionId, 80).map((l) => l.text);
       lines.push('', `Output of ${failed.name} (last ${tail.length} lines):`, '```', ...tail, '```');
     }
-    // A Git checkpoint the repository rejected after these checks passed (a
-    // pre-commit hook) is the failure the fix stage is here for.
+    // A Git checkpoint the repository (a pre-commit hook) or the secret check
+    // (VER-1) refused after these checks passed is the failure the fix stage is here for.
     const stages = this.store.listStages(task.id);
     const testsAt = stages.find((s) => s.id === lastStage)?.createdAt ?? '';
     const rejected = stages.filter((s) => s.kind === 'git' && s.status === 'FAILED' && s.createdAt >= testsAt).at(-1);
     if (rejected?.errorMessage) {
-      lines.push('', `${rejected.name} was rejected by the repository (its commit hook):`, '```', rejected.errorMessage, '```');
+      const by = /Secret check refused the commit/.test(rejected.errorMessage) ? "refused by the Control Center's secret check" : 'rejected by the repository (its commit hook)';
+      lines.push('', `${rejected.name} was ${by}:`, '```', rejected.errorMessage, '```');
     }
     return lines.join('\n');
   }
@@ -751,6 +754,8 @@ export class ContextBuilder {
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
       team_stages: teamStagesText(task.workflow.stages),
+      // Scans run only for a template that shows them (the reviewer and verifier by default): each one is a recorded tool call.
+      security_findings: /\{\{\s*security_findings\s*\}\}/.test(template.body) ? await this.securityFindings(task, repo, stage).catch(() => '') : '',
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workspace ? agentWorkdir(task, repo) : workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);

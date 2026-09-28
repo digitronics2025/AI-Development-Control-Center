@@ -44,6 +44,10 @@ A diff that does not show every changed file is not the whole change. Before you
 
 {{verification_report}}
 
+## Security scans (run by the orchestrator on this change)
+
+{{security_findings}}
+
 ## Screenshots the Control Center kept (open them)
 
 {{screenshots}}
@@ -60,7 +64,7 @@ A diff that does not show every changed file is not the whole change. Before you
 
 - **Correctness against the criteria**: does the diff do what was asked, including the edge cases the request implies? Is anything asked for missing?
 - **Tests**: is there a test that would fail without this change? Was any test weakened, skipped or deleted? Do the recorded results pass?
-- **Security**: secrets in code or logs, injection, authentication and authorization, paths that escape the repository, unsafe deserialization, new network calls.
+- **Security**: the security scans above first — a secret in the change is blocking (no commit of the task takes it), and so is a new dependency advisory rated high or critical that has a fixed-in version the change could move to; any other new advisory is advisory, with the fixed-in version named. Then secrets in code or logs, injection, authentication and authorization, paths that escape the repository, unsafe deserialization, new network calls.
 - **Data safety**: migrations (additive, never editing a shipped one), deletes, destructive scripts, production configuration.
 - **Existing work**: files marked "pre-existing user work" or "task change on top of pre-existing user work" above must keep the user's own changes intact.
 - **Scope and hygiene**: unrelated changes, dead code, debug output, TODO in production paths, dependencies nobody asked for, docs the repository requires that the diff does not update.

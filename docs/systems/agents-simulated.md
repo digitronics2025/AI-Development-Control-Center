@@ -20,6 +20,11 @@ description steer it: `[sim:review-fail-once]`, `[sim:review-fail-always]`,
 `[sim:verify-plan-mismatch]`, `[sim:chairman-down]`, `[sim:chairman-bad-json]`,
 `[sim:big-diff]` (the implementer also writes three 60 KB files),
 `[sim:source-only]` (implementer and fixer change `sim-output.ts` instead of `sim-output.md`),
+`[sim:writes-token]` (the implementer writes a GitHub-token-shaped string, assembled at run time, into
+`sim-config.ts`; the fixer rewrites it to read the environment — the secret check at every commit, [git.md](git.md#commits)),
+`[sim:tool-commit]` (implementer and fixer also commit the files they wrote with `git.commit` through their tool
+session and report OK or REFUSED with its summary), `[sim:adds-dependency]` (the implementer adds
+`sim-vulnerable@1.0.0` to `pnpm-lock.yaml`, for the dependency audit),
 `[sim:review-miss-coverage]` / `[sim:review-miss-coverage-once]` (reviewer and verifier
 leave out the files the diff did not show; by default they name the ones to read, never media to view, under `## Files reviewed`).
 Role `designer` changes files like the implementer (the same markers apply) and

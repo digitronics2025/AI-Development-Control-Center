@@ -95,7 +95,11 @@ registry and SaaS tokens including the formats above, credentials in URLs,
 private keys — not JWTs or the broad `key=value` rule) and [sensitive-files.ts](../../packages/security/src/sensitive-files.ts)
 names files that are secret by name (`.env*` except `.example/.sample/.template`,
 keys, keystores, `.npmrc`, SSH and cloud credentials). Source Control uses both to
-block commits and pushes ([source-control.md](source-control.md)).
+block commits and pushes ([source-control.md](source-control.md)), and so does
+every commit of task work — the Git checkpoint, a worktree's final commit and
+`git.commit` — on the staged diff of the task's own paths, with no inline
+allow marker (VER-1, [git.md](git.md#commits)); `SECRET_LABEL` words each
+finding ("a GitHub token").
 
 ## Command classification ([commands.ts](../../packages/security/src/commands.ts))
 

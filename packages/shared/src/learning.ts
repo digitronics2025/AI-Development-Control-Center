@@ -77,6 +77,8 @@ export const INSTALLABLE_TOOLS: readonly InstallableTool[] = [
   { id: 'adb', name: 'Android platform tools', commands: ['adb', 'fastboot'], providerId: 'adb', method: { kind: 'winget', packageId: 'Google.PlatformTools' }, purpose: 'Install and inspect Android apps on a device' },
   { id: 'wrangler', name: 'Wrangler', commands: ['wrangler'], providerId: 'wrangler', method: { kind: 'npm', packageName: 'wrangler' }, purpose: 'Cloudflare Workers, Pages and D1' },
   { id: 'ffmpeg', name: 'FFmpeg', commands: ['ffmpeg', 'ffprobe'], providerId: 'ffmpeg', method: { kind: 'winget', packageId: 'Gyan.FFmpeg' }, purpose: 'Optimise images and video, poster frames and video frames (media tools)' },
+  // The dependency audit prefers it to pnpm/npm audit (security.dependency_audit, VER-1); the audit works without it.
+  { id: 'osv-scanner', name: 'OSV-Scanner', commands: ['osv-scanner'], providerId: null, method: { kind: 'winget', packageId: 'Google.OSVScanner' }, purpose: 'Known vulnerabilities in lockfiles of every ecosystem, for the dependency audit' },
 ];
 
 export const INSTALLABLE_TOOL_IDS = INSTALLABLE_TOOLS.map((t) => t.id) as [string, ...string[]];

@@ -45,10 +45,46 @@ psql, mysql), docker, android (adb, Gradle), hosted (processes, terminals,
 checkpoints, privileged helper, VS Code), verify, credential-broker
 (`credential.generate`), installer (`software.catalog`, `software.install` —
 a reviewed program list only, [learning.md](learning.md#programs)), media
-(fetch, view, SVG, fal generation, FFmpeg) and design (contrast, token lint)
-([design-agent.md](design-agent.md#media-tools)). The orchestrator adds
+(fetch, view, SVG, fal generation, FFmpeg), design (contrast, token lint)
+([design-agent.md](design-agent.md#media-tools)) and security (secret scan,
+dependency audit, below). The orchestrator adds
 `environment` and one `mcp:<id>` provider per healthy MCP server
-([mcp.md](mcp.md)). About 178 built-in capabilities in total.
+([mcp.md](mcp.md)). About 180 built-in capabilities in total.
+
+**Security scans** ([security.ts](../../packages/tools/src/packs/security.ts),
+VER-1), both Level 1 and read-only, in every profile (last, so a full list
+keeps a stage's working tools):
+`security.secret_scan` runs the commit and push secret preflight
+([git.md](git.md#commits)) on scope `task` (everything since the task's
+baseline commit, `ctx.baseline`: tracked changes and untracked files Git does
+not ignore; `UNAVAILABLE` outside a task), `staged`, or `paths` (whole files
+or folders, confined to the roots), naming file and kind, never the value.
+Whole files are read only when they are regular files whose real path is
+inside the roots (`scanFiles`): a link, or a file under a linked folder Git
+lists, is never followed out of them.
+`security.dependency_audit` (`network` effect) audits the root's lockfiles, or
+those named — both confined to the roots, so a lockfile-named link out of them
+is never read — with osv-scanner (`scan source -L <lockfile> --format json`)
+when it is on PATH, else `pnpm audit --json` (`pnpm-lock.yaml`) or
+`npm audit --json --package-lock-only` (`package-lock.json`). Scanners run
+with `NoDefaultCurrentDirectoryInExePath=1`: npm's `pnpm.cmd` / `npm.cmd` call a
+bare `node`, and cmd.exe would otherwise run a `node.cmd` the repository
+holds. A lockfile no scanner could read is listed in `notAudited` with its
+reason (status `partial`) beside those that were audited. In a task it
+audits the baseline commit's lockfile (`git show`, in a temporary folder with
+its `package.json`) the same way and reports as new only advisories — package
+and id — the baseline did not have (an unchanged lockfile brings in none, a
+lockfile new since the baseline all of its own). Only a report counts: JSON
+without `results` (osv-scanner) or without `advisories` / `vulnerabilities`
+(pnpm, npm), or with `error` — npm's and pnpm's answer when the registry
+cannot be reached, exit 1 as for findings — is that scanner failing, with its
+message. When no scanner works it fails `UNAVAILABLE` "Dependency audit
+unverified: …" with each reason, never a pass. osv-scanner is in the installer catalog (`Google.OSVScanner`). The
+engine runs both for `{{security_findings}}` ([prompts.md](prompts.md)); a
+security call that ran to its end counts as the optional "Security scan"
+verification evidence (`verificationCoverage` in
+[tooling.ts](../../apps/orchestrator/src/engine/tooling.ts), `EXTRA_EVIDENCE`
+in [verification.ts](../../packages/tools/src/verification.ts)).
 
 ## Registry, router, health
 
@@ -72,7 +108,10 @@ a reviewed program list only, [learning.md](learning.md#programs)), media
 
 `ToolService.invoke()` is the only way anything runs a tool (in a task across
 repositories it first narrows the call to the repository its `cwd`/`directory`
-names — roots and credentials included, [multi-repository-tasks.md](multi-repository-tasks.md#tool-calls)):
+names — roots, credentials and that repository's baseline commit included, [multi-repository-tasks.md](multi-repository-tasks.md#tool-calls)).
+A task scope carries `baseline`, the commit the task started from (the empty
+tree for a repository with no commits; null at a workspace root), which an
+operation reads as `ctx.baseline`:
 
 1. route → 2. validate input → 3. classify (`classify()` may raise or lower
 the level: a recursive delete is Level 5, a read-only shell script Level 1;
@@ -250,6 +289,10 @@ makes for it, and a failure there is reported with the push as done. Only
 scanned, and the preflight takes the local remote-tracking branch as what the
 remote has, which a command can move (`git update-ref`). It keeps a secret
 from being pushed by mistake; it does not stop an agent set on pushing one.
+`git.commit` stages its paths and runs the commit check on exactly them
+before `git commit` (`assertNoStagedSecrets`, [git.md](git.md#commits)): a
+secret fails the call `DENIED` with the findings, unstages the paths and
+commits nothing; there is no inline allow marker.
 
 Packs that stream a child process's output keep only its last 4000 lines
 (`pushBounded` in [detect.ts](../../packages/tools/src/detect.ts)), so a

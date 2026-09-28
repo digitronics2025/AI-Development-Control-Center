@@ -35,6 +35,7 @@ export const PROMPT_PLACEHOLDERS = {
   max_fix_cycles: "The task's fix cycle limit",
   team_stages: 'Later stages of this workflow that can run as an adaptive Stage Team, with their keys and worker limits, or (none)',
   screenshots: 'Screenshots and images the Control Center kept for this task so far (browser checks, the visual matrix, generated media), newest first, by file path',
+  security_findings: "The Control Center's secret scan of the change and, when a lockfile changed, each dependency advisory the change brings in (package, severity, fixed-in version) — not those already on the baseline lockfile",
   design_context: "The repository's design standard and design memory: design.md or DESIGN.md, a design/ folder (brief, tokens), a Tailwind theme — by path and size, with a short design brief inline",
 } as const;
 

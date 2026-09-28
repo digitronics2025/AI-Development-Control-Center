@@ -190,6 +190,8 @@ export const EVENT_TYPES = [
   'GIT_BASELINE',
   'GIT_BRANCH',
   'GIT_COMMIT',
+  /** The secret check refused a task's final commit (VER-1): its files are kept in a backup ref, off the branch. */
+  'SECRET_BLOCKED',
   'TEST_STARTED',
   'TEST_FAILED',
   'TEST_PASSED',

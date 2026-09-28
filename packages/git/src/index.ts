@@ -6,6 +6,7 @@ import { isAbsolute, join } from 'node:path';
 import { runProcess } from '@acc/executor';
 import { credentialFreeEnv } from '@acc/security';
 import type { ChangedFile } from '@acc/shared';
+import { assertNoStagedSecrets } from './preflight.js';
 
 /** Git's well-known empty tree, used as the baseline of a repository with no commits. */
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -351,12 +352,17 @@ export async function diffSince(
   return { diff, truncated: false };
 }
 
-/** Stage exactly the given paths and commit them. Returns the new commit hash. */
+/**
+ * Stage exactly the given paths and commit them. Returns the new commit hash.
+ * What is staged is checked for secret material first (VER-1): a finding
+ * unstages the paths again and throws `SecretCommitError`, committing nothing.
+ */
 export async function commitPaths(cwd: string, paths: string[], message: string): Promise<string | null> {
   if (paths.length === 0) return null;
   await gitOk(cwd, ['add', '--all', '--', ...paths]);
   const staged = await git(cwd, ['diff', '--cached', '--quiet']);
   if (staged.code === 0) return null;
+  await assertNoStagedSecrets(cwd, paths);
   // Repository hooks run as usual; the orchestrator never bypasses them.
   await gitOk(cwd, ['commit', '-m', message, '--', ...paths]);
   return headCommit(cwd);

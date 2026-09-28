@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
-import { changesSince, commitPaths, committableTree, pathStatusSince } from '@acc/git';
+import { changesSince, commitPaths, committableTree, pathStatusSince, SecretCommitError } from '@acc/git';
 import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
@@ -1630,15 +1630,17 @@ export class StageRunners {
       return { kind: 'success', stageId: stage.id };
     } catch (error) {
       const failedIn = current?.folder ? ` in ${current.repo.name}` : '';
-      const message = `Git commit failed${failedIn}: ${(error as Error).message}`;
-      // A rejecting pre-commit hook (a docs guard, a linter) names something an
-      // agent can fix, so a stage with a failure route treats it like a failed
-      // test: the fix stage sees the message in its test results and the
-      // checkpoint runs again after it.
+      // The secret check (VER-1) refused the commit: its message names each file and kind of secret, never the value.
+      const secret = error instanceof SecretCommitError ? error : null;
+      const message = secret ? `${current?.folder ? `${current.repo.name}: ` : ''}${secret.message}` : `Git commit failed${failedIn}: ${(error as Error).message}`;
+      // A rejecting pre-commit hook (a docs guard, a linter) or a secret in the
+      // change names something an agent can fix, so a stage with a failure
+      // route treats it like a failed test: the fix stage sees the message in
+      // its test results and the checkpoint runs again after it.
       if (def.onFail) {
         const clean = redact(message);
         publisher.updateStage(stage.id, { status: 'FAILED', errorClass: 'COMMAND_FAILURE', errorMessage: clean, summary: clean, finishedAt: now() });
-        publisher.event(task.id, 'STAGE_FAILED', `${def.name} was rejected by the repository: ${clean}`, { errorClass: 'COMMAND_FAILURE' }, stage.id);
+        publisher.event(task.id, 'STAGE_FAILED', `${def.name} was ${secret ? 'refused by the secret check' : 'rejected by the repository'}: ${clean}`, { errorClass: 'COMMAND_FAILURE', ...(secret ? { findings: secret.findings } : {}) }, stage.id);
         return { kind: 'tests_failed', stageId: stage.id, message: clean };
       }
       return this.failStage(stage, 'COMMAND_FAILURE', message);

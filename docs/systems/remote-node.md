@@ -119,7 +119,8 @@ stage's permission level, making a verdict stage advisory, adding or changing a
 stage's `when` condition (removing one is allowed; [workflow-engine.md](workflow-engine.md#profiles)),
 creating a new workflow (duplicate one instead),
 adding a repository-discovery folder or un-ignoring a removed repository,
-turning on terminals, agent tool access, automatic repairs, the Chairman
+turning on terminals, agent tool access, automatic repairs, resuming tasks by
+themselves after a usage reset ([usage.md](usage.md#auto-resume-at-reset)), the Chairman
 adopting improvements on its own, or an agent loading the operator's own CLI
 customisations, attachments, a task across several repositories (`linkedRepositoryIds`), paid media generation — turning it on, a larger budget per task, a price estimate lowered, removed or added, or loosening a media budget (raised, warn only, disabled or removed; [design-agent.md](design-agent.md#spend-gate)) — and where phone alerts go — the messenger address, the token and the recipient (switching alerts off by clearing all three is allowed; [operations.md](operations.md#phone-alerts)). Lowering auto-approve or a budget, or raising a price estimate, is allowed. Settings are judged as they would be saved
 (`mergeSettings` in [settings.ts](../../apps/orchestrator/src/services/settings.ts)),

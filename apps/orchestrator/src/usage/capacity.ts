@@ -48,7 +48,19 @@ export function toReading(snapshot: CapacitySnapshot, now = Date.now()): Capacit
  * is shown with its freshness.
  */
 export class CapacityStore {
-  constructor(private readonly db: Db) {}
+  private readonly listeners = new Set<(agentId: string) => void>();
+
+  /** `now` judges freshness (an injectable clock for tests of the reset scheduler). */
+  constructor(
+    private readonly db: Db,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Called after every recorded reading (the reset scheduler re-plans from it). A listener's error never fails the write. */
+  onRecord(listener: (agentId: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
 
   record(provider: string, agentId: string, eventId: string | null, source: string, observations: CapacityObservation[]): void {
     const insert = this.db.prepare(
@@ -61,6 +73,13 @@ export class CapacityStore {
         insert.run(randomUUID(), provider, agentId, o.metric, o.label, o.usedPercent, remaining, o.status, o.resetsAt, source, 'LIVE', o.observedAt, o.detail, eventId);
       }
     })();
+    for (const listener of this.listeners) {
+      try {
+        listener(agentId);
+      } catch (error) {
+        console.warn(`[usage] after a capacity reading: ${(error as Error).message}`);
+      }
+    }
   }
 
   /** Latest snapshot per agent and metric. */
@@ -77,7 +96,27 @@ export class CapacityStore {
     ).map(toSnapshot);
   }
 
-  readings(now = Date.now()): CapacityReading[] {
+  /**
+   * One agent's latest snapshot per metric as it stood at `at` (an ISO time):
+   * what a run that ended then was judged on. The readings recorded from that
+   * run itself (its usage event is keyed by `executionId`) count whatever time
+   * they carry; readings of later runs never do, so they cannot hide the reset
+   * a blocked task waits for (docs/systems/usage.md#auto-resume-at-reset).
+   */
+  asOf(agentId: string, at: string, executionId: string): CapacitySnapshot[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM (
+             SELECT s.*, ROW_NUMBER() OVER (PARTITION BY s.metric ORDER BY s.captured_at DESC) AS n FROM capacity_snapshots s
+             WHERE s.agent_id = ? AND (s.captured_at <= ? OR s.event_id IN (SELECT id FROM usage_events WHERE idempotency_key = ?))
+           ) WHERE n = 1 ORDER BY metric`,
+        )
+        .all(agentId, at, executionId) as Row[]
+    ).map(toSnapshot);
+  }
+
+  readings(now = this.now()): CapacityReading[] {
     return this.latest().map((s) => toReading(s, now));
   }
 

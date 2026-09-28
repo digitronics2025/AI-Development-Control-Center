@@ -17,7 +17,8 @@ import type { SettingsService } from './settings.js';
  * state and never blocks or delays anything.
  */
 
-export type AlertKind = 'approval' | 'decision' | 'stopped' | 'usage' | 'failed' | 'completed';
+/** `resumed`: auto-resume at a usage reset ran, or tried and did not get through (docs/systems/usage.md#auto-resume-at-reset). */
+export type AlertKind = 'approval' | 'decision' | 'stopped' | 'usage' | 'resumed' | 'failed' | 'completed';
 
 export interface AlertServiceDeps {
   store: Store;
@@ -43,8 +44,10 @@ export interface AlertDelivery {
 
 /** The messenger's ingest route (whatsapp-inbox-saas-1, internal-notifications.ts). */
 const INGEST_PATH = '/api/v1/internal/notifications/ingest';
-/** Events that mark a task entering an alerting state. */
-const ENTRY_EVENTS: ReadonlySet<EventType> = new Set(['TASK_WAITING', 'TASK_FAILED', 'TASK_COMPLETED']);
+/** Events that mark a task entering an alerting state (what a restart catches up on). */
+const STATE_EVENTS: readonly EventType[] = ['TASK_WAITING', 'TASK_FAILED', 'TASK_COMPLETED'];
+/** …plus a task leaving a usage wait by itself, alerted as it happens. */
+const ENTRY_EVENTS: ReadonlySet<EventType> = new Set([...STATE_EVENTS, 'USAGE_AUTO_RESUME']);
 /** After a restart, states entered longer ago than this are not alerted late. */
 const CATCH_UP_MS = 60 * 60_000;
 const MAX_TITLE = 120;
@@ -55,6 +58,7 @@ const TOGGLE: Record<AlertKind, 'approvals' | 'failures' | 'completions'> = {
   decision: 'approvals',
   stopped: 'failures',
   usage: 'failures',
+  resumed: 'failures',
   failed: 'failures',
   completed: 'completions',
 };
@@ -64,8 +68,13 @@ function cut(text: string, max: number): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
-/** Which alert, if any, a task's entry event calls for, judged by the state the task is in now. */
-export function alertKindFor(task: Pick<TaskRecord, 'status' | 'blocker'>, eventType: EventType): Exclude<AlertKind, 'approval'> | null {
+/**
+ * Which alert, if any, a task's entry event calls for, judged by the state the
+ * task is in now; an auto-resume by what happened (`data.phase`), only when it
+ * resumed the task or failed to.
+ */
+export function alertKindFor(task: Pick<TaskRecord, 'status' | 'blocker'>, eventType: EventType, data: Record<string, unknown> = {}): Exclude<AlertKind, 'approval'> | null {
+  if (eventType === 'USAGE_AUTO_RESUME') return data.phase === 'resumed' || data.phase === 'not_resumed' ? 'resumed' : null;
   if (eventType === 'TASK_COMPLETED') return task.status === 'COMPLETED' ? 'completed' : null;
   if (eventType === 'TASK_FAILED') return task.status === 'FAILED' ? 'failed' : null;
   if (eventType !== 'TASK_WAITING') return null;
@@ -120,7 +129,7 @@ export class AlertService {
     const since = Date.now() - CATCH_UP_MS;
     const recent = (iso: string) => Date.parse(iso) >= since;
     for (const task of this.d.store.listTasks({ statuses: ['WAITING_FOR_USER', 'WAITING_FOR_USAGE_RESET', 'FAILED', 'COMPLETED'], limit: 200 })) {
-      const entry = this.d.store.lastEventOfType(task.id, [...ENTRY_EVENTS]);
+      const entry = this.d.store.lastEventOfType(task.id, [...STATE_EVENTS]);
       if (entry && recent(entry.at)) await this.onEntry(entry);
     }
     for (const approval of this.d.store.listApprovals({ status: 'pending', limit: 200 })) {
@@ -128,20 +137,32 @@ export class AlertService {
     }
   }
 
-  private async onEntry(event: Pick<TaskEvent, 'id' | 'taskId' | 'type' | 'message'>): Promise<void> {
+  private async onEntry(event: Pick<TaskEvent, 'id' | 'taskId' | 'type' | 'message' | 'data'>): Promise<void> {
     const task = this.d.store.getTask(event.taskId);
     if (!task) return;
-    const kind = alertKindFor(task, event.type);
+    const kind = alertKindFor(task, event.type, event.data ?? {});
     if (!kind) return;
+    const resumed = event.data?.phase === 'resumed';
     const phrase: Record<typeof kind, string> = {
       decision: 'needs your decision',
       stopped: 'is stopped',
       usage: 'waits for usage to reset',
+      resumed: resumed ? 'resumed after the usage reset' : 'did not resume after the usage reset',
       failed: 'failed',
       completed: `is done · ${task.finalStatus === 'READY' ? 'ready' : 'needs your attention'}`,
     };
-    const severity = kind === 'failed' ? 'critical' : kind === 'usage' || (kind === 'completed' && task.finalStatus === 'READY') ? 'info' : 'warn';
-    const detail = kind === 'completed' ? this.completionLine(task.finalStatus) : (task.blocker?.message ?? event.message);
+    const severity =
+      kind === 'failed'
+        ? 'critical'
+        : kind === 'resumed'
+          ? resumed
+            ? 'info'
+            : 'warn'
+          : kind === 'usage' || (kind === 'completed' && task.finalStatus === 'READY')
+            ? 'info'
+            : 'warn';
+    // An auto-resume is about what just happened, not the (now cleared) blocker.
+    const detail = kind === 'completed' ? this.completionLine(task.finalStatus) : kind === 'resumed' ? event.message : (task.blocker?.message ?? event.message);
     await this.deliver({ taskId: task.id, kind, source: `event:${event.id}`, title: `${task.id} ${phrase[kind]} · ${task.title}`, body: this.body(task, detail), severity });
   }
 

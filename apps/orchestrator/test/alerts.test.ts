@@ -79,6 +79,16 @@ describe('which alert a state calls for', () => {
     // Already moved on: nothing to say.
     expect(alertKindFor({ status: 'RUNNING', blocker: null }, 'TASK_WAITING')).toBeNull();
   });
+
+  it('alerts an auto-resume at a usage reset that ran or did not get through, never its plan', () => {
+    const running = { status: 'RUNNING' as const, blocker: null };
+    const waiting = { status: 'WAITING_FOR_USAGE_RESET' as const, blocker: null };
+    expect(alertKindFor(running, 'USAGE_AUTO_RESUME', { phase: 'resumed' })).toBe('resumed');
+    expect(alertKindFor(waiting, 'USAGE_AUTO_RESUME', { phase: 'not_resumed' })).toBe('resumed');
+    expect(alertKindFor(waiting, 'USAGE_AUTO_RESUME', { phase: 'scheduled' })).toBeNull();
+    expect(alertKindFor(waiting, 'USAGE_AUTO_RESUME', { phase: 'manual' })).toBeNull();
+    expect(alertKindFor(waiting, 'USAGE_AUTO_RESUME')).toBeNull();
+  });
 });
 
 describe('phone alerts', () => {

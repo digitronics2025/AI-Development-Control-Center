@@ -46,6 +46,7 @@ import { ToolStore } from './tools/store.js';
 import { VaultBridgeService } from './tools/vault-bridge.js';
 import { TerminalService } from './tools/terminals.js';
 import { UsageService } from './usage/service.js';
+import { UsageResetScheduler, type ResetClock } from './usage/reset-scheduler.js';
 import { MediaSpendGate } from './usage/media.js';
 import { RemoteNodeService, type RemoteNodeDeps } from './remote/service.js';
 import { ConnectedAppService } from './connected-apps/service.js';
@@ -123,6 +124,8 @@ export function createServices(
     release?: { probe?: Probe; pollSeconds?: number };
     /** Phone alerts (docs/plans/LEAD_TIME_PLAN.md §3.4): a stand-in messenger and a short retry wait, for tests. */
     alerts?: Pick<AlertServiceDeps, 'fetch' | 'retryDelayMs' | 'timeoutMs'>;
+    /** Capacity freshness and auto-resume timers (docs/systems/usage.md#auto-resume-at-reset): a hand-advanced clock, for tests. */
+    clock?: ResetClock;
   } = {},
 ): AppServices {
   const db = openDatabase(options.databaseFile ?? path.join(config.dataDir, 'acc.db'));
@@ -130,7 +133,7 @@ export function createServices(
   const store = new Store(db);
   const bus = new Bus();
   const settings = new SettingsService(store, bus);
-  const usage = new UsageService({ db, store, bus, dataDir: config.dataDir, simulated: config.simulatedAgents });
+  const usage = new UsageService({ db, store, bus, dataDir: config.dataDir, simulated: config.simulatedAgents, clock: options.clock });
   const agents = new AgentRegistry(store, bus, settings, options.adapters ?? defaultAdapters(config), options.baseEnv ?? process.env, usage.recorder);
   usage.attachAdapters(() => agents.ids().map((id) => agents.adapter(id)));
   // Native permission rules of every run deny these (SEC-3); main.ts sets the port the server really listens on.
@@ -188,6 +191,19 @@ export function createServices(
   const chat = new ChairmanChat({ store, bus, views, agents, artifacts, chairman });
   const ask = new AskService({ store, askStore: new AskStore(db), bus, views, agents, repositories, settings, chairman, dataDir: config.dataDir, tools, toolStore, tooling, credentials });
   const watchdog = new Watchdog(engine, store, views, settings, chairman);
+  // Auto-resume at a usage reset (opt-in): one RESUME_TASK through the gateway per reset and task, keyed so it survives a restart.
+  const resets = new UsageResetScheduler({
+    store,
+    settings,
+    bus,
+    capacity: usage.capacity,
+    used: (taskId, key) => chairman.store.actionByKey(taskId, key) !== null,
+    resume: (taskId, key, expectedVersion) => chairman.gateway.execute(taskId, { type: 'RESUME_TASK', params: {} }, { initiator: 'system', source: 'supervisor', idempotencyKey: key, expectedVersion }),
+    event: (taskId, type, message, data) => void engine.publisher.event(taskId, type, message, data),
+    agentName: (id) => (agents.has(id) ? agents.adapter(id).displayName : id),
+    clock: usage.clock,
+  });
+  usage.attachResetScheduler(resets);
   const learning = new LearningService({ store, bus, settings, chairman, artifacts, toolStore, tools, skills, dataDir: config.dataDir, baseEnv });
   // The adapter's declaration decides whether the run loads a learned skill or is pointed at its file.
   context.lessons = async (task, def, stage) => learning.promptSection(task, def, stage, stage.agentId && agents.has(stage.agentId) ? (await agents.capabilities(stage.agentId)).pluginDirs : false);
@@ -288,6 +304,8 @@ export function createServices(
       learning.start();
       // Phone alerts from now on, plus any a restart left unsent in the last hour (docs/plans/LEAD_TIME_PLAN.md §3.4).
       alerts.start();
+      // Auto-resume timers re-armed by usage.recover() fire only now, after the engine and the Chairman recovered (and alerts listen).
+      resets.start();
       // Only once local state is settled: the cloud then receives the corrected picture.
       remote.start();
       return result;

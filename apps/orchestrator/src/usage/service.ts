@@ -34,6 +34,7 @@ import { MediaLedger } from './media.js';
 import { PricingRegistry } from './pricing.js';
 import { UsageQueries, type BreakdownDimension } from './queries.js';
 import { UsageRecorder } from './recorder.js';
+import { systemClock, type ResetClock, type UsageResetScheduler } from './reset-scheduler.js';
 
 type Row = Record<string, any>;
 
@@ -78,15 +79,20 @@ export class UsageService {
   readonly media: MediaLedger;
   readonly anomalies: AnomalyDetector;
   readonly recorder: UsageRecorder;
+  /** Judges capacity freshness and runs the reset scheduler's timers (a hand-advanced clock in tests). */
+  readonly clock: ResetClock;
   private adapters: () => AdapterInfo[] = () => [];
+  /** Auto-resume at a usage reset; null until `attachResetScheduler`. */
+  resets: UsageResetScheduler | null = null;
   private lastReconciliation: ReconciliationResult | null = null;
 
   constructor(
-    private readonly d: { db: Db; store: Store; bus: Bus; dataDir: string; simulated: boolean },
+    private readonly d: { db: Db; store: Store; bus: Bus; dataDir: string; simulated: boolean; clock?: ResetClock },
   ) {
+    this.clock = d.clock ?? systemClock;
     this.pricing = new PricingRegistry(d.db);
     this.ledger = new UsageLedger(d.db, this.pricing);
-    this.capacity = new CapacityStore(d.db);
+    this.capacity = new CapacityStore(d.db, () => this.clock.now());
     this.queries = new UsageQueries(d.db, d.store);
     this.media = new MediaLedger(d.db);
     this.budgets = new BudgetService(d.db, d.store, this.queries, this.media);
@@ -99,7 +105,16 @@ export class UsageService {
     this.adapters = list;
   }
 
-  /** Startup: replay spooled writes, close interrupted attempts, prune old readings, reconcile. */
+  /** The auto-resume scheduler (docs/systems/usage.md#auto-resume-at-reset); it needs the Chairman's gateway, so it is set once that exists. */
+  attachResetScheduler(scheduler: UsageResetScheduler): void {
+    this.resets = scheduler;
+  }
+
+  /**
+   * Startup: replay spooled writes, close interrupted attempts, prune old
+   * readings, reconcile, and re-arm auto-resume timers from stored state
+   * (they fire only once the app has recovered: `UsageResetScheduler.start`).
+   */
   recover(): { replayed: number; interrupted: number } {
     const result = this.recorder.recover();
     try {
@@ -108,10 +123,12 @@ export class UsageService {
     } catch (error) {
       console.warn(`[usage] startup checks failed: ${(error as Error).message}`);
     }
+    this.resets?.recover();
     return result;
   }
 
   close(): void {
+    this.resets?.stop();
     this.recorder.stop();
   }
 

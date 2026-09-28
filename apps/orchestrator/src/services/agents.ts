@@ -1,5 +1,5 @@
 import { AgentGuardError, cliCompat, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRunAs, type AgentRuntimeOptions } from '@acc/agent-sdk';
-import { PERMISSION_LEVEL_INFO, type AgentCapabilities, type AgentInfo, type AgentSettings, type ModelDescriptor, type PermissionLevel, type UsageBilling } from '@acc/shared';
+import { PERMISSION_LEVEL_INFO, capacityUnavailableReason, type AgentCapabilities, type AgentInfo, type AgentSettings, type ModelDescriptor, type PermissionLevel, type UsageBilling } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { Store } from '../store/store.js';
 import type { UsageAttribution } from '../usage/ledger.js';
@@ -78,12 +78,30 @@ export class AgentRegistry {
   }
 
   /**
+   * Why this agent cannot run now because its last run reported it out of
+   * usage or credits — "Claude Code is unavailable (usage limit, resets at
+   * 21:00)" — or null (docs/systems/usage.md#capacity). The Chairman and Ask
+   * check it before launching; `launch` refuses on it. A simulated agent's
+   * limit is a scripted scenario of one task (`[sim:usage-limit]`), not an
+   * allowance other runs share: it is shown and steers reroutes, but never
+   * refuses a launch.
+   */
+  capacityReason(agentId: string): string | null {
+    const adapter = this.adapter(agentId);
+    if (adapter.usageCapabilities.provider === 'simulated') return null;
+    const block = this.meter?.capacityBlock(agentId) ?? null;
+    return block ? capacityUnavailableReason(adapter.displayName, block) : null;
+  }
+
+  /**
    * Start an agent run through the usage meter — the one capture boundary
    * every provider attempt passes (docs/systems/usage.md#capture). A budget
    * whose policy stops new runs refuses the launch; once the process starts,
    * exactly one usage event is recorded when it finishes. Telemetry never
    * changes the run's result. A run above the permission level the adapter
-   * can enforce (`maxPermissionLevel`) is refused before anything starts.
+   * can enforce (`maxPermissionLevel`) is refused before anything starts, and
+   * so is a run of an agent a fresh reading says is out of usage or credits
+   * (`USAGE_LIMIT`, with the reset time when one is known).
    */
   async launch(agentId: string, input: AgentExecutionInput, attribution: UsageAttribution): Promise<AgentExecutionHandle> {
     const adapter = this.adapter(agentId);
@@ -98,6 +116,9 @@ export class AgentRegistry {
         'PERMISSION_DENIED',
       );
     }
+    // Admission: the provider already said no (docs/systems/usage.md#capacity). Fails open with the meter.
+    const exhausted = this.capacityReason(agentId);
+    if (exhausted) throw new AgentGuardError(`${exhausted}; no run was started`, 'USAGE_LIMIT');
     const info = { agentId, capabilities: adapter.usageCapabilities, model: input.model, attribution };
     const blocked = this.meter?.blockReason(info) ?? null;
     if (blocked) throw new AgentGuardError(blocked, 'PERMISSION_DENIED');

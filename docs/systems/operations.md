@@ -63,14 +63,18 @@ so a task that needs the operator reaches the phone with no dashboard open.
 
 - **When:** on the bus, a `TASK_WAITING` (decision → "needs your decision";
   any other blocker except approval and queued → "is stopped"; usage →
-  "waits for usage to reset"), `TASK_FAILED`, `TASK_COMPLETED`, and every new
-  pending approval. Each follows its Settings switch (approvals, failures,
-  completions).
+  "waits for usage to reset"), `TASK_FAILED`, `TASK_COMPLETED`, a
+  `USAGE_AUTO_RESUME` that resumed the task or did not get through ("resumed
+  after the usage reset" / "did not resume after the usage reset", with the
+  event's own text; [usage.md](usage.md#auto-resume-at-reset)), and every new
+  pending approval. Each follows its Settings switch (approvals, failures —
+  which also covers the auto-resume alerts — completions).
 - **Once:** every attempt writes `ALERT_SENT` or `ALERT_NOT_SENT` with the
   source (`event:<id>` or `approval:<id>`); nothing is sent again for a source
   with `ALERT_SENT`, and the `dedupeKey` `acc:<task>:<source>` makes the
   messenger drop a repeat too. At start, states entered within the last hour
-  without an `ALERT_SENT` are sent late.
+  without an `ALERT_SENT` are sent late (the three state events only, not an
+  auto-resume).
 - **Content:** title (≤ 120, the only text the phone's tray shows)
   `TASK-n <what> · <title>`, body `<repository> — <blocker or approval>`
   redacted and capped at 600, a link to `<open URL>/tasks/<id>` when set.

@@ -37,6 +37,7 @@ export async function createTestApp(
     remoteTimings?: Parameters<typeof createServices>[1] extends infer O ? (O extends { remoteTimings?: infer R } ? R : never) : never;
     release?: Parameters<typeof createServices>[1] extends infer O ? (O extends { release?: infer R } ? R : never) : never;
     alerts?: Parameters<typeof createServices>[1] extends infer O ? (O extends { alerts?: infer R } ? R : never) : never;
+    clock?: Parameters<typeof createServices>[1] extends infer O ? (O extends { clock?: infer R } ? R : never) : never;
   } = {},
 ): Promise<TestApp> {
   const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
@@ -54,7 +55,7 @@ export async function createTestApp(
     allowedOrigins: [],
     version: 'test',
   };
-  const services = createServices(config, { adapters: options.adapters ?? simAdapters(), baseEnv: options.baseEnv, remoteTimings: options.remoteTimings, release: options.release, alerts: options.alerts });
+  const services = createServices(config, { adapters: options.adapters ?? simAdapters(), baseEnv: options.baseEnv, remoteTimings: options.remoteTimings, release: options.release, alerts: options.alerts, clock: options.clock });
   await services.recover();
   const app = await buildServer(services);
   const api = async (method: string, url: string, body?: unknown, headers: Record<string, string> = {}) => {

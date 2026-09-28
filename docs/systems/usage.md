@@ -26,20 +26,26 @@ the Chairman's reasoning ([reasoner.ts](../../apps/orchestrator/src/chairman/rea
 and commit-message suggestions ([assist.ts](../../apps/orchestrator/src/source-control/assist.ts)).
 A test fails if any other orchestrator file calls an adapter's `execute({` directly.
 
-1. **Budget check.** An exceeded `STOP_NEW_RUNS` budget refuses the launch with
+1. **Capacity check (admission).** An agent a fresh reading says is out of usage
+   or credits (`capacityBlock`, [below](#capacity)) is refused with
+   `AgentGuardError(USAGE_LIMIT)` — "Claude Code is unavailable (usage limit,
+   resets at 21:00); no run was started" — before any process starts, so a
+   stage waits for the reset exactly as if the provider had said no. Nothing is
+   recorded. Fails open with the meter.
+2. **Budget check.** An exceeded `STOP_NEW_RUNS` budget refuses the launch with
    `AgentGuardError(PERMISSION_DENIED)`, so the stage waits for the user. No
    provider attempt happens, so nothing is recorded. If the budget engine
    itself fails, the run is allowed and the failure is logged (fail open).
-2. **Dispatch.** Once the process has started, a `usage_pending` row keyed by the
+3. **Dispatch.** Once the process has started, a `usage_pending` row keyed by the
    execution id is written.
-3. **Finish.** The adapter's result carries `usage` (per-model token lines and the
+4. **Finish.** The adapter's result carries `usage` (per-model token lines and the
    provider-reported cost) and `capacity` observations. The recorder writes one
    `usage_events` row with its lines in a single transaction, and deletes the
    pending row.
-4. **Failure to save.** The attempt is appended to `<data>/usage-spool.jsonl` and
+5. **Failure to save.** The attempt is appended to `<data>/usage-spool.jsonl` and
    retried with backoff (1 s to 60 s). The execution id is `UNIQUE`, so replays
    never double count. The provider is never called again to recreate telemetry.
-5. **Startup** ([recorder.ts](../../apps/orchestrator/src/usage/recorder.ts) `recover`).
+6. **Startup** ([recorder.ts](../../apps/orchestrator/src/usage/recorder.ts) `recover`).
    The spool is replayed first. Pending rows still left belonged to attempts that
    a stop interrupted: they are recorded as `interrupted` with unknown usage.
 
@@ -51,7 +57,7 @@ A test fails if any other orchestrator file calls an adapter's `execute({` direc
 | Input semantics | uncached input | includes cached input, so the parser subtracts it | uncached |
 | Cost | `costUSD` per model (list-price equivalent) → `PROVIDER` | none: price list, else `UNKNOWN` | the simulated `claude` reports one; `codex` does not |
 | 1-hour cache writes | known only when one model ran and `usage.cache_creation` covers every write | not applicable | 0 |
-| Capacity | `rate_limit_event.rate_limit_info.unifiedWindows` (five-hour and weekly utilisation, reset times) and `overageStatus` | only a failure message ("out of credits", "usage limit") | a five-hour window |
+| Capacity | `rate_limit_event.rate_limit_info.unifiedWindows` (five-hour and weekly utilisation, reset times as epoch seconds) and `overageStatus` | only a failure message ("out of credits", "usage limit"); a usage limit carries the reset its text states, "try again at 21:00" or "try again in 2 hours 5 minutes" ([agents-codex.md](agents-codex.md#usage-limits)) | a five-hour window |
 
 The real Claude Code 2.1.280 events are kept in
 [tests/fixtures/claude-2.1.280-usage.jsonl](../../tests/fixtures/claude-2.1.280-usage.jsonl).
@@ -174,11 +180,67 @@ have no separate limits endpoint. They are never fetched, scraped or estimated.
 - **Can't run now.** `blocksRuns` ([usage.ts](../../packages/shared/src/usage.ts)):
   a fresh `exhausted` reading of any metric except `overage` (paid extra usage,
   never used in Subscription Only mode). The recorder's `capacityBlock(agentId)`
-  exposes it as `AgentInfo.capacityBlock` on `GET /api/agents`; Home shows it
-  on the agent's health row, and the Chairman never reroutes into such an agent
-  ([chairman.md](chairman.md)). It never refuses a launch, and a stale reading
-  never blocks, so adding credits or a window reset clears it by itself.
+  exposes it as `AgentInfo.capacityBlock` on `GET /api/agents` (`metric`,
+  `resetAt`: of several blocks, one with no reset time wins, else the latest
+  reset); Home shows it on the agent's health row, and the Chairman never
+  reroutes into such an agent ([chairman.md](chairman.md)).
+- **Refused, not attempted.** `AgentRegistry.capacityReason` turns the block
+  into "Claude Code is unavailable (usage limit, resets at 21:00)" ("… (out of
+  credits)", "… (usage limit, reset time not reported)";
+  `capacityUnavailableReason`, the time in the machine's local clock, with the
+  date when it is not today). `launch` refuses on it with `USAGE_LIMIT`
+  ([Capture](#capture)), and the Chairman's reasoner and Ask report it instead
+  of launching ([chairman.md](chairman.md#reasoning-reasonerts), [ask.md](ask.md#answering-servicets)).
+  A stale reading never blocks, so a window reset clears it by itself. A
+  simulated agent's limit is scripted for one task (`[sim:usage-limit]`): it is
+  shown and steers reroutes, but never refuses a launch.
   Dashboards refetch agents with every `usage` message.
+
+### Auto-resume at reset
+
+[reset-scheduler.ts](../../apps/orchestrator/src/usage/reset-scheduler.ts), wired
+in [app.ts](../../apps/orchestrator/src/app.ts). **Off by default**:
+Tools → Policy → *Resume tasks after a usage reset* (`execution.autoResumeOnReset`).
+It spends the new window without asking, so it is opt-in, the cloud may only turn
+it off ([remote-node.md](remote-node.md)), and it adds no spending cap (weekly
+pacing is a later roadmap item, G-5).
+
+- **Which tasks.** Every `WAITING_FOR_USAGE_RESET` task. The agent is the one of
+  the task's last `USAGE_LIMIT` execution (a run the provider refused, or a
+  launch refused at admission). Its readings are taken as they stood when that
+  run was blocked (`CapacityStore.asOf`: the latest per metric up to the run's
+  end, plus the run's own by its usage event), so a later run's reading — the
+  window open again, or a failure that states no reset — never hides the reset
+  the task waits for. Of those, a reading counts when it explains the block: an
+  `exhausted` reading (not `overage`) whose reset is after the run ended, or one
+  with no reset taken at most 30 minutes before it. All must lift, so the reset
+  is the latest; any reading without one, or none at all, leaves the task to the
+  operator (a `manual` note, no timer).
+- **When.** At the reset plus a 2-minute grace (`RESET_GRACE_MS`), one
+  `RESUME_TASK` through the Chairman's [Action Gateway](chairman.md#action-gateway-gatewayts)
+  as initiator `system`, with the idempotency key `usage-reset:<agent>:<reset>`.
+  The key is stored with the action, so it is **one resume per reset per task**,
+  across restarts. The task's version must still match.
+- **Again.** If the resumed run hits the limit with a new reset time, or its
+  launch is refused at admission because a later run reported a new limit, the
+  task waits for that one (a new block, planned from its own readings). With the
+  same reset time (the key is taken) it stays manual: no loop.
+- **Re-planned** after every recorded reading (`CapacityStore.onRecord`: the
+  blocked run's own readings may be written late, from the spool), when a
+  task's status changes, and when settings change (turning it off clears every
+  timer). A timer longer than Node allows re-arms when it wakes.
+- **Restart.** `UsageService.recover` re-arms the timers from stored state;
+  they fire only once `start()` runs at the end of recovery, after the engine,
+  the Chairman and phone alerts, so a reset passed while the machine was off
+  resumes then.
+- **Timeline.** `USAGE_AUTO_RESUME` events, `data.phase`: `scheduled`
+  (once per reset and limit hit, never repeated by a restart), `resumed`,
+  `not_resumed` (the gateway refused; the reason is given) and `manual`.
+  `resumed` and `not_resumed` send a phone alert ([operations.md](operations.md#phone-alerts)).
+- **Clock.** `ResetClock` (`now`, `setTimer`, `clearTimer`) also judges capacity
+  freshness in `CapacityStore`; tests pass a hand-advanced one through
+  `createServices({ clock })`, so they never wait for a real reset
+  ([usage-reset.test.ts](../../apps/orchestrator/test/usage-reset.test.ts)).
 
 ## Budgets
 
@@ -266,6 +328,9 @@ components ([charts.tsx](../../packages/ui/src/components/charts.tsx)):
   Earlier executions have no token data and are not backfilled.
 - A Claude run can use several models. Model totals come from the lines, never
   from the requested alias.
+- A block with no reset time (out of credits, or a limit stated without one)
+  refuses launches until its reading is 30 minutes old. After adding credits,
+  reroute the stage or wait that long; the next run then reports the new state.
 - The live orchestrator runs from this repository's `dist`. Rebuild it only
   from a committed, checked tree: the dashboard is served live as soon as it is
   rebuilt.

@@ -5,6 +5,9 @@
 //                               event has none. Anything but "none" keeps the run going until it is stopped.
 //   FAKE_CLAUDE_INIT_SUBTYPE    subtype of the run's first system event (default init; anything else: a run without one)
 //   FAKE_CLAUDE_SCENARIO        ok | usage | auth | model | hang | error | long | crash | skill | silent (exit 0, no output)
+//   FAKE_CLAUDE_RESETS_AT       resetsAt (epoch seconds) of the usage scenario's rejected rate_limit_event
+//   FAKE_CLAUDE_RUN_FILE        JSON { scenario?, resetsAt? } read at each run, overriding the two above (a test
+//                               changes what the next run does without restarting the app)
 //   FAKE_CLAUDE_SKILLS_JSON     file with { skills, plugins } for the `/skills` lookup (default none)
 //   FAKE_CLAUDE_MCP_SERVERS     JSON list of the operator's own MCP servers (default none)
 //   FAKE_ARGS_FILE              where a run writes its launch record (the conformance kit's LaunchRecord)
@@ -96,7 +99,14 @@ if (args[0] === '-p') {
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => (prompt += chunk));
   process.stdin.on('end', () => {
-    const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'ok';
+    let run = {};
+    try {
+      if (process.env.FAKE_CLAUDE_RUN_FILE) run = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_RUN_FILE, 'utf8'));
+    } catch {
+      // no run file yet: the environment decides
+    }
+    const scenario = run.scenario ?? process.env.FAKE_CLAUDE_SCENARIO ?? 'ok';
+    const resetsAt = run.resetsAt ?? (process.env.FAKE_CLAUDE_RESETS_AT ? Number(process.env.FAKE_CLAUDE_RESETS_AT) : 1790122800);
     if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify(launchRecord(prompt)));
     if (scenario === 'model') {
       // A CLI older than the adapter's flags refuses them before it starts (MODEL_UNAVAILABLE: update the CLI).
@@ -172,7 +182,7 @@ if (args[0] === '-p') {
       process.exit(0);
     }
     if (scenario === 'usage') {
-      out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1790122800, rateLimitType: 'five_hour' } });
+      out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt, rateLimitType: 'five_hour' } });
       out({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 9pm" });
       process.exit(1);
     }

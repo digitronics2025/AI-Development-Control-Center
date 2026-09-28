@@ -393,6 +393,12 @@ export const executionSettingsSchema = z.object({
   environmentDiscovery: z.boolean().default(true),
   /** Stage Team workers running at once across every task on this machine (docs/plans/STAGE_TEAMS_PLAN.md §3.5). */
   teamWorkerLimit: z.number().int().min(1).max(4).default(3),
+  /**
+   * Resume a task waiting for a usage reset by itself, once, just after the
+   * provider's stated reset time (docs/systems/usage.md#auto-resume-at-reset).
+   * Off until the operator turns it on here: it spends the new window unasked.
+   */
+  autoResumeOnReset: z.boolean().default(false),
 });
 export type ExecutionSettings = z.infer<typeof executionSettingsSchema>;
 

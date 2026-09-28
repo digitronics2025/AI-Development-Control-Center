@@ -29,6 +29,8 @@ describe('F-50: switches that widen what runs are turned on locally only', () =>
     [{ execution: { exposeToolsToAgents: true } }],
     [{ execution: { autoRepair: true } }],
     [{ learning: { autonomy: 'act' } }],
+    // Auto-resume at a usage reset spends a new usage window unasked (AGT-1).
+    [{ execution: { autoResumeOnReset: true } }],
   ])('%j is refused from the cloud', (patch) => {
     expect(guardRemoteCommand('settings.update', {}, patch, ctx()).ok).toBe(false);
   });
@@ -36,6 +38,9 @@ describe('F-50: switches that widen what runs are turned on locally only', () =>
   it('allows turning them off, and refuses loading user CLI customisations into an agent', () => {
     const on = ctx({ settings });
     expect(guardRemoteCommand('settings.update', {}, { execution: { terminals: false } }, on).ok).toBe(true);
+    const resuming = ctx({ settings: { ...settings, execution: { ...settings.execution, autoResumeOnReset: true } } });
+    expect(guardRemoteCommand('settings.update', {}, { execution: { autoResumeOnReset: false } }, resuming).ok).toBe(true);
+    expect(guardRemoteCommand('settings.update', {}, { execution: { autoResumeOnReset: true } }, resuming).ok).toBe(true);
     expect(guardRemoteCommand('agent.update', { id: 'claude' }, { loadUserConfig: true }, ctx()).ok).toBe(false);
     expect(guardRemoteCommand('agent.update', { id: 'claude' }, { loadUserConfig: false }, ctx()).ok).toBe(true);
   });

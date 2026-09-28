@@ -62,7 +62,9 @@ Message status: `pending` (question waiting) → `done`; an answer is `running`
 - Agent, model and effort come from the conversation. New conversations take
   `settings.ask` (default Claude Code, CLI default model, low effort) unless
   the composer's **Options** chose others. An unavailable agent fails the
-  answer with the reason and launches nothing.
+  answer with the reason and launches nothing — including one a fresh reading
+  says is out of usage or credits: "Claude Code is unavailable (usage limit,
+  resets at 21:00). Choose another agent under Options." ([usage.md](usage.md#capacity)).
 - Timeout: 10 minutes. Answers over 20,000 characters are shortened.
 
 **Prompt** ([prompt.ts](../../apps/orchestrator/src/ask/prompt.ts)):

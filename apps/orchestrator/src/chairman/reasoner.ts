@@ -317,6 +317,9 @@ export class Reasoner {
     if (!this.agents.isEnabled(cfg.agentId)) return `${this.agents.adapter(cfg.agentId).displayName} is disabled in Settings.`;
     const state = this.agents.get(cfg.agentId).health.state;
     if (!['connected', 'unknown'].includes(state)) return `${this.agents.adapter(cfg.agentId).displayName} is not available (${state.replace(/_/g, ' ')}).`;
+    // Out of usage or credits: the rules decide instead of a launch the provider would refuse (docs/systems/usage.md#capacity).
+    const exhausted = this.agents.capacityReason(cfg.agentId);
+    if (exhausted) return `${exhausted}.`;
     return null;
   }
 

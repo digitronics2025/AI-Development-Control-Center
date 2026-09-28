@@ -221,7 +221,10 @@ into `candidate details` (`splitAgentText`). The model's `guidance` must pass
 the learned-text safety scan ([safety.ts](../../apps/orchestrator/src/learning/safety.ts)),
 or the chosen strategy's own guidance is used. The model only **chooses a candidate id** (recovery) or replies
 (chat); output is Zod-validated, repaired once, then the rules decide. No
-model, or a failed call → `degraded` ("rules only"). Each call is launched
+model, or a failed call → `degraded` ("rules only"). An agent a fresh reading
+says is out of usage or credits counts as no model: `unavailableReason` reads
+"Claude Code is unavailable (usage limit, resets at 21:00).", and nothing is
+launched ([usage.md](usage.md#capacity)). Each call is launched
 through `AgentRegistry.launch`, so its usage and cost are recorded against the
 task with step `chairman` ([usage.md](usage.md)).
 

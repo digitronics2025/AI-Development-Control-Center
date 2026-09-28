@@ -242,6 +242,8 @@ export const EVENT_TYPES = [
   // Stage Teams (docs/plans/STAGE_TEAMS_PLAN.md): a team started, fell back to one agent or integrated its work; one work unit changed state.
   'STAGE_TEAM',
   'WORK_UNIT',
+  // Auto-resume at a usage reset (docs/systems/usage.md#auto-resume-at-reset): `data.phase` is scheduled, resumed, not_resumed or manual.
+  'USAGE_AUTO_RESUME',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

@@ -249,6 +249,27 @@ export function blocksRuns(reading: CapacityReading): boolean {
   return reading.status === 'exhausted' && !reading.stale && reading.metric !== 'overage';
 }
 
+/** A reset time as the machine's local clock shows it: `21:00` today, else `2026-09-29 21:00`. */
+export function formatResetTime(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso);
+  if (!Number.isFinite(at.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const sameDay = at.getFullYear() === now.getFullYear() && at.getMonth() === now.getMonth() && at.getDate() === now.getDate();
+  return sameDay ? time : `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${time}`;
+}
+
+/**
+ * Why an agent with a capacity block cannot be launched, in the words the
+ * Chairman, Ask and a refused launch all use: "Claude Code is unavailable
+ * (usage limit, resets at 21:00)".
+ */
+export function capacityUnavailableReason(agentName: string, block: { metric: string; resetAt: string | null }, now: Date = new Date()): string {
+  if (block.metric === 'credit') return `${agentName} is unavailable (out of credits)`;
+  if (block.resetAt) return `${agentName} is unavailable (usage limit, resets at ${formatResetTime(block.resetAt, now)})`;
+  return `${agentName} is unavailable (usage limit, reset time not reported)`;
+}
+
 export interface ProviderCapabilityView {
   tokenUsage: boolean;
   providerCost: boolean;

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,23 +60,63 @@ interface CodexTurnUsage {
   reasoning: number | null;
 }
 
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
+const TOML_TABLE = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
+const TOML_STRING = /^\s*("?)([A-Za-z0-9_-]+)\1\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:#.*)?$/;
+
+/**
+ * The model Codex runs when none is asked for (`-m` absent): the `model` of the
+ * profile `config.toml` selects (`profile = "…"` → `[profiles.<name>] model`),
+ * else its top-level `model`, from `$CODEX_HOME/config.toml`
+ * (docs/systems/agents-codex.md#usage-limits; the key is unconfirmed against a
+ * real sample). Only plain string keys are read. Null when the file, the key or a
+ * sane model name is missing: the line then keeps `default`.
+ */
+export function codexConfiguredModel(env: NodeJS.ProcessEnv): string | null {
+  let text: string;
+  try {
+    text = readFileSync(path.join(codexHome(env), 'config.toml'), 'utf8');
+  } catch {
+    return null;
+  }
+  const tables = new Map<string, Map<string, string>>([['', new Map()]]);
+  let table = '';
+  for (const line of text.split(/\r?\n/)) {
+    const header = TOML_TABLE.exec(line);
+    if (header) {
+      // Dotted keys, each bare or quoted (a quoted part may itself hold a dot).
+      table = [...header[1]!.matchAll(/\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*(?:\.|$)/g)].map((m) => m[1] ?? m[2] ?? m[3]).join('\u0000');
+      if (!tables.has(table)) tables.set(table, new Map());
+      continue;
+    }
+    const pair = TOML_STRING.exec(line);
+    if (pair) tables.get(table)!.set(pair[2]!, pair[3] ?? pair[4] ?? '');
+  }
+  const top = tables.get('')!;
+  const profile = top.get('profile');
+  const model = (profile ? tables.get(`profiles\u0000${profile}`)?.get('model') : undefined) ?? top.get('model');
+  return model && MODEL_NAME.test(model) ? model : null;
+}
+
 /**
  * One usage line from Codex's `turn.completed` totals. Codex (OpenAI) counts
  * cached input inside `input_tokens`, so the uncached share is the
  * difference; reasoning is part of `output_tokens`. Codex reports no cost and
- * does not name the model, so the line carries the requested model (or
- * `default` when the CLI picked it).
+ * does not name the model, so the line carries the requested model. A run on
+ * `default` carries the model `config.toml` configures (`configuredModel`) as
+ * its line and resolved model when there is one, else `default`.
  */
-export function codexUsage(turns: CodexTurnUsage[], threadId: string | null, requestedModel: string): AgentUsageReport | null {
+export function codexUsage(turns: CodexTurnUsage[], threadId: string | null, requestedModel: string, configuredModel: string | null = null): AgentUsageReport | null {
   if (!turns.length) return null;
   const input = sumCounts(...turns.map((t) => t.input));
   const cached = sumCounts(...turns.map((t) => t.cached));
+  const resolved = requestedModel === 'default' ? configuredModel : null;
   return {
     providerRequestId: threadId,
-    resolvedModel: null,
+    resolvedModel: resolved,
     lines: [
       {
-        model: requestedModel,
+        model: resolved ?? requestedModel,
         inputTokens: input === null ? null : Math.max(0, input - (cached ?? 0)),
         outputTokens: sumCounts(...turns.map((t) => t.output)),
         cacheReadTokens: cached,
@@ -371,12 +412,14 @@ export class CodexAdapter extends CliAgentAdapter {
         if (line.trim()) emit('stderr', line);
       },
       finish() {
-        // Codex exposes no limits feed; the only capacity signal is a failure that states it.
+        // Codex exposes no limits feed; the only capacity signal is a failure that states it ("… try again at 21:00" carries the reset).
         const capacity = new CapacityCollector();
         for (const message of failureMessages) {
           const signal = capacityFromFailure(message);
           if (signal) capacity.add(signal);
         }
+        // `default` runs the model config.toml configures — unless this run ignores that file, or starts as another account with its own.
+        const configured = input.model === 'default' && input.loadUserConfig !== false && !input.runAs && turns.length ? codexConfiguredModel(input.baseEnv) : null;
         return {
           finalMessage,
           failureMessages,
@@ -385,7 +428,7 @@ export class CodexAdapter extends CliAgentAdapter {
           guardViolation: null,
           protocolDrift: codexProtocolDrift(threadStarted, turns.length > 0),
           filesChanged: [...filesChanged],
-          usage: codexUsage(turns, sessionId, input.model),
+          usage: codexUsage(turns, sessionId, input.model, configured),
           capacity: capacity.list(),
         };
       },

@@ -74,6 +74,8 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
         [n.execution.terminals && !settings.execution.terminals, 'Terminals'],
         [n.execution.exposeToolsToAgents && !settings.execution.exposeToolsToAgents, "Giving agents the Control Center's tools"],
         [n.execution.autoRepair && !settings.execution.autoRepair, 'Automatic repairs'],
+        // It spends a fresh usage window unasked (docs/systems/usage.md#auto-resume-at-reset).
+        [n.execution.autoResumeOnReset && !settings.execution.autoResumeOnReset, 'Resuming tasks by themselves after a usage reset'],
         [n.learning.autonomy === 'act' && settings.learning.autonomy !== 'act', 'Letting the Chairman adopt improvements on its own'],
       ];
       const first = widened.find(([on]) => on);

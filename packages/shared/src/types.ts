@@ -613,8 +613,12 @@ export interface AgentInfo {
   capabilities: AgentCapabilities;
   models: ModelDescriptor[];
   settings: AgentSettings;
-  /** The agent's last run reported it cannot run now (e.g. out of credits); null when nothing says so. */
-  capacityBlock: { label: string; detail: string | null; capturedAt: Iso } | null;
+  /**
+   * The agent's last run reported it cannot run now (e.g. out of credits); null when nothing says so.
+   * A launch is refused while it is set (`USAGE_LIMIT`, docs/systems/usage.md#capacity). `resetAt` is when
+   * it lifts, null when no reading says (credits, or a limit stated without a time).
+   */
+  capacityBlock: { metric: string; label: string; detail: string | null; capturedAt: Iso; resetAt: Iso | null } | null;
 }
 
 export interface OverviewCounts {

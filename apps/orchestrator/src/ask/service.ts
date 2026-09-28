@@ -391,6 +391,9 @@ export class AskService {
     if (!this.d.agents.isEnabled(agentId)) return `${name} is disabled in Settings → Agents & Models.`;
     const state = this.d.agents.get(agentId).health.state;
     if (!['connected', 'unknown'].includes(state)) return `${name} is not available (${state.replace(/_/g, ' ')}).`;
+    // Out of usage or credits: say so instead of a launch the provider would refuse (docs/systems/usage.md#capacity).
+    const exhausted = this.d.agents.capacityReason(agentId);
+    if (exhausted) return `${exhausted}. Choose another agent under Options.`;
     return null;
   }
 

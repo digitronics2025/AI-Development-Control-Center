@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Test double for the Codex CLI. Behaviour is chosen by environment variables:
 //   FAKE_CODEX_AUTH        chatgpt | apikey | none
-//   FAKE_CODEX_SCENARIO    ok | usage | auth | model | hang | secret | drift | thread-only
+//   FAKE_CODEX_SCENARIO    ok | usage | limit | auth | model | hang | secret | drift | thread-only
+//   FAKE_CODEX_LIMIT_TEXT  the usage-limit message of the limit scenario (default names a 21:00 reset;
+//                          the real wording is unconfirmed, docs/systems/agents-codex.md#usage-limits)
 //   FAKE_CODEX_MCP_LIST    JSON printed by `mcp list --json` (default []), or `fail`
 //   FAKE_CODEX_PLUGIN_MCP  JSON list of MCP servers the account's plugins add (default none)
 //   FAKE_MCP_ARGS_FILE     where `mcp list` records its argv and cwd
@@ -107,6 +109,10 @@ if (args[0] === 'exec') {
     out({ type: 'item.completed', item: { id: 'w', type: 'error', message: 'failed to parse hooks config' } });
     if (scenario === 'usage') {
       out({ type: 'turn.failed', error: { message: 'Your workspace is out of credits. Add credits to continue.' } });
+      process.exit(1);
+    }
+    if (scenario === 'limit') {
+      out({ type: 'turn.failed', error: { message: process.env.FAKE_CODEX_LIMIT_TEXT ?? "You've hit your usage limit. Try again at 21:00." } });
       process.exit(1);
     }
     if (scenario === 'auth') {

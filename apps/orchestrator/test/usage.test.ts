@@ -1,11 +1,14 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SimulatedAgentAdapter } from '@acc/agent-sdk';
-import type { UsageEvent, UsageEventPage, UsageOverview, UsageTaskLedger } from '@acc/shared';
+import { ClaudeCodeAdapter } from '@acc/agent-claude';
+import { CodexAdapter } from '@acc/agent-codex';
+import { AgentGuardError, SimulatedAgentAdapter } from '@acc/agent-sdk';
+import { formatResetTime, type UsageEvent, type UsageEventPage, type UsageOverview, type UsageTaskLedger } from '@acc/shared';
 import { budgetState } from '../src/usage/budgets.js';
 import type { UsageDispatch } from '../src/usage/ledger.js';
-import { addRepo, createTask, createTestApp, makeRepo, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 let t: TestApp;
 
@@ -148,8 +151,10 @@ describe('usage capture', () => {
     expect(simulated.capacity).toEqual(expect.arrayContaining([expect.objectContaining({ metric: 'usage_limit', status: 'exhausted', confidence: 'LIVE' })]));
     // The agent list says the implementer's agent cannot run now; the other agent is unaffected.
     const agents = (await t.api('GET', '/api/agents')).body as Array<{ id: string; capacityBlock: { label: string; detail: string | null } | null }>;
-    expect(agents.find((a) => a.id === 'claude')!.capacityBlock).toMatchObject({ label: 'Usage limit', detail: 'You have hit your usage limit. Limit resets at 21:00.' });
+    expect(agents.find((a) => a.id === 'claude')!.capacityBlock).toMatchObject({ label: 'Usage limit', detail: 'You have hit your usage limit. Limit resets at 21:00.', resetAt: null });
     expect(agents.find((a) => a.id === 'codex')!.capacityBlock).toBeNull();
+    // A simulated limit is scripted for one task ([sim:usage-limit]): shown, but it never refuses another run.
+    expect(t.services.agents.capacityReason('claude')).toBeNull();
   });
 
   it('never lets an old or paid-overage reading mark an agent as unable to run', async () => {
@@ -394,5 +399,90 @@ describe('usage API', () => {
     expect(json.rows[0]).toMatchObject({ taskId: id });
     const onlyFixers = await t.app.inject({ method: 'GET', url: `/api/usage/export?${range()}&dataset=events&format=csv&role=fixer`, headers: { host: '127.0.0.1:4317', authorization: `Bearer ${TOKEN}` } });
     expect(onlyFixers.body.trim()).toBe('');
+  });
+});
+
+describe('usage limits: admission, the Chairman and Ask (AGT-1)', () => {
+  const exe = (name: string) => path.join(ROOT, 'tests', 'fixtures', process.platform === 'win32' ? `${name}.cmd` : name);
+  /** Where the fake CLIs write the record of a run they started: absent means no process ran. */
+  let launched: string;
+
+  beforeEach(async () => {
+    await t.close();
+    launched = path.join(mkdtempSync(path.join(os.tmpdir(), 'acc-launch-')), 'launch.json');
+    t = await createTestApp({ adapters: [new CodexAdapter(), new ClaudeCodeAdapter()], baseEnv: { ...process.env, FAKE_CLAUDE_APIKEY_SOURCE: 'none', FAKE_ARGS_FILE: launched } });
+    await t.api('PATCH', '/api/agents/codex', { executablePath: exe('fake-codex') });
+    await t.api('PATCH', '/api/agents/claude', { executablePath: exe('fake-claude') });
+    await t.services.agents.refresh();
+  });
+
+  const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
+  const exhaust = (resetsAt: string | null, metric = 'window:five_hour', observedAt = new Date().toISOString()) =>
+    t.services.usage.capacity.record('anthropic', 'claude', null, 'test', [{ metric, label: 'Window', usedPercent: 100, status: 'exhausted', resetsAt, detail: null, observedAt }]);
+  const launch = (agentId: string) =>
+    t.services.agents.launch(
+      agentId,
+      { ...t.services.agents.runtimeOptions(agentId), executionId: `exec-${Math.random().toString(36).slice(2)}`, cwd: t.dataDir, prompt: 'hi', model: 'default', effort: 'default', permissionLevel: 1, timeoutMs: 20_000 },
+      { origin: 'ask', projectId: null, taskId: null, runId: null, workflowId: null, workflowStep: 'ask', agentRole: 'ask', mode: null },
+    );
+
+  it('refuses a launch while a fresh exhausted reading exists, with the reset time, and starts no process', async () => {
+    const reset = inAnHour();
+    exhaust(reset);
+    const refused = await launch('claude').then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(AgentGuardError);
+    expect(refused).toMatchObject({ errorClass: 'USAGE_LIMIT', message: `Claude Code is unavailable (usage limit, resets at ${formatResetTime(reset)}); no run was started` });
+    expect(existsSync(launched)).toBe(false);
+    expect(t.services.usage.ledger.listPending()).toEqual([]);
+    expect(t.services.agents.get('claude').capacityBlock).toMatchObject({ metric: 'window:five_hour', resetAt: reset });
+    // Another agent is unaffected.
+    expect((await (await launch('codex')).done).status).toBe('succeeded');
+    expect(existsSync(launched)).toBe(true);
+  });
+
+  it('lets a launch through once the reading is stale: its reset passed, or it is old', async () => {
+    exhaust(new Date(Date.now() - 60_000).toISOString());
+    expect((await (await launch('claude')).done).status).toBe('succeeded');
+    expect(existsSync(launched)).toBe(true);
+    exhaust(null, 'usage_limit', new Date(Date.now() - 2 * 3_600_000).toISOString());
+    expect(t.services.agents.capacityReason('claude')).toBeNull();
+  });
+
+  it('names the block that lifts last: one with no reset time, else the latest reset', () => {
+    const late = new Date(Date.now() + 5 * 3_600_000).toISOString();
+    exhaust(inAnHour());
+    exhaust(late, 'window:seven_day');
+    expect(t.services.agents.capacityReason('claude')).toBe(`Claude Code is unavailable (usage limit, resets at ${formatResetTime(late)})`);
+    exhaust(null, 'credit');
+    expect(t.services.agents.capacityReason('claude')).toBe('Claude Code is unavailable (out of credits)');
+    // Another agent is unaffected.
+    expect(t.services.agents.capacityReason('codex')).toBeNull();
+  });
+
+  it('keeps the Chairman on its rules instead of launching an exhausted agent', async () => {
+    expect(t.services.chairman.reasoner.unavailableReason()).toBeNull();
+    const reset = inAnHour();
+    exhaust(reset);
+    const reason = `Claude Code is unavailable (usage limit, resets at ${formatResetTime(reset)}).`;
+    expect(t.services.chairman.reasoner.unavailableReason()).toBe(reason);
+    expect(await t.services.chairman.reasoner.review('TASK-9999', 'Review this', (raw) => raw)).toEqual({ ok: false, reason });
+    expect(existsSync(launched)).toBe(false);
+    // A supervised task's Chairman reports itself degraded, in the same words.
+    const id = await createTask(t, await addRepo(t, await makeRepo()), 'Not started', { supervised: true, start: false });
+    expect(t.services.chairman.state(id)).toMatchObject({ status: 'degraded', degradedReason: reason, reasoner: { available: false } });
+  });
+
+  it('answers Ask with the block instead of launching', async () => {
+    const reset = inAnHour();
+    exhaust(reset);
+    const thread = (await t.api('POST', '/api/ask/threads', {})).body.id as string;
+    expect((await t.api('POST', `/api/ask/threads/${thread}/messages`, { text: 'How is it going?', clientMessageId: 'm-usage-limit' })).status).toBe(202);
+    await t.services.ask.idle(thread);
+    const reply = (await t.api('GET', `/api/ask/threads/${thread}`)).body.messages.find((m: { role: string }) => m.role === 'assistant');
+    expect(reply).toMatchObject({ status: 'failed', error: `Claude Code is unavailable (usage limit, resets at ${formatResetTime(reset)}). Choose another agent under Options.` });
+    expect(existsSync(launched)).toBe(false);
   });
 });

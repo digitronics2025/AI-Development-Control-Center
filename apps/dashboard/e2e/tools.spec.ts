@@ -118,6 +118,37 @@ test('the execution policy is one segmented choice and persists', async ({ page 
   await expect(page.getByRole('radio', { name: /Autopilot \(recommended\)/ })).toHaveAttribute('aria-checked', 'true');
 });
 
+for (const theme of ['dark', 'light'] as const) {
+  test(`resuming after a usage reset is off until switched on, and the choice persists (${theme})`, async ({ page }, testInfo) => {
+    const errors = trackConsoleErrors(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/tools/policy');
+    await setTheme(page, theme);
+    type Execution = { execution: { autoResumeOnReset: boolean } };
+    try {
+      // Off by default (docs/systems/usage.md#auto-resume-at-reset): it spends a new usage window unasked.
+      const toggle = () => page.getByRole('switch', { name: 'Resume tasks after a usage reset' });
+      await expect(toggle()).toHaveAttribute('aria-checked', 'false');
+      await expect(page.getByText(/It spends the new allowance without asking/)).toBeVisible();
+      await expectNoAxeViolations(page, testInfo);
+      await toggle().click();
+      await expect(toggle()).toHaveAttribute('aria-checked', 'true');
+      await expect.poll(async () => (await api<Execution>(page, 'GET', '/api/settings')).execution.autoResumeOnReset).toBe(true);
+      await page.reload();
+      await expect(toggle()).toHaveAttribute('aria-checked', 'true');
+      await toggle().click();
+      await expect.poll(async () => (await api<Execution>(page, 'GET', '/api/settings')).execution.autoResumeOnReset).toBe(false);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(toggle()).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+      expect(errors).toEqual([]);
+    } finally {
+      await api(page, 'PATCH', '/api/settings', { execution: { autoResumeOnReset: false } });
+      await setTheme(page, 'dark');
+    }
+  });
+}
+
 test('a terminal opened from the dashboard runs real commands', async ({ page }) => {
   const errors = trackConsoleErrors(page);
   await page.setViewportSize({ width: 1440, height: 900 });

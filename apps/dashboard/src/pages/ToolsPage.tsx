@@ -481,11 +481,16 @@ function PolicyTab() {
     setError(null);
     update.mutate({ execution: { ...execution, ...patch } }, { onSuccess: () => toast(message), onError: (e) => setError(errorMessage(e)) });
   };
-  const toggles: Array<{ key: 'exposeToolsToAgents' | 'terminals' | 'autoRepair' | 'environmentDiscovery'; title: string; help: string }> = [
+  const toggles: Array<{ key: 'exposeToolsToAgents' | 'terminals' | 'autoRepair' | 'environmentDiscovery' | 'autoResumeOnReset'; title: string; help: string }> = [
     { key: 'exposeToolsToAgents', title: 'Give agents the Control Center tools', help: 'Agent stages get browser checks, HTTP, ports, processes, databases and more over MCP, limited to their stage and profile.' },
     { key: 'autoRepair', title: 'Repair environment problems automatically', help: 'Missing dependencies, a port held by the task itself, network hiccups and locked files are fixed before a check runs again.' },
     { key: 'environmentDiscovery', title: 'Describe the environment before a task', help: 'Machine, toolchain and listening ports, given to the first stages.' },
     { key: 'terminals', title: 'Terminals', help: 'Interactive terminals in the dashboard and for agents. Available only while the Control Center listens on this computer alone.' },
+    {
+      key: 'autoResumeOnReset',
+      title: 'Resume tasks after a usage reset',
+      help: 'A task paused by a usage limit resumes by itself once, a couple of minutes after the reset time the agent reported. Without a reported time it waits for you. It spends the new allowance without asking.',
+    },
   ];
   return (
     <div className="flex max-w-[900px] flex-col gap-5">

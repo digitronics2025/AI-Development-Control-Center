@@ -112,8 +112,13 @@ export class UsageRecorder implements UsageMeter {
 
   capacityBlock(agentId: string): AgentInfo['capacityBlock'] {
     try {
-      const reading = this.d.capacity.readings().find((r) => r.agentId === agentId && blocksRuns(r));
-      return reading ? { label: reading.label, detail: reading.detail, capturedAt: reading.capturedAt } : null;
+      // Every block must lift before a run can start: one with no known end wins, else the latest reset.
+      const lifts = (r: { resetAt: string | null }) => (r.resetAt === null ? Infinity : Date.parse(r.resetAt));
+      const reading = this.d.capacity
+        .readings()
+        .filter((r) => r.agentId === agentId && blocksRuns(r))
+        .sort((a, b) => (lifts(b) > lifts(a) ? 1 : lifts(b) < lifts(a) ? -1 : 0))[0];
+      return reading ? { metric: reading.metric, label: reading.label, detail: reading.detail, capturedAt: reading.capturedAt, resetAt: reading.resetAt } : null;
     } catch (error) {
       this.warn(`Capacity check failed: ${(error as Error).message}`);
       return null;

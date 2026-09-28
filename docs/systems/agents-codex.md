@@ -33,12 +33,40 @@ Part of [Agent adapters](agents.md).
   "unexpected argument" → `MODEL_UNAVAILABLE` (update the CLI).
 - Auth: `codex login status` — "Logged in using ChatGPT" = subscription.
 - Models: read from `$CODEX_HOME/models_cache.json` (visible entries, per-model effort levels).
+  A run on `default` (no `-m`) records the model `$CODEX_HOME/config.toml`
+  configures (`codexConfiguredModel`: the selected `profile`'s
+  `[profiles.<name>] model`, else the top-level `model`) as its usage line and
+  resolved model, so it can be priced; not when the run ignores the user config
+  or starts as the agent account, and `default` when the file names none. The
+  key is Codex's documented one, unconfirmed against a real sample here.
 - Output: JSONL events (`agent_message`, `command_execution`, `file_change`, `turn.failed`).
   A run that exits 0 without a `turn.completed` — the event that ends every
   successful turn and carries its usage — fails `PROTOCOL_DRIFT` instead of
   succeeding (`codexProtocolDrift`; a `thread.started` alone holds no turn): a
   changed event format is never counted as a success. A run that failed anyway
   (`turn.failed`, a non-zero exit) keeps its own class.
+
+### Usage limits
+
+Codex has no limits feed: its only capacity signal is a failure message
+(`capacityFromFailure`, [usage.ts](../../packages/agent-sdk/src/usage.ts)).
+"Out of credits" is a `credit` reading, which never resets by time. A usage
+limit ("usage limit", "hit your limit", "rate limit", 429) is a `usage_limit`
+reading with the reset its text states (`resetFromFailure`):
+
+- "try again at 21:00", "try again at 9:00 PM", "try again at Sep 29th, 2026 9:00 PM",
+  "try again at 2026-09-29 21:00" or an ISO instant. A clock time with no date is
+  its next occurrence on the machine's local clock; `UTC`/`GMT` after it reads it
+  as UTC; a date with no year that has passed is next year's.
+- "try again in 2 hours 5 minutes", "in 3 days 1 hour", "in 20s", "in ~5 min"
+  (at most 62 days).
+
+Anything else leaves the reset unknown, so the task waits for the operator
+([usage.md](usage.md#auto-resume-at-reset)). **Unconfirmed against a live Codex
+run:** no real Codex usage-limit message has been captured here (the account has
+no credits), so these forms are the expected wording and common variants; the
+fake CLI's `limit` scenario (`FAKE_CODEX_LIMIT_TEXT`) carries them. Capture a
+real one with `pnpm verify:agents --run --only codex` once credits return.
 
 ### MCP servers in a Codex run
 

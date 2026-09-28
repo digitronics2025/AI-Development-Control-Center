@@ -160,6 +160,20 @@ describe('policy', () => {
     expect(decide({ ...base, risk: risk(3), mode: 'safe', origin: 'operator' }).decision).toBe('approval');
   });
 
+  it("lifts the ceiling to a stage's approved level, never past the stage's level, dangerous or production work", () => {
+    // Auto-approve 1 in Autopilot, and Safe (ceiling 2): the operator approved the stage at its level.
+    expect(decide({ ...base, autoApproveUpToLevel: 1, stageLevel: 2, risk: risk(2) }).decision).toBe('deny');
+    expect(decide({ ...base, autoApproveUpToLevel: 1, stageLevel: 2, risk: risk(2), approvedLevel: 2 }).decision).toBe('allow');
+    expect(decide({ ...base, mode: 'safe', stageLevel: 3, risk: risk(3), approvedLevel: 3 }).decision).toBe('allow');
+    expect(decide({ ...base, mode: 'safe', stageLevel: 3, risk: risk(3), approvedLevel: 3, origin: 'operator' }).decision).toBe('allow');
+    expect(decide({ ...base, mode: 'safe', stageLevel: 3, risk: risk(4), approvedLevel: 3 }).reason).toMatch(/needs Level 4, and this stage is Level 3/);
+    expect(decide({ ...base, mode: 'safe', stageLevel: 4, risk: risk(4), approvedLevel: 3 }).decision).toBe('deny');
+    expect(decide({ ...base, mode: 'full', stageLevel: 4, risk: risk(4, { production: true }), approvedLevel: 4 }).decision).toBe('deny');
+    expect(decide({ ...base, stageLevel: 4, risk: risk(3, { risk: 'dangerous' }), approvedLevel: 4 }).decision).toBe('deny');
+    // Never lowers what the mode already runs on its own.
+    expect(decide({ ...base, mode: 'full', stageLevel: 4, risk: risk(4), approvedLevel: 2 }).decision).toBe('allow');
+  });
+
   it('always asks a person for dangerous or production work, even in Full Autopilot+', () => {
     expect(decide({ ...base, mode: 'full', stageLevel: 5, risk: risk(5, { risk: 'dangerous' }), origin: 'operator' })).toMatchObject({ decision: 'approval', typedConfirmation: true });
     expect(decide({ ...base, mode: 'full', stageLevel: 5, risk: risk(4, { production: true }) }).decision).toBe('deny');

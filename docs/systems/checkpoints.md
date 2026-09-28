@@ -45,7 +45,10 @@ keeps its mode, and its page shows **Tasks run in your working folder** with a
 **Use isolated worktrees** button. The task header shows the folder a task
 works in:
 
-1. Before the first stage the engine runs `git worktree add -b ai/TASK-… <data>/worktrees/<repo>-<id>/<task> HEAD`.
+1. Before the first stage the engine runs `git worktree add -b ai/TASK-… <work>/worktrees/<repo>-<id>/<task> HEAD`
+   in the work root, outside the data folder so an agent may name its paths
+   ([orchestrator.md](orchestrator.md#work-root-acc_work_dir); worktrees made
+   in `<data>/worktrees` before it existed are moved there once, at start).
    The baseline is that commit with no pre-existing changes — your
    uncommitted work stays in your working tree and is never seen.
 2. When the project has a lockfile, dependencies are installed with its
@@ -83,11 +86,11 @@ works in:
 4. **Completed**: remaining task files are committed to the branch, the
    branch stays for you to merge. **Cancelled**: uncommitted work is kept in
    `refs/acc/worktree-backup/<task>` first. Then the worktree folder is
-   renamed into `<data>/trash/<parent>-<folder>-<random>` (same drive: a
+   renamed into `<work>/trash/<parent>-<folder>-<random>` (same drive: a
    rename, not a copy), `git worktree prune` drops Git's record of it,
    `worktreePath` is cleared, COMPLETED (or CANCELLED) is published, and the
    folder — node_modules included, ~11 s on a large repository — is deleted
-   in the background ([orchestrator.md](orchestrator.md#data-folder)). A folder
+   in the background ([orchestrator.md](orchestrator.md#work-root-acc_work_dir)). A folder
    that cannot be renamed (a locked file, a process still inside on Windows),
    or that still has changes when nothing was committed, is removed in place
    as before (`git worktree remove`).
@@ -107,7 +110,7 @@ use a third kind: a detached worktree of the task's baseline commit under
 `<data>/baselines/`, removed after the one command, swept at start.
 
 A task across repositories has one worktree per repository inside
-`<data>/workspaces/<task>/<folder>`, all created before its first stage (their
+`<work>/workspaces/<task>/<folder>`, all created before its first stage (their
 installs follow in the background, as in step 2); a failure removes what that
 attempt made and parks the task. Its checkpoints
 hold one ref per repository (`task_checkpoints.parts`) and restore all or
@@ -122,7 +125,7 @@ Source Control commit can never land on a half-restored tree.
 
 Write workers of a Stage Team run in detached child checkouts of a hidden
 checkpoint of the task worktree (`refs/acc/team/<task>/…`, folders under
-`<dataDir>/team-worktrees/`); results are captured as hidden commits and
+`<work>/team-worktrees/`); results are captured as hidden commits and
 written back only while the task still equals the base. Swept at start,
 deleted at completion and cancel ([stage-teams.md](stage-teams.md)).
 

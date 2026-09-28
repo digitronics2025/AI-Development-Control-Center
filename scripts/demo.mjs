@@ -22,8 +22,11 @@ const port = Number(flag('port', process.env.ACC_PORT ?? 4390));
 const seed = !args.includes('--no-seed');
 const base = flag('data', null) ?? mkdtempSync(path.join(os.tmpdir(), 'acc-demo-'));
 const dataDir = path.join(base, 'data');
+// Task worktrees live outside the data folder (SEC-3); the demo keeps its own beside it and starts it afresh too.
+const workDir = path.join(base, 'work');
 const reposDir = path.join(base, 'repos');
 rmSync(dataDir, { recursive: true, force: true });
+rmSync(workDir, { recursive: true, force: true });
 rmSync(path.join(base, 'ready'), { force: true });
 mkdirSync(dataDir, { recursive: true });
 mkdirSync(reposDir, { recursive: true });
@@ -106,6 +109,7 @@ function makeSourceControlRepo(name) {
 const env = {
   ...process.env,
   ACC_DATA_DIR: dataDir,
+  ACC_WORK_DIR: workDir,
   ACC_PORT: String(port),
   ACC_SIMULATED_AGENTS: '1',
   // The demo works on its own fixture repositories; never scan or fetch the user's real ones.

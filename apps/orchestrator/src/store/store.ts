@@ -861,6 +861,12 @@ export class Store {
     return (this.db.prepare(sql.replace(/LIKE \?/g, "LIKE ? ESCAPE '\\'")).all(...params, filter.limit ?? 50) as Row[]).map(toTask);
   }
 
+  /** Every task whose record still points at a worktree or a task workspace, whatever its status. */
+  tasksWithWorkFolders(): TaskRecord[] {
+    const rows = this.db.prepare("SELECT * FROM tasks WHERE json_extract(git, '$.worktreePath') IS NOT NULL OR json_extract(git, '$.workspacePath') IS NOT NULL ORDER BY seq").all() as Row[];
+    return rows.map(toTask);
+  }
+
   // ----- linked repositories (multi-repository tasks) ----------------------
 
   insertLinkedRepositories(rows: LinkedRepositoryRecord[]): void {

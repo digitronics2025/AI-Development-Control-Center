@@ -53,6 +53,17 @@ export const INSTALL_MARKER = '.acc-install-complete';
  */
 const NPM_INSTALL_COMPLETE = '.package-lock.json';
 
+/** `child` is `parent` or inside it (case-insensitive on Windows). */
+function isInsidePath(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/** One folder, however Git or Node spells it (`C:/x` and `C:\x`; case-insensitive on Windows). */
+function samePath(a: string, b: string): boolean {
+  return path.relative(path.resolve(a), path.resolve(b)) === '';
+}
+
 /** Whether a worktree's dependencies were installed to the end (`prepareWorktree`). */
 function installComplete(cwd: string, pm: ReturnType<typeof packageManager>): boolean {
   const modules = path.join(cwd, 'node_modules');
@@ -97,6 +108,19 @@ export interface AgentToolBridge {
   close(): void;
 }
 
+/**
+ * One stage run's tool session (V2 plan §30, SEC-3). `bridge` is the MCP
+ * server when the Control Center's tools are offered to agents; `shellGuard`
+ * is the command hook that prechecks the agent's native shell commands and file reads, when
+ * its script is built here. Both carry the same session in `env`; a session
+ * opened for the guard alone opens no tool route.
+ */
+export interface AgentRunSession {
+  bridge: { command: string; args: string[]; env: Record<string, string> } | null;
+  shellGuard: { command: string; args: string[]; env: Record<string, string> } | null;
+  close(): void;
+}
+
 export interface EngineToolingDeps {
   store: Store;
   bus: Bus;
@@ -111,8 +135,12 @@ export interface EngineToolingDeps {
   /** Skills the agents would load; null in tests that build tooling by hand. */
   skills?: SkillCatalog | null;
   dataDir: string;
+  /** Where task worktrees and workspaces live, outside the data folder (`defaultWorkDir`). */
+  workDir: string;
   /** Built stdio MCP bridge agents launch; null in development without a build. */
   bridgePath: string | null;
+  /** Built native shell precheck hook (SEC-3); null without a build, and then no native shell from Level 2. */
+  shellGuardPath?: string | null;
 }
 
 /**
@@ -265,21 +293,38 @@ export class EngineTooling {
   /**
    * `opts.root` confines the session to one folder (a Stage Team worker's
    * disposable checkout: its only working directory and only root);
-   * `opts.level` lowers the level (a read-only decomposition run).
+   * `opts.level` lowers the level (a read-only decomposition run). With tools
+   * off for agents the session still exists for the shell guard alone
+   * (`guardOnly`: it opens no tool route), so turning tools off does not take
+   * the native shell away; null only when neither can run here. With agent
+   * isolation on, stage runs get the guard alone (`stageToolsOffered`).
    */
-  openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, opts: { root?: string; level?: PermissionLevel } = {}): AgentToolBridge | null {
-    if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return null;
+  openAgentSession(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, opts: { root?: string; level?: PermissionLevel } = {}): AgentRunSession | null {
+    const offered = this.stageToolsOffered();
+    const guard = this.d.shellGuardPath ?? null;
+    if (!this.listenUrl || (!offered && !guard)) return null;
     const level = opts.level !== undefined ? (Math.min(opts.level, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
     const scope = this.scope(task, repo, { level, stageId: stage.id, ...(opts.root ? { cwd: opts.root } : {}), ...(def.toolProfile ? { profile: def.toolProfile } : {}) });
     const { sessionId: _s, escalated: _e, repositories: _r, ...rest } = scope;
     const base = opts.root ? { ...rest, roots: [opts.root], protectedPaths: [] } : { ...rest, ...(scope.repositories ? { repositories: scope.repositories } : {}) };
-    const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000);
+    const session = this.d.tools.openSession(base, 'agent', def.timeoutSec * 1000 + 10 * 60_000, { guardOnly: !offered });
+    const env = { ACC_TOOL_URL: this.listenUrl, ACC_TOOL_SESSION: session.token };
     return {
-      command: process.execPath,
-      args: [this.d.bridgePath],
-      env: { ACC_TOOL_URL: this.listenUrl, ACC_TOOL_SESSION: session.token },
+      bridge: offered ? { command: process.execPath, args: [this.d.bridgePath!], env } : null,
+      shellGuard: guard ? { command: process.execPath, args: [guard], env } : null,
       close: () => this.d.tools.closeSession(session.id),
     };
+  }
+
+  /**
+   * Whether a stage run gets the Control Center's tools: not when they are
+   * off or not built, and not when stage runs start as the agent account
+   * (docs/systems/security.md#agent-os-boundary) — the tools run as the
+   * operator, so a run could have them read what its account may not.
+   */
+  private stageToolsOffered(): boolean {
+    const settings = this.d.settings.get();
+    return settings.execution.exposeToolsToAgents && Boolean(this.d.bridgePath) && settings.agentIsolation.mode !== 'account';
   }
 
   /** Why an agent run cannot get the Control Center's tools right now, or null when it can. */
@@ -308,7 +353,7 @@ export class EngineTooling {
 
   /** "## Control Center tools" section appended to agent prompts. */
   toolsPromptSection(task: TaskRecord, def: StageDefinition, repo: RepositoryRecord): string {
-    if (!this.d.settings.get().execution.exposeToolsToAgents || !this.listenUrl || !this.d.bridgePath) return '';
+    if (!this.stageToolsOffered() || !this.listenUrl) return '';
     const profile = def.toolProfile ?? profileForRepository(repo.tooling, def.permissionLevel);
     return [
       '## Control Center tools',
@@ -443,12 +488,140 @@ export class EngineTooling {
 
   worktreeRoot(repo: RepositoryRecord): string {
     const slug = `${repo.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}-${repo.id.slice(0, 6)}`;
-    return path.join(this.d.dataDir, 'worktrees', slug);
+    return path.join(this.d.workDir, 'worktrees', slug);
   }
 
   /** The folder of a multi-repository task: one worktree per repository, side by side (docs/plans/MULTI_REPO_TASKS_PLAN.md). */
   workspaceRoot(task: Pick<TaskRecord, 'id'>): string {
-    return path.join(this.d.dataDir, 'workspaces', task.id);
+    return path.join(this.d.workDir, 'workspaces', task.id);
+  }
+
+  /**
+   * Once, at start (SEC-3): worktrees and task workspaces made before the work
+   * root existed live in the data folder, whose path an agent may not name.
+   * Each is moved to the work root and its task's record follows: a worktree
+   * with `git worktree move`, a workspace (its worktrees and whatever the
+   * agents left beside them) with one rename and `git worktree repair` of each
+   * worktree in it, renamed back if a repair fails. Only paths still under the
+   * old folders are looked at, so it is idempotent. A task whose move fails
+   * keeps its folder and record (it runs from there as before) and is tried
+   * again at the next start; one whose move a stop cut off after the folder
+   * moved and before its record did is finished from where the folder is.
+   */
+  async relocateLegacyWorkFolders(): Promise<{ moved: string[]; kept: Array<{ taskId: string; reason: string }> }> {
+    const report = { moved: [] as string[], kept: [] as Array<{ taskId: string; reason: string }> };
+    const oldWorktrees = path.join(this.d.dataDir, 'worktrees');
+    const oldWorkspaces = path.join(this.d.dataDir, 'workspaces');
+    for (const task of this.d.store.tasksWithWorkFolders()) {
+      const { workspacePath, worktreePath } = task.git;
+      let kept: string | null;
+      try {
+        if (workspacePath) {
+          if (!isInsidePath(oldWorkspaces, workspacePath)) continue;
+          kept = await this.relocateWorkspace(task, workspacePath, path.join(this.d.workDir, 'workspaces', path.relative(oldWorkspaces, workspacePath)));
+        } else if (worktreePath && isInsidePath(oldWorktrees, worktreePath)) {
+          kept = await this.relocateWorktree(task, worktreePath, path.join(this.d.workDir, 'worktrees', path.relative(oldWorktrees, worktreePath)));
+        } else continue;
+      } catch (error) {
+        kept = redact((error as Error).message).slice(0, 300);
+      }
+      if (kept) report.kept.push({ taskId: task.id, reason: kept });
+      else report.moved.push(task.id);
+    }
+    return report;
+  }
+
+  /** Whether Git lists `dir` among `repoPath`'s worktrees. */
+  private async listsWorktree(repoPath: string, dir: string): Promise<boolean> {
+    const listed = (await git(repoPath, ['worktree', 'list', '--porcelain'])).stdout.split('\n').map((l) => (l.startsWith('worktree ') ? l.slice(9) : null));
+    return listed.some((p) => p !== null && samePath(p, dir));
+  }
+
+  /**
+   * Why the worktree stays where it is, or null once it moved and the task's
+   * record says so. A start that stopped after the move and before the record
+   * finishes here: the worktree Git already lists at `to` is taken as it is.
+   */
+  private async relocateWorktree(task: TaskRecord, from: string, to: string): Promise<string | null> {
+    const repo = this.d.store.getRepository(task.repositoryId);
+    if (!repo || !existsSync(repo.path)) return 'its repository is not on this disk';
+    const resumed = !existsSync(from) && existsSync(to) && (await this.listsWorktree(repo.path, to));
+    if (!resumed) {
+      if (!existsSync(from)) return `${from} is missing`;
+      if (existsSync(to)) return `${to} already exists`;
+      mkdirSync(path.dirname(to), { recursive: true });
+      const moved = await git(repo.path, ['worktree', 'move', from, to]);
+      if (moved.code !== 0) return redact((moved.stderr || moved.stdout).trim()).slice(0, 300) || `git worktree move exited with ${moved.code}`;
+    }
+    this.d.store.updateTask(task.id, { git: { ...task.git, worktreePath: to } });
+    await this.setAsideInstall(to);
+    return null;
+  }
+
+  /**
+   * Why the workspace stays where it is, or null once it and every worktree in
+   * it moved and the records say so. A start that stopped after the rename and
+   * before the records finishes here: the folder already at `to` is repaired
+   * and taken, or left there with the reason when a repair fails.
+   */
+  private async relocateWorkspace(task: TaskRecord, from: string, to: string): Promise<string | null> {
+    const resumed = !existsSync(from) && existsSync(to);
+    if (!resumed) {
+      if (!existsSync(from)) return `${from} is missing`;
+      if (existsSync(to)) return `${to} already exists`;
+    }
+    const units = taskRepositories(this.d.store, task).filter((u) => u.git.worktreePath && isInsidePath(from, u.git.worktreePath));
+    const inside = (p: string, root: string) => path.join(root, path.relative(from, p));
+    if (!resumed) {
+      mkdirSync(path.dirname(to), { recursive: true });
+      await rename(from, to);
+    }
+    const repairAll = async (root: string): Promise<string | null> => {
+      for (const u of units) {
+        const dir = inside(u.git.worktreePath!, root);
+        const repaired = await git(u.repo.path, ['worktree', 'repair', dir]);
+        if (repaired.code !== 0 || !(await this.listsWorktree(u.repo.path, dir))) return `${u.repo.name}: ${redact((repaired.stderr || repaired.stdout).trim()).slice(0, 200) || 'git worktree repair did not take'}`;
+      }
+      return null;
+    };
+    const failed = await repairAll(to);
+    // Found there, not moved there now: nothing of this start's to undo.
+    if (failed && resumed) return `${failed}; the workspace is at ${to}`;
+    if (failed) {
+      // Everything back as it was: the folder, and each repository's record of its worktree.
+      try {
+        await rename(to, from);
+      } catch (error) {
+        return `${failed}; the workspace could not be moved back and is now at ${to} (${redact((error as Error).message).slice(0, 200)})`;
+      }
+      await repairAll(from);
+      return failed;
+    }
+    const primary = task.git.worktreePath && isInsidePath(from, task.git.worktreePath) ? { worktreePath: inside(task.git.worktreePath, to) } : {};
+    this.d.store.updateTask(task.id, { git: { ...task.git, workspacePath: to, ...primary } });
+    for (const u of units) if (!u.primary) this.d.store.updateLinkedRepositoryGit(task.id, u.repo.id, { ...u.git, worktreePath: inside(u.git.worktreePath!, to) });
+    for (const u of units) await this.setAsideInstall(inside(u.git.worktreePath!, to));
+    return null;
+  }
+
+  /**
+   * Dependencies the Control Center installed in a worktree that moved go to
+   * the trash, so the task's next run installs them again from its lockfile:
+   * links in them (pnpm's junctions on Windows) still name the old folder.
+   * Only an install it made (its marker) is touched, never a tracked folder.
+   */
+  private async setAsideInstall(dir: string): Promise<void> {
+    const modules = path.join(dir, 'node_modules');
+    if (!existsSync(path.join(modules, INSTALL_MARKER))) return;
+    try {
+      await mkdir(this.trashRoot(), { recursive: true });
+      const root = await this.plainTrashRoot();
+      if (!root) throw new Error('no plain trash folder');
+      await rename(modules, path.join(root, `${path.basename(dir)}-node_modules-${randomBytes(4).toString('hex')}`));
+    } catch {
+      // Left in place without its marker: the next run installs over it.
+      await rm(path.join(modules, INSTALL_MARKER), { force: true }).catch(() => undefined);
+    }
   }
 
   /**
@@ -629,22 +802,24 @@ export class EngineTooling {
     return patch;
   }
 
-  /** Where finished worktrees wait for deletion: in the data folder, so on the worktrees' drive and a rename away. */
+  /** Where finished worktrees wait for deletion: in the work root, so on the worktrees' drive and a rename away. */
   trashRoot(): string {
-    return path.join(this.d.dataDir, 'trash');
+    return path.join(this.d.workDir, 'trash');
   }
 
   /**
-   * The trash folder, only when it is a plain folder right where it belongs.
+   * The trash folder under `base` (the work root, or the data folder where
+   * finished worktrees waited before the work root existed: only emptied,
+   * never moved into), only when it is a plain folder right where it belongs.
    * Were it a link (a junction on Windows), moving into it or emptying it
    * would act on whatever it points at, with the orchestrator's rights. Null
    * when it is missing or not plain; the caller then leaves it alone.
    */
-  private async plainTrashRoot(): Promise<string | null> {
-    const root = this.trashRoot();
+  private async plainTrashRoot(base: string = this.d.workDir): Promise<string | null> {
+    const root = path.join(base, 'trash');
     try {
       const stat = await lstat(root);
-      if (stat.isDirectory() && !stat.isSymbolicLink() && (await realpath(root)) === path.join(await realpath(this.d.dataDir), 'trash')) return root;
+      if (stat.isDirectory() && !stat.isSymbolicLink() && (await realpath(root)) === path.join(await realpath(base), 'trash')) return root;
     } catch {
       return null;
     }
@@ -695,16 +870,19 @@ export class EngineTooling {
       let removed = 0;
       do {
         this.trashAgain = false;
-        const root = await this.plainTrashRoot();
-        if (!root) continue;
-        for (const name of await readdir(root).catch(() => [] as string[])) {
-          // Checked again before each entry: a link swapped in mid-sweep is not followed either.
-          if (!(await this.plainTrashRoot())) break;
-          try {
-            await rm(path.join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 400 });
-            removed++;
-          } catch {
-            /* locked: the next sweep tries again */
+        // The work root's trash, and the data folder's from before it existed (SEC-3).
+        for (const base of [this.d.workDir, this.d.dataDir]) {
+          const root = await this.plainTrashRoot(base);
+          if (!root) continue;
+          for (const name of await readdir(root).catch(() => [] as string[])) {
+            // Checked again before each entry: a link swapped in mid-sweep is not followed either.
+            if (!(await this.plainTrashRoot(base))) break;
+            try {
+              await rm(path.join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 400 });
+              removed++;
+            } catch {
+              /* locked: the next sweep tries again */
+            }
           }
         }
       } while (this.trashAgain);

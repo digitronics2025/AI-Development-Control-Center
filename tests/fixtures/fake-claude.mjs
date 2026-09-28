@@ -143,7 +143,7 @@ if (args[0] === '-p') {
           canonicalModel: 'claude-haiku-4-5',
         },
       },
-      result: `PONG cwd=${process.cwd()} ENV_HAS_ANTHROPIC_KEY=${key} prompt=${prompt.trim().length}`,
+      result: `PONG cwd=${process.cwd()} ENV_HAS_ANTHROPIC_KEY=${key} prompt=${prompt.trim().length} TOOL_SESSION=${process.env.ACC_TOOL_SESSION ?? 'none'}`,
     });
     process.exit(0);
   });

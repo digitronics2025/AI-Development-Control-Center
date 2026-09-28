@@ -221,6 +221,35 @@ export function unregisterSecretValues(values: Iterable<string>): void {
   if (changed) shared = null;
 }
 
+/**
+ * `redact` for a stream handed over in pieces (a terminal's output): a
+ * private key block one piece opens stays hidden in the pieces after it, up
+ * to and including its END line. Every other secret must lie within one
+ * piece, so the caller cuts at safe points (whole lines, as `PtySession`
+ * does). Uses the shared redactor as it is at each piece.
+ */
+export function streamRedactor(): (piece: string) => string {
+  let inPrivateKey = false;
+  const last = (re: RegExp, text: string) => {
+    let at = -1;
+    for (const m of text.matchAll(re)) at = m.index ?? at;
+    return at;
+  };
+  const begins = new RegExp(PRIVATE_KEY_BEGIN.source, 'g');
+  const ends = new RegExp(PRIVATE_KEY_END.source, 'g');
+  return (piece: string) => {
+    let rest = piece;
+    if (inPrivateKey) {
+      const end = PRIVATE_KEY_END.exec(rest);
+      if (!end) return '';
+      inPrivateKey = false;
+      rest = rest.slice(end.index + end[0].length);
+    }
+    if (last(begins, rest) > last(ends, rest)) inPrivateKey = true;
+    return sharedRedactor().redact(rest);
+  };
+}
+
 /** Deeply redact string values of a JSON-like object. */
 export function redactDeep<T>(value: T, redactor: Redactor = sharedRedactor()): T {
   if (typeof value === 'string') return redactor.redact(value) as T;

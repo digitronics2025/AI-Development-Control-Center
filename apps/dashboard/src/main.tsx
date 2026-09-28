@@ -42,6 +42,12 @@ function fail(title: string, text: string): void {
 const detected = detectMode(document);
 // Read once, then gone from the DOM: a DOM dump or a content script must not find the token (audit F-25).
 document.querySelector('meta[name="acc-token"]')?.remove();
+// A launcher's one-time ticket (docs/systems/security.md#agent-os-boundary) is spent: keep it out of the address bar and history.
+const launched = new URL(window.location.href);
+if (launched.searchParams.has('ticket')) {
+  launched.searchParams.delete('ticket');
+  window.history.replaceState(window.history.state, '', `${launched.pathname}${launched.search}${launched.hash}`);
+}
 if (detected.mode === 'local') {
   render({ baseUrl: '', mode: 'local', token: detected.token, host: 'web' });
 } else {

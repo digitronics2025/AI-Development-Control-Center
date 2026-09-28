@@ -17,6 +17,7 @@ import {
   type ProviderUsageCapabilities,
   type RawAgentResult,
 } from './contract.js';
+import { relayLaunch, relayRefusal, runAsRefusal } from './run-as.js';
 
 export interface StreamParser {
   onStdout(line: string): void;
@@ -214,10 +215,14 @@ export abstract class CliAgentAdapter implements AgentAdapter {
     }
     const executable = await this.resolveExecutable(input);
     if (!executable) throw new AgentGuardError(`${this.displayName} CLI was not found`, 'PROCESS_CRASH');
+    // The agent OS boundary: a run that cannot start as the agent account does not start at all.
+    const cannotRunAs = input.runAs ? runAsRefusal(input.runAs) : null;
+    if (cannotRunAs) throw new AgentGuardError(cannotRunAs, 'PERMISSION_DENIED');
 
     const { env } = sanitizeEnv(input.baseEnv, input.billingMode);
     // The tool session token reaches the agent (and the MCP server it starts) only through its environment.
     if (input.toolBridge) Object.assign(env, input.toolBridge.env);
+    if (input.shellGuard) Object.assign(env, input.shellGuard.env);
     const args = await this.buildArgs(input);
     let guardViolation: string | null = null;
     let handle: ProcessHandle | null = null;
@@ -237,16 +242,25 @@ export abstract class CliAgentAdapter implements AgentAdapter {
       },
     });
 
-    handle = runProcess({
-      command: executable,
-      args,
-      cwd: input.cwd,
-      env,
-      stdin: input.prompt,
-      timeoutMs: input.timeoutMs,
-      maxLineLength: PROTOCOL_MAX_LINE_LENGTH,
-      onLine: (stream, line) => (stream === 'stdout' ? parser.onStdout(line) : parser.onStderr(line)),
-    });
+    const onLine = (stream: 'stdout' | 'stderr', line: string) => (stream === 'stdout' ? parser.onStdout(line) : parser.onStderr(line));
+    const runAs = input.runAs;
+    if (runAs) {
+      // As the agent account, through the relay: same program, arguments, folder, environment and stdin.
+      emit('system', `Running as the Windows account ${runAs.account} (agent isolation)`);
+      const relayed = relayLaunch(runAs, executable, args, input.cwd, env);
+      handle = runProcess({ ...relayed, cwd: input.cwd, stdin: input.prompt, timeoutMs: input.timeoutMs, maxLineLength: PROTOCOL_MAX_LINE_LENGTH, onLine });
+    } else {
+      handle = runProcess({
+        command: executable,
+        args,
+        cwd: input.cwd,
+        env,
+        stdin: input.prompt,
+        timeoutMs: input.timeoutMs,
+        maxLineLength: PROTOCOL_MAX_LINE_LENGTH,
+        onLine,
+      });
+    }
     this.running.set(input.executionId, handle);
 
     const done = handle.done.then(async (process) => {
@@ -254,12 +268,15 @@ export abstract class CliAgentAdapter implements AgentAdapter {
       for (const file of this.executionFiles.get(input.executionId) ?? []) rmSync(file, { force: true });
       this.executionFiles.delete(input.executionId);
       const parsed = parser.finish();
-      return this.parseResult({
+      const result = await this.parseResult({
         executionId: input.executionId,
         process,
         ...parsed,
         guardViolation: guardViolation ?? parsed.guardViolation,
       });
+      // The relay would not start the run as the agent account (and started nothing else).
+      const refused = runAs && !process.cancelled && !process.timedOut ? relayRefusal(process.exitCode, process.tail, runAs.account) : null;
+      return refused ? { ...result, status: 'failed' as const, errorClass: 'PERMISSION_DENIED' as const, errorMessage: refused } : result;
     });
 
     return {

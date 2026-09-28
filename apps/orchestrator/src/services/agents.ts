@@ -1,4 +1,4 @@
-import { AgentGuardError, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRuntimeOptions } from '@acc/agent-sdk';
+import { AgentGuardError, type AgentAdapter, type AgentExecutionHandle, type AgentExecutionInput, type AgentRunAs, type AgentRuntimeOptions } from '@acc/agent-sdk';
 import type { AgentCapabilities, AgentInfo, AgentSettings, ModelDescriptor, UsageBilling } from '@acc/shared';
 import type { Bus } from '../bus.js';
 import type { Store } from '../store/store.js';
@@ -27,6 +27,9 @@ export class AgentNotFoundError extends Error {}
 export class AgentRegistry {
   private readonly adapters = new Map<string, AgentAdapter>();
   private refreshing: Promise<void> | null = null;
+  /** The Control Center's own data folder and port, denied in every run's native rules (SEC-3); set at start. */
+  private controlCenter: AgentRuntimeOptions['controlCenter'];
+  private isolation: Omit<AgentRunAs, 'account'> | null = null;
 
   constructor(
     private readonly store: Store,
@@ -96,7 +99,30 @@ export class AgentRegistry {
       baseEnv: this.baseEnv,
       executablePath: record?.settings.executablePath ?? null,
       loadUserConfig: record?.settings.loadUserConfig ?? true,
+      ...(this.controlCenter ? { controlCenter: this.controlCenter } : {}),
     };
+  }
+
+  /** Teach every later launch where the Control Center's own secrets and API are (the port once the server listens). */
+  setControlCenter(controlCenter: NonNullable<AgentRuntimeOptions['controlCenter']>): void {
+    this.controlCenter = controlCenter;
+  }
+
+  /** Where the agent account's password record and the relay are (SEC-3, docs/systems/security.md#agent-os-boundary); set at start. */
+  setIsolation(paths: Omit<AgentRunAs, 'account'>): void {
+    this.isolation = paths;
+  }
+
+  /**
+   * The Windows account a stage's run starts as, or undefined while agent
+   * isolation is off (Settings → `agentIsolation`). With it on, the adapter
+   * refuses a run it cannot start as that account — unknown paths included —
+   * and never starts it as the operator instead.
+   */
+  stageRunAs(): AgentRunAs | undefined {
+    const { agentIsolation } = this.settings.get();
+    if (agentIsolation.mode !== 'account') return undefined;
+    return { account: agentIsolation.account, credentialFile: this.isolation?.credentialFile ?? '', relay: this.isolation?.relay ?? '' };
   }
 
   list(): AgentInfo[] {

@@ -268,7 +268,10 @@ the orchestrator it spawned, which would hold the port for the next run.
 
 The same build runs in two modes ([mode.ts](../../apps/dashboard/src/app/mode.ts)):
 **local** when the page carries the `acc-token` meta tag (orchestrator, VS Code
-webview), **cloud** when served by the cloud Worker without it. `ApiConfig.auth`
+webview), **cloud** when served by the cloud Worker without it. With agent
+isolation on, the orchestrator adds the tag only for a launcher's one-time
+`?ticket=`, which [main.tsx](../../apps/dashboard/src/main.tsx) then removes
+from the address bar ([security.md](security.md#agent-os-boundary)). `ApiConfig.auth`
 is `{kind:'local', token}` or `{kind:'cloud', node()}`; cloud requests send
 `x-acc-node` and an `Idempotency-Key`, and a command still running surfaces as
 `REMOTE_PENDING` (decided by `x-acc-command-status`, not the 202). Cloud mode adds

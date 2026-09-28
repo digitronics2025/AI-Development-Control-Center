@@ -3,9 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AgentGuardError, type AgentExecutionInput } from '@acc/agent-sdk';
-import { ClaudeCodeAdapter, claudeToolPolicy, lookupWasFree, readInitEvent, repositoryHookSwitches } from '../src/index.js';
+import { ClaudeCodeAdapter, claudeToolPolicy, lookupWasFree, readInitEvent, repositoryHookSwitches, rulePath, shellGuardSettings } from '../src/index.js';
 
 const fixture = path.resolve(import.meta.dirname, '../../../tests/fixtures', process.platform === 'win32' ? 'fake-claude.cmd' : 'fake-claude');
+/** A shell guard whose program exists (this test file stands in for the built hook script). */
+const guard = { command: process.execPath, args: [path.resolve(import.meta.dirname, 'claude.test.ts')], env: { ACC_TOOL_URL: 'http://127.0.0.1:1', ACC_TOOL_SESSION: 'session' } };
 
 function input(overrides: Partial<AgentExecutionInput> & { env?: NodeJS.ProcessEnv } = {}): AgentExecutionInput {
   const { env, ...rest } = overrides;
@@ -82,7 +84,7 @@ describe('ClaudeCodeAdapter', () => {
     };
     const after = (args: string[], flag: string) => args[args.indexOf(flag) + 1] ?? '';
 
-    const user = await argsOf({ permissionLevel: 2, loadUserConfig: true });
+    const user = await argsOf({ permissionLevel: 2, loadUserConfig: true, shellGuard: guard });
     expect(after(user, '--tools')).toBe(claudeToolPolicy(2).tools.join(','));
     expect(after(user, '--allowedTools')).toContain('Skill');
     expect(user).toContain('--strict-mcp-config');
@@ -100,12 +102,32 @@ describe('ClaudeCodeAdapter', () => {
     expect(bridged).toContain('--strict-mcp-config');
 
     // Learned skills (docs/systems/learning.md): each managed plugin folder, and nothing else changes.
-    const learned = await argsOf({ permissionLevel: 2, pluginDirs: ['C:/data/learning/plugins/global', 'C:/data/learning/plugins/repo-r1'] });
+    const learned = await argsOf({ permissionLevel: 2, shellGuard: guard, pluginDirs: ['C:/data/learning/plugins/global', 'C:/data/learning/plugins/repo-r1'] });
     expect(learned.filter((a) => a === '--plugin-dir')).toHaveLength(2);
     expect(after(learned, '--plugin-dir')).toBe('C:/data/learning/plugins/global');
     expect(learned.at(-1)).toBe('C:/data/learning/plugins/repo-r1');
     expect(after(learned, '--tools')).toBe(claudeToolPolicy(2).tools.join(','));
     expect(user).not.toContain('--plugin-dir');
+  });
+
+  it('gives a run as the agent account its MCP configuration inline: that account cannot open the operator temp folder', () => {
+    class Args extends ClaudeCodeAdapter {
+      of(i: AgentExecutionInput): string[] {
+        return this.buildArgs(i);
+      }
+    }
+    const bridge = { name: 'acc', command: process.execPath, args: ['C:/acc/dist/acc-mcp.js'], env: { ACC_TOOL_URL: 'http://127.0.0.1:1', ACC_TOOL_SESSION: 'session-secret' } };
+    const asOperator = new Args().of(input({ permissionLevel: 2, shellGuard: guard, toolBridge: bridge }));
+    const file = asOperator[asOperator.indexOf('--mcp-config') + 1]!;
+    expect(existsSync(file)).toBe(true);
+    const asAgent = new Args().of(input({ permissionLevel: 2, shellGuard: guard, toolBridge: bridge, runAs: { account: 'acc-agent', credentialFile: 'C:/data/agent-account.json', relay: 'C:/acc/agent-relay.ps1' } }));
+    const inline = asAgent[asAgent.indexOf('--mcp-config') + 1]!;
+    expect(JSON.parse(inline)).toEqual({ ...JSON.parse(readFileSync(file, 'utf8')) });
+    expect(inline).toContain('${ACC_TOOL_SESSION}');
+    expect(inline).not.toContain('session-secret');
+    // Everything else is the same run.
+    expect(asAgent.filter((a) => a !== inline)).toEqual(asOperator.filter((a) => a !== file));
+    rmSync(file, { force: true });
   });
 
   // A repository's .claude/settings.json allowing `Bash(*)` adds to --allowedTools; only a deny rule or a missing tool beats it.
@@ -137,7 +159,7 @@ describe('ClaudeCodeAdapter', () => {
     const argsOf = async (permissionLevel: 1 | 2) => {
       const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
       const argsFile = path.join(cwd, 'args.json');
-      await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+      await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel, shellGuard: guard, env: { FAKE_ARGS_FILE: argsFile } }))).done;
       const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
       return (flag: string) => (args[args.indexOf(flag) + 1] ?? '').split(',');
     };
@@ -151,11 +173,11 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   // Hooks are shell commands outside every permission rule, and `-p` runs a repository's in trusted and untrusted folders alike (2.1.283).
-  it('runs no hooks at Level 1, whatever the user config, and leaves hooks alone from Level 2', async () => {
-    const argsOf = async (permissionLevel: 1 | 2 | 3 | 4 | 5, loadUserConfig?: boolean) => {
+  it('runs no hooks at Level 1, whatever the user config, and adds only the shell guard from Level 2', async () => {
+    const argsOf = async (permissionLevel: 1 | 2 | 3 | 4 | 5, loadUserConfig?: boolean, shellGuard: AgentExecutionInput['shellGuard'] | null = guard) => {
       const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
       const argsFile = path.join(cwd, 'args.json');
-      await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel, loadUserConfig, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+      await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel, loadUserConfig, ...(shellGuard ? { shellGuard } : {}), env: { FAKE_ARGS_FILE: argsFile } }))).done;
       return (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
     };
     for (const loadUserConfig of [undefined, true, false]) {
@@ -163,28 +185,70 @@ describe('ClaudeCodeAdapter', () => {
       expect(one.filter((a) => a === '--settings')).toHaveLength(1);
       expect(JSON.parse(one[one.indexOf('--settings') + 1]!)).toEqual({ disableAllHooks: true });
     }
-    for (const level of [2, 3, 4, 5] as const) expect(await argsOf(level)).not.toContain('--settings');
+    for (const level of [2, 3, 4, 5] as const) {
+      const args = await argsOf(level);
+      expect(args.filter((a) => a === '--settings')).toHaveLength(1);
+      // Hooks stay on — the operator's own guards too — and one PreToolUse hook asks the Control Center about Bash and the file reads.
+      const settings = args[args.indexOf('--settings') + 1]!;
+      expect(JSON.parse(settings)).toEqual({
+        disableAllHooks: false,
+        hooks: { PreToolUse: [{ matcher: 'Bash|Read|Grep|Glob', hooks: [{ type: 'command', command: `"${process.execPath.replace(/\\/g, '/')}" "${guard.args[0]!.replace(/\\/g, '/')}"`, timeout: 60 }] }] },
+      });
+      // claude.cmd reads its arguments again through cmd.exe, where a bare `|` would run the rest as a command.
+      expect(settings).not.toMatch(/[|&<>^]/);
+      expect(args[args.indexOf('--tools') + 1]!.split(',')).toContain('Bash');
+    }
+    // Without a guard there is no hook to add, and no shell (below).
+    expect(await argsOf(2, undefined, null)).not.toContain('--settings');
   });
 
-  it("warns when a repository's disableAllHooks would switch off the operator's own hooks", async () => {
+  it('hands the shell guard its session through the environment only', async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
+    const argsFile = path.join(cwd, 'args.json');
+    const result = await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 2, shellGuard: { ...guard, env: { ACC_TOOL_SESSION: 'guard-session-value' } }, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+    expect(result.status).toBe('succeeded');
+    expect(result.output).toContain('TOOL_SESSION=guard-session-value');
+    expect(readFileSync(argsFile, 'utf8')).not.toContain('guard-session-value');
+  });
+
+  it('fails closed to no native shell when the guard cannot run or a repository would switch hooks off (SEC-3)', async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
     mkdirSync(path.join(cwd, '.claude'));
     const settings = (name: string, body: string) => writeFileSync(path.join(cwd, '.claude', name), body);
-    const warnings = async (overrides: Partial<AgentExecutionInput>) => {
+    const run = async (overrides: Partial<AgentExecutionInput>) => {
       const lines: string[] = [];
-      await (await new ClaudeCodeAdapter().execute(input({ cwd, onLine: (_s, t) => lines.push(t), ...overrides }))).done;
-      return lines.filter((l) => l.startsWith('Warning:'));
+      const argsFile = path.join(cwd, 'args.json');
+      await (await new ClaudeCodeAdapter().execute(input({ cwd, onLine: (_s, t) => lines.push(t), env: { FAKE_ARGS_FILE: argsFile }, ...overrides }))).done;
+      const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+      const list = (flag: string) => (args[args.indexOf(flag) + 1] ?? '').split(',');
+      return { lines: lines.filter((l) => l.startsWith('No native shell')), tools: list('--tools'), denied: list('--disallowedTools'), settings: args.includes('--settings') };
     };
+    const noShell = (r: Awaited<ReturnType<typeof run>>) => !r.tools.includes('Bash') && r.denied.includes('Bash') && !r.settings;
+
+    // The guard's way in is open: a shell, and nothing said.
+    const open = await run({ permissionLevel: 2, shellGuard: guard });
+    expect(open.tools).toContain('Bash');
+    expect(open.lines).toEqual([]);
+    // No guard (tools not built here), or its program is missing: the CLI would let every call through.
+    const unguarded = await run({ permissionLevel: 3 });
+    expect(noShell(unguarded)).toBe(true);
+    expect(unguarded.lines[0]).toMatch(/check of shell commands is not available/);
+    const missing = await run({ permissionLevel: 2, shellGuard: { ...guard, args: [path.join(cwd, 'no-such-guard.js')] } });
+    expect(noShell(missing)).toBe(true);
+    expect(missing.lines[0]).toMatch(/shell check program is missing/);
+    // Edits stay: only the shell goes.
+    expect(unguarded.tools).toEqual(expect.arrayContaining(['Edit', 'Write', 'Read']));
+
+    // A repository that switches hooks off would switch the guard off with them, whatever the user config.
     settings('settings.json', JSON.stringify({ disableAllHooks: true }));
     settings('settings.local.json', '{ "disableAllHooks": true,'); // does not parse, so the CLI ignores it too
-
-    expect(await warnings({ permissionLevel: 2, loadUserConfig: true })).toEqual([
-      "Warning: this repository's .claude/settings.json sets disableAllHooks, which also switches off your own Claude Code hooks (your secret guards included) for this run.",
-    ]);
-    expect(await warnings({ permissionLevel: 4 })).toHaveLength(1); // user config is on unless turned off
-    // Nothing of the operator's to lose: their hooks are not loaded, or Level 1 runs none.
-    expect(await warnings({ permissionLevel: 2, loadUserConfig: false })).toEqual([]);
-    expect(await warnings({ permissionLevel: 1, loadUserConfig: true })).toEqual([]);
+    for (const loadUserConfig of [true, false]) {
+      const switched = await run({ permissionLevel: 2, loadUserConfig, shellGuard: guard });
+      expect(noShell(switched)).toBe(true);
+      expect(switched.lines).toEqual([expect.stringContaining("this repository's .claude/settings.json sets disableAllHooks")]);
+    }
+    // Level 1 has no shell and no hooks anyway, and says nothing.
+    expect((await run({ permissionLevel: 1, shellGuard: guard })).lines).toEqual([]);
 
     settings('settings.json', JSON.stringify({ disableAllHooks: false }));
     settings('settings.local.json', JSON.stringify({ disableAllHooks: true }));
@@ -407,25 +471,124 @@ describe('claudeToolPolicy', () => {
     }
   });
 
+  it("denies the Control Center's own files and port natively, and nothing else of the data folder (SEC-3)", () => {
+    const dataDir = process.platform === 'win32' ? String.raw`C:\Users\op\AppData\Local\AIDevControlCenter` : '/home/op/.local/share/ai-control-center';
+    const data = process.platform === 'win32' ? '//c/Users/op/AppData/Local/AIDevControlCenter' : '//home/op/.local/share/ai-control-center';
+    const plugins = path.join(dataDir, 'learning', 'plugins');
+    expect(rulePath(dataDir)).toBe(data);
+    const cc = { dataDir, port: 4399, readOnly: [plugins] };
+    const denied = claudeToolPolicy(2, undefined, { controlCenter: cc }).denied;
+    for (const file of ['auth-token', '*.db*', 'credential-key*', 'privileged-key*']) expect(denied).toContain(`Read(${data}/${file})`);
+    // One Edit rule covers every file at the data folder's top; the learned plugins below it are read-only.
+    expect(denied).toEqual(expect.arrayContaining([`Edit(${data}/*)`, 'Bash(*auth-token*)', 'Bash(*127.0.0.1:4399*)', 'Bash(*localhost:4399*)', `Edit(${data}/learning/plugins/**)`]));
+    expect(denied.some((r) => r === `Edit(${data}/**)`)).toBe(false);
+    // Settings files through which the hooks could be switched off cannot be edited.
+    expect(denied).toEqual(expect.arrayContaining(['Edit(**/.claude/settings*.json)', 'Write(**/.claude/settings*.json)', 'Edit(~/.claude/settings*.json)']));
+    // The rest of the data folder (learned skills, attachments) stays readable, and nothing names the work root.
+    expect(denied.filter((r) => r.startsWith('Read(')).every((r) => /\/(auth-token|\*\.db\*|credential-key\*|privileged-key\*)\)$/.test(r))).toBe(true);
+    expect(denied.some((r) => r === `Read(${data}/**)` || r === `Read(${data})`)).toBe(false);
+    // Level 1 reads, so it gets the read rules; its shell and edits are gone already.
+    const one = claudeToolPolicy(1, undefined, { controlCenter: cc }).denied;
+    expect(one).toEqual(expect.arrayContaining(['Bash', 'Edit', `Read(${data}/auth-token)`]));
+    expect(one.some((r) => r.startsWith('Bash(') || r.startsWith('Edit('))).toBe(false);
+    // Without the port known, no port rules; the token's name is denied regardless.
+    const noPort = claudeToolPolicy(2, undefined, { controlCenter: { dataDir, port: null } }).denied;
+    expect(noPort.some((r) => r.includes('127.0.0.1:'))).toBe(false);
+    expect(claudeToolPolicy(2).denied).toContain('Bash(*auth-token*)');
+  });
+
+  it("makes the shell check's own folder read-only for the run it guards (SEC-3)", () => {
+    const script = path.join(os.tmpdir(), 'acc-checkout', 'apps', 'orchestrator', 'dist', 'acc-shell-guard.mjs');
+    const rule = `Edit(${rulePath(path.dirname(script))}/**)`;
+    const hooked = { command: process.execPath, args: [script], env: {} };
+    for (const level of [2, 3, 4, 5] as const) expect(claudeToolPolicy(level, undefined, { guard: hooked }).denied, `L${level}`).toContain(rule);
+    // Without a shell there is no hook to protect; Level 1 has neither.
+    expect(claudeToolPolicy(3, undefined, { shell: false, guard: hooked }).denied).not.toContain(rule);
+    expect(claudeToolPolicy(1, undefined, { guard: hooked }).denied).not.toContain(rule);
+  });
+
+  it('passes the rule on its hook folder to the CLI when the run is hooked', async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
+    const argsFile = path.join(cwd, 'args.json');
+    await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 2, shellGuard: guard, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+    const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+    expect(args[args.indexOf('--disallowedTools') + 1]!.split(',')).toContain(`Edit(${rulePath(path.dirname(guard.args[0]!))}/**)`);
+  });
+
+  it('takes Bash and its rules away, and only those, when the shell is off', () => {
+    const cc = { dataDir: os.tmpdir(), port: 4399 };
+    const off = claudeToolPolicy(3, undefined, { shell: false, controlCenter: cc });
+    expect(off.tools).not.toContain('Bash');
+    expect(off.allowed).not.toContain('Bash');
+    expect(off.denied).toContain('Bash');
+    expect(off.denied.some((r) => r.startsWith('Bash('))).toBe(false);
+    expect(off.tools).toEqual(expect.arrayContaining(['Edit', 'Write', 'Read']));
+    expect(off.denied).toContain(`Read(${rulePath(os.tmpdir())}/auth-token)`);
+  });
+
   it('keeps the rules short enough for cmd.exe, which runs claude.cmd on Windows (8191 characters a line)', () => {
     // cross-spawn quotes each argument and escapes cmd.exe's metacharacters with `^`.
     const cmdLine = (args: string[]) => args.map((a) => `"${a}"`.replace(/([()\][%!^"`<>&|;, *?])/g, '^$1')).join(' ').length;
     const releases = ['upstream', 'deploy', 'pages', 'docs', 'www'].map((remote, i) => ({ remote, branch: `release-${i}` }));
+    // A long profile path, with the learned plugins as a read-only folder (SEC-3).
+    const dataDir = String.raw`C:\Users\a-rather-long-user-name\AppData\Local\AIDevControlCenter`;
+    const hooked = { command: String.raw`C:\Program Files\nodejs\node.exe`, args: [String.raw`C:\Users\a-rather-long-user-name\AI-Development-Control-Center\apps\orchestrator\dist\acc-shell-guard.mjs`], env: {} };
     for (const level of [3, 4, 5] as const) {
-      const policy = claudeToolPolicy(level, releases);
-      const args = ['--tools', policy.tools.join(','), '--allowedTools', [...policy.allowed, 'mcp__acc'].join(','), '--disallowedTools', policy.denied.join(',')];
-      // Five releases on five remotes leave room for the executable, the MCP config and plugin folders.
-      expect(cmdLine(args), `L${level}`).toBeLessThan(5_000);
+      const policy = claudeToolPolicy(level, releases, { controlCenter: { dataDir, port: 43170, readOnly: [path.join(dataDir, 'learning', 'plugins')] }, guard: hooked });
+      const hook = shellGuardSettings(hooked);
+      const args = ['--tools', policy.tools.join(','), '--allowedTools', [...policy.allowed, 'mcp__acc'].join(','), '--disallowedTools', policy.denied.join(','), '--settings', hook];
+      // Five releases on five remotes and the shell guard leave room for the executable, the MCP config and plugin folders.
+      expect(cmdLine(args), `L${level}`).toBeLessThan(5_600);
       expect(new Set(policy.denied).size).toBe(policy.denied.length);
     }
+  });
+
+  it("writes cmd.exe's operators in the hook settings as JSON escapes, which read back the same", () => {
+    const hooked = { command: String.raw`C:\Tools & More\node.exe`, args: [String.raw`C:\a<b>^c\acc-shell-guard.mjs`], env: {} };
+    const settings = shellGuardSettings(hooked);
+    expect(settings).not.toMatch(/[|&<>^]/);
+    const parsed = JSON.parse(settings) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse[0]!.matcher).toBe('Bash|Read|Grep|Glob');
+    expect(parsed.hooks.PreToolUse[0]!.hooks[0]!.command).toBe('"C:/Tools & More/node.exe" "C:/a<b>^c/acc-shell-guard.mjs"');
   });
 
   it('passes the release branch denial to the CLI', async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
     const argsFile = path.join(cwd, 'args.json');
-    await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 3, releaseBranches: [{ remote: 'origin', branch: 'site' }], env: { FAKE_ARGS_FILE: argsFile } }))).done;
+    await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 3, shellGuard: guard, releaseBranches: [{ remote: 'origin', branch: 'site' }], env: { FAKE_ARGS_FILE: argsFile } }))).done;
     const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
     expect(args[args.indexOf('--disallowedTools') + 1]!.split(',')).toEqual(expect.arrayContaining(['Bash(git push origin site:*)', 'Bash(git push -u origin HEAD:site:*)', 'Bash(git push origin main:*)', 'Bash(gh pr merge:*)']));
+  });
+
+  it("passes the Control Center's own rules to the CLI from the runtime options", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'acc-claude-'));
+    const argsFile = path.join(cwd, 'args.json');
+    const dataDir = path.join(cwd, 'data');
+    await (await new ClaudeCodeAdapter().execute(input({ cwd, permissionLevel: 2, shellGuard: guard, controlCenter: { dataDir, port: 4399 }, env: { FAKE_ARGS_FILE: argsFile } }))).done;
+    const args = (JSON.parse(readFileSync(argsFile, 'utf8')) as { args: string[] }).args;
+    const tokenRule = `Read(${rulePath(dataDir)}/auth-token)`;
+    const denied = args[args.indexOf('--disallowedTools') + 1]!.split(',');
+    expect(denied).toContain('Bash(*127.0.0.1:4399*)');
+    // With the precheck hook, the token's Read rule asks instead of denying: the CLI weighs a deny rule
+    // before the hook (no Control Center reason or row), and `--permission-prompts none` refuses an ask.
+    expect(denied).not.toContain(tokenRule);
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]!) as { permissions?: { ask?: string[] } };
+    expect(settings.permissions?.ask).toContain(tokenRule);
+    expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
+  });
+
+  it('keeps the data folder Read rules as deny rules where no precheck hook runs', () => {
+    const cc = { dataDir: path.join(os.tmpdir(), 'acc-data'), port: 4399 };
+    const tokenRule = `Read(${rulePath(cc.dataDir)}/auth-token)`;
+    // Level 1 (no hooks at all) and a Level 2 run without its shell guard.
+    for (const policy of [claudeToolPolicy(1, undefined, { controlCenter: cc }), claudeToolPolicy(2, undefined, { shell: false, controlCenter: cc })]) {
+      expect(policy.denied).toContain(tokenRule);
+      expect(policy.asked).toEqual([]);
+    }
+    const guarded = claudeToolPolicy(2, undefined, { controlCenter: cc, guard });
+    expect(guarded.denied).not.toContain(tokenRule);
+    expect(guarded.asked).toContain(tokenRule);
   });
 
   it('allows skills at every level inside a closed tool set', () => {

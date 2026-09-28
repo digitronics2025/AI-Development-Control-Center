@@ -24,6 +24,10 @@ tool took a screenshot, up to three MCP `image` blocks the model looks at
 **Agent stages.** When Settings → Execution → *Give agents the Control Center
 tools* is on and the bridge is built, each agent execution gets a session
 scoped to its task, stage level and profile, closed when the execution ends.
+The same session authenticates the native shell precheck hook
+([agents.md](agents.md), `AgentRunSession.shellGuard`); with tools off, or
+with stage runs starting as the agent account ([security.md](security.md#agent-os-boundary)),
+it is opened for the hook alone (`guardOnly`: the tool routes answer 403).
 The token and URL travel only in the agent's environment
 (`ACC_TOOL_SESSION`, `ACC_TOOL_URL`):
 

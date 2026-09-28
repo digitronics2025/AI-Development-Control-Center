@@ -20,6 +20,27 @@ travel on **stdin**; argv holds only fixed flags and validated model/effort
 values. Processes are killed as a tree on cancel/timeout
 ([process.ts](../../packages/executor/src/process.ts)).
 
+**As the agent account.** With agent isolation on ([security.md](security.md#agent-os-boundary)),
+a stage's run carries `AgentExecutionInput.runAs` (only stage runs:
+[runners.ts](../../apps/orchestrator/src/engine/runners.ts) `launchAgent`, Stage
+Team workers included; Ask, the Chairman and commit-message drafts stay Level 1
+runs as the operator). `CliAgentAdapter.execute` then refuses with
+`PERMISSION_DENIED` before anything starts when it is not Windows, the relay is
+missing or the password record is missing (`runAsRefusal`,
+[run-as.ts](../../packages/agent-sdk/src/run-as.ts)); otherwise it starts
+Windows PowerShell on [agent-relay.ps1](../../scripts/windows/agent-relay.ps1)
+with the run's environment plus `ACC_AGENT_RELAY` (base64 JSON: account, record,
+the program and the exact command line `runProcess` would have used —
+`windowsLaunch`: cross-spawn's `cmd.exe /d /s /c` for a `.cmd` shim, libuv's
+quoting otherwise — and the folder; nothing secret). The relay starts the
+program as the account, copies stdin to it and its output back byte for byte,
+holds it in a kill-on-close job (ending the relay's tree on cancel or timeout
+ends everything the run started, and a run's leftovers end with it), and exits
+with its code. A relay refusal (exit 31436, one `Agent isolation:` line) becomes
+`PERMISSION_DENIED` with that line. Never a fallback to the operator. Claude
+Code's `--mcp-config` is inline JSON in such a run (the account cannot open the
+operator's temp folder). Without `runAs` the launch is unchanged.
+
 **Line lengths.** `runProcess` splits lines longer than `maxLineLength`
 (default 8,000 characters) for display. Agent CLIs stream one JSON event per
 line, and a single event — a long final answer, a large file read — exceeds
@@ -108,7 +129,9 @@ tenten-accounting-in.
 
 ## Claude Code ([agent-claude](../../packages/agent-claude/src/index.ts))
 
-- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] [--settings {"disableAllHooks":true}] --strict-mcp-config [--mcp-config <acc>]`
+- Run: `claude -p --output-format stream-json --verbose --no-session-persistence --permission-prompts none --permission-mode … --tools … --allowedTools … --disallowedTools … [--model] [--effort] [--setting-sources project,local] [--settings {"disableAllHooks":true} | <the shell guard>] --strict-mcp-config [--mcp-config <acc>]`
+- **The Control Center itself is denied natively, at every level** (SEC-3, `controlCenterDenied`, from `AgentRuntimeOptions.controlCenter`, which `AgentRegistry.runtimeOptions` fills with the real data folder and listen port): `Read(//<data>/auth-token)`, `Read(//<data>/*.db*)`, `Read(//<data>/credential-key*)`, `Read(//<data>/privileged-key*)` (paths in the CLI's POSIX form, `//c/Users/…`, `rulePath`), `Edit(//<data>/*)` (every file at the data folder's top), `Edit(//<data>/learning/plugins/**)` (the learned skills are read-only), `Edit`/`Write(**/.claude/settings*.json)` and `Edit(~/.claude/settings*.json)` (a run cannot switch its hooks off), `Bash(*auth-token*)`, `Bash(*127.0.0.1:<port>*)`, `Bash(*localhost:<port>*)`. Read and Edit rules also cover the file commands the CLI recognises in Bash and redirection targets. The files only: for these rules the rest of the data folder (learned skills, attachments) stays readable, and the agents' worktrees are outside it ([orchestrator.md](orchestrator.md#work-root-acc_work_dir)); from Level 2 the precheck hook below narrows file reads further, and these rules are its backstop. Level 1 gets only the Read rules, and they are all its reads have: it runs no hooks. Lexical, like every rule here.
+- **From Level 2 native Bash and file reads run only behind the Control Center's precheck** (SEC-3). `--settings` carries `disableAllHooks: false` and one PreToolUse command hook on `Bash|Read|Grep|Glob` (`shellGuardSettings`, `GUARDED_FILE_TOOLS`; one entry, not one per tool, for cmd.exe's line limit): `"<node>" "<orchestrator dist>/acc-shell-guard.mjs"` ([shell-guard.ts](../../packages/agent-claude/src/shell-guard.ts), inline JSON, never a file an agent could edit). cmd.exe's operators `|&<>^` are written in that JSON as `\u` escapes: an npm-installed `claude.cmd` reads its arguments again (`%*`), and a bare `|` ran the rest as a command (measured through a `.cmd` shim). The script is out of the run's reach too: `.mjs`, so no package.json decides how Node loads it; `Edit(//<orchestrator dist>/**)` on its folder (`shellGuardDenied`, only in a hooked run); and the precheck refuses a command that names the script or that folder to do more than read. Before each call it posts to `POST /api/tool-session/precheck` — `{ command }` for Bash, `{ tool, input, cwd }` for Read, Grep and Glob (the CLI's own folder, from the hook's input) — with the run's tool session from its environment (`AgentExecutionInput.shellGuard`, the session `EngineTooling.openAgentSession` opens for the stage — for the hook alone when tools are off for agents or the run starts as the agent account) and lets it run only on an explicit allow ([tool-system.md](tool-system.md#sessions)). A file read is refused when a path it reads names the Control Center or when it searches a folder that holds the data folder; the learned plugins and the task's own attachments stay readable ([security.md](security.md#permission-levels)). The CLI lets a call through when a hook exits with anything but 2, fails to start or times out, and an `http` hook's failures do not block, so the hook is a command and refuses — exit 2, the reason on stderr, which Claude sees, and the deny decision on stdout — on every other outcome: no session, an unreadable call or a tool it does not guard, the orchestrator unreachable, a non-2xx or undecided answer, its own 15 s deadline (the CLI's is 60 s), any error of its own. An allow prints nothing, so the run's deny rules still apply after it; whether the CLI weighs a deny rule before the hook (Claude Code's message, no row) is what `--run` reports for Read. **No native shell at all** (`nativeShellRefusal`, fails closed, said in the first line of the run log): without a guard (no build, or the orchestrator not listening yet), with the guard's program missing, or in a repository whose `.claude/settings.json` or `settings.local.json` sets `disableAllHooks: true` — which would switch the hook off (and the operator's own hooks) — whatever the user config; edits and reads stay, the reads with only the deny rules.
 - Permission mapping (`claudeToolPolicy`): L1 `dontAsk`, read-only tools and **no shell**; L2 `acceptEdits`, no git commit/push/deploy; L3 adds git; L4+ adds deploy. Always denied, at every level with a shell (prefix rules on Claude's native Bash — a heuristic, not the Control Center's classifier): force and mirror push, `git reset --hard`, `git clean`, `git restore`, `git checkout --`/`.`/`-f`, `git switch --discard-changes`, `git stash drop|clear`, `git branch -D`, `git worktree remove`, `git filter-branch`, `rm -rf`/`rm -r`, `rmdir /s`, `rd /s`, `del /s`, `Remove-Item`, `npx rimraf`. From L3 (where git is allowed) `gh pr merge` and a push to a branch that deploys are denied too: a push there is Level 5 and never an agent's. The rules name each release branch of the task's repositories on its own remote (the engine passes `AgentExecutionInput.releaseBranches`, one per repository of a multi-repository task that releases by push) and the production-named branches (`PRODUCTION_BRANCH_NAMES`: main, master…) on `origin`, in the usual spellings: `git push <remote> <branch>` and `HEAD:<branch>`, each also with `-u` or `--set-upstream`. The set is kept small on purpose: an npm-installed `claude` is `claude.cmd` on Windows, run through cmd.exe, which refuses a command line over 8191 characters, and a rule per remote × branch × spelling pushed a multi-release task past it (a test bounds it). They are prefix rules, so they are best-effort: `git push origin topic:main`, `HEAD:refs/heads/main`, a production name on a remote other than `origin`, a bare `git push` whose upstream is main, or a global option before `push` are not a prefix they name. The Control Center's own tools judge a push in the ways a line runs one (lexically: a script or program that pushes by itself is judged by what the line says) and fail closed when its destination cannot be read, and rate a pull-request merge Level 5 too (`git.push`, and any command line through `shell.*`, `process.*`, `terminal.send`, `node.run_script`, and a terminal's line at Enter: [tool-system.md](tool-system.md#the-execution-door-servicets)); routing native Bash through that judgement is SEC-3's precheck hook. `Skill` is allowed at every level.
 - Tool set (`--tools`, closed on purpose): L1 `Read, Grep, Glob, Skill, ToolSearch, TodoWrite` (and `Bash` denied outright); L2+ adds `Bash, Edit, Write, NotebookEdit`. `WebFetch`, `WebSearch`, `Agent`, `PowerShell` do not exist in a run.
 - **A repository's settings cannot widen a stage.** Settings files the run loads —
@@ -136,17 +159,22 @@ tenten-accounting-in.
   agent can also write hooks into `settings.local.json` (hidden by a global
   gitignore) for a later stage to run. The switch stops all of them — plugins' and
   the operator's too — and a repository's `disableAllHooks: false` cannot undo it
-  (the key merges restrictively). Skills still load and run. From L2 hooks stay on:
-  the agent has a shell anyway, a hook answering `allow` does not lift a deny rule
-  (measured: an L2 `git commit` stayed denied), and the switch would take away the
-  operator's own hooks — their secret guards match `Bash|PowerShell`, which L1 does
-  not have.
-- **A repository that switches hooks off is named in the run log.** The key merges
-  restrictively in that direction too: a repository's `disableAllHooks: true`
-  silently switches off the operator's own hooks (measured). At L2+ with user
-  config on, the init line is followed by `Warning: this repository's
-  .claude/settings.json sets disableAllHooks, …` (`repositoryHookSwitches`; a file
-  that does not parse is skipped, as the CLI skips it). The run is not stopped.
+  (the key merges restrictively). It stops the Control Center's own precheck hook
+  as well, which cannot be kept while the repository's go, so an L1 run's native
+  reads (`Read`/`Grep`/`Glob`) are held by the deny rules alone. Skills still load and run. From L2 hooks stay on
+  (`disableAllHooks: false` beside the shell guard): the agent has a shell anyway, a
+  hook answering `allow` does not lift a deny rule (measured: an L2 `git commit`
+  stayed denied), and the switch would take away the operator's own hooks — their
+  secret guards match `Bash|PowerShell`, which L1 does not have — and the Control
+  Center's own.
+- **A repository that switches hooks off gets no native shell from L2.** The key
+  merged restrictively in that direction too on 2.1.283: a repository's
+  `disableAllHooks: true` silently switched off the operator's own hooks
+  (measured), and so it would the shell guard; the documentation says the flag's
+  settings take precedence instead. Either way the run fails closed: no Bash, and
+  the log's first line names the file (`repositoryHookSwitches`; a file that does
+  not parse is skipped, as the CLI skips it). `pnpm verify:agents --run` records
+  which way the installed CLI goes.
 - `--strict-mcp-config` is always passed: the operator's personal and plugin MCP servers never join a run; only the Control Center's `acc` server does ([mcp.md](mcp.md)).
 - Auth: `claude auth status` JSON; `authMethod: claude.ai` + `apiProvider: firstParty` = subscription.
 - Runtime tripwire: if the init event reports `apiKeySource` other than `none` in Subscription Only mode, the run is stopped.
@@ -174,8 +202,10 @@ skill at L2 could run `WebFetch` and personal MCP tools, which bypasses
 
 **Learned skills** ([learning.md](learning.md#skills)): `AgentExecutionInput.pluginDirs`
 becomes one `--plugin-dir` per folder for Claude Code — the Control Center's
-own plugins in its data folder, for that run only. Codex ignores it; the
-prompt names the SKILL.md files instead.
+own plugins in its data folder, for that run only. They are the one part of the
+data folder an agent may name: readable (natively, and by a read-only shell
+command through the precheck), never writable (`Edit(//<data>/learning/plugins/**)`).
+Codex ignores it; the prompt names the SKILL.md files instead.
 
 Stage logs name skills: `[tool] Skill fix-bug`, `permission denied: Skill
 ship-it`, and the init line ends `· N skills`; skill `args` are never logged.
@@ -188,7 +218,24 @@ haiku --skills --permissions` (5 skill probes, the skill-list checks below, and 
 probes in a repository whose settings allow `Bash(*)` and carry SessionStart/Stop
 hooks: a control proving the rule is live, then L1 cannot write a file or commit
 and runs none of the hooks, L2 still runs commands but cannot commit or push, and
-still runs the hooks — the control for the L1 hook check; exits 1 on any mismatch). A CLI too old for
+still runs the hooks — the control for the L1 hook check; exits 1 on any mismatch).
+Add `--run` for the native-tool guards (SEC-3; `pnpm build` first — L2 has a
+shell only with the built hook, `--permissions` included): against a throwaway
+Control Center in the script's own process (own data folder, work root and
+port, a stage of a simulated task hanging so its session is live), an L2 run
+in that task's worktree must see `cat` of the token, `curl` to the port and
+`node -e fetch` to `127.1:<port>` refused with the Control Center's reason and a
+denied `native.bash` row each, Read of the token refused with the Control
+Center's own words for a file read ("Reads the Control Center's own…" in a tool
+error: a tool error cannot be placed by position when the model batches calls)
+and a denied `native.read` row, with an `info` line naming the layer that
+refused it — the hook, or Claude Code's own deny rule if the CLI weighs that
+first (then the check fails: no row), the token's content
+nowhere in the run, reads, an edit and a test command on absolute worktree
+paths working, and `.claude/settings.local.json` unwritable; then native Bash
+refused with the orchestrator gone, no shell in a repository whose
+`settings.local.json` sets `disableAllHooks`, and an `info` line saying whether
+the CLI itself lets the run's `--settings` hook beat that setting. A CLI too old for
 `--tools` fails the run with "unknown option", classified `MODEL_UNAVAILABLE`
 (update the CLI).
 
@@ -336,4 +383,4 @@ REFUSED with the summary.
 
 The skills catalog is listed for a stage only when the task or an active directive names a `/skill` token (`SKILL_TOKEN`, the rule `requestedSkills` uses) or the stage lists `skills`; a file path or URL no longer triggers a cold listing.
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

@@ -47,6 +47,11 @@ export function guardRemoteCommand(op: string, params: Record<string, string>, b
         return allow; // the route answers with the validation error
       }
       if (n.billingMode !== settings.billingMode) return deny('Billing mode can only be changed on this machine (subscription-only guard).');
+      // Which Windows account agents run as is the OS boundary around the data folder (SEC-3): neither
+      // direction, nor the account's name, is the cloud's to change.
+      if (n.agentIsolation.mode !== settings.agentIsolation.mode || n.agentIsolation.account !== settings.agentIsolation.account) {
+        return deny('Agent isolation can only be changed on this machine.');
+      }
       if (n.autoApproveUpToLevel > settings.autoApproveUpToLevel) return deny('Raising the auto-approve level can only be done on this machine.');
       if (policyRank(n.execution.policyMode) > policyRank(settings.execution.policyMode)) return deny('A more permissive execution policy can only be chosen on this machine.');
       // Discovery roots register every repository under them: adding one is adding repositories by local path.

@@ -22,7 +22,7 @@ A task works in its **primary** repository (`tasks.repository_id`, Git state in
 Every repository of such a task is an isolated worktree, side by side:
 
 ```text
-<ACC_DATA_DIR>/workspaces/TASK-0142/
+<ACC_WORK_DIR>/workspaces/TASK-0142/
   api/   ← primary, on ai/TASK-0142-…
   web/   ← linked, on ai/TASK-0142-…
 ```
@@ -78,7 +78,7 @@ roots shrink to that repository's folder and it gets that repository's
 credentials only. At the workspace root it keeps the workspace as its root,
 only credentials not limited to any repository are usable, and Git capabilities
 are refused (any Git process there also gets `GIT_CEILING_DIRECTORIES`, so it
-never finds a repository above the data folder);
+never finds a repository above the workspaces folder);
 `credential.generate` is refused there (it takes `cwd`). A folder outside the
 roots is refused (`OUTSIDE_ROOT`). Git tools and `terminal.start` accept a
 confined `cwd`.

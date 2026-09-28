@@ -143,7 +143,7 @@ describe('Stage Teams', () => {
     const alpha = execs.find((e) => e.workUnitId === impl[0]!.id)!;
     const beta = execs.find((e) => e.workUnitId === impl[1]!.id)!;
     const lead = execs.find((e) => e.workUnitId === impl[2]!.id)!;
-    const teamRoot = path.join(t!.dataDir, 'team-worktrees');
+    const teamRoot = path.join(t!.workDir, 'team-worktrees');
     expect(alpha.cwd.startsWith(teamRoot)).toBe(true);
     expect(beta.cwd.startsWith(teamRoot)).toBe(true);
     expect(alpha.cwd).not.toBe(beta.cwd);
@@ -688,7 +688,7 @@ describe('Stage Teams', () => {
     // A partial child checkout with a shared-dependency link, as a crash would leave it.
     const shared = mkdtempSync(path.join(os.tmpdir(), 'acc-shared-deps-'));
     writeFileSync(path.join(shared, 'keep.txt'), 'must survive');
-    const child = path.join(t!.dataDir, 'team-worktrees', id, 'abc-running');
+    const child = path.join(t!.workDir, 'team-worktrees', id, 'abc-running');
     mkdirSync(child, { recursive: true });
     symlinkSync(shared, path.join(child, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
 

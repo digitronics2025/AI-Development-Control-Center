@@ -194,6 +194,45 @@ function start(child: ChildProcess, options: RunOptions | ShellRunOptions): Proc
   };
 }
 
+/**
+ * One argument as libuv writes it into a Windows command line (`quote_cmd_arg`),
+ * so the program's C runtime reads it back unchanged: quoted when it holds a
+ * space, tab or quote (or is empty), with the backslashes before a quote — and
+ * before the closing quote — doubled.
+ */
+export function quoteWindowsArg(arg: string): string {
+  if (arg === '') return '""';
+  if (!/[ \t"]/.test(arg)) return arg;
+  if (!/["\\]/.test(arg)) return `"${arg}"`;
+  let out = '"';
+  let backslashes = 0;
+  for (const ch of arg) {
+    if (ch === '\\') {
+      backslashes++;
+      continue;
+    }
+    out += ch === '"' ? `${'\\'.repeat(backslashes * 2 + 1)}"` : `${'\\'.repeat(backslashes)}${ch}`;
+    backslashes = 0;
+  }
+  return `${out}${'\\'.repeat(backslashes * 2)}"`;
+}
+
+type CrossSpawnParse = (command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => { command: string; args: string[]; options: { windowsVerbatimArguments?: boolean } };
+
+/**
+ * What `runProcess` starts on Windows for this argv, for a launcher that starts
+ * it itself (the agent relay, docs/systems/security.md#agent-os-boundary): the
+ * program file, and the command line after it. cross-spawn decides as it does
+ * for `runProcess` — a `.cmd` shim goes through `cmd.exe /d /s /c` with its
+ * escaping, taken verbatim — and anything else is quoted as libuv quotes it.
+ */
+export function windowsLaunch(command: string, args: string[], env: NodeJS.ProcessEnv): { file: string; commandLine: string } {
+  const parse = (crossSpawn as unknown as { _parse: CrossSpawnParse })._parse;
+  const parsed = parse(command, args, { env });
+  const verbatim = parsed.options.windowsVerbatimArguments === true;
+  return { file: parsed.command, commandLine: parsed.args.map((a) => (verbatim ? a : quoteWindowsArg(a))).join(' ') };
+}
+
 /** Run an executable with an argv array. No shell is involved. */
 export function runProcess(options: RunOptions): ProcessHandle {
   const child = crossSpawn(options.command, options.args ?? [], {

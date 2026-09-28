@@ -1,17 +1,21 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import type { GuardedFileTool } from '@acc/agent-claude';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, sanitizeEnv } from '@acc/security';
+import { classifyCommand, constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, referencesSelf, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
+  classifyScript,
   decide,
   isInside,
   policyCeiling,
   PROFILES,
   profileIncludes,
   profileRank,
+  realish,
   resolveInside,
   ToolHealthCache,
   ToolRegistry,
@@ -28,6 +32,7 @@ import {
 } from '@acc/tools';
 import { z } from 'zod';
 import type { Bus } from '../bus.js';
+import { learnedPluginsRoot } from '../learning/skills.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now } from '../store/store.js';
@@ -136,6 +141,65 @@ export interface ToolSession {
   kind: 'agent' | 'operator';
   createdAt: string;
   expiresAt: number;
+  /** Opened only for the native shell precheck (tools are off for agents): no tool route accepts it. */
+  guardOnly?: boolean;
+}
+
+/** Claude Code's settings files, through which a command could switch the precheck hook off (`disableAllHooks`). */
+const NAMES_CLAUDE_SETTINGS = /\.claude[\\/]+settings[^\\/\s"'`]*\.json/i;
+
+/** The native precheck's answer to the run's hook (SEC-3). */
+export type NativeDecision = { decision: 'allow' } | { decision: 'deny'; reason: string };
+
+/** The input fields that name what each guarded native file tool reads (Grep's `pattern` is text to find, not a path). */
+export const NATIVE_FILE_PATHS: Readonly<Record<GuardedFileTool, readonly string[]>> = { Read: ['file_path'], Grep: ['path', 'glob'], Glob: ['path', 'pattern'] };
+
+/** A native call no approval can let through: Level 5, dangerous. */
+function dangerous(reason: string, effect: ToolRisk['effects'][number]): ToolRisk {
+  return { level: 5, risk: 'dangerous', reasons: [reason], effects: [effect], production: false };
+}
+/** A path segment `..`: a read-only folder's mention followed by one leaves the folder. */
+const PARENT_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
+
+/**
+ * A mention of the absolute folder `root` in a command, in its own spelling or
+ * Git Bash's (`/c/Users/…` for `C:\Users\…`), with the rest of that path as
+ * group 1; null for a root that names no folder.
+ */
+function folderMention(root: string, flags: string): RegExp | null {
+  const parts = root.split(/[\\/]+/).filter(Boolean);
+  const drive = /^[A-Za-z]:$/.test(parts[0] ?? '') ? parts.shift()!.slice(0, 1) : null;
+  if (!parts.length) return null;
+  const head = drive ? `(?:${drive}:|[\\\\/]${drive}(?=[\\\\/]))` : '';
+  const body = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]+');
+  return new RegExp(`${head}[\\\\/]+${body}(?![^\\\\/\\s"'\`|;&<>])((?:[\\\\/][^\\s"'\`|;&<>]*)?)`, flags);
+}
+
+/**
+ * `command` with each mention of a folder agents may read but never write
+ * (the learned plugins, which live in the data folder) put as a neutral word,
+ * so that folder alone does not make the command a self-reference (SEC-3).
+ * The caller uses the result only for a command that then reads and nothing
+ * more; a mention followed by a `..` segment is kept as it is.
+ */
+export function excuseReadOnlyFolders(command: string, roots: readonly string[]): string {
+  let out = command;
+  for (const root of roots) {
+    const mention = folderMention(root, 'gi');
+    if (mention) out = out.replace(mention, (whole, tail: string) => (PARENT_SEGMENT.test(tail) ? whole : `learned-plugins${tail}`));
+  }
+  return out;
+}
+
+/**
+ * Whether `command` names the native shell check (SEC-3): its script by file
+ * name, whatever the path before it, or its folder by absolute path. The run's
+ * Edit rule on that folder (`shellGuardDenied`) covers the file tools and
+ * redirections; this covers the rest of a shell command's ways to change it.
+ */
+export function namesShellGuard(command: string, script: string): boolean {
+  const name = path.basename(script).replace(/\.[^.]*$/, '').toLowerCase();
+  return (name !== '' && command.toLowerCase().includes(name)) || Boolean(folderMention(path.dirname(script), 'i')?.test(command));
 }
 
 /** Capabilities agents already have natively (their own Read/Edit/Bash and git): callable, but not listed, to keep prompts small. */
@@ -195,6 +259,8 @@ export interface ToolServiceDeps {
   spend?: MediaSpendGate;
   dataDir: string;
   baseEnv: NodeJS.ProcessEnv;
+  /** The native shell precheck hook's script (SEC-3), which the precheck keeps agents from changing (`namesShellGuard`). */
+  shellGuardPath?: string | null;
 }
 
 /**
@@ -686,11 +752,127 @@ export class ToolService {
   // Sessions (agents over MCP, operators from their own MCP client)
   // ===========================================================================
 
-  openSession(scope: Omit<ToolScope, 'sessionId' | 'escalated'>, kind: 'agent' | 'operator', ttlMs = 8 * 3600_000): ToolSession {
+  openSession(scope: Omit<ToolScope, 'sessionId' | 'escalated'>, kind: 'agent' | 'operator', ttlMs = 8 * 3600_000, opts: { guardOnly?: boolean } = {}): ToolSession {
     const id = newId();
-    const session: ToolSession = { id, token: randomBytes(32).toString('base64url'), scope: { ...scope, sessionId: id, escalated: new Set() }, kind, createdAt: now(), expiresAt: Date.now() + ttlMs };
+    const session: ToolSession = { id, token: randomBytes(32).toString('base64url'), scope: { ...scope, sessionId: id, escalated: new Set() }, kind, createdAt: now(), expiresAt: Date.now() + ttlMs, ...(opts.guardOnly ? { guardOnly: true } : {}) };
     this.sessions.set(id, session);
     return session;
+  }
+
+  /**
+   * The Control Center's judgement of a command an agent is about to run in
+   * its CLI's own shell (SEC-3), asked by the run's command hook before each
+   * one: the classification and policy `shell.*` gets, at the session's level,
+   * origin `agent`, with that level counted as approved (the stage passed its
+   * gate to be running). A native command cannot wait for an approval, so anything
+   * `decide()` does not allow outright is refused, and so is a command that
+   * names the Control Center itself (`referencesSelf`), Claude Code's settings
+   * files, or — to do more than read — the hook's own script or folder
+   * (`namesShellGuard`), through which the hook could be switched off. Its learned
+   * plugins may be read (`excuseReadOnlyFolders`). Only refusals are recorded,
+   * as `native.bash` rows in tool_executions. File reads: `precheckFile`.
+   */
+  precheck(session: ToolSession, command: string): NativeDecision {
+    const refuse = (reason: string, risk: ToolRisk) => this.refuseNative(session, 'native.bash', { command }, reason, risk);
+    const { scope } = session;
+    if (NAMES_CLAUDE_SETTINGS.test(command)) {
+      const reason = "Names Claude Code's settings files, through which the Control Center's checks could be switched off";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'persistence'));
+    }
+    // The hook that asks this: changed, replaced or gone, it would let every later command through. Reading it is harmless.
+    if (this.d.shellGuardPath && namesShellGuard(command, this.d.shellGuardPath) && !classifyCommand(command).readOnly) {
+      const reason = "Changes the Control Center's check of shell commands, which would switch it off";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'persistence'));
+    }
+    // The learned plugins may be read; a command that does more than read them is judged as written.
+    const excused = excuseReadOnlyFolders(command, [learnedPluginsRoot(this.d.dataDir)]);
+    const text = excused !== command && classifyCommand(excused).readOnly ? excused : command;
+    if (referencesSelf(text)) {
+      const reason = "Reaches the Control Center's own token, data folder or API";
+      return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
+    }
+    const processHost = this.d.processes.host(scope.taskId, scope.stageId);
+    const risk: ToolRisk = { ...this.baseRisk(2, 'Runs a native shell command'), ...classifyScript(text, [], { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) }) };
+    // The stage is running, so it passed its approval gate: its own level runs, as its native shell always did there.
+    const decision = decide({ risk, mode: scope.mode, autoApproveUpToLevel: scope.autoApproveUpToLevel, stageLevel: scope.stageLevel, inProfile: true, origin: 'agent', approvedLevel: scope.stageLevel });
+    if (decision.decision === 'allow') return { decision: 'allow' };
+    const way = session.guardOnly ? 'report it as an operator decision' : `use the Control Center's shell tool (shell.run on the "acc" server), which applies the same policy, or report it as an operator decision`;
+    return refuse(`${decision.reason.replace(/\.$/, '')}. A native shell command cannot wait for an approval: ${way}.`, risk);
+  }
+
+  /**
+   * The same hook's judgement of a native file read (SEC-3): Claude Code's
+   * `Read`, `Grep` or `Glob`, judged by the paths it reads (`NATIVE_FILE_PATHS`)
+   * — as given, with `~` and Git Bash's `/c/…` spelled out, resolved against
+   * the run's folder and the CLI's (`cwd`, which the hook reports; it only ever
+   * refuses more), and through links. Refused: a path that names the Control
+   * Center itself (`referencesSelf`: its data folder, token and key files,
+   * address), and a search whose folder holds the data folder (it would read
+   * every file in it). The learned plugins and this task's own attachments,
+   * which live in the data folder, may be read (`excuseReadOnlyFolders`); the
+   * worktree and every other path are allowed. Only refusals are recorded, as
+   * `native.read`, `native.grep` or `native.glob` rows in tool_executions.
+   */
+  precheckFile(session: ToolSession, tool: GuardedFileTool, input: Record<string, unknown>, cwd: string | null = null): NativeDecision {
+    const { scope } = session;
+    const given = Object.fromEntries(NATIVE_FILE_PATHS[tool].flatMap((field) => (typeof input[field] === 'string' && input[field] ? [[field, input[field] as string]] : [])));
+    const refuse = (reason: string) => this.refuseNative(session, `native.${tool.toLowerCase()}`, given, `${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
+    const bases = [...new Set([scope.cwd, ...(cwd && path.isAbsolute(cwd) ? [cwd] : [])])];
+    const spellings = (value: string): string[] => {
+      const out = [value];
+      if (/^~(?=[\\/]|$)/.test(value)) out.push(path.join(os.homedir(), value.slice(1)));
+      if (process.platform === 'win32' && /^\/[A-Za-z](?=\/|$)/.test(value)) out.push(`${value[1]!.toUpperCase()}:${value.slice(2) || '\\'}`);
+      return out;
+    };
+    const absolute = (value: string, from: readonly string[]) => spellings(value).flatMap((s) => from.map((base) => path.resolve(base, s)));
+    // Grep and Glob search a folder — their `path`, else the CLI's — and their glob or pattern is read inside it.
+    const roots = tool === 'Read' ? [] : given.path ? absolute(given.path, bases) : bases;
+    const candidates = new Set<string>();
+    const add = (p: string) => {
+      candidates.add(p);
+      if (path.isAbsolute(p)) candidates.add(realish(p));
+    };
+    for (const [field, value] of Object.entries(given)) for (const p of [...spellings(value), ...absolute(value, field === 'glob' || field === 'pattern' ? roots : bases)]) add(p);
+    for (const root of roots) add(root);
+    const readable = [learnedPluginsRoot(this.d.dataDir), ...(scope.taskId ? [path.join(this.d.dataDir, 'tasks', scope.taskId, 'attachments')] : [])];
+    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(p, readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
+    const data = path.resolve(this.d.dataDir);
+    if (roots.some((root) => isInside(root, data) || isInside(realish(root), realish(data)))) return refuse("Searches a folder that holds the Control Center's own data folder");
+    return { decision: 'allow' };
+  }
+
+  /** Record a refused native call (the precheck's only rows) and answer the hook with the reason. */
+  private refuseNative(session: ToolSession, capability: string, input: unknown, reason: string, risk: ToolRisk): NativeDecision {
+    const { scope } = session;
+    const at = now();
+    this.record({
+      id: newId(),
+      taskId: scope.taskId,
+      stageId: scope.stageId,
+      sessionId: scope.sessionId,
+      capability,
+      providerId: null,
+      origin: 'agent',
+      routeReason: null,
+      inputSummary: clipInput(input),
+      attempt: 1,
+      recoveryOf: null,
+      artifacts: [],
+      filesChanged: [],
+      networkTargets: [],
+      evidence: [],
+      startedAt: at,
+      finishedAt: at,
+      durationMs: 0,
+      status: 'denied',
+      decision: 'deny',
+      permissionLevel: risk.level,
+      risk: risk.risk,
+      effects: risk.effects,
+      summary: redact(reason).slice(0, 500),
+      errorCode: 'DENIED',
+    });
+    return { decision: 'deny', reason };
   }
 
   closeSession(id: string): void {

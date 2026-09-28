@@ -15,8 +15,14 @@ package, `allowBuilds` only runs its prebuild check).
 
 ## Sessions
 
-- Output is redacted per chunk and kept in a bounded buffer (256 KB) with a
-  monotonic **cursor**: `read(since)` returns what came after a cursor and
+- Output is redacted before it is kept or sent, whole lines at a time: the
+  line in progress (at most 8 KB of it) is held back until the chunk that
+  completes it arrives, or 40 ms after it started (a prompt, an echoed key),
+  so a secret the pseudo-terminal splits across two chunks is redacted whole;
+  a private key block stays hidden across chunks up to its END line
+  (`streamRedactor`, [security.md](security.md#redaction-redactts)). A secret
+  whose second half arrives after that wait is judged in halves. Output is
+  kept in a bounded buffer (256 KB) with a monotonic **cursor**: `read(since)` returns what came after a cursor and
   says when older output was dropped. The realtime socket skips chunks for a
   viewer that falls more than 8 MB behind; the dashboard terminal sees the gap
   between its cursor and the next chunk and reads the missing part with

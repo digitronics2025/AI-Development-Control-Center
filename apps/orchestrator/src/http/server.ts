@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { AppServices } from '../app.js';
 import { registerErrorHandler, registerRoutes } from './routes.js';
@@ -16,6 +16,7 @@ import { registerVaultBridgeRoutes } from './vault-bridge-routes.js';
 import { registerConnectedAppRoutes } from './connected-app-routes.js';
 import { registerAskRoutes } from './ask-routes.js';
 import { registerWebSocket } from './ws.js';
+import { LaunchTickets } from './launch-tickets.js';
 
 const DASHBOARD_CSP = [
   "default-src 'self'",
@@ -72,6 +73,16 @@ export async function buildServer(
   // Liveness probe for launchers; reveals nothing about state.
   app.get('/healthz', async () => ({ ok: true }));
 
+  // Launch tickets (docs/systems/security.md#agent-os-boundary): a launcher that holds the token asks for
+  // one and opens `/?ticket=…`; with agent isolation on, only such a request gets the token in the page.
+  // Never relayed from the cloud, which has no browser on this machine to open.
+  const tickets = new LaunchTickets();
+  app.post('/api/launch-tickets', async (request, reply) => {
+    if (request.headers['x-acc-remote-request']) return reply.code(403).send({ error: { code: 'REMOTE_FORBIDDEN', message: 'Launch tickets are for launchers on this machine.' } });
+    const issued = tickets.issue();
+    return reply.code(201).header('cache-control', 'no-store').send({ ...issued, path: `/?ticket=${issued.ticket}` });
+  });
+
   // Graceful stop for launchers: a background process on Windows cannot
   // receive Ctrl+C. Authenticated like every /api route. While stages run it
   // refuses unless asked to drain (stop each task at its next stage boundary,
@@ -115,7 +126,19 @@ export async function buildServer(
         return null; // mid-rebuild: the build tool emptied the folder
       }
     };
-    const sendIndex = (_req: unknown, reply: import('fastify').FastifyReply) => {
+    const sendIndex = (request: FastifyRequest, reply: FastifyReply) => {
+      // With agent isolation on, the page carries the token only for a launch ticket (single use, a minute):
+      // agents run as another Windows account that cannot read the token file, and must not take it from here.
+      if (s.settings.get().agentIsolation.mode === 'account') {
+        const ticket = request.method === 'GET' ? (request.query as Record<string, unknown> | undefined)?.ticket : undefined;
+        if (!tickets.consume(typeof ticket === 'string' ? ticket : null)) {
+          return reply
+            .code(403)
+            .header('cache-control', 'no-store')
+            .header('content-type', 'text/plain; charset=utf-8')
+            .send('Open the AI Development Control Center from its launcher: the Start menu shortcut "AI Control Center", or scripts\\windows\\start-control-center.ps1. While agents run under their own Windows account, the dashboard opens only through a one-time link the launcher asks for, so reloading this page needs the launcher again.');
+        }
+      }
       const html = indexHtml();
       if (html === null) {
         return reply

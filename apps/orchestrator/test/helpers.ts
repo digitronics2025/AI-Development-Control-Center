@@ -6,7 +6,7 @@ import { git } from '@acc/git';
 import type { TaskStatus } from '@acc/shared';
 import type { FastifyInstance } from 'fastify';
 import { createServices, type AppServices } from '../src/app.js';
-import type { OrchestratorConfig } from '../src/config.js';
+import { defaultWorkDir, type OrchestratorConfig } from '../src/config.js';
 import { buildServer } from '../src/http/server.js';
 
 export const TOKEN = 'test-token-0123456789abcdefghijklmnopqrstuv';
@@ -16,6 +16,8 @@ export interface TestApp {
   services: AppServices;
   app: FastifyInstance;
   dataDir: string;
+  /** Where the app keeps task worktrees and workspaces (beside `dataDir`). */
+  workDir: string;
   api: <T = any>(method: string, url: string, body?: unknown, headers?: Record<string, string>) => Promise<{ status: number; body: T }>;
   close: () => Promise<void>;
 }
@@ -28,6 +30,8 @@ export async function createTestApp(
   options: {
     adapters?: AgentAdapter[];
     dataDir?: string;
+    /** Default: `defaultWorkDir(dataDir)`, so a restart on the same data folder finds the same work root. */
+    workDir?: string;
     baseEnv?: NodeJS.ProcessEnv;
     dashboardDir?: string;
     remoteTimings?: Parameters<typeof createServices>[1] extends infer O ? (O extends { remoteTimings?: infer R } ? R : never) : never;
@@ -36,10 +40,12 @@ export async function createTestApp(
   } = {},
 ): Promise<TestApp> {
   const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
+  const workDir = options.workDir ?? defaultWorkDir(dataDir);
   const config: OrchestratorConfig = {
     host: '127.0.0.1',
     port: 0,
     dataDir,
+    workDir,
     resourcesDir: ROOT,
     dashboardDir: options.dashboardDir ?? null,
     token: TOKEN,
@@ -70,6 +76,7 @@ export async function createTestApp(
     services,
     app,
     dataDir,
+    workDir,
     api,
     async close() {
       await services.close();

@@ -35,6 +35,14 @@ export interface PolicyInput {
    * and a production read is still a read.
    */
   readOnly?: { allowed: boolean };
+  /**
+   * The level the call's stage was approved at when it started (the engine's
+   * stage gate asks the operator before a stage above what the task runs on
+   * its own): up to it, calls run on their own whatever the mode's ceiling.
+   * The stage's level, dangerous and production calls still bound it. Only
+   * the native shell precheck passes it (SEC-3).
+   */
+  approvedLevel?: PermissionLevel;
 }
 
 /** The highest level that runs without asking, for a mode and auto-approve level. */
@@ -46,7 +54,8 @@ export function policyCeiling(mode: PolicyMode, autoApproveUpToLevel: Permission
 
 export function decide(input: PolicyInput): PolicyDecision {
   const { risk, origin } = input;
-  const ceiling = policyCeiling(input.mode, input.autoApproveUpToLevel);
+  const modeCeiling = policyCeiling(input.mode, input.autoApproveUpToLevel);
+  const ceiling = input.approvedLevel !== undefined && input.approvedLevel > modeCeiling ? input.approvedLevel : modeCeiling;
   const why = risk.reasons.length ? risk.reasons.join(', ') : `Level ${risk.level}`;
 
   // Fails closed: not on the list, not declared a read, or dangerous is refused, never escalated.

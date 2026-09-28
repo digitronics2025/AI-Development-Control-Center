@@ -33,6 +33,13 @@ export interface AgentRuntimeOptions {
   executablePath?: string | null;
   /** Load the user's own CLI customisations (hooks, skills, plugins). Personal MCP servers are never loaded. */
   loadUserConfig?: boolean;
+  /**
+   * The Control Center itself (SEC-3): its data folder and listen port, which
+   * adapters deny in the agent's native permission rules (the token, database
+   * and key files; the port), and folders an agent may read but never write
+   * (the learned plugins). Absent: only the adapter's own rules apply.
+   */
+  controlCenter?: { dataDir: string; port: number | null; readOnly?: string[] };
 }
 
 export type AgentLogStream = 'stdout' | 'stderr' | 'system';
@@ -101,6 +108,16 @@ export interface CapacityObservation {
   observedAt: string;
 }
 
+/** A run started as the Control Center's agent account (`AgentExecutionInput.runAs`). */
+export interface AgentRunAs {
+  /** The local Windows account, as Settings names it. */
+  account: string;
+  /** Its password record (`<data>/agent-account.json`), written by the privileged helper. */
+  credentialFile: string;
+  /** scripts/windows/agent-relay.ps1. */
+  relay: string;
+}
+
 export interface AgentExecutionInput extends AgentRuntimeOptions {
   executionId: string;
   cwd: string;
@@ -119,6 +136,23 @@ export interface AgentExecutionInput extends AgentRuntimeOptions {
    * written to disk or argv.
    */
   toolBridge?: { name: string; command: string; args: string[]; env: Record<string, string> };
+  /**
+   * The Control Center's precheck of the agent's native shell commands and
+   * file reads (SEC-3): a program the CLI runs before each one, which asks the
+   * orchestrator and refuses on any error. `env` carries the run's tool
+   * session, as `toolBridge.env` does, into the agent's environment only.
+   * Absent: an adapter whose native shell needs it runs without one.
+   */
+  shellGuard?: { command: string; args: string[]; env: Record<string, string> };
+  /**
+   * The agent OS boundary (SEC-3, docs/systems/security.md#agent-os-boundary):
+   * start the CLI as this separate local Windows account, through `relay`
+   * (scripts/windows/agent-relay.ps1), which alone reads the account's password
+   * from `credentialFile` (protected for the operator's Windows user). When the
+   * run cannot start as that account it fails — it never runs as the operator
+   * instead. Absent: the CLI starts as the operator, exactly as without it.
+   */
+  runAs?: AgentRunAs;
   /**
    * Skill plugins the Control Center manages (docs/systems/learning.md), loaded
    * for this run only. Adapters that cannot load plugins ignore them; the

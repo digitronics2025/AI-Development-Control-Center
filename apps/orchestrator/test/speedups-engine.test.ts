@@ -312,6 +312,7 @@ describe('item 5: a finished worktree goes to the trash, deleted after COMPLETED
   it('falls back to removing the worktree in place when it cannot be moved to the trash', async () => {
     t = await createTestApp();
     // A file where the trash folder should be: the move fails, the old removal runs.
+    mkdirSync(path.dirname(t.services.tooling.trashRoot()), { recursive: true });
     writeFileSync(t.services.tooling.trashRoot(), 'not a folder');
     const repoPath = await makeRepo();
     const id = await createTask(t, await addRepo(t, repoPath), 'No trash', { workflowId: 'quick-change', supervised: false });
@@ -327,6 +328,7 @@ describe('item 5: a finished worktree goes to the trash, deleted after COMPLETED
 
   it('empties leftovers in the trash at start, without following links or touching anything else', async () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
+    // The data folder's trash, where finished worktrees waited before the work root existed: still emptied.
     const trash = path.join(dataDir, 'trash');
     mkdirSync(path.join(trash, 'x-TASK-0001-abcd', 'node_modules', 'dep'), { recursive: true });
     writeFileSync(path.join(trash, 'x-TASK-0001-abcd', 'node_modules', 'dep', 'index.js'), '');
@@ -346,14 +348,15 @@ describe('item 5: a finished worktree goes to the trash, deleted after COMPLETED
   }, 60_000);
 
   it('neither empties nor moves into a trash folder that is itself a link', async () => {
-    // `<data>/trash` is a junction to a folder outside: following it would delete that folder's contents.
+    // `<work>/trash` is a junction to a folder outside: following it would delete that folder's contents.
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'acc-data-'));
+    const workDir = mkdtempSync(path.join(os.tmpdir(), 'acc-work-'));
     const outside = mkdtempSync(path.join(os.tmpdir(), 'acc-outside-'));
     writeFileSync(path.join(outside, 'keep.txt'), 'mine');
-    symlinkSync(outside, path.join(dataDir, 'trash'), process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(outside, path.join(workDir, 'trash'), process.platform === 'win32' ? 'junction' : 'dir');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    t = await createTestApp({ dataDir });
+    t = await createTestApp({ dataDir, workDir });
     // The startup sweep (or a later one) leaves the target alone.
     expect(await t.services.tooling.emptyTrash()).toBe(0);
     expect(readdirSync(outside)).toEqual(['keep.txt']);

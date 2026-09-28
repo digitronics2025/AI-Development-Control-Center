@@ -26,7 +26,7 @@ import {
   type Command,
   type TimelineStage,
 } from '@acc/ui';
-import { CONNECTED_APP_LABEL, MODE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
+import { CONNECTED_APP_LABEL, MODE_LABEL, ROLE_LABEL, TERMINAL_TASK_STATUSES, workflowHappyPath, type TaskDetail } from '@acc/shared';
 import { ApiError, errorMessage } from '../../api/client';
 import { useChairman, useRepository, useTask, useTaskArtifacts, useTaskCommand, useTaskTests } from '../../api/hooks';
 import { ReleaseButton } from './ReleaseCard';
@@ -57,7 +57,8 @@ function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefin
   const onPath = new Set(happy.map((s) => s.key));
   const latest = new Map(task.stages.map((s) => [s.stageKey, s]));
   const runs = new Map<string, number>();
-  for (const s of task.stages) runs.set(s.stageKey, (runs.get(s.stageKey) ?? 0) + 1);
+  // A skipped stage did not run: it is not counted as a run.
+  for (const s of task.stages) if (s.status !== 'SKIPPED') runs.set(s.stageKey, (runs.get(s.stageKey) ?? 0) + 1);
   const ordered = [];
   for (const def of happy) {
     ordered.push(def);
@@ -68,7 +69,11 @@ function buildTimeline(task: TaskDetail, agentName: (id: string | null | undefin
   return ordered.map((def) => ({
     def,
     instance: latest.get(def.key) ?? null,
-    agentName: def.kind === 'agent' ? agentName(latest.get(def.key)?.agentId ?? task.assignments[def.key]?.agentId) : null,
+    // A stage a specialist ran names it: "Claude Code · Designer" (DESIGNER_ROUTING_PLAN §6).
+    agentName:
+      def.kind === 'agent'
+        ? `${agentName(latest.get(def.key)?.agentId ?? task.assignments[def.key]?.agentId)}${latest.get(def.key)?.routedRole ? ` · ${ROLE_LABEL[latest.get(def.key)!.routedRole!]}` : ''}`
+        : null,
     isCurrent: task.status !== 'COMPLETED' && task.currentStageKey === def.key,
     runs: runs.get(def.key) ?? 0,
     team: latest.has(def.key) ? teamSummary(unitsOfStage(task, latest.get(def.key)!.id)) : null,

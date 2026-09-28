@@ -22,7 +22,7 @@ import {
   useNow,
   type Column,
 } from '@acc/ui';
-import { POLICY_MODE_DESCRIPTION, POLICY_MODE_LABEL, TERMINAL_TASK_STATUSES, type StageWorkUnit, type TaskDetail, type ToolExecution } from '@acc/shared';
+import { POLICY_MODE_DESCRIPTION, POLICY_MODE_LABEL, ROLE_LABEL, TERMINAL_TASK_STATUSES, type StageWorkUnit, type TaskDetail, type ToolExecution } from '@acc/shared';
 import { errorMessage } from '../../api/client';
 import { useCheckpointMutations, useStopProcess, useTaskExecution } from '../../api/tools';
 import { useConnection } from '../../app/runtime';
@@ -69,6 +69,8 @@ function StageTeamPanel({ task }: { task: TaskDetail }) {
                 <span className="text-small text-fg-secondary">
                   {u.agentId ? agentName(u.agentId) : 'Agent not chosen yet'}
                   {u.model ? ` · ${u.model}` : ''}
+                  {u.role ? ` · as the ${ROLE_LABEL[u.role]}` : ''}
+                  {u.specialty ? ` · ${u.specialty}` : ''}
                   {u.attempt > 1 ? ` · attempt ${u.attempt}` : ''}
                 </span>
                 {u.status === 'FAILED' && u.errorMessage ? <span className="text-small text-danger wrap-anywhere">{u.errorMessage}</span> : null}

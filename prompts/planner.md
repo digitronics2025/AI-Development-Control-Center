@@ -99,8 +99,8 @@ When a stage is listed and the plan has **genuinely independent** work streams �
 
 ```acc-work-units
 {"version":1,"stage":"implement","units":[
-  {"key":"backend","title":"API and persistence","goal":"What this unit delivers, self-contained","specialty":"backend","dependsOn":[],"pathPrefixes":["apps/orchestrator/","packages/shared/"],"checks":["typecheck","test"]},
-  {"key":"frontend","title":"Dashboard","goal":"…","specialty":"frontend","dependsOn":["backend"],"pathPrefixes":["apps/dashboard/"],"checks":["typecheck"]}
+  {"key":"api","title":"API and persistence","goal":"What this unit delivers, self-contained","dependsOn":[],"pathPrefixes":["apps/orchestrator/","packages/shared/"],"checks":["typecheck","test"]},
+  {"key":"dashboard","title":"Dashboard","goal":"…","specialty":"frontend","dependsOn":[],"pathPrefixes":["apps/dashboard/"],"checks":["typecheck"]}
 ]}
 ```
 
@@ -108,7 +108,8 @@ When a stage is listed and the plan has **genuinely independent** work streams �
 - `checks` names check kinds only — `lint`, `typecheck`, `test`, `build`, `e2e` — never commands; the orchestrator runs the real checks itself.
 - `pathPrefixes` are repository-relative folders (ending in `/`) or files each unit alone may change. Units that can run at the same time must not share any path; a unit changing a file outside its own paths has all its work discarded.
 - `dependsOn` names units that must finish first (a shared type before its users). No cycles.
-- Prefer **one** unit — or no block at all — whenever the work is small, cohesive, or the parts would need to agree on something while being written. Artificial splitting is slower, not faster: the stage then runs as one agent, exactly as without a team.
+- `specialty` is set only when the stage lists specialties above and the unit's work is what one covers; leave it out otherwise. Include in that unit's paths everything its specialist changes (its tests, the design memory in `design/`).
+- Prefer **one** unit — or no block at all — whenever the work is small, cohesive, or the parts would need to agree on something while being written. Artificial splitting is slower, not faster: the stage then runs as one agent, exactly as without a team. When a listed specialty covers the work, write the block anyway — one unit is fine — so the specialist does it.
 - Units describe work only: never credentials, commands to run, agents or permissions.
 
 With no stage listed, add no block.

@@ -109,6 +109,10 @@ operator's own Windows user: a program that builds the path or the address at
 run time, or reads the files through anything these guards do not read, is not
 stopped. They narrow the way to the token; the boundary the operating system
 enforces is the separate agent account ([Agent OS boundary](#agent-os-boundary)).
+A page a tool drives is judged by `webUrlReferencesSelf` for web URLs: the
+address in any spelling, one carried inside the URL, or the data folder — not
+the key files' bare names, which are ordinary path words on other servers
+([browser-and-web.md](browser-and-web.md)).
 The address is matched in every spelling Node's URL parser normalises
 (`referencesSelf`): each URL in the text, and a scheme-less `host:port` with
 any numeric or dotted host, is first normalised by Node's URL parser, so `127.1:4317`,

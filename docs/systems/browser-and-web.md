@@ -196,9 +196,11 @@ Verified against the operator's account on 2026-09-24.
   4 MB (`web.search`); curl has `--max-filesize`.
 - Every browser context the tools create aborts any request to the Control
   Center's own address (`guardBrowserContext`, in any of the spellings above):
-  its dashboard page carries the local token. Over http(s) and ws(s) only the
-  address counts (`browserRequestRefused`), as in `guardedFetch`: a page on
-  another server whose path merely says `auth-token` loads. Any other scheme
-  (`file:`) is aborted when it names the data folder, the token or a key file.
+  its dashboard page carries the local token. A web request
+  (`browserRequestReachesSelf`, `webUrlReferencesSelf`) is refused when it goes
+  to the listen address or carries it, or the data folder, inside it (an open
+  redirect's target: Playwright never routes a redirect hop), but not for the
+  key files' bare names on another server (`/octokit/auth-token.js` loads); a
+  `file:` or other non-web URL is judged by its whole text.
 
-Last verified: 2026-09-28
+Last verified: 2026-09-27

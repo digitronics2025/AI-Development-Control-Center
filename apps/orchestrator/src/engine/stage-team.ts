@@ -20,8 +20,10 @@ import { redact } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
   independentOverlaps,
+  normalizeSpecialty,
   pathInScope,
   ROLE_LABEL,
+  routedStage,
   transitiveDependencies,
   type ErrorClass,
   type StageDefinition,
@@ -39,6 +41,8 @@ import type { ArtifactService } from '../services/artifacts.js';
 import type { SettingsService } from '../services/settings.js';
 import { newId, now, type RepositoryRecord, type Store, type TaskRecord } from '../store/store.js';
 import type { ContextBuilder, PromptCoverage } from './context.js';
+
+type BuiltPrompt = Awaited<ReturnType<ContextBuilder['build']>>;
 import type { Publisher } from './publisher.js';
 import { extractOperatorBlockers } from './report.js';
 import { ROLE_ARTIFACT, parseVerdict, summarize, unreviewedFiles, type AgentRun, type RunControl, type StageOutcome, type StageRunners, type StopReason } from './runners.js';
@@ -87,6 +91,19 @@ interface PlannedUnit {
   agentId: string;
   model: string | null;
   effort: string | null;
+  /**
+   * The stage as the unit's specialist runs it (DESIGNER_ROUTING_PLAN §6): its template, instructions, tools and
+   * usage role. Null = the stage's own role. Artifact names, reuse, limits and the verdict stay the stage's.
+   */
+  route: StageDefinition | null;
+  /** The plan's label, normalised. */
+  specialty: string | null;
+}
+
+/** A unit's route: the specialist that matched its label, if any. */
+interface UnitRoute {
+  def: StageDefinition | null;
+  specialty: string | null;
 }
 
 /** What one worker left behind. */
@@ -212,6 +229,8 @@ export class StageTeamRunner {
         checks: [],
         primary: w.primary,
         ...this.assignment(task, def, stage, w),
+        route: null,
+        specialty: null,
       }));
       if (planned.length < 2) return this.fallback(task, def, stage, variants ? 'variants need at least two workers' : 'a fixed team needs at least two workers');
       fingerprint = { stage: def.key, team };
@@ -230,7 +249,21 @@ export class StageTeamRunner {
         return this.fallback(task, def, stage, 'every work unit depends on the one before it, so nothing could run in parallel');
       }
       const base = this.assignment(task, def, stage);
-      planned = units.map((u) => ({ key: u.key, title: clipTitle(u.title), focus: u.goal, goal: u.goal, dependsOn: u.dependsOn, pathScope: write ? u.pathPrefixes : [], checks: u.checks, primary: false, ...base }));
+      // A labelled unit goes to its specialist; the agent stays the stage's (DESIGNER_ROUTING_PLAN §6).
+      const routes = this.routes(task, def, stage, units);
+      planned = units.map((u) => ({
+        key: u.key,
+        title: clipTitle(u.title),
+        focus: u.goal,
+        goal: u.goal,
+        dependsOn: u.dependsOn,
+        pathScope: write ? u.pathPrefixes : [],
+        checks: u.checks,
+        primary: false,
+        ...base,
+        route: routes.get(u.key)?.def ?? null,
+        specialty: routes.get(u.key)?.specialty ?? null,
+      }));
       fingerprint = { stage: def.key, manifest: manifest.hash };
     }
     const hash = stableHash({ fingerprint, directives: this.directiveIds(task), permissionLevel: def.permissionLevel });
@@ -260,6 +293,8 @@ export class StageTeamRunner {
         agentId: p.agentId,
         model: p.model,
         effort: p.effort,
+        role: p.route?.role ?? null,
+        specialty: p.specialty,
         attempt: earlier.filter((u) => u.unitKey === p.key).length + 1,
         reusedFrom: null,
         summary: null,
@@ -296,22 +331,31 @@ export class StageTeamRunner {
       const batch = ready.slice(0, cap);
       if (!batch.length) break;
       wave++;
-      // The prompt is built per wave: a later wave sees what the earlier ones integrated.
-      let built;
+      // The prompt is built per wave, once per route in it (the stage's own, each specialist's): a later wave sees what
+      // the earlier ones integrated, and a specialist's unit reads its own template, design context, instructions and
+      // tools. Keyed by specialist, not role: two specialists may share a role with different instructions.
+      const routeKey = (p: PlannedUnit) => (p.route ? `specialist:${p.specialty}` : 'stage');
+      const builds = new Map<string, BuiltPrompt>();
       try {
-        built = await this.d.context.build(this.task(task.id), def, stage);
-        this.d.store.updateTask(task.id, { promptVersions: { ...this.task(task.id).promptVersions, [def.role]: built.templateVersion } });
+        for (const p of batch) {
+          if (builds.has(routeKey(p))) continue;
+          const d = p.route ?? def;
+          const built = await this.d.context.build(this.task(task.id), d, stage);
+          builds.set(routeKey(p), built);
+          this.d.store.updateTask(task.id, { promptVersions: { ...this.task(task.id).promptVersions, [d.role]: built.templateVersion } });
+        }
       } catch (error) {
         this.markRemaining(rows, pending, 'CANCELLED', 'The stage context could not be built');
         return this.d.runners.failStage(stage, 'CONTEXT_FAILURE', `Context could not be built: ${(error as Error).message}`);
       }
-      coverage = built.coverage;
+      coverage = (builds.get('stage') ?? [...builds.values()][0]!).coverage;
+      const promptFor = (p: PlannedUnit) => builds.get(routeKey(p))!.prompt;
       const others = (p: PlannedUnit) => planned.filter((o) => o.key !== p.key);
       // The last wave of a write team also reserves the lead's integration pass (variants: the judge) that follows it.
       const reserve = write && batch.length === pending.length ? 1 : 0;
       const waveResults = write
-        ? await this.writeWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, wave, reserve, variants)
-        : await this.readWave(task, def, stage, repo, control, batch, rows, built.prompt, others, hash, earlier, variants);
+        ? await this.writeWave(task, def, stage, repo, control, batch, rows, promptFor, others, hash, earlier, wave, reserve, variants)
+        : await this.readWave(task, def, stage, repo, control, batch, rows, promptFor, others, hash, earlier, variants);
       if ('outcome' in waveResults) return waveResults.outcome;
       if ('kind' in waveResults) return this.parkAtLimit(task, def, stage, rows, pending, results, waveResults.message);
       results.push(...waveResults.results);
@@ -748,6 +792,71 @@ export class StageTeamRunner {
     return { kind: 'units', units: read.manifest.units, hash: read.hash };
   }
 
+  /**
+   * Each unit's specialist: the one whose `specialty` is the unit's label (normalised), else none — the stage's own
+   * role does it. A label no specialist has is said on the timeline, never guessed at (DESIGNER_ROUTING_PLAN §6).
+   */
+  private routes(task: TaskRecord, def: StageDefinition, stage: StageInstance, units: WorkUnitManifestUnit[]): Map<string, UnitRoute> {
+    const specialists = def.team?.specialists ?? [];
+    const out = new Map<string, UnitRoute>();
+    const unknown: string[] = [];
+    for (const u of units) {
+      const specialty = normalizeSpecialty(u.specialty);
+      const specialist = specialty ? specialists.find((s) => s.specialty === specialty) : undefined;
+      if (specialty && !specialist && specialists.length) unknown.push(`${u.title} ("${specialty}")`);
+      out.set(u.key, { def: specialist ? routedStage(def, specialist) : null, specialty });
+    }
+    if (unknown.length) {
+      const own = ROLE_LABEL[def.role].toLowerCase();
+      this.d.publisher.event(
+        task.id,
+        'STAGE_TEAM',
+        `${def.name}: ${unknown.join(', ')} ${unknown.length === 1 ? 'is labelled with a specialty' : 'are labelled with specialties'} this stage does not have; the ${own} does ${unknown.length === 1 ? 'it' : 'them'}`,
+        { unknownSpecialties: unknown },
+        stage.id,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * The stage run as one agent (no team ran): when the plan's block for it has units that all carry one
+   * specialist's label, that specialist does the whole stage on the stage's own agent; recorded on the stage row
+   * as `routedRole`. Mixed labels that could not run in parallel stay with the stage's own role, as today — the
+   * visual critique still judges the UI part. Null = the stage's own role (DESIGNER_ROUTING_PLAN §6).
+   */
+  async soloRoute(task: TaskRecord, def: StageDefinition, stage: StageInstance): Promise<StageDefinition | null> {
+    if (!def.team?.specialists?.length || def.team.mode !== 'adaptive' || def.role === 'fixer') return null;
+    const plan = await this.d.artifacts.latestText(task.id, 'plan');
+    const read = plan ? readManifest(plan, def.key) : null;
+    if (!read?.ok) return null;
+    const units = read.manifest.units;
+    const routes = [...this.routes(task, def, stage, units).values()];
+    const first = routes[0]?.def ?? null;
+    // One specialist for the whole stage: every unit matched the same specialty (not merely the same role).
+    if (first && routes.every((r) => r.def && r.specialty === routes[0]!.specialty)) {
+      this.d.publisher.event(
+        task.id,
+        'STAGE_TEAM',
+        `${def.name} runs as the ${ROLE_LABEL[first.role].toLowerCase()}: ${units.length === 1 ? 'the plan\'s work is' : `all ${units.length} of the plan's work units are`} ${routes[0]!.specialty} work`,
+        { routedRole: first.role, specialty: routes[0]!.specialty },
+        stage.id,
+      );
+      this.d.publisher.updateStage(stage.id, { routedRole: first.role });
+      return first;
+    }
+    if (routes.some((r) => r.def)) {
+      this.d.publisher.event(
+        task.id,
+        'STAGE_TEAM',
+        `${def.name} runs as the ${ROLE_LABEL[def.role].toLowerCase()}: its work units need different specialists and cannot run in parallel`,
+        { routedRole: null },
+        stage.id,
+      );
+    }
+    return null;
+  }
+
   private fallback(task: TaskRecord, def: StageDefinition, stage: StageInstance, reason: string): null {
     this.d.publisher.event(task.id, 'STAGE_TEAM', `${def.name} runs as one agent: ${reason}`, { fallback: true, reason }, stage.id);
     return null;
@@ -766,7 +875,7 @@ export class StageTeamRunner {
     control: RunControl,
     batch: PlannedUnit[],
     rows: Map<string, StageWorkUnit>,
-    basePrompt: string,
+    promptFor: (p: PlannedUnit) => string,
     others: (p: PlannedUnit) => PlannedUnit[],
     hash: string,
     earlier: StageWorkUnit[],
@@ -782,8 +891,8 @@ export class StageTeamRunner {
         const unit = rows.get(p.key)!;
         const output = reused[i];
         if (output !== null && output !== undefined) return { unit: this.d.store.getWorkUnit(unit.id)!, planned: p, output, changes: [], failure: null, stopped: null, questions: [] };
-        const prompt = basePrompt + (variants ? this.variantSection(def, p, others(p), false) : this.unitSection(def, p, others(p), false));
-        const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false, `${this.promptBase(def)}-${p.key}.md`);
+        const prompt = promptFor(p) + (variants ? this.variantSection(def, p, others(p), false) : this.unitSection(def, p, others(p), false));
+        const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, cwd, false, `${this.promptBase(def)}-${p.key}.md`, false, p.route ?? def);
         return this.settle(task, def, stage, unit, p, run, []);
       }),
     );
@@ -804,7 +913,7 @@ export class StageTeamRunner {
     control: RunControl,
     batch: PlannedUnit[],
     rows: Map<string, StageWorkUnit>,
-    basePrompt: string,
+    promptFor: (p: PlannedUnit) => string,
     others: (p: PlannedUnit) => PlannedUnit[],
     hash: string,
     earlier: StageWorkUnit[],
@@ -847,8 +956,8 @@ export class StageTeamRunner {
         }
         try {
           // The worker never needs the task's folder or the operator's checkout: every spelling of either names its own checkout.
-          const prompt = rewritePaths(basePrompt, [parent, repo.path], dir) + (variants ? this.variantSection(def, p, others(p), true) : this.unitSection(def, p, others(p), true));
-          const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, dir, true, `${this.promptBase(def)}-${p.key}.md`);
+          const prompt = rewritePaths(promptFor(p), [parent, repo.path], dir) + (variants ? this.variantSection(def, p, others(p), true) : this.unitSection(def, p, others(p), true));
+          const run = await this.runUnit(task, def, stage, repo, control, unit, prompt, dir, true, `${this.promptBase(def)}-${p.key}.md`, false, p.route ?? def);
           if (run.kind !== 'ok') return this.settle(task, def, stage, unit, p, run, []);
           // Capture everything the worker left — new, deleted, binary files included — as a hidden commit, then check its paths.
           const result = await captureResult(dir, `${this.refPrefix(task)}${stage.id}/${p.key}`, `${task.id}: ${def.name} · ${p.title}`);
@@ -1027,14 +1136,17 @@ export class StageTeamRunner {
   // One unit
   // ---------------------------------------------------------------------------
 
-  /** Launch one unit's run. Its final prompt is saved first (`promptName`), so every run can be debugged from what it read. */
-  private async runUnit(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, unit: StageWorkUnit, prompt: string, cwd: string, confine: boolean, promptName: string, slotHeld = false): Promise<AgentRun> {
+  /**
+   * Launch one unit's run. Its final prompt is saved first (`promptName`), so every run can be debugged from what it
+   * read. `runDef` is the stage as the unit's specialist runs it (its tools and usage role); the level is the stage's.
+   */
+  private async runUnit(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl, unit: StageWorkUnit, prompt: string, cwd: string, confine: boolean, promptName: string, slotHeld = false, runDef: StageDefinition = def): Promise<AgentRun> {
     await this.savePrompt(task, def, stage, promptName, prompt);
     const release = slotHeld ? () => undefined : await this.slots.acquire(() => control.stopReason !== null);
     if (!release) return { kind: 'stopped', reason: control.stopReason ?? 'cancel' };
     this.publish(this.d.store.updateWorkUnit(unit.id, { status: 'RUNNING', startedAt: now(), finishedAt: null }));
     try {
-      return await this.d.runners.launchAgent(task, def, stage, repo, control, {
+      return await this.d.runners.launchAgent(task, runDef, stage, repo, control, {
         prompt,
         agentId: unit.agentId!,
         model: unit.model,
@@ -1301,6 +1413,8 @@ export class StageTeamRunner {
     lines.push(`- Unit: ${p.title} (key: ${p.key})`);
     if (p.goal) lines.push(`- Goal: ${p.goal}`);
     else lines.push(`- Focus: ${p.focus}`);
+    if (p.route) lines.push(`- You do it as the ${ROLE_LABEL[p.route.role]} (specialty: ${p.specialty}); the stage's other units are done in their own roles.`);
+    if (p.dependsOn.length) lines.push(`- Runs after: ${p.dependsOn.join(', ')} (already integrated into your checkout)`);
     if (others.length) lines.push(`- Other workers: ${others.map((o) => `${o.title}${o.pathScope.length ? ` (${o.pathScope.join(', ')})` : ''}`).join('; ')}`);
     if (write) {
       lines.push(`- Paths you own: ${p.pathScope.join(', ')}`);
@@ -1320,7 +1434,7 @@ export class StageTeamRunner {
           : `- You are a specialist reviewer: concentrate on ${p.focus}. End with your own VERDICT line; any FAIL sends the change back.`,
       );
     }
-    lines.push('- Never start other agents or sub-agents.', `- Write your ${ROLE_LABEL[def.role].toLowerCase()} report for your unit only.`);
+    lines.push('- Never start other agents or sub-agents.', `- Write your ${ROLE_LABEL[(p.route ?? def).role].toLowerCase()} report for your unit only.`);
     return lines.join('\n');
   }
 

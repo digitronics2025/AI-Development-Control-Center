@@ -21,4 +21,10 @@ describe('teamSummary', () => {
     expect(teamSummary([unit('worker', 'QUEUED'), unit('worker', 'QUEUED')])).toBe('Team of 2 · waiting');
     expect(teamSummary([unit('worker', 'FAILED'), unit('worker', 'SUCCESS'), unit('judge', 'RUNNING')])).toBe('Team of 2 · 1 failed');
   });
+
+  it('names the workers a specialist ran (DESIGNER_ROUTING_PLAN §6)', () => {
+    const designer = { ...unit('worker', 'SUCCESS'), role: 'designer' } as StageWorkUnit;
+    expect(teamSummary([designer, unit('worker', 'SUCCESS'), unit('integration', 'SUCCESS')])).toBe('Team of 2 · done · 1 as Designer');
+    expect(teamSummary([{ ...designer, status: 'RUNNING' } as StageWorkUnit, unit('worker', 'QUEUED')])).toBe('Team 1/2 running · 1 as Designer');
+  });
 });

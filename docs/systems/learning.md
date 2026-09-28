@@ -45,8 +45,8 @@ the engine.
    | `completion_limits` | `final_status = NEEDS_USER_ACTION` |
    | `slow_stage` | an agent stage over 20 minutes |
    | `task_stuck` | a stuck task's blocker (kind and message) |
-   | `design_critique` | one judge stage with ≥ 2 `FAIL` verdicts, when it is a visual critic or the task ran a designer; key = stage key |
-   | `a11y_rule` | an axe rule id named in ≥ 2 `browser.accessibility` summaries (a width, a theme or a later round); key = rule id. Such a call found violations, so it is left out of `tool_failures` |
+   | `design_critique` | one judge stage with ≥ 2 `FAIL` verdicts, when it is a visual critic or every write stage the task ran was a designer (Frontend Design; not Full Autopilot's design fix among implementer work); key = stage key |
+   | `a11y_rule` | an axe rule id named in ≥ 2 `browser.accessibility` summaries (a width, a theme or a later round); outside a designer-only task the calls must come from 2 stage runs, since one critique's two themes are one finding; key = rule id. Such a call found violations, so it is left out of `tool_failures` |
    | `media_spend` | the task's paid-media spend (the media ledger) at ≥ 80% of Settings → Media's task budget, or a `media.*` call refused (`DENIED`) for the budget |
 
    No signal → review `skipped` ("clean run"), no model call.

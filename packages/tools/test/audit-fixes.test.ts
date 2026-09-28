@@ -210,7 +210,7 @@ describe('F-02: pages the tools drive never load the Control Center', async () =
   }, 60_000);
 
   it('refuses the listen address over the network, and the data folder over other schemes, not a page that only names a word (SEC-1)', async () => {
-    const { browserRequestRefused } = await import('../src/index.js');
+    const { browserRequestReachesSelf: browserRequestRefused } = await import('../src/index.js');
     const { setSelfReferences } = await import('@acc/security');
     const os = await import('node:os');
     const path = await import('node:path');

@@ -43,8 +43,9 @@ adaptive Fix (max 2). **Full Autopilot**
 ([full-autopilot.yaml](../../workflows/full-autopilot.yaml)) — fixed investigation
 (one worker on the stage's agent, one pinned to Claude Code), adaptive Implement
 (max 3, two attempts so a crashed worker's siblings are reused), fixed review
-(primary correctness + risk), adaptive Fix (max 2); Test, App check, Verify, Git
-checkpoint, staging and Release unchanged. **Frontend Design**
+(primary correctness + risk), adaptive Fix (max 2); Test, App check, the
+conditional Visual critique and Design fix ([design-agent.md](design-agent.md#in-full-autopilot)),
+Verify, Git checkpoint, staging and Release run as one agent or as system stages. **Frontend Design**
 ([frontend-design.yaml](../../workflows/frontend-design.yaml)) — fixed Design
 brief (three Claude Code workers, bold, calm and contrarian directions, each
 drawing a style tile). Other built-ins have no teams, and none uses variants.
@@ -78,8 +79,9 @@ variants (k failed); kept X: …", and the completion event's `team` data
 carries `variants: { chosen, finished, judgeMs }`.
 
 Not yet: a running app per variant, so a judge could open each build in a
-browser (the App runtime starts one app per task worktree). Specialty routing
-is deferred until per-worker outcome data exists (the plan's gate).
+browser (the App runtime starts one app per task worktree). Choosing an agent
+or model by specialty is deferred until per-worker outcome data exists (the
+plan's gate); choosing a role is [Specialists](#specialists).
 
 ## Manifest
 
@@ -91,7 +93,41 @@ The planner prompt lists adaptive team stages in `{{team_stages}}`
 `goal`, `dependsOn` (known, acyclic), `pathPrefixes` (repository-relative; no
 `/`, `..`, `.`, `.git`, `//`, drive or shell text) and `checks`.
 [work-units.ts](../../apps/orchestrator/src/engine/work-units.ts) reads only the
-last valid block for the stage (≤20 000 chars) and hashes it canonically.
+last valid block for the stage (≤20 000 chars), folds keys and `specialty` to
+slugs, and hashes it canonically.
+
+## Specialists
+
+Plan: [DESIGNER_ROUTING_PLAN.md](../plans/DESIGNER_ROUTING_PLAN.md) §6. An
+adaptive team may list `specialists` (`stageSpecialistSchema`: `specialty`,
+`description`, `role`, optional `toolProfile`, `instructions`); validation
+allows them only on a Level 2 write stage that is not a fixer, with write-class
+roles and unique specialties, so a routed unit can never reach a Level 3 (paid)
+tool. `{{team_stages}}` (`teamStagesText` in [context.ts](../../apps/orchestrator/src/engine/context.ts))
+tells the planner each stage's specialties and the rule: label a unit whose
+work a specialty covers, and write the block even for one unit.
+
+A specialist changes what the worker is told and shown, never who runs it:
+`routedStage` ([stage-teams.ts](../../packages/shared/src/stage-teams.ts))
+takes the specialist's role, instructions and tool profile and keeps the
+stage's key, level, timeout, retries, transitions and agent pin; the unit's
+agent is the stage's (a reroute moves it). A routed unit's prompt is built from
+that definition (template, `{{design_context}}`, tools, `Role:` header, "You do
+it as the Designer"), and its run uses it for the tool session and the usage
+role; artifact and prompt names, reuse, limits, the aggregate and the
+integration pass stay the stage's own. Prompts are built once per route in a
+wave (the stage's own, each specialist's — keyed by specialty, since two
+specialists may share a role). Unit rows record `role` (null = the stage's) and `specialty`
+(migration 23). A label no specialist has is said on the timeline ("… is
+labelled with a specialty this stage does not have; the implementer does it").
+
+When the team does not run, `soloRoute` reads the plan's block: if every unit
+carries the same specialty, the one agent runs as that specialist
+(`task_stages.routed_role`, "Implement runs as the designer: the plan's work
+is frontend work"); mixed labels that could not run in parallel stay with the
+stage's own role ("… its work units need different specialists and cannot run
+in parallel"), so routing never adds a run. Full Autopilot's Implement lists
+`frontend → Designer` ([design-agent.md](design-agent.md#in-full-autopilot)).
 
 A **Fix** stage never reuses the plan's manifest: one read-only (Level 1)
 decomposition run (unit kind `decomposer`) reads the fresh test and review
@@ -110,7 +146,7 @@ reused. A failed run's split is never reused.
 `StageTeamRunner.run` returns null — the stage runs as one agent, with a
 `STAGE_TEAM` event "… runs as one agent: <reason>" — when: no or invalid
 manifest; fewer than two units; independent units claiming overlapping paths
-(`independentOverlaps`); every unit depends on the previous one; a write team
+(`independentOverlaps`); every unit depends on the previous one (mixed specialties included: routing never adds a run); a write team
 in a task that is not isolated in a worktree, spans several repositories, or is
 a fixed team above Level 1; the decomposition run fails. A fallback is never a
 task failure.

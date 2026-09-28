@@ -115,7 +115,9 @@ more permissive policy (settings, repository, task), editing a repository's
 commands or dev command, turning on a repository's affected-tests-only setting
 (`testSelection: 'changed'`; turning it off is allowed), choosing an agent's program (`executablePath`),
 removing the approval step from a workflow stage that has one or lowering a
-stage's permission level, creating a new workflow (duplicate one instead),
+stage's permission level, making a verdict stage advisory, adding or changing a
+stage's `when` condition (removing one is allowed; [workflow-engine.md](workflow-engine.md#profiles)),
+creating a new workflow (duplicate one instead),
 adding a repository-discovery folder or un-ignoring a removed repository,
 turning on terminals, agent tool access, automatic repairs, the Chairman
 adopting improvements on its own, or an agent loading the operator's own CLI

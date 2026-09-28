@@ -16,3 +16,4 @@ export * from './skills.js';
 export * from './learning.js';
 export * from './prompts.js';
 export * from './stage-teams.js';
+export * from './ui-paths.js';

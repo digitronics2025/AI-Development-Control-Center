@@ -402,6 +402,8 @@ interface CommandRun {
 /** Runs a stage that has a `team` (docs/plans/STAGE_TEAMS_PLAN.md); null means "run it as one agent". */
 export interface TeamRunner {
   run(task: TaskRecord, def: StageDefinition, stage: StageInstance, repo: RepositoryRecord, control: RunControl): Promise<StageOutcome | null>;
+  /** The stage as a specialist runs it when no team ran and all of the plan's work is that specialist's; null = its own role. */
+  soloRoute(task: TaskRecord, def: StageDefinition, stage: StageInstance): Promise<StageDefinition | null>;
 }
 
 export class StageRunners {
@@ -457,21 +459,24 @@ export class StageRunners {
       const outcome = await this.team.run(task, def, stage, repo, control);
       if (outcome) return outcome;
     }
+    // One agent: when all of the plan's work for this stage is one specialist's, that specialist does it on the
+    // stage's own agent — its template, instructions and tools; artifact names stay the stage's (DESIGNER_ROUTING_PLAN §6).
+    const runDef = (def.team && this.team ? await this.team.soloRoute(task, def, stage).catch(() => null) : null) ?? def;
 
     let prompt: string;
     let coverage: PromptCoverage;
     try {
-      const built = await this.d.context.build(task, def, stage);
+      const built = await this.d.context.build(task, runDef, stage);
       prompt = built.prompt;
       coverage = built.coverage;
-      store.updateTask(task.id, { promptVersions: { ...task.promptVersions, [def.role]: built.templateVersion } });
+      store.updateTask(task.id, { promptVersions: { ...task.promptVersions, [runDef.role]: built.templateVersion } });
     } catch (error) {
       return this.failStage(stage, 'CONTEXT_FAILURE', `Context could not be built: ${(error as Error).message}`);
     }
     // What the agent actually read, kept per stage so any run can be debugged from its prompt.
     await this.d.artifacts.write(task.id, { name: ROLE_ARTIFACT[def.role]?.prompt ?? `${def.key}-prompt.md`, type: 'stage-output', content: prompt, stageId: stage.id, stageKey: def.key });
 
-    const first = await this.executeAgent(task, def, stage, repo, control, prompt);
+    const first = await this.executeAgent(task, runDef, stage, repo, control, prompt);
     if ('kind' in first) return first;
     let { output } = first;
     const artifact = ROLE_ARTIFACT[def.role] ?? { type: 'stage-output' as const, name: `${def.key}.md` };

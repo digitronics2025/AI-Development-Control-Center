@@ -296,6 +296,13 @@ export class SimulatedAgentAdapter implements AgentAdapter {
           // A workflow with an adaptive team stage lists it in the prompt; [sim:team] splits the work for it.
           const teamStage = /^- `([a-z0-9-]+)` \([^)]*\): up to \d+ workers/m.exec(input.prompt)?.[1];
           if (teamStage && has('team')) output += `\n\n\`\`\`acc-work-units\n${JSON.stringify(simulatedManifest(teamStage, has))}\n\`\`\``;
+          // Specialist routing (docs/plans/DESIGNER_ROUTING_PLAN.md): [sim:plan-frontend] labels the whole work as one
+          // frontend unit; [sim:plan-mixed] an API unit and a frontend unit that depends on it.
+          else if (teamStage && (has('plan-frontend') || has('plan-mixed'))) {
+            const ui = { key: 'card', title: 'Card component', goal: 'Restyle the card', specialty: 'Frontend', dependsOn: has('plan-mixed') ? ['api'] : [], pathPrefixes: ['src/components/'], checks: [] };
+            const api = { key: 'api', title: 'API handler', goal: 'Serve the new field', dependsOn: [], pathPrefixes: ['src/api/'], checks: [] };
+            output += `\n\n\`\`\`acc-work-units\n${JSON.stringify({ version: 1, stage: teamStage, units: has('plan-mixed') ? [api, ui] : [ui] })}\n\`\`\``;
+          }
           break;
         }
         case 'decomposer': {
@@ -345,6 +352,15 @@ export class SimulatedAgentAdapter implements AgentAdapter {
             const entries = assets.map((a) => ({ path: `public/generated/${a.name}`, sha256: has('assets-bad-hash') && a.name === 'hero-2.png' ? '0'.repeat(64) : sha(a.data), bytes: a.data.length, width: 16, height: 9, model: 'fal-ai/flux/dev', usedIn: a.usedIn }));
             await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify({ assets: entries }, null, 2)}\n`);
             files.push(...assets.map((a) => `public/generated/${a.name}`), 'public/generated/manifest.json', ...(has('assets-unnamed') ? ['public/generated/extra.png'] : []));
+          }
+          // A user-interface change (docs/plans/DESIGNER_ROUTING_PLAN.md): [sim:ui] makes the implementer and the
+          // designer also touch a component; [sim:ui-in-fix] makes the fixer do it, so a UI change can appear only after a fix.
+          if (!unitFile && ((has('ui') && role !== 'fixer') || (has('ui-in-fix') && role === 'fixer'))) {
+            const ui = folders.length ? `${folders[0]}/src/components/SimOutput.tsx` : 'src/components/SimOutput.tsx';
+            await mkdir(path.dirname(path.join(input.cwd, ui)), { recursive: true });
+            await appendFile(path.join(input.cwd, ui), `// ${role} change at ${finishedAt.toISOString()}\n`, 'utf8');
+            emit(`[file] update ${ui}`);
+            files.push(ui);
           }
           if (has('big-diff') && role === 'implementer') {
             for (const file of ['big-a.ts', 'big-b.ts', 'big-c.ts']) {
@@ -492,8 +508,8 @@ function simulatedManifest(stage: string, has: (marker: string) => boolean): unk
     version: 1,
     stage,
     units: [
-      { key: 'alpha', title: 'Alpha part', goal: 'Deliver the alpha half of the change', dependsOn: [], pathPrefixes: [shared ? 'shared/' : 'team-a/'], checks: ['test'] },
-      { key: 'beta', title: 'Beta part', goal: 'Deliver the beta half of the change', dependsOn: has('team-chain') ? ['alpha'] : [], pathPrefixes: [shared ? 'shared/' : 'team-b/'], checks: ['test'] },
+      { key: 'alpha', title: 'Alpha part', goal: 'Deliver the alpha half of the change', ...(has('team-frontend') ? { specialty: 'frontend' } : has('team-unknown-label') ? { specialty: 'ui' } : {}), dependsOn: [], pathPrefixes: [shared ? 'shared/' : 'team-a/'], checks: ['test'] },
+      { key: 'beta', title: 'Beta part', goal: 'Deliver the beta half of the change', ...(has('team-email') ? { specialty: 'email' } : {}), dependsOn: has('team-chain') ? ['alpha'] : [], pathPrefixes: [shared ? 'shared/' : 'team-b/'], checks: ['test'] },
       ...(has('team-three') ? [{ key: 'gamma', title: 'Gamma part', goal: 'Deliver the gamma third of the change', dependsOn: [], pathPrefixes: ['team-c/'], checks: [] }] : []),
     ],
   };

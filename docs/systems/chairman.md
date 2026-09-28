@@ -317,7 +317,12 @@ critique's PASS never stands for the code review. The role's latest run of
 any of its verdict stages decides (a re-review after a fix stands for the
 review before it), a run of an advisory (`verdict: false`) stage counts for
 nothing, and the remedy returns to the stage of that run (the role's first
-verdict stage when none ran). The protected-paths remedy goes to the fixer,
+verdict stage when none ran). A judge role whose every verdict stage has a
+`when` that does not hold — Full Autopilot's visual critique when no
+user-interface file changed — is not required; the facts are read by
+`taskChanges` ([task-changes.ts](../../apps/orchestrator/src/engine/task-changes.ts)),
+exactly as the engine read them to skip it, and unknown facts require it.
+The protected-paths remedy goes to the fixer,
 else the first write stage at Level 2 or below, so it never lands on a paid
 Level 3 Assets stage ([design-agent.md](design-agent.md)).
 A waived kind is never required. A test stage whose only failures already

@@ -1,0 +1,148 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { expect, test, type Page } from '@playwright/test';
+import { api, expectNoAxeViolations, expectNoHorizontalOverflow, setTheme, trackConsoleErrors } from './helpers';
+
+/**
+ * Full Autopilot brings in the design specialist only for user-interface work
+ * (docs/plans/DESIGNER_ROUTING_PLAN.md): a backend task shows its Visual critique
+ * as skipped — no agent, the reason — and a UI task shows it run; the workflow
+ * editor says when the critique runs. Both themes, desktop and phone.
+ */
+
+function fixtureRepo(): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'acc-e2e-design-'));
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'e2e@example.com');
+  git('config', 'user.name', 'E2E');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'design-routing', private: true, scripts: { test: 'node -e "0"' } }, null, 2));
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  return dir;
+}
+
+async function waitForTask(page: Page, id: string): Promise<{ status: string }> {
+  for (let i = 0; i < 1000; i++) {
+    const task = await api<{ status: string }>(page, 'GET', `/api/tasks/${id}`);
+    if (['COMPLETED', 'FAILED', 'WAITING_FOR_USER'].includes(task.status)) return task;
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`${id} never finished`);
+}
+
+let backendTask = '';
+let uiTask = '';
+let routedTask = '';
+let teamTask = '';
+let reviewTask = '';
+
+test.beforeAll(async ({ browser }) => {
+  // Five full Autopilot runs: each on its own repository, so they run side by side instead of queueing behind one
+  // another (one task per repository at a time); the hook gets the time a slow CI runner needs.
+  test.setTimeout(300_000);
+  const page = await browser.newPage();
+  await page.goto('/');
+  const start = async (name: string, mode: 'autopilot' | 'discuss', description: string) => {
+    const repo = await api<{ id: string }>(page, 'POST', '/api/repositories', { path: fixtureRepo(), name });
+    return (await api<{ id: string }>(page, 'POST', '/api/tasks', { repositoryId: repo.id, workflowId: 'full-autopilot', mode, description })).id;
+  };
+  backendTask = await start('design-routing-backend', 'autopilot', 'Tidy the API handler.');
+  uiTask = await start('design-routing-ui', 'autopilot', 'Restyle the card. [sim:ui]');
+  // Phase 2: a plan that is all frontend work runs Implement as the designer; a team sends its frontend unit there.
+  routedTask = await start('design-routing-routed', 'autopilot', 'Restyle the badge. [sim:plan-frontend]');
+  teamTask = await start('design-routing-team', 'autopilot', 'Two parts. [sim:team] [sim:team-frontend]');
+  // Left waiting for its plan review for the whole file; cancelled at the end.
+  reviewTask = await start('design-routing-review', 'discuss', 'Restyle the header. [sim:plan-frontend]');
+  const done = await Promise.all([backendTask, uiTask, routedTask, teamTask, reviewTask].map((id) => waitForTask(page, id)));
+  expect(done.map((t) => t.status)).toEqual(['COMPLETED', 'COMPLETED', 'COMPLETED', 'COMPLETED', 'WAITING_FOR_USER']);
+  await page.close();
+});
+
+test.afterAll(async ({ browser }) => {
+  const page = await browser.newPage();
+  await page.goto('/');
+  await api(page, 'POST', `/api/tasks/${reviewTask}/cancel`);
+  await page.close();
+});
+
+for (const theme of ['dark', 'light'] as const) {
+  test.describe(`design routing in the ${theme} theme`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.goto('/');
+      await setTheme(page, theme);
+    });
+
+    test('a backend task shows the critique skipped, with no agent; a UI task shows it run', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/tasks/${backendTask}`);
+      const stages = page.getByRole('list', { name: 'Workflow stages' });
+      const critique = stages.getByRole('listitem').filter({ hasText: 'Visual critique' });
+      await expect(critique).toContainText('Skipped');
+      await expect(critique.getByTitle('Skipped: No user-interface files changed in this task')).toBeVisible();
+      await expect(critique).not.toContainText('Claude Code');
+      await expect(stages.getByRole('listitem').filter({ hasText: 'Design fix' })).toHaveCount(0);
+      await expectNoAxeViolations(page, testInfo);
+
+      await page.goto(`/tasks/${uiTask}`);
+      const ran = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Visual critique' });
+      await expect(ran).not.toContainText('Skipped');
+      await expect(ran).toContainText(/Codex|Claude Code/);
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('the workflow editor says when the critique runs', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto('/workflows/full-autopilot');
+      await page.getByRole('button', { name: /Visual critique/ }).first().click();
+      await expect(page.getByText('Runs only when user-interface files change')).toBeVisible();
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('a stage a specialist ran names it', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/tasks/${routedTask}`);
+      const implement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
+      await expect(implement).toContainText('· Designer');
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test("a team's line names the workers a specialist ran", async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/tasks/${teamTask}`);
+      const implement = page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Implement' }).first();
+      await expect(implement).toContainText('Team of 2 · done · 1 as Designer');
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('plan review shows the work units as a list naming who does each one', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto('/approvals');
+      const card = page.getByRole('article').filter({ hasText: reviewTask });
+      await expect(card.getByText('Work units for implement:')).toBeVisible();
+      await expect(card.getByText(/by the designer/)).toBeVisible();
+      await expect(card).not.toContainText('acc-work-units');
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+    });
+
+    test('the skipped stage fits a phone', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/tasks/${backendTask}`);
+      await expect(page.getByRole('list', { name: 'Workflow stages' }).getByRole('listitem').filter({ hasText: 'Visual critique' })).toContainText('Skipped');
+      await expectNoHorizontalOverflow(page);
+    });
+  });
+}

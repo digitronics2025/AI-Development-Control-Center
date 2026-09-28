@@ -227,6 +227,13 @@ export interface StageInstance {
   startedAt: Iso | null;
   finishedAt: Iso | null;
   createdAt: Iso;
+  /**
+   * A stage with `when`: the fingerprint of the user-interface files it saw (engine/task-changes.ts `uiDigest`),
+   * so a later pass over the same files reuses its PASS. Null otherwise.
+   */
+  conditionDigest?: string | null;
+  /** The specialist role that ran this stage instead of its own (one agent, all of the plan's work one specialty; DESIGNER_ROUTING_PLAN §6). */
+  routedRole?: Role | null;
 }
 
 export interface TaskEvent {

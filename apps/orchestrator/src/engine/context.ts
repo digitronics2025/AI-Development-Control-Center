@@ -10,6 +10,7 @@ import {
   DEFAULT_VERIFY_COMMAND_KINDS,
   PLACEHOLDER_PATTERN,
   ROLE_LABEL,
+  judgeKind,
   type ArtifactType,
   type CommandKind,
   type PromptPlaceholder,
@@ -237,6 +238,29 @@ function readHint(file: PackFile | undefined, omitted: OmittedFile, source: { fo
  * needs — the investigator gets repository facts, the reviewer gets the diff
  * and test results — instead of the whole repository in every prompt.
  */
+/**
+ * The adaptive stages a planner may split, one line each (the simulated planner reads the line's start), with the
+ * specialists each one sends labelled units to and the rule for labelling them (DESIGNER_ROUTING_PLAN §6). Generated
+ * here, so an operator-edited planner template with the placeholder is always current.
+ */
+export function teamStagesText(stages: StageDefinition[]): string {
+  const adaptive = stages.filter((s) => s.kind === 'agent' && s.team?.mode === 'adaptive' && s.role !== 'fixer');
+  const lines = adaptive.map((s) => {
+    const line = `- \`${s.key}\` (${s.name}): up to ${s.team!.maxWorkers} workers${s.permissionLevel >= 2 ? ', each changing only the paths its unit owns' : ', read-only'}`;
+    const specialists = s.team!.specialists ?? [];
+    if (!specialists.length) return line;
+    const routes = specialists.map((x) => `\`${x.specialty}\` → ${ROLE_LABEL[x.role]} (${x.description})`).join('; ');
+    return `${line}. Specialties: ${routes}; any other unit → ${ROLE_LABEL[s.role]}`;
+  });
+  if (adaptive.some((s) => s.team!.specialists?.length)) {
+    lines.push(
+      '',
+      'Specialties: set a unit\'s `specialty` to the listed name when its work is what that specialty covers, and leave it out otherwise. When any part of the work belongs to a listed specialty, end the plan with the block for that stage even if it holds a single unit: the specialist then does that work (a whole task of one specialty runs as that specialist). Never split work only to route it; parts that depend on each other stay one unit.',
+    );
+  }
+  return lines.join('\n');
+}
+
 export class ContextBuilder {
   /** Current Chairman strategy guidance for a task, set once the Chairman exists. */
   guidance: (taskId: string) => string | null = () => null;
@@ -269,6 +293,28 @@ export class ContextBuilder {
 
   private async latest(taskId: string, type: ArtifactType): Promise<string> {
     return (await this.artifacts.latestText(taskId, type, MAX_SECTION_CHARS)) ?? '';
+  }
+
+  /**
+   * `{{review}}` for a reviewing judge is its own role's previous review: a code reviewer never reads the visual
+   * critique as "its previous review" (nor the other way round), since both write reviews
+   * (docs/plans/DESIGNER_ROUTING_PLAN.md §5). Every other role reads the latest review, which is the one that
+   * sent the task to it.
+   */
+  private async reviewFor(task: TaskRecord, def: StageDefinition): Promise<string> {
+    if (judgeKind(def.role) !== 'review') return this.latest(task.id, 'review');
+    const roleOf = new Map(task.workflow.stages.map((s) => [s.key, s.role]));
+    const rec = this.store
+      .listArtifacts(task.id)
+      .filter((a) => a.type === 'review' && a.stageKey !== null && roleOf.get(a.stageKey) === def.role)
+      .at(-1);
+    if (!rec) return '';
+    try {
+      const { content, truncated } = await this.artifacts.read(rec, MAX_SECTION_CHARS);
+      return truncated ? `${content}\n\n[truncated]` : content;
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -679,7 +725,7 @@ export class ContextBuilder {
       investigation: await this.artifactsOf(task.id, ['investigation']),
       plan: await this.latest(task.id, 'plan'),
       implementation_report: await this.artifactsOf(task.id, ['implementation-report', 'fix-report'], 20_000),
-      review: await this.latest(task.id, 'review'),
+      review: await this.reviewFor(task, def),
       test_results: this.testResults(task),
       verification_report: await this.latest(task.id, 'browser-report'),
       // The packer owns the diff's budget; clipping it here would cut away its own note (§3.A).
@@ -704,10 +750,7 @@ export class ContextBuilder {
       preexisting_changes: task.git.preexistingChanges.length ? task.git.preexistingChanges.join(', ') : 'none',
       fix_cycle: String(task.fixCycles),
       max_fix_cycles: String(task.maxFixCycles),
-      team_stages: task.workflow.stages
-        .filter((s) => s.kind === 'agent' && s.team?.mode === 'adaptive' && s.role !== 'fixer')
-        .map((s) => `- \`${s.key}\` (${s.name}): up to ${s.team!.maxWorkers} workers${s.permissionLevel >= 2 ? ', each changing only the paths its unit owns' : ', read-only'}`)
-        .join('\n'),
+      team_stages: teamStagesText(task.workflow.stages),
     };
     const header = `Task: ${task.id}\nRole: ${def.role}\nStage: ${def.key}\nWorking directory: ${path.resolve(workspace ? agentWorkdir(task, repo) : workdir)}\n\n${RUN_CONTEXT}\n\n`;
     const guidance = this.guidance(task.id);

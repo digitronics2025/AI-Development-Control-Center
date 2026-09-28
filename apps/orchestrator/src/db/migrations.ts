@@ -1342,4 +1342,28 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Conditional stages (docs/plans/DESIGNER_ROUTING_PLAN.md §5): the
+    // fingerprint of the user-interface files a visual critique saw, so a PASS
+    // stands while they are unchanged. Every existing stage reads NULL, which
+    // never matches. Additive only.
+    version: 22,
+    name: 'stage condition digest',
+    sql: `
+      ALTER TABLE task_stages ADD COLUMN condition_digest TEXT;
+    `,
+  },
+  {
+    // Specialists (docs/plans/DESIGNER_ROUTING_PLAN.md §6): the role a stage or
+    // a Stage Team work unit actually ran as when a specialist did the plan's
+    // labelled work, and the unit's label. Every existing row reads NULL: the
+    // stage's own role, as before. Additive only.
+    version: 23,
+    name: 'specialist routing',
+    sql: `
+      ALTER TABLE task_stages ADD COLUMN routed_role TEXT;
+      ALTER TABLE stage_work_units ADD COLUMN role TEXT;
+      ALTER TABLE stage_work_units ADD COLUMN specialty TEXT;
+    `,
+  },
 ];

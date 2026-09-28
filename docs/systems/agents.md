@@ -344,7 +344,14 @@ reports with `## Summary` and `## Design decisions` ([design-agent.md](design-ag
 `[sim:assets]` makes it also write two PNGs in `public/generated/` and a
 `manifest.json` naming both with their SHA-256, `[sim:assets-unnamed]` adds a
 PNG the manifest does not name, `[sim:assets-bad-hash]` gives `hero-2.png` a
-wrong SHA-256. Role `art-director` answers with a direction and a $0 media
+wrong SHA-256. `[sim:ui]` makes the implementer and the designer also change
+`src/components/SimOutput.tsx` (a user-interface file, so Full Autopilot's visual
+critique runs); `[sim:ui-in-fix]` makes only the fixer do it. Specialists
+([stage-teams.md](stage-teams.md#specialists)): `[sim:plan-frontend]` makes the
+planner write one unit labelled `Frontend`, `[sim:plan-mixed]` an API unit and a
+frontend unit that depends on it; with `[sim:team]`, `[sim:team-frontend]` labels
+alpha `frontend`, `[sim:team-unknown-label]` labels it `ui`, and `[sim:team-email]`
+labels beta `email`. Role `art-director` answers with a direction and a $0 media
 budget; role `visual-critic` passes unless `[sim:critic-fail-once]` /
 `[sim:critic-fail-always]`, and names unshown files like the reviewer. Stage
 Teams: `[sim:team]` (units alpha and beta), `[sim:team-chain]`, `[sim:team-three]`, `[sim:team-overlap]`, `[sim:team-out-of-scope]`,

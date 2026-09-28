@@ -1,4 +1,4 @@
-import { isLoopbackHostname, referencesSelf, urlIsSelfAddress } from '@acc/security';
+import { isLoopbackHostname, referencesSelf, urlIsSelfAddress, webUrlReferencesSelf } from '@acc/security';
 import type { BrowserContext } from 'playwright-core';
 
 /**
@@ -106,14 +106,16 @@ export async function readCapped(res: Response, max = MAX_RESPONSE_BYTES): Promi
 }
 
 /**
- * Whether a browser a tool drives must not make this request: over the
- * network, only the Control Center's own address in any spelling (SEC-1) — as
- * in `guardedFetch`, a page on another server whose path merely says
- * `auth-token` is someone else's; any other scheme (`file:`…) when it names
- * the data folder, the token or a key file.
+ * Whether a page's request would reach the Control Center itself. A web
+ * request (http, https, ws, wss) is refused when it goes to the listen address
+ * in any spelling (SEC-1), or names that address or the data folder inside it
+ * (an open redirect's target: Playwright never routes a redirect hop, so the
+ * first URL is the only one judged). A path that merely names one of the key
+ * files' words on another server (`/octokit/auth-token.js`) loads. Any other
+ * scheme (`file:` and the rest) is judged by its whole text.
  */
-export function browserRequestRefused(url: URL): boolean {
-  return /^(https?|wss?):$/.test(url.protocol) ? urlIsSelfAddress(url) : referencesSelf(url.href);
+export function browserRequestReachesSelf(url: URL): boolean {
+  return /^(?:https?|wss?):$/.test(url.protocol) ? webUrlReferencesSelf(url) : referencesSelf(url.href);
 }
 
 /**
@@ -122,5 +124,5 @@ export function browserRequestRefused(url: URL): boolean {
  * the tools create.
  */
 export async function guardBrowserContext(context: BrowserContext): Promise<void> {
-  await context.route(browserRequestRefused, (route) => route.abort('blockedbyclient'));
+  await context.route((url) => browserRequestReachesSelf(url), (route) => route.abort('blockedbyclient'));
 }

@@ -7,6 +7,7 @@ import {
   DEFAULT_AUTO_APPROVE_LEVEL,
   DEFAULT_MAX_FIX_CYCLES,
   ROLES,
+  STAGE_CONDITIONS,
   STAGE_KINDS,
   TASK_MODES,
   THEMES,
@@ -90,12 +91,30 @@ export type StageTeamWorker = z.infer<typeof stageTeamWorkerSchema>;
  * variants: each listed worker does the whole stage its own way, a judge picks
  * one, and only that one is kept (docs/plans/stage-team-variants.md).
  */
+/**
+ * A specialist of an adaptive team (docs/plans/DESIGNER_ROUTING_PLAN.md §6): the plan's work units labelled with
+ * `specialty` run as `role`, told `instructions` and shown `toolProfile`'s tools. It never changes which agent runs
+ * the work, the stage's level, its approvals or its gates: only what the worker is told and shown.
+ */
+export const stageSpecialistSchema = z.object({
+  specialty: slugSchema.max(40),
+  /** What work it covers, as the planner is told ("Pages, layout, styling, UI components and images"). */
+  description: z.string().trim().min(1).max(200),
+  role: roleSchema,
+  toolProfile: z.enum(STAGE_TOOL_PROFILES).optional(),
+  /** Replaces the stage's own instructions for this specialist's work. */
+  instructions: z.string().trim().min(1).max(2000),
+});
+export type StageSpecialist = z.infer<typeof stageSpecialistSchema>;
+
 export const stageTeamSchema = z.object({
   mode: z.enum(['fixed', 'adaptive', 'variants']),
   maxWorkers: z.number().int().min(2).max(MAX_TEAM_WORKERS).default(3),
   workers: z.array(stageTeamWorkerSchema).max(MAX_TEAM_WORKERS).optional(),
   /** Variants only: who judges them (else the stage's own agent, model and effort). */
   judge: z.object({ agentId: agentIdSchema.optional(), model: modelIdSchema.optional(), effort: effortSchema.optional() }).optional(),
+  /** Adaptive only: who does the plan's labelled work units (validated in workflow.ts). */
+  specialists: z.array(stageSpecialistSchema).max(MAX_TEAM_WORKERS).optional(),
 });
 export type StageTeam = z.infer<typeof stageTeamSchema>;
 
@@ -129,6 +148,11 @@ export const stageDefinitionSchema = z.object({
    * otherwise it is skipped (Smoke after a Staging deploy that did not run).
    */
   requires: z.array(slugSchema).max(10).optional(),
+  /**
+   * Run this stage only when the condition holds; otherwise it is skipped and the completion gate does not require it
+   * (docs/plans/DESIGNER_ROUTING_PLAN.md §5). Allowed only on a visual critique (workflow.ts).
+   */
+  when: z.enum(STAGE_CONDITIONS).optional(),
   description: z.string().max(300).optional(),
   /** Run this agent stage as a bounded team of workers (docs/plans/STAGE_TEAMS_PLAN.md); absent = one agent, as always. */
   team: stageTeamSchema.optional(),

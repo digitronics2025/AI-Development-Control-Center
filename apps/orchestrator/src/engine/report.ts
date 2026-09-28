@@ -151,10 +151,17 @@ export function buildFinalReport(input: ReportInput): ReportResult {
   const mixed = files?.filter((f) => f.origin === 'both') ?? [];
   if (mixed.length) limitations.push(`${mixed.length} file(s) mix your pre-existing uncommitted work with task changes: ${mixed.map((f) => f.path).join(', ')}.`);
 
-  const verdictStages = stages.filter((s) => s.verdict !== null);
-  const lastReview = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'review');
-  const lastVerify = [...verdictStages].reverse().find((s) => judgeKind(s.role) === 'verify');
+  // Each judge role's own last word decides, as in the completion gate (gate.ts): a critique's PASS is not the code
+  // review's, nor the other way round. A stage skipped by its condition (a visual critique when no user-interface
+  // file changed) was not needed, whatever an earlier run of it said.
+  const conditional = new Set(task.workflow.stages.filter((d) => d.when).map((d) => d.key));
+  const lastJudged = (pred: (s: StageInstance) => boolean) =>
+    [...stages].reverse().find((s) => pred(s) && (s.verdict !== null || (s.status === 'SKIPPED' && conditional.has(s.stageKey)))) ?? null;
+  const lastReview = lastJudged((s) => judgeKind(s.role) === 'review' && s.role !== 'visual-critic');
+  const lastCritique = lastJudged((s) => s.role === 'visual-critic');
+  const lastVerify = lastJudged((s) => judgeKind(s.role) === 'verify');
   if (lastReview?.verdict === 'FAIL') limitations.push('The last review did not pass.');
+  if (lastCritique?.verdict === 'FAIL') limitations.push('The last visual critique did not pass.');
   if (lastVerify?.verdict === 'FAIL') limitations.push('The last verification did not pass.');
   for (const item of input.operatorItems ?? []) limitations.push(`Needs your decision: ${item}`);
   for (const item of input.gateLimitations ?? []) if (!limitations.includes(item)) limitations.push(item);
@@ -210,6 +217,9 @@ export function buildFinalReport(input: ReportInput): ReportResult {
     '## Review',
     '',
     `- Review: ${lastReview ? (lastReview.verdict === 'PASS' ? 'passed' : 'issues remain') : 'no review stage'}`,
+    ...(lastCritique
+      ? [`- Visual critique: ${lastCritique.status === 'SKIPPED' ? `not needed — ${(lastCritique.summary ?? '').replace(/^Skipped: /, '').replace(/^./, (c) => c.toLowerCase()) || 'its condition did not hold'}` : lastCritique.verdict === 'PASS' ? 'passed' : 'issues remain'}`]
+      : []),
     ...(lastVerify ? [`- Verification: ${lastVerify.verdict === 'PASS' ? 'passed' : 'failed'}`] : []),
     ...(task.supervised
       ? [

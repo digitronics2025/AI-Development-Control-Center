@@ -115,6 +115,15 @@ export function judgeKind(role: Role | string | null | undefined): 'review' | 'v
 export const STAGE_KINDS = ['agent', 'tests', 'command', 'git', 'verify', 'release'] as const;
 export type StageKind = (typeof STAGE_KINDS)[number];
 
+/**
+ * When a stage runs at all (docs/plans/DESIGNER_ROUTING_PLAN.md §5): `ui-changed`
+ * = only when the task's own changes touch user-interface files (ui-paths.ts).
+ * A closed list on purpose: each condition is judged the same way by the engine
+ * and the completion gate.
+ */
+export const STAGE_CONDITIONS = ['ui-changed'] as const;
+export type StageCondition = (typeof STAGE_CONDITIONS)[number];
+
 export const TASK_MODES = ['discuss', 'autopilot'] as const;
 export type TaskMode = (typeof TASK_MODES)[number];
 

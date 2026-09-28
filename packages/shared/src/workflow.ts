@@ -1,4 +1,4 @@
-import { COMPLETE, isJudgeRole, type Role } from './constants.js';
+import { COMPLETE, isJudgeRole, isWriteRole, type Role } from './constants.js';
 import {
   workflowProfileSchema,
   type PartialAssignment,
@@ -57,6 +57,19 @@ function teamIssues(stage: StageDefinition): Array<{ field: string; message: str
     if (stage.verdict) out.push({ field: 'team.mode', message: 'A review team is a fixed team of reviewers' });
   }
   if (team.judge && team.mode !== 'variants') out.push({ field: 'team.judge', message: 'Only variants have a judge' });
+  if (team.specialists?.length) {
+    // A specialist is told other things and shown other tools, never given more: only where the plan's units write
+    // code at Level 2, so a routed specialist can never reach a Level 3 (paid) tool (DESIGNER_ROUTING_PLAN §6).
+    if (team.mode !== 'adaptive') out.push({ field: 'team.specialists', message: "Only an adaptive team sends the plan's work units to specialists" });
+    else if (stage.role === 'fixer') out.push({ field: 'team.specialists', message: 'A Fix splits its own work: it takes no specialists' });
+    else if (!isWriteRole(stage.role) || stage.permissionLevel !== 2) out.push({ field: 'team.specialists', message: 'Specialists take work that changes files: only a Level 2 stage that writes code has them' });
+    const seen = new Set<string>();
+    team.specialists.forEach((s, i) => {
+      if (!isWriteRole(s.role)) out.push({ field: `team.specialists.${i}.role`, message: 'A specialist writes code: choose a role that changes files (designer, implementer)' });
+      if (seen.has(s.specialty)) out.push({ field: `team.specialists.${i}.specialty`, message: `Specialty "${s.specialty}" is listed twice` });
+      seen.add(s.specialty);
+    });
+  }
   return out;
 }
 
@@ -133,6 +146,20 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
     if (stage.team) {
       for (const issue of teamIssues(stage)) issues.push({ stageIndex: index, ...issue });
     }
+    if (stage.when !== undefined) {
+      // A condition makes a judge optional in the completion gate, so it is allowed only where skipping cannot hide a
+      // defect: the visual critique, a read-only verdict stage. Code review, verification and write stages always run.
+      if (stage.kind !== 'agent' || !stage.verdict || stage.role !== 'visual-critic') {
+        issues.push({ stageIndex: index, field: 'when', message: 'Only a visual critique (a verdict stage) can run conditionally; code review, verification and stages that change files always run' });
+      } else if (stage.permissionLevel !== 1) {
+        issues.push({ stageIndex: index, field: 'when', message: 'A conditional stage must be read-only (Level 1)' });
+      }
+    }
+    // A stage allowed to spend on media asks every time, and never retries a paid run by itself (docs/systems/design-agent.md).
+    if (stage.kind === 'agent' && stage.permissionLevel >= 3 && (stage.role === 'designer' || stage.toolProfile === 'frontend-design')) {
+      if (!stage.requiresApproval) issues.push({ stageIndex: index, field: 'permissionLevel', message: 'A design stage at Level 3 or above can spend on media, so it must ask for approval every time' });
+      if (stage.retry.maxAttempts !== 1) issues.push({ stageIndex: index, field: 'retry', message: 'A design stage at Level 3 or above runs once per approval: a retry would spend again' });
+    }
     for (const field of ['instructions', 'toolProfile', 'skills'] as const) {
       if (stage[field] !== undefined && stage.kind !== 'agent') issues.push({ stageIndex: index, field, message: 'Only agent stages take instructions, a tool profile or skills' });
     }
@@ -194,6 +221,17 @@ export function validateWorkflow(input: unknown): { profile: WorkflowProfile | n
   if (!reachesComplete) {
     issues.push({ stageIndex: null, field: 'stages', message: 'The workflow never reaches "complete"' });
   }
+
+  // A condition judges the task's own changes, so it means something only after a stage that makes them: before one
+  // an isolated task has none yet (always skipped), a shared checkout has no baseline (always run).
+  const happy = workflowHappyPath(profile);
+  profile.stages.forEach((stage, index) => {
+    if (!stage.when) return;
+    const at = happy.findIndex((s) => s.key === stage.key);
+    if (at < 0 || !happy.slice(0, at).some((s) => s.kind === 'agent' && isWriteRole(s.role))) {
+      issues.push({ stageIndex: index, field: 'when', message: 'A conditional stage must be on the main path, after a stage that changes files' });
+    }
+  });
 
   return issues.length ? { profile: null, issues } : { profile, issues: [] };
 }

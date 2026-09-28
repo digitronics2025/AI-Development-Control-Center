@@ -29,6 +29,8 @@ import {
   PERMISSION_LEVEL_INFO,
   ROLES,
   ROLE_LABEL,
+  STAGE_CONDITIONS,
+  STAGE_CONDITION_LABEL,
   STAGE_KINDS,
   STAGE_TOOL_PROFILES,
   validateWorkflow,
@@ -55,7 +57,7 @@ const KIND_LABEL: Record<(typeof STAGE_KINDS)[number], string> = { agent: 'Agent
 export function withStageKind(stage: StageDefinition, kind: StageDefinition['kind']): StageDefinition {
   if (kind === stage.kind) return stage;
   if (kind === 'agent') return { ...stage, kind, commandKinds: undefined };
-  return { ...stage, kind, agentId: undefined, model: undefined, effort: undefined, verdict: false, team: undefined, instructions: undefined, toolProfile: undefined, skills: undefined };
+  return { ...stage, kind, agentId: undefined, model: undefined, effort: undefined, verdict: false, team: undefined, instructions: undefined, toolProfile: undefined, skills: undefined, when: undefined };
 }
 
 function issuesFor(issues: WorkflowIssue[], index: number | null, field?: string) {
@@ -176,6 +178,20 @@ function StageInspector({
           label="Stage returns a verdict"
           description='The agent must end with "VERDICT: PASS" or "VERDICT: FAIL"; FAIL takes the failure transition.'
         />
+      ) : null}
+      {stage.kind === 'agent' && (stage.role === 'visual-critic' || stage.when) ? (
+        <Field
+          label="Runs"
+          error={err('when')}
+          helper="A visual critique may run only when the task's own changes touch user-interface files; the completion gate then requires it only then."
+        >
+          <Select
+            value={stage.when ?? '__always__'}
+            onValueChange={(v) => set('when', v === '__always__' ? undefined : (v as StageDefinition['when']))}
+            options={[{ value: '__always__', label: 'Always' }, ...STAGE_CONDITIONS.map((c) => ({ value: c, label: STAGE_CONDITION_LABEL[c] }))]}
+            disabled={readOnly}
+          />
+        </Field>
       ) : null}
       {stage.kind === 'agent' ? <StageTeamEditor stage={stage} issues={issuesFor(issues, index, 'team')} readOnly={readOnly} onChange={(team) => set('team', team)} /> : null}
       {stage.kind === 'agent' ? (

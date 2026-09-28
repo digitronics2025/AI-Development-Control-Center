@@ -23,18 +23,35 @@ Built-ins live in [workflows/](../../workflows) and are loaded at start
 (read-only; duplicate to customise). A stage has `key, name, role, kind
 (agent|tests|command|git|verify|release), agentId/model/effort (optional pin),
 permissionLevel, timeoutSec, retry.maxAttempts, requiresApproval, next, onFail,
-verdict, commandKinds, optional, requires`, and for agent stages `instructions`
+verdict, commandKinds, optional, requires, when`, and for agent stages `instructions`
 (appended to the role prompt), `toolProfile` (the capability profile the
 stage's tool list is built from, never `operator`; the level still decides
 what runs) and `skills` (installed skills the stage should run); the three are
 refused on other kinds. `requires` names stages whose latest
 run must have ended SUCCESS; otherwise the stage is SKIPPED before any approval
 is asked (`Skipped: Staging deploy did not run` — Full Autopilot's Smoke
-requires Staging). Validation
+requires Staging). A skip records a SKIPPED row with no agent and emits only
+`STAGE_SKIPPED` (never `STAGE_STARTED`), for `requires`, `when` and a release
+with nothing to do alike (`skipStage` in engine.ts).
+
+`when: ui-changed` ([DESIGNER_ROUTING_PLAN.md](../plans/DESIGNER_ROUTING_PLAN.md))
+runs a stage only when the task's own changes touch user-interface files
+([ui-paths.ts](../../packages/shared/src/ui-paths.ts) `isUiPath`: markup,
+styles, components, images, fonts, the design standard, theme config;
+repository-relative paths, pre-existing work excluded). The facts come from
+`taskChanges` ([task-changes.ts](../../apps/orchestrator/src/engine/task-changes.ts)),
+the same reading the completion gate uses; unknown (no Git baseline,
+unreadable) means the stage runs. Allowed only on a Level 1 `visual-critic`
+verdict stage after a write stage on the main path. When it holds, the stage
+row records a digest of the UI files (`condition_digest`, migration 22); if
+the last verdict of that stage was a PASS over the same digest and no
+directive came since, a reused PASS is recorded instead of a run
+(`Reused: no user-interface file changed since … passed`). Validation
 ([workflow.ts](../../packages/shared/src/workflow.ts)): unique keys,
 resolvable transitions and `requires` keys, every stage reachable, reaches `complete`, and the
 `next` edges alone are acyclic — loops exist only through `onFail`, bounded by
-`maxFixCycles`. Each task stores a snapshot of its profile.
+`maxFixCycles`; a designer or `frontend-design` agent stage at Level 3+ must
+ask every time and run once. Each task stores a snapshot of its profile.
 
 A stage's `team` may be fixed, adaptive or `variants` (competing attempts, a
 read-only judge keeps one; [stage-teams.md](stage-teams.md#variants)).
@@ -57,6 +74,14 @@ A `tests` stage runs the repository's enabled commands of its `commandKinds`,
 by default `lint, typecheck, test, build`. Full Autopilot and Frontend Design add `e2e`, so an
 end-to-end pass is observed by the orchestrator rather than taken from an
 agent's report; the other built-ins keep the fast default.
+
+Full Autopilot runs `app-check → critique → review`: the Visual critique
+(visual critic, Level 1, `when: ui-changed`) goes on FAIL to **Design fix**
+(designer on Claude, Level 2, then back to Test), so a backend task never runs
+or waits for it and a failed critique never pays for media
+([design-agent.md](design-agent.md#in-full-autopilot)). Its Implement sends the
+plan's frontend work to the designer on the stage's own agent and level
+(`team.specialists`, [stage-teams.md](stage-teams.md#specialists)).
 
 A `verify` stage (the **App check** after the tests stage in Full Autopilot and
 Frontend Design) starts the app

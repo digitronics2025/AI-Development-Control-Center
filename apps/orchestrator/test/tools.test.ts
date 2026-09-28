@@ -9,6 +9,7 @@ import { startOAuthMcpServer } from '../../../packages/mcp/test/fixtures/oauth-s
 import { findBrowser } from '@acc/tools';
 import { schemaVersion } from '../src/db/database.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
+import { DESIGN_MCP_REFUSAL } from '../src/tools/service.js';
 import { addRepo as addRepoTo, createTask, createTestApp, makeRepo, ROOT, TOKEN, waitFor, waitForStatus, IN_PLACE, type TestApp } from './helpers.js';
 
 // These tests cover tasks that work in your own folder on a task branch, the mode new repositories no longer get by default.
@@ -512,6 +513,45 @@ describe('MCP servers', () => {
     // A Level 3 stage with auto-approval up to 3 still reaches it by escalation, outside the stage's profile.
     const assets = await call(session(3).token);
     expect(assets.body.ok).toBe(true);
+    expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
+  }, 60_000);
+
+  it('refuses every outside MCP tool to a design stage, at any level; other stages reach it as before', async () => {
+    // A server left at the default Level 2 (docs/plans/DESIGNER_ROUTING_PLAN.md §5): before, any Level 2 stage reached it by
+    // escalation with no cost check, so a designer inside Full Autopilot could have billed past the spend gate.
+    const fixture = path.join(ROOT, 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const created = await t.api('POST', '/api/mcp', { name: 'gen', transport: 'stdio', command: process.execPath, args: [fixture] });
+    expect(created.status).toBe(201);
+    const session = (stageLevel: 1 | 2 | 3, designSession: boolean) =>
+      t.services.tools.openSession({ taskId: null, stageId: null, repositoryId: repoId, cwd: repoPath, roots: [repoPath], stageLevel, autoApproveUpToLevel: 3, mode: 'autopilot', profile: designSession ? 'frontend-design' : 'web-development', protectedPaths: [], ...(designSession ? { designSession } : {}) }, 'agent');
+    const call = (token: string) => t.api('POST', '/api/tool-session/call', { capability: 'mcp.gen.echo', input: { text: 'hero image' } }, sessionHeaders(token));
+    for (const level of [2, 3] as const) {
+      const design = session(level, true);
+      const refused = await call(design.token);
+      expect(refused.body).toMatchObject({ ok: false, decision: 'deny' });
+      expect(refused.body.summary).toBe(DESIGN_MCP_REFUSAL);
+      // Not advertised either: absent from its tools, and named as refused when searched for.
+      expect((await t.api('GET', '/api/tool-session/tools', undefined, sessionHeaders(design.token))).body.tools.map((x: { capability: string }) => x.capability)).not.toContain('mcp.gen.echo');
+      expect(JSON.stringify((await t.api('POST', '/api/tool-session/find', { query: 'echo text back' }, sessionHeaders(design.token))).body)).toContain('refused in design stages');
+    }
+    // An implementer's Level 2 stage is unchanged: it still escalates to the tool.
+    expect((await call(session(2, false).token)).body.ok).toBe(true);
+    // The engine marks a design stage's session itself: the designer role, or the frontend-design profile.
+    const taskId = await createTask(t, repoId, 'Look [sim:slow]');
+    const task = t.services.store.getTask(taskId)!;
+    const repo = t.services.store.getRepository(repoId)!;
+    Object.assign((t.services.tooling as unknown as { d: { bridgePath: string | null } }).d, { bridgePath: path.join(ROOT, 'apps', 'orchestrator', 'dist', 'acc-mcp.js') });
+    t.services.tooling.setListenUrl('http://127.0.0.1:1');
+    const stage = (await waitFor(() => t.services.store.listStages(taskId), (list) => list.length > 0, 20_000, 'a first stage'))[0]!;
+    const def = (role: 'designer' | 'implementer' | 'reviewer', toolProfile?: 'frontend-design') => ({ key: 'build', name: 'Build', role, kind: 'agent' as const, permissionLevel: 2 as const, timeoutSec: 60, retry: { maxAttempts: 1 }, requiresApproval: false, next: 'complete', verdict: false, optional: false, ...(toolProfile ? { toolProfile } : {}) });
+    const tokenOf = (bridge: { env: Record<string, string> } | null) => bridge!.env.ACC_TOOL_SESSION!;
+    for (const [role, profile, refused] of [['designer', undefined, true], ['reviewer', 'frontend-design', true], ['implementer', undefined, false]] as const) {
+      const session = t.services.tooling.openAgentSession(task, def(role, profile), stage, repo);
+      const result = await call(tokenOf(session?.bridge ?? null));
+      expect(result.body.ok, `${role} ${profile ?? ''}`).toBe(!refused);
+      session!.close();
+    }
+    await t.api('POST', `/api/tasks/${taskId}/cancel`);
     expect((await t.api('DELETE', `/api/mcp/${created.body.id}`)).status).toBe(200);
   }, 60_000);
 });

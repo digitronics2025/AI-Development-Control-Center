@@ -86,7 +86,7 @@ reported it is out of credits or out of its window is not an escape route, so
 with no other agent left the task waits for the limit instead of burning an
 attempt. An agent also takes only stages within its adapter's permission
 ceiling (`CandidateContext.maxPermissionLevel`, read from each adapter's
-`maxPermissionLevel`, [agents.md](agents.md#declared-capabilities)): no
+`maxPermissionLevel`, [agents-contract.md](agents-contract.md#declared-capabilities)): no
 change-agent candidate hands it a stage above that level, and a provider-wide
 move leaves such stages on their agent for their own recovery.
 

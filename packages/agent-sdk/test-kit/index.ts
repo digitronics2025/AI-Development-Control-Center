@@ -1,5 +1,5 @@
 /**
- * The adapter conformance kit (docs/systems/agents.md#adapter-conformance-kit).
+ * The adapter conformance kit (docs/systems/agents-contract.md#adapter-conformance-kit).
  *
  * The security-critical behaviour every agent adapter must show, checked
  * against the adapter's fake CLI (tests/fixtures/fake-*.mjs): the prompt only

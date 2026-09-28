@@ -17,7 +17,7 @@ const after = (flag) => {
 
 /**
  * What this run was given, and what the real CLI would make of it
- * (packages/agent-sdk/test-kit; docs/systems/agents.md#mcp-servers-in-a-codex-run):
+ * (packages/agent-sdk/test-kit; docs/systems/agents-codex.md#mcp-servers-in-a-codex-run):
  * the MCP servers it would load and whether it could change files.
  */
 function launchRecord(prompt) {

@@ -15,7 +15,7 @@ One agent stage run by a bounded team of Control Center workers
 the team: every worker is its own agent run through `AgentRegistry.launch`
 (subscription guard, usage ledger), with its own execution, log, tool session
 and artifact. Provider-native sub-agents stay off (Claude Code's `Agent` tool
-is not in the closed tool set, [agents.md](agents.md)); a worker never starts
+is not in the closed tool set, [agents-claude-code.md](agents-claude-code.md)); a worker never starts
 another worker. The stage still returns one `StageOutcome`, so transitions,
 fix cycles, approvals, the Chairman and the completion gate work as before.
 

@@ -108,7 +108,7 @@ export function codexProtocolDrift(sawThread: boolean, sawCompletedTurn: boolean
 
 /**
  * Features that add MCP servers to a run on their own, measured on Codex
- * 0.156.1 (docs/systems/agents.md#mcp-servers-in-a-codex-run): `apps` starts
+ * 0.156.1 (docs/systems/agents-codex.md#mcp-servers-in-a-codex-run): `apps` starts
  * `codex_apps` (ChatGPT connectors); `plugins` starts plugin servers, including
  * those of plugins installed on the ChatGPT account, which load even with
  * --ignore-user-config; `skill_mcp_dependency_install` installs and enables

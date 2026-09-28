@@ -517,7 +517,7 @@ async function verifyImages() {
 
 /**
  * Real-CLI proof that a Codex run starts no MCP server but the Control Center's
- * (docs/systems/agents.md#mcp-servers-in-a-codex-run). Codex has no
+ * (docs/systems/agents-codex.md#mcp-servers-in-a-codex-run). Codex has no
  * --strict-mcp-config; the adapter switches every other server off by name and
  * by feature flag, so this runs exactly what ships, with the operator's real
  * configuration, and reads Codex's own log of what it started. A stand-in

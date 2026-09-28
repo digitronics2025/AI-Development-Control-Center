@@ -4,7 +4,7 @@ import { expectNoAxeViolations, expectNoHorizontalOverflow, setTheme, trackConso
 
 /**
  * Settings → Agents & Models: installed CLI versions against agents.compat.json
- * (docs/systems/agents.md#tested-cli-versions), at desktop and phone width in
+ * (docs/systems/agents-contract.md#tested-cli-versions), at desktop and phone width in
  * both themes. The demo's simulated agents have no CLI version to judge, so the
  * agent list gets real-looking CLIs on the way to the page: Claude Code newer
  * than any tested version, Codex on its tested one.

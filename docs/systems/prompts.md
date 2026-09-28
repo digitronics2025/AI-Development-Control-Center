@@ -125,7 +125,7 @@ the headings it lists.
 Level 1 roles (investigator, planner, art director, reviewer, visual critic,
 verifier) can use the read tools and, when the run lists Control Center tools,
 its read-only Git tools and Level 1 checks against something already running
-([agents.md](agents.md), the `analysis` profile in [tool-system.md](tool-system.md#profiles-profilests)).
+([agents-claude-code.md](agents-claude-code.md), the `analysis` profile in [tool-system.md](tool-system.md#profiles-profilests)).
 Claude Code has no shell at Level 1, so the investigator and planner templates
 say the stage "may have no shell" and forbid tests, builds and installs
 outright. Level 2 roles (implementer, fixer, designer) run targeted checks before

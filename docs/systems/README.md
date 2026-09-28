@@ -10,7 +10,12 @@
 | Chairman supervisor and chat | [chairman.md](chairman.md) | `apps/orchestrator/src/chairman`, `packages/shared/src/chairman.ts` |
 | Ask (read-only questions outside tasks) | [ask.md](ask.md) | `apps/orchestrator/src/ask`, `packages/shared/src/ask.ts`, `apps/dashboard/src/components/ask.tsx` |
 | Learning loop (task reviews, findings, improvements the Chairman adopts) | [learning.md](learning.md) | `apps/orchestrator/src/learning`, `packages/shared/src/learning.ts`, `packages/tools/src/packs/installer.ts` |
-| Agent adapters | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |
+| Agent adapters — map: scope, invariants, which child doc to open | [agents.md](agents.md) | `packages/agent-*`, `packages/executor` |
+| Agent adapter contract (launch path, declared capabilities, tested CLI versions, usage reporting, conformance kit, failure classification) | [agents-contract.md](agents-contract.md) | `packages/agent-sdk`, `packages/executor` |
+| Claude Code adapter (command line, native denies and precheck hook, permission mapping, Subscription Only tripwire) | [agents-claude-code.md](agents-claude-code.md) | `packages/agent-claude` |
+| Codex adapter (command line, sandbox, MCP servers in a Codex run) | [agents-codex.md](agents-codex.md) | `packages/agent-codex` |
+| Skills in agent runs (closed tool set, learned skills, skill list, requested skills) | [agents-skills.md](agents-skills.md) | `apps/orchestrator/src/services/skills.ts`, `packages/shared/src/skills.ts`, `packages/agent-sdk/src/skills.ts` |
+| Simulated agent adapter (demo and e2e `[sim:…]` markers) | [agents-simulated.md](agents-simulated.md) | `packages/agent-sdk/src/simulated.ts` |
 | Security | [security.md](security.md) | `packages/security`, `apps/orchestrator/src/http/security.ts` |
 | Git integration | [git.md](git.md) | `packages/git` |
 | Releases (Release stage and button, proof of live) | [release.md](release.md) | `apps/orchestrator/src/release`, `packages/tools/src/packs/cloudflare-api.ts` |

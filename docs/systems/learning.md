@@ -136,9 +136,9 @@ Code `--plugin-dir` per non-empty folder (measured on 2.1.280: loaded under
 `--setting-sources project,local`, zero turns). `ContextBuilder.lessons` adds
 "## Lessons from earlier tasks" after the Chairman guidance (≤ 10 lines):
 lessons, then skills — "loaded for this run" when the stage's agent declares
-`pluginDirs` (Claude Code; read from the adapter, [agents.md](agents.md#declared-capabilities)),
+`pluginDirs` (Claude Code; read from the adapter, [agents-contract.md](agents-contract.md#declared-capabilities)),
 the SKILL.md path for other agents. The skills still run inside the stage's closed tool set
-([agents.md](agents.md#skills)).
+([agents-skills.md](agents-skills.md#skills)).
 
 ## Programs ([installer.ts](../../packages/tools/src/packs/installer.ts))
 

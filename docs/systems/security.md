@@ -38,9 +38,9 @@ the orchestrator logs the **names** of any such variable it withheld.
 `CLAUDE_CODE_OAUTH_TOKEN` (the subscription sign-in) is kept. Adapters verify the CLI's own login before each launch
 (cached 5 minutes) and refuse API-key logins; a Claude Code run also stops
 unless its init event reports `apiKeySource: none`, a missing field or a
-missing init event included ([agents.md](agents.md#claude-code-agent-claude)). The shared adapter
+missing init event included ([agents-claude-code.md](agents-claude-code.md#claude-code-agent-claude)). The shared adapter
 conformance kit checks the stripping and the login refusal for every adapter
-([agents.md](agents.md#adapter-conformance-kit)). Explicit API Mode requires typing
+([agents-contract.md](agents-contract.md#adapter-conformance-kit)). Explicit API Mode requires typing
 `API BILLING` in Settings → Billing — checked by the server: `PATCH /api/settings`
 with `billingMode: 'api'` is 422 `CONFIRMATION_REQUIRED` unless the body carries
 `confirmation: 'API BILLING'` — and shows a persistent indicator.
@@ -226,7 +226,7 @@ runs a command line — `shell.*`, `process.exec|start`, `terminal.send`,
 `git.bisect`, `verify.web`, `node.run_script` — a terminal's line at Enter,
 and the commands the engine's stages run
 ([tool-system.md](tool-system.md#the-execution-door-servicets)). Claude's
-native shell denies the usual spellings from Level 3 ([agents.md](agents.md)).
+native shell denies the usual spellings from Level 3 ([agents-claude-code.md](agents-claude-code.md)).
 
 ## Chairman ([chairman.md](chairman.md))
 
@@ -291,7 +291,7 @@ auto-approve: up to 3 (global, per repository, per task). Stages above it wait
 for approval.
 
 **A repository or the operator's CLI settings cannot widen a stage**
-([agents.md](agents.md)). Claude Code adds the `permissions.allow` rules of every
+([agents-claude-code.md](agents-claude-code.md)). Claude Code adds the `permissions.allow` rules of every
 settings file a run loads (a repository's `.claude/settings.json` allowing
 `Bash(*)`, for one) to the Control Center's, and only a deny rule or a missing
 tool beats an allow rule; so each level's limits are deny rules, and Level 1,
@@ -324,7 +324,7 @@ Where it cannot run — no build,
 or a repository whose settings switch hooks off — the run has no native shell
 at all, and its reads keep only the deny rules. At every level the run's deny
 rules refuse Claude's own tools the token, database and key files, the listen
-port by name, and Claude Code's settings files ([agents.md](agents.md)) — from
+port by name, and Claude Code's settings files ([agents-claude-code.md](agents-claude-code.md)) — from
 Level 2 a backstop behind the hook. Codex runs with
 `--ignore-rules`, because an execpolicy `allow` rule runs a command outside the
 sandbox. `pnpm verify:agents --permissions` proves the Claude side with real
@@ -357,7 +357,7 @@ With `account`:
   [agent-relay.ps1](../../scripts/windows/agent-relay.ps1) — same program,
   arguments, folder, environment (its user-folder variables its own), prompt on
   stdin, streamed output and exit code, the whole run in a job that ends with
-  the relay ([agents.md](agents.md)). A run that cannot start so fails with
+  the relay ([agents-contract.md](agents-contract.md)). A run that cannot start so fails with
   `PERMISSION_DENIED` and the reason; it never runs as the operator. Ask, the
   Chairman and commit-message drafts — Level 1, no shell, working in the data
   folder or your repository — stay runs as you.

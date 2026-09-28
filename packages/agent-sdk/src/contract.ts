@@ -229,7 +229,7 @@ export interface AgentAdapter {
   listModels(options: AgentRuntimeOptions): Promise<ModelDescriptor[]>;
   /**
    * Skills this CLI would load in `cwd`, named as it invokes them. Optional: an
-   * agent that cannot report its skills lists none (docs/systems/agents.md#skills).
+   * agent that cannot report its skills lists none (docs/systems/agents-skills.md#skills).
    */
   listSkills?(options: AgentRuntimeOptions, cwd: string): Promise<SkillInfo[]>;
 

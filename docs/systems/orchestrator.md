@@ -195,7 +195,7 @@ phone alerts start — alerts send what a restart left unsent in the last hour,
 [operations.md](operations.md#phone-alerts) — and `close()` stops alerts
 before the learning loop), gives the classifier and every agent run's native
 rules the data folder and listen port (`setSelfReferences`,
-`AgentRegistry.setControlCenter`, [agents.md](agents.md)), the tool layer
+`AgentRegistry.setControlCenter`, [agents-claude-code.md](agents-claude-code.md)), the tool layer
 its listen URL (agent tool sessions need it) and the MCP service its listen
 port (OAuth sign-ins come back to it), refreshes stale tool detection
 and loads stored credentials into the redactor in the background,

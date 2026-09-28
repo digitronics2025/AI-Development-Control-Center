@@ -85,7 +85,7 @@ export interface AppServices {
   /** MyVault bridge sessions (memory only) and trusted origins. */
   vaultBridge: VaultBridgeService;
   mcp: McpService;
-  /** Skills the enabled agents would load, per repository (docs/systems/agents.md#skills). */
+  /** Skills the enabled agents would load, per repository (docs/systems/agents-skills.md#skills). */
   skills: SkillCatalog;
   tooling: EngineTooling;
   privileged: PrivilegedHelper;

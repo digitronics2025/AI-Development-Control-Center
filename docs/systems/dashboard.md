@@ -137,7 +137,7 @@ Models ends with **Installed versions**, each agent's detected CLI version and,
 when `AgentInfo.compat` puts it outside the versions the Control Center was tested
 with, an **Unverified** badge (the neutral `Badge` with a warning icon) and the
 tested range in words — [agent-versions.tsx](../../apps/dashboard/src/components/agent-versions.tsx),
-[agents.md](agents.md#tested-cli-versions); Media
+[agents-contract.md](agents-contract.md#tested-cli-versions); Media
 generation holds **Allow paid generation** and **Budget per task** in dollars,
 whole cents allowed (`LimitField` with `cents`; empty is invalid, not $0),
 see [design-agent.md](design-agent.md#spend-gate); Workflows

@@ -1,5 +1,5 @@
 /**
- * Tested CLI versions (docs/systems/agents.md#tested-cli-versions): each
+ * Tested CLI versions (docs/systems/agents-contract.md#tested-cli-versions): each
  * adapter names, in agents.compat.json, the CLI versions it was verified
  * against. An installed version outside that range still runs — the adapter's
  * fail-closed checks (billing tripwire, PROTOCOL_DRIFT) guard it — but the

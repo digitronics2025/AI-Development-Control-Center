@@ -593,6 +593,26 @@ async function verifyCodexMcp() {
       console.log(`info  switched off by name: ${off.join(', ') || 'none'}`);
       if (!ok) failures++;
     }
+    // Codex asks before an MCP tool not marked read-only, and exec refuses the prompt; the adapter approves the
+    // bridge's tools (the Control Center judges each call). A tool without readOnlyHint must run.
+    const fixture = path.join(import.meta.dirname, '..', 'packages', 'mcp', 'test', 'fixtures', 'echo-server.mjs');
+    const cwd = path.join(dir, 'repo-tools');
+    mkdirSync(cwd, { recursive: true });
+    const handle = await codex.adapter.execute({
+      ...options,
+      executionId: randomUUID(),
+      cwd,
+      prompt: 'Call the tool "env" on the MCP server named "acc" and reply with exactly what it returned, or the exact error if it was refused. Do not run shell commands.',
+      model: codex.model,
+      effort: 'low',
+      permissionLevel: 1,
+      timeoutMs: 240_000,
+      toolBridge: { name: 'acc', command: process.execPath, args: [fixture], env: {} },
+    });
+    const result = await handle.done;
+    const called = result.status === 'succeeded' && /token=/i.test(result.output) && !/requires approval/i.test(result.output);
+    console.log(`${called ? 'pass' : 'FAIL'}  a Control Center tool not marked read-only runs in a Codex stage — ${redact.redact(result.output || result.errorMessage || result.status).slice(0, 200)}`);
+    if (!called) failures++;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

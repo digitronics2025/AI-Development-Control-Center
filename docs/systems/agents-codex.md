@@ -81,7 +81,8 @@ How ([index.ts](../../packages/agent-codex/src/index.ts) `buildArgs`):
 the operator's real config it runs the shipped argv with a stand-in `acc`
 server, config loaded and ignored, and passes only when Codex's log names `acc`
 alone at session start, no other server starts or fails to start, and the
-stand-in was started. 2026-09-27: 3/3 pass, `tenten-d1` switched off by name in
+stand-in was started; then a tool not marked read-only must run on a stand-in
+`acc` (the approval setting in [agents-contract.md](agents-contract.md)). 2026-09-27: 3/3 pass, `tenten-d1` switched off by name in
 tenten-accounting-in.
 
 Last verified: 2026-09-28

@@ -71,6 +71,27 @@ describe('F-02: an agent cannot reach the Control Center itself through any tool
     const outcome = await t.services.tools.invoke({ capability: 'http.request', input: { method: 'GET', url: 'http://127.0.0.1:9/' }, origin: 'agent', scope: scope() });
     expect(outcome.decision).not.toBe('deny');
   });
+
+  it("lets an isolated task name its own worktree, which lives in the data folder, and nothing past it", async () => {
+    // Seen live (TASK-0022, 2026-09-28): the designer's process.start with cwd = its worktree was refused as the
+    // Control Center's own data folder, so it could not start the app to look at it.
+    const worktree = path.join(t.dataDir, 'worktrees', 'shop-1a2b3c', 'TASK-0099');
+    mkdirSync(path.join(worktree, 'src'), { recursive: true });
+    writeFileSync(path.join(worktree, 'src', 'a.txt'), 'in the worktree\n');
+    const own = scope({ cwd: worktree, roots: [worktree], stageLevel: 2, autoApproveUpToLevel: 2, profile: 'general' });
+    const ok = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `Get-Content "${path.join(worktree, 'src', 'a.txt')}"`, cwd: worktree }, origin: 'agent', scope: own });
+    expect(ok.result.summary).not.toMatch(/Control Center's own/);
+    expect(ok.decision).not.toBe('deny');
+    // Climbing out of the worktree reaches the data folder again: refused, whatever the spelling.
+    for (const script of [`Get-Content "${path.join(worktree, '..', '..', '..', 'acc.db')}"`, `Get-Content "${worktree}\\..\\..\\..\\auth-token"`, `dir "${path.join(t.dataDir, 'tasks')}"`]) {
+      const out = await t.services.tools.invoke({ capability: 'shell.run', input: { script }, origin: 'agent', scope: own });
+      expect(out.decision, script).toBe('deny');
+    }
+    // A sibling task's worktree is not this task's.
+    const sibling = path.join(t.dataDir, 'worktrees', 'shop-1a2b3c', 'TASK-0098');
+    const other = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `dir "${sibling}"` }, origin: 'agent', scope: own });
+    expect(other.decision).toBe('deny');
+  });
 });
 
 describe('F-54: switching to API billing needs the typed phrase on the server', () => {

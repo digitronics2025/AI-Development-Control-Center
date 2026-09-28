@@ -323,6 +323,27 @@ describe('the native shell precheck (SEC-3 step 2)', () => {
     await t!.api('POST', `/api/tasks/${taskId}/cancel`);
   }, 60_000);
 
+  it('lets a task name its own worktree left in the data folder, and nothing else there (relativizeOwnRoots)', async () => {
+    const { taskId, session } = await runningStage();
+    // A worktree the move at start could not relocate: it still lives in the data folder.
+    const legacy = path.join(t!.dataDir, 'worktrees', 'app', 'TASK-LEGACY');
+    mkdirSync(legacy, { recursive: true });
+    const token = t!.services.tools.openSession({ ...session.scope, cwd: legacy, roots: [legacy] }, 'agent').token;
+    const shell = async (command: string) => (await t!.api('POST', '/api/tool-session/precheck', { command }, sessionHeaders(token))).body;
+    const read = async (file: string) => (await t!.api('POST', '/api/tool-session/precheck', { tool: 'Read', input: { file_path: file } }, sessionHeaders(token))).body;
+    for (const command of [`ls ${legacy}`, `cat "${path.join(legacy, 'README.md')}"`, `node "${path.join(legacy, 'probe.test.mjs').replace(/\\/g, '/')}"`]) {
+      expect(await shell(command), command).toEqual({ decision: 'allow' });
+    }
+    expect(await read(path.join(legacy, 'src', 'a.ts'))).toEqual({ decision: 'allow' });
+    // Climbing out, a sibling task's worktree and the data folder's own files stay refused.
+    for (const command of [`cat "${path.join(legacy, '..', '..', '..', 'auth-token')}"`, `ls ${path.join(t!.dataDir, 'worktrees', 'app', 'TASK-OTHER')}`, `cat "${path.join(t!.dataDir, 'auth-token')}"`]) {
+      expect((await shell(command)).decision, command).toBe('deny');
+    }
+    expect((await read(path.join(legacy, '..', '..', '..', 'auth-token'))).decision).toBe('deny');
+    expect((await read(path.join(t!.dataDir, 'auth-token'))).decision).toBe('deny');
+    await t!.api('POST', `/api/tasks/${taskId}/cancel`);
+  }, 60_000);
+
   it("runs the approved stage's own level above the task's auto-approve ceiling, and nothing above the stage", async () => {
     const { taskId, session, worktree, rows } = await runningStage();
     const open = (over: Partial<typeof session.scope>) => t!.services.tools.openSession({ ...session.scope, ...over }, 'agent').token;

@@ -34,8 +34,11 @@ The token and URL travel only in the agent's environment
 - Claude Code: `--mcp-config <temp file>` naming the variables as
   `${ACC_TOOL_SESSION}` (never the value), and `mcp__acc` added to
   `--allowedTools`; the file is deleted when the run ends.
-- Codex: `-c mcp_servers.acc.command=…`, `args=…`, and
-  `env_vars=["ACC_TOOL_URL","ACC_TOOL_SESSION"]` to forward them.
+- Codex: `-c mcp_servers.acc.command=…`, `args=…`,
+  `env_vars=["ACC_TOOL_URL","ACC_TOOL_SESSION"]` to forward them, and
+  `default_tools_approval_mode="approve"`: `codex exec` otherwise refuses every
+  tool not marked read-only, and the Control Center judges each call itself
+  ([agents.md](agents.md)).
 
 The prompt gains a "Control Center tools" section (at Level 1 it also says to read Git
 through `git__status`/`git__diff`/`git__log`/`git__show`: Claude Code has no shell there,

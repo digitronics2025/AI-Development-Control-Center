@@ -108,6 +108,14 @@ from Level 2, a precheck of every native shell command and file read
 ([Permission levels](#permission-levels)).
 Agents' worktrees live in the work root, outside the data folder, so naming
 their own files trips none of this ([orchestrator.md](orchestrator.md#work-root-acc_work_dir)).
+A task whose worktree still lives in the data folder (one the move at start
+could not relocate) is judged with its own folders written relative to them
+(`relativizeOwnRoots`: `…worktreesappTASK-0022src` → `.src`), by the
+tool door and the native precheck alike: its own paths are not the Control
+Center's files, while a path that climbs out (`..`), a sibling task's worktree
+or the data folder itself is still refused; only the judging sees that form,
+the call runs with its input as given (seen live on TASK-0022, before worktrees
+moved: the designer's `process.start` in its worktree was refused).
 All of it is lexical, and unless agent isolation is on agents run as the
 operator's own Windows user: a program that builds the path or the address at
 run time, or reads the files through anything these guards do not read, is not

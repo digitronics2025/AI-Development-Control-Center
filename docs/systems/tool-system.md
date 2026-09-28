@@ -70,7 +70,9 @@ repositories it first narrows the call to the repository its `cwd`/`directory`
 names — roots and credentials included, [multi-repository-tasks.md](multi-repository-tasks.md#tool-calls)):
 
 1. route → 2. validate input → 3. classify (`classify()` may raise or lower
-the level: a recursive delete is Level 5, a read-only shell script Level 1) →
+the level: a recursive delete is Level 5, a read-only shell script Level 1;
+judged, with the self-reference check, on the input with the task's own folders
+made relative — `relativizeOwnRoots`, [security.md](security.md)) →
 4. policy ([autopilot.md](autopilot.md)): allow, **escalate** (outside the
 stage's profile but within its level — recorded in `capability_escalations`
 and as a `CAPABILITY_ESCALATED` event), needs approval, or deny; before it, a

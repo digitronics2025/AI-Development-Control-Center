@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { GuardedFileTool } from '@acc/agent-claude';
 import { resolveShell, type ShellInfo, type ShellKind } from '@acc/executor';
-import { classifyCommand, constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, referencesSelf, sanitizeEnv } from '@acc/security';
+import { classifyCommand, constantTimeEqual, inputReferencesSelf, maskPersonalData, maskPersonalText, redact, referencesSelf, relativizeOwnRoots, sanitizeEnv } from '@acc/security';
 import type { CapabilityView, EventType, PermissionLevel, PolicyMode, ToolCallOrigin, ToolExecution, ToolExecutionStatus, ToolView } from '@acc/shared';
 import {
   builtinProviders,
@@ -167,6 +167,11 @@ export const NATIVE_FILE_PATHS: Readonly<Record<GuardedFileTool, readonly string
 /** A native call no approval can let through: Level 5, dangerous. */
 function dangerous(reason: string, effect: ToolRisk['effects'][number]): ToolRisk {
   return { level: 5, risk: 'dangerous', reasons: [reason], effects: [effect], production: false };
+}
+
+/** The task's own folders, which a call may name as its own (`relativizeOwnRoots`): its roots, working folder and linked repositories. */
+function ownRoots(scope: ToolScope): string[] {
+  return [...scope.roots, scope.cwd, ...(scope.repositories ?? []).map((r) => r.root)];
 }
 /** A path segment `..`: a read-only folder's mention followed by one leaves the folder. */
 const PARENT_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
@@ -556,9 +561,12 @@ export class ToolService {
     if (!parsed.success) return refuse('failed', 'INVALID_INPUT', `Invalid input for ${req.capability}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`, 'deny');
     const input = parsed.data;
 
-    // 3. Classify this concrete call.
+    // 3. Classify this concrete call. It is judged with the task's own folders written relative to them: an isolated
+    // task's worktree lives in the data folder, and its own path is not the Control Center's files. Only the judging
+    // sees this form; the call runs with its input as given.
+    const judged = relativizeOwnRoots(input, ownRoots(scope));
     const processHost = this.d.processes.host(scope.taskId, scope.stageId);
-    const classified = operation.classify?.(input, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
+    const classified = operation.classify?.(judged, { cwd: scope.cwd, isTaskOwnedPid: (pid) => processHost.isTaskOwnedPid(pid), releaseBranches: this.releaseBranchesOf(scope) });
     // Fails closed: a call is a read only when its operation says so and its classification does not say otherwise.
     const risk: ToolRisk = { ...this.baseRisk(operation.level, operation.title), ...classified, writes: classified?.writes ?? !operation.readOnly };
 
@@ -566,7 +574,7 @@ export class ToolService {
     // any tool: it runs as the operator's user, so that would let it act as the operator (audit F-02).
     // Every URL in the input is read the way the tool's own `new URL()` will read it, so `127.1:4317`,
     // `2130706433:4317` and `[::ffff:127.0.0.1]:4317` are the listen address too (SEC-1).
-    if (req.origin === 'agent' && inputReferencesSelf(input)) {
+    if (req.origin === 'agent' && inputReferencesSelf(judged)) {
       const self: ToolRisk = { ...risk, level: 5, risk: 'dangerous', reasons: ["Reaches the Control Center's own token, data folder or API"] };
       this.escalate(scope, req.capability, 'denied', self.reasons[0]!, 5);
       return refuse('denied', 'DENIED', `${self.reasons[0]}. Agents cannot do this; report it as an operator decision.`, 'deny', self);
@@ -800,9 +808,12 @@ export class ToolService {
       const reason = "Changes the Control Center's check of shell commands, which would switch it off";
       return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'persistence'));
     }
+    // Judged with the task's own folders written relative to them, as `invoke` judges a tool call: a worktree the
+    // start could not move out of the data folder is the task's own, not the Control Center's files.
+    const judged = relativizeOwnRoots(command, ownRoots(scope));
     // The learned plugins may be read; a command that does more than read them is judged as written.
-    const excused = excuseReadOnlyFolders(command, [learnedPluginsRoot(this.d.dataDir)]);
-    const text = excused !== command && classifyCommand(excused).readOnly ? excused : command;
+    const excused = excuseReadOnlyFolders(judged, [learnedPluginsRoot(this.d.dataDir)]);
+    const text = excused !== judged && classifyCommand(excused).readOnly ? excused : judged;
     if (referencesSelf(text)) {
       const reason = "Reaches the Control Center's own token, data folder or API";
       return refuse(`${reason}. Agents cannot do this; report it as an operator decision.`, dangerous(reason, 'credentials'));
@@ -851,7 +862,8 @@ export class ToolService {
     for (const [field, value] of Object.entries(given)) for (const p of [...spellings(value), ...absolute(value, field === 'glob' || field === 'pattern' ? roots : bases)]) add(p);
     for (const root of roots) add(root);
     const readable = [learnedPluginsRoot(this.d.dataDir), ...(scope.taskId ? [path.join(this.d.dataDir, 'tasks', scope.taskId, 'attachments')] : [])];
-    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(p, readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
+    const own = ownRoots(scope);
+    if ([...candidates].some((p) => referencesSelf(excuseReadOnlyFolders(relativizeOwnRoots(p, own), readable)))) return refuse("Reads the Control Center's own data folder, token or key files");
     const data = path.resolve(this.d.dataDir);
     if (roots.some((root) => isInside(root, data) || isInside(realish(root), realish(data)))) return refuse("Searches a folder that holds the Control Center's own data folder");
     return { decision: 'allow' };

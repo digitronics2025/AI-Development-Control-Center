@@ -56,9 +56,16 @@ was reported as "finished without producing any output".
 Control Center's stdio MCP server to a run; its session token is put in the
 agent's environment only ([mcp.md](mcp.md)). Claude Code gets a temporary
 `--mcp-config` file referencing the variable by name and `mcp__acc` in its
-allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars`, and every
-other MCP server switched off ([agents-codex.md](agents-codex.md#mcp-servers-in-a-codex-run)). The file is
-removed when the run ends.
+allowed tools; Codex gets `-c mcp_servers.acc.*` with `env_vars` and
+`default_tools_approval_mode="approve"`, and every other MCP server switched off
+([agents-codex.md](agents-codex.md#mcp-servers-in-a-codex-run)). Codex asks before any MCP tool not
+marked read-only and `exec` refuses every such prompt ("MCP tool call requires
+approval, but approval policy is never"): measured on 0.156.1 (2026-09-28), a
+read-only tool ran and any other was refused, so a Codex critic, reviewer or
+verifier could not use the Control Center's tools at all (TASK-0022). The
+Control Center judges each call itself (level, profile, approvals, spend gate,
+self-reference), so its tools are approved in Codex, as Claude Code allows
+`mcp__acc`. The file is removed when the run ends.
 
 ## Declared capabilities
 

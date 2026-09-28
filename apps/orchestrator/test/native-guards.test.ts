@@ -180,7 +180,14 @@ describe('worktrees made in the data folder move to the work root once, at start
     const again = await t.services.tooling.relocateLegacyWorkFolders();
     expect(again.moved).toEqual([]);
     expect(again.kept).toEqual([{ taskId: id, reason: expect.stringContaining('already exists') }]);
-  }, 90_000);
+    // No agent works there: the run is refused before it starts, and the task waits for the operator saying why
+    // (review, 2026-09-28: a folder in the data folder is a `..` from the Control Center's own files).
+    const status = t.services.store.getTask(id)!.status;
+    if (status !== 'RUNNING' && status !== 'WAITING_FOR_USER') expect((await t.api('POST', `/api/tasks/${id}/resume`)).status).toBe(200);
+    const waiting = await waitFor(() => t!.services.store.getTask(id)!, (task) => task.status === 'WAITING_FOR_USER', 60_000, 'the refusal');
+    expect(waiting.blocker?.message).toMatch(/still inside the Control Center's data folder/);
+    expect(t.services.store.listExecutions(id).filter((e) => e.kind === 'agent' && e.cwd === kept)).toEqual([]);
+  }, 120_000);
 
   it("moves a multi-repository task's workspace whole, and every repository's record of its worktree", async () => {
     t = await createTestApp();
@@ -323,19 +330,20 @@ describe('the native shell precheck (SEC-3 step 2)', () => {
     await t!.api('POST', `/api/tasks/${taskId}/cancel`);
   }, 60_000);
 
-  it('lets a task name its own worktree left in the data folder, and nothing else there (relativizeOwnRoots)', async () => {
+  it('refuses every path into the data folder, a task folder left there included: no agent works there', async () => {
     const { taskId, session } = await runningStage();
-    // A worktree the move at start could not relocate: it still lives in the data folder.
+    // A worktree the move at start could not relocate: it still lives in the data folder. Its runs are refused before
+    // they start (runners.launchAgent), and the checks read a call as written, so naming it is refused too (review,
+    // 2026-09-28: writing it relative let a climb out of it hide the data folder's name).
     const legacy = path.join(t!.dataDir, 'worktrees', 'app', 'TASK-LEGACY');
     mkdirSync(legacy, { recursive: true });
     const token = t!.services.tools.openSession({ ...session.scope, cwd: legacy, roots: [legacy] }, 'agent').token;
     const shell = async (command: string) => (await t!.api('POST', '/api/tool-session/precheck', { command }, sessionHeaders(token))).body;
     const read = async (file: string) => (await t!.api('POST', '/api/tool-session/precheck', { tool: 'Read', input: { file_path: file } }, sessionHeaders(token))).body;
     for (const command of [`ls ${legacy}`, `cat "${path.join(legacy, 'README.md')}"`, `node "${path.join(legacy, 'probe.test.mjs').replace(/\\/g, '/')}"`]) {
-      expect(await shell(command), command).toEqual({ decision: 'allow' });
+      expect((await shell(command)).decision, command).toBe('deny');
     }
-    expect(await read(path.join(legacy, 'src', 'a.ts'))).toEqual({ decision: 'allow' });
-    // Climbing out, a sibling task's worktree and the data folder's own files stay refused.
+    expect((await read(path.join(legacy, 'src', 'a.ts'))).decision).toBe('deny');
     for (const command of [`cat "${path.join(legacy, '..', '..', '..', 'auth-token')}"`, `ls ${path.join(t!.dataDir, 'worktrees', 'app', 'TASK-OTHER')}`, `cat "${path.join(t!.dataDir, 'auth-token')}"`]) {
       expect((await shell(command)).decision, command).toBe('deny');
     }
@@ -399,23 +407,6 @@ describe('the native shell precheck (SEC-3 step 2)', () => {
     const up = [plugins, '..', '..', 'acc.db'].join(path.sep);
     for (const command of [`node "${path.join(plugins, 'global', 'run.js')}"`, `echo x > "${skill}"`, `cat "${up}"`, `cat ${up.replace(/\\/g, '/')}`, `cat "${skill}" "${path.join(t!.dataDir, 'acc.db')}"`]) {
       expect((await ask(command)).body.decision, command).toBe('deny');
-    }
-    await t!.api('POST', `/api/tasks/${taskId}/cancel`);
-  }, 60_000);
-
-  it("reads a relative climb from the folder the agent's shell is in, following each cd, for a worktree left in the data folder", async () => {
-    // Review, 2026-09-28: the hook did not say where the shell was, and a cd earlier in the line was not followed.
-    const { taskId, session } = await runningStage();
-    const legacy = path.join(t!.dataDir, 'worktrees', 'app', 'TASK-L');
-    mkdirSync(path.join(legacy, 'src'), { recursive: true });
-    const inData = t!.services.tools.openSession({ ...session.scope, cwd: legacy, roots: [legacy] }, 'agent');
-    const ask = (command: string, cwd?: string) => t!.api('POST', '/api/tool-session/precheck', { command, ...(cwd ? { cwd } : {}) }, sessionHeaders(inData.token));
-    for (const [command, cwd] of [['cat ../../../../acc.db', path.join(legacy, 'src')], ['cd src && cat ../../../../acc.db'], ['cd ..; cd ..; cd ..; cat acc.db']] as Array<[string, string?]>) {
-      expect((await ask(command, cwd)).body.decision, command).toBe('deny');
-    }
-    // Work inside its own folders is not refused: a climb read from where it runs stays inside.
-    for (const [command, cwd] of [['cd src && cat ../package.json'], ['cat ../package.json', path.join(legacy, 'src')], ['git commit -m "Move helpers to ../../shared"']] as Array<[string, string?]>) {
-      expect((await ask(command, cwd)).body.decision, command).not.toMatch(/deny/);
     }
     await t!.api('POST', `/api/tasks/${taskId}/cancel`);
   }, 60_000);

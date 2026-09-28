@@ -123,34 +123,21 @@ from Level 2, a precheck of every native shell command and file read
 ([Permission levels](#permission-levels)).
 Agents' worktrees live in the work root, outside the data folder, so naming
 their own files trips none of this ([orchestrator.md](orchestrator.md#work-root-acc_work_dir)).
-A call is judged with the task's own folders written relative
-(`relativizeOwnRoots`: `…\worktrees\app\TASK-0022\src` → `.\src`), by the tool
-door and the native precheck alike, so a worktree still in the data folder
-(one the move at start could not relocate) is not the Control Center's files,
-and a whole-tree command on the task's own folder reads as one. It is
-classified in two readings and the stricter counts: relative to the folder the
-call runs in (a sibling repository of a multi-repository task is `..\api`, so
-the release gate reads the right one) and relative to the root that holds each
-path (`git -C <api> checkout -- <api>` is `git checkout -- .`, discarding
-everything). The self-reference check reads it failing closed: with a `..` in
-any string the input is judged as written, so a climb out stays refused however
-it is spelled — a space or bracket in the path, the root in its own quotes, in a
-variable or in another argument — and only the call's own `cwd` is still written
-relative. A relative climb (`..\..\..\acc.db`, `"$PWD"\..\..\..\acc.db`), or a
-`cd` (`cd ..` typed three times), is read from the folder that part of the
-command runs in — the call's `cwd`, else the folder the agent's native shell is
-in (its hook reports it), else the task's folder, then moved by each `cd`,
-`pushd` or `Set-Location` before it — and refused when it lands in the Control
-Center's files outside the task's own (`relativeClimbTargets`). Text the call
-does not act on as a path is not read: a file's content, what a patch finds and
-writes, a request body, a commit message (`-m`, `--message`), a page's HTML. A
-sibling task's worktree or the data folder itself is refused too. Only the
-judging sees these forms, the call runs with its input as given (seen live on
-TASK-0022, before worktrees moved: the designer's `process.start` in its
-worktree was refused; the climbs and the classification found in three reviews,
-2026-09-28). A folder a variable holds, or one a program changes to, is not
-followed; a worktree left in the data folder that names itself absolutely next
-to a `..` is refused, and should use paths relative to its folder.
+No agent works inside the data folder: a task folder the move at start could
+not relocate has its runs refused before they start, and the task waits for you
+with the reason (`runners.launchAgent`, [orchestrator.md](orchestrator.md)).
+So the self-reference check reads every call as written, and any path into the
+data folder is refused however it is spelled — through a space or bracket in
+the path, the root in its own quotes, in a variable or in another argument
+(2026-09-28: an earlier version wrote a task's own folder relative before this
+check, and a climb out of it then hid the data folder's name; guessing where a
+relative climb lands from the text was tried and dropped, since each rule
+opened another gap). A call is classified — never checked for self-reference —
+with the task's own folders written relative (`relativizeOwnRoots`), in two
+readings, the stricter counting: relative to the folder it runs in (a sibling
+repository of a multi-repository task is `..\api`, so the release gate reads the
+right one) and relative to the root that holds each path (`git -C <api> checkout
+-- <api>` is `git checkout -- .`, discarding everything).
 All of it is lexical, and unless agent isolation is on agents run as the
 operator's own Windows user: a program that builds the path or the address at
 run time, or reads the files through anything these guards do not read, is not

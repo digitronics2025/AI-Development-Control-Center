@@ -875,16 +875,18 @@ describe('discarding the whole working tree, however the tree is written', () =>
     'git checkout HEAD .',
     'git restore --staged --worktree .',
     'GIT checkout -- .',
+    // Fourth review: a word that starts like git, and git's shortened --worktree, never lower it.
+    'git checkout git-feature -f',
+    'git switch git-x --discard-changes',
+    'git restore --staged --work .',
+    // Fails closed as before: --staged alone only unstages, but is judged with the rest.
+    'git restore --staged .',
   ])('%s is Level 5', (command) => {
     expect(classifyCommand(command)).toMatchObject({ level: 5, reasons: expect.arrayContaining(['Discards uncommitted work']) });
   });
 
   it.each(['git checkout -- ./src', 'git checkout -- .env', 'git checkout -- "src/a.ts"', 'git restore ./README.md'])('%s discards files, not the tree', (command) => {
     expect(classifyCommand(command).level).toBe(3);
-  });
-
-  it.each(['git restore --staged .', 'git restore --staged ./', 'git restore -S .'])('%s only unstages', (command) => {
-    expect(classifyCommand(command).level).toBeLessThan(5);
   });
 
   it('reads a long line in time', () => {

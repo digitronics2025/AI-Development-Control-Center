@@ -106,11 +106,11 @@ const PATTERNS: Pattern[] = [
   // `git clean` with a force flag anywhere (`-fd`, `-d -f`, `--force`) deletes untracked files (audit F-13).
   { test: /\bgit\s+clean\b(?=[^;&|]*\s(?:-[a-z]*f[a-z]*|--force)(?:\s|$))/i, risk: 'dangerous', level: 5, reason: 'Deletes untracked files', effects: ['git', 'filesystem'] },
   { test: /\bgit\s+reset\s+--hard\b/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
-  // The whole tree however it is written — `.`, `"."`, `'.'`, `./`, `:/`, after `--`, options or a tree-ish
-  // (`git checkout HEAD -- .`, `git restore -s HEAD .`) — but not `git restore --staged` alone, which only unstages
-  // (review, 2026-09-28). Case-sensitive, as Git is: `-S` is --staged, `-s` a source. Each run of words stops at the
-  // next `git`, so a long line is read once, not once per `git` in it.
-  { test: /\b[Gg][Ii][Tt]\s+(?:checkout|restore(?!(?=(?:\s+(?![Gg][Ii][Tt]\b)[^\s;&|]+)*?\s+(?:--staged|-S)(?=\s|$))(?!(?:\s+(?![Gg][Ii][Tt]\b)[^\s;&|]+)*?\s+(?:--worktree|-W)(?=\s|$))))(?:\s+(?![Gg][Ii][Tt]\b)[^\s;&|]+)*?\s+["']?(?:\.[\\/]?|:[\\/])["']?(?=\s|$|[;&|)])|\b[Gg][Ii][Tt]\s+(?:checkout|switch)(?:\s+(?![Gg][Ii][Tt]\b)[^\s;&|]+)*?\s+(?:-f|--force|--discard-changes)(?=\s|$)/, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
+  { test: /\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)|\bgit\s+restore\s+(?:--\S+\s+)*\.(?:\s|$)|\bgit\s+(?:checkout|switch)\b[^;&|]*\s(?:-f|--force|--discard-changes)(?:\s|$)/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
+  // The same, written otherwise: the tree as `"."`, `'.'`, `./` or `:/`, after `--`, options or a tree-ish
+  // (`git checkout HEAD -- .`, `git restore -s HEAD .`) (review, 2026-09-28). Added beside the rule above, so nothing it
+  // rates is rated lower; each run of words stops at the next bare `git`, so a long line is read once.
+  { test: /\bgit\s+(?:checkout|restore)(?:\s+(?!git(?:\.exe)?(?=\s|$))[^\s;&|]+)*?\s+["']?(?:\.[\\/]?|:[\\/])["']?(?=\s|$|[;&|)])/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
   { test: /\bgit\s+push\b.*(?:\s--force\b|\s-f\b|\s--force-with-lease\b|\s\+\S+)/i, risk: 'dangerous', level: 5, reason: 'Force push rewrites remote history', effects: ['git', 'network'] },
   { test: /\bgit\s+push\b.*\s(?:--delete|-d|--mirror|--prune)\b|\bgit\s+push\s+\S+\s+:\S+/i, risk: 'dangerous', level: 5, reason: 'Deletes remote branches', effects: ['git', 'network'] },
   { test: /\bgit\s+(?:filter-branch|filter-repo)\b|\bgit\s+rebase\b|\bgit\s+commit\b.*--amend\b/i, risk: 'dangerous', level: 5, reason: 'Rewrites Git history', effects: ['git'] },
@@ -465,121 +465,20 @@ export function webUrlReferencesSelf(url: URL): boolean {
 }
 
 /**
- * `referencesSelf` over a structured tool input: its JSON text, and every
- * string in it as it is (JSON escapes a `\`) and read as a URL the way the
- * tool's own `new URL(…)` would (`http:127.1:4317` has no `//` to find in text).
- * The Host header rule reads the input's objects (`requestOverridesHost`) and
- * each string on its own — never the JSON text, where a file's lines run
- * together — and a string that is a JSON document by its objects too.
- */
-/** A `..` path segment anywhere in a string: between separators, quotes, brackets or command punctuation. */
-const CLIMB = /(?:^|[\\/\s"'`(=:;,|&<>])\.\.(?=$|[\\/\s"'`);,|&<>])/;
-
-/** Every string in a tool input, and every key, as far down as the checks read (20 levels). */
-function eachString(input: unknown, visit: (text: string, key: string | null) => void): void {
-  const walk = (value: unknown, key: string | null, depth: number): void => {
-    if (depth > 20) return;
-    if (typeof value === 'string') visit(value, key);
-    else if (Array.isArray(value)) for (const v of value) walk(v, key, depth + 1);
-    else if (value && typeof value === 'object') {
-      for (const [k, v] of Object.entries(value)) {
-        visit(k, null);
-        walk(v, k, depth + 1);
-      }
-    }
-  };
-  walk(input, null, 0);
-}
-
-/**
- * Text a call carries but never acts on as a path or runs: a file's content, the text a patch finds and writes, a
- * request body, a commit message, a page's HTML. A relative import in code (`../../lib`) is relative to its file,
- * and file tools are confined to the task's folders anyway. What a call runs (`script`, `command`, `stdin`, `text`
- * typed into a terminal) is never here.
- */
-const CONTENT_KEYS = new Set(['content', 'find', 'replace', 'body', 'message', 'html']);
-
-/** A relative path with a `..` in one word of a command, read from the folder it runs in; null when it is not one. */
-function climbWord(raw: string): string | null {
-  if (!raw || !CLIMB.test(raw) || /^(?:[A-Za-z]:|[a-z][a-z+.-]*:\/\/|[\\/]{2})/i.test(raw)) return null;
-  // `$w\..`, `${w}/..`, `%CD%\..`, and what is left of `"$PWD"\..` once the quotes are split off.
-  const token = raw.replace(/^(?:\$\{?[\w:]+\}?|%\w+%)(?=[\\/])/, '').replace(/^[\\/]+(?=\.\.)/, '');
-  return /^[\\/]/.test(token) ? null : token;
-}
-
-/**
- * Where a tool input's relative paths lead, and where its `cd`s take the shell, read from the folder each part of a
- * command runs in: `bases` are the folders the call starts in (the task's folder, or the call's own `cwd`, or the
- * folder the agent's shell is in), and a `cd`, `pushd` or `Set-Location` moves it for the parts after it. A
- * `..\..\..\acc.db`, or `cd ..` typed three times, names no folder, so the self-reference check, which reads text,
- * never sees that a task whose folder is in the data folder reaches the Control Center's files with it. A path that
- * starts with a variable or a separator (`$w\..`, `"$PWD"\..`) is read from the current folder. Lexical like that
- * check: a folder a variable holds, or one changed by a program, is not followed — the boundary for that is the
- * agent account (docs/systems/security.md#agent-os-boundary).
- */
-export function relativeClimbTargets(input: unknown, bases: readonly string[]): string[] {
-  const usable = bases.filter((b) => typeof b === 'string' && /^(?:[A-Za-z]:[\\/]|\/)/.test(b));
-  if (!usable.length) return [];
-  const out = new Set<string>();
-  eachString(input, (text, key) => {
-    if ((key && CONTENT_KEYS.has(key)) || !(CLIMB.test(text) || /\b(?:cd|chdir|pushd|set-location|sl|push-location)\b/i.test(text))) return;
-    for (const base of usable) {
-      const pathApi = /^[A-Za-z]:/.test(base) ? path.win32 : path.posix;
-      let here = base;
-      for (const segment of splitCommands(text)) {
-        const words = shellWords(segment.text);
-        // A message (`git commit -m "…../shared"`, `-am`, `--message=`) is text, like a file's content.
-        const skip = new Set<number>();
-        words.forEach((w, i) => {
-          if (/^-[A-Za-z]*m$|^--message$/.test(w)) skip.add(i + 1);
-          if (/^--message=/.test(w)) skip.add(i);
-        });
-        for (const [i, word] of words.entries()) {
-          if (skip.has(i)) continue;
-          for (const raw of word.split(/[\s"'`;,|&<>()=]+/)) {
-            const token = climbWord(raw);
-            if (token) out.add(pathApi.resolve(here, token));
-          }
-        }
-        if (!CHANGES_DIRECTORY.has(commandWord(words[0] ?? ''))) continue;
-        const args = words.slice(1);
-        const flagged = args.findIndex((w) => /^-(?:path|literalpath)$/i.test(w));
-        const target = flagged >= 0 ? args[flagged + 1] : args.find((w) => !w.startsWith('-'));
-        // A folder only known when it runs (`cd $w`, `cd -`, `cd ~`) is not followed: the parts after it are read
-        // from where the shell was.
-        if (!target || /[$`%~]/.test(target) || /^-$/.test(target)) continue;
-        here = pathApi.resolve(here, target);
-        out.add(here);
-      }
-    }
-  });
-  return [...out];
-}
-
-/**
  * A tool input with every path inside one of the task's own folders (`roots`: its worktree, a worker's
- * checkout) written relative to it: `C:\…\AIDevControlCenter\worktrees\app\TASK-0022\src\a.ts` becomes
- * `.\src\a.ts`. A worktree left in the data folder would otherwise read as the Control Center's files, and every
- * call naming it would be refused; a whole-tree command on the task's own folder reads as one (`git checkout -- .`).
- * Only for judging a call — never run. A path is written relative to `cwd`, the folder the call runs in, when that
- * is given: a sibling repository of a multi-repository task becomes `..\api`, never a `.` the release gate would
- * read as the call's own folder. The file name is kept, so sensitive-file rules still apply.
- *
- * `failClosed` (for the self-reference check): an input with a `..` segment in any string is left as written,
- * so a climb out of the root is judged in the absolute form the check recognises, however it is spelled — a space
- * or bracket in the path, the root in its own quotes, in a variable, or in another argument. Only its `cwd`, when
- * that has no climb itself, is still written relative: a climb from it is resolved by `relativeClimbTargets`.
+ * checkout, the repositories of a multi-repository task) written relative, for classifying the call — never for
+ * running it, and never for the self-reference check, which reads the call as written: `C:\work\app\TASK-7\src`
+ * becomes `.\src`, so a whole-tree command on the task's own folder reads as one (`git checkout -- .`). A path is
+ * written relative to `cwd`, the folder the call runs in, when that is given — a sibling repository becomes
+ * `..\api`, never a `.` the release gate would read as the call's own folder — else relative to the root that
+ * holds it. The file name is kept, so sensitive-file rules still apply. A path that leaves its root is written as
+ * it was. An agent never works in a folder inside the data folder (the engine refuses it,
+ * docs/systems/security.md), so this rewriting never hides the Control Center's own files.
  */
-export function relativizeOwnRoots<T>(input: T, roots: readonly string[], cwd?: string, options: { failClosed?: boolean } = {}): T {
+export function relativizeOwnRoots<T>(input: T, roots: readonly string[], cwd?: string): T {
   const absolute = (r: unknown): r is string => typeof r === 'string' && /^(?:[A-Za-z]:[\\/]|\/)./.test(r);
   const usable = [...new Set(roots.filter(absolute))];
   if (!usable.length) return input;
-  let climbs = false;
-  if (options.failClosed) {
-    eachString(input, (text, key) => {
-      if (!(key && CONTENT_KEYS.has(key))) climbs ||= CLIMB.test(text);
-    });
-  }
   const base = absolute(cwd) ? cwd : null;
   const rules = usable.map((root) => {
     const windows = /^[A-Za-z]:/.test(root);
@@ -606,12 +505,6 @@ export function relativizeOwnRoots<T>(input: T, roots: readonly string[], cwd?: 
     }
     return out;
   };
-  if (climbs) {
-    // Only the folder the call runs in is still its own: a climb from it is resolved by relativeClimbTargets.
-    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
-    const given = (input as { cwd?: unknown }).cwd;
-    return typeof given === 'string' && !CLIMB.test(given) ? ({ ...input, cwd: rewrite(given) } as T) : input;
-  }
   const walk = (value: unknown, depth: number): unknown => {
     if (depth > 20) return value;
     if (typeof value === 'string') return rewrite(value);
@@ -622,6 +515,14 @@ export function relativizeOwnRoots<T>(input: T, roots: readonly string[], cwd?: 
   return walk(input, 0) as T;
 }
 
+/**
+ * `referencesSelf` over a structured tool input: its JSON text, and every
+ * string in it as it is (JSON escapes a `\`) and read as a URL the way the
+ * tool's own `new URL(…)` would (`http:127.1:4317` has no `//` to find in text).
+ * The Host header rule reads the input's objects (`requestOverridesHost`) and
+ * each string on its own — never the JSON text, where a file's lines run
+ * together — and a string that is a JSON document by its objects too.
+ */
 export function inputReferencesSelf(input: unknown): boolean {
   if (namesSelf(JSON.stringify(input) ?? '') || requestOverridesHost(input)) return true;
   const strings: string[] = [];

@@ -271,7 +271,7 @@ local API token is refused there, and a session token opens nothing else);
 a `guardOnly` session (tools off for agents, or a stage run as the agent
 account, [security.md](security.md#agent-os-boundary)) is refused there with 403.
 `POST /api/tool-session/precheck` (SEC-3) is the native precheck a
-Claude Code run's hook asks before each Bash command (`{ command, cwd }`: the folder its shell is in) and each
+Claude Code run's hook asks before each Bash command (`{ command }`) and each
 Read, Grep and Glob (`{ tool, input, cwd? }`): only the live agent
 session of a stage that is `STARTING`, `RUNNING` or `RETRYING` gets an answer
 (`{decision: 'allow'}` or `{decision: 'deny', reason}`; anything else is 401

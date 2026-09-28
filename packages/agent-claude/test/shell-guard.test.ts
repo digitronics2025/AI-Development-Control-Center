@@ -42,7 +42,7 @@ describe('the native shell precheck hook (SEC-3)', () => {
   it('lets a command run only on an explicit allow, asking with the run session', async () => {
     seen.length = 0;
     expect(await runShellGuard(call('allowed'), env())).toEqual({ exitCode: 0, stdout: '', stderr: '' });
-    expect(seen).toEqual([{ authorization: 'Bearer session-token', body: JSON.stringify({ command: 'allowed', cwd: ROOT }) }]);
+    expect(seen).toEqual([{ authorization: 'Bearer session-token', body: JSON.stringify({ command: 'allowed' }) }]);
   });
 
   it("refuses with the Control Center's reason, on stderr and as the deny decision", async () => {

@@ -49,7 +49,7 @@ export async function runShellGuard(stdin: string, env: NodeJS.ProcessEnv, opts:
     const call = JSON.parse(stdin) as { tool_name?: unknown; tool_input?: unknown; cwd?: unknown } | null;
     const input = call?.tool_input;
     const object = input !== null && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
-    if (call?.tool_name === 'Bash' && typeof object?.command === 'string') body = { command: object.command, ...(typeof call.cwd === 'string' ? { cwd: call.cwd } : {}) };
+    if (call?.tool_name === 'Bash' && typeof object?.command === 'string') body = { command: object.command };
     else if ((GUARDED_FILE_TOOLS as readonly unknown[]).includes(call?.tool_name) && object) body = { tool: call!.tool_name, input: object, ...(typeof call!.cwd === 'string' ? { cwd: call!.cwd } : {}) };
     else return refusal('the call could not be read.');
   } catch {

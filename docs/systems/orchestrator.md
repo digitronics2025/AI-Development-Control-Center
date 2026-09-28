@@ -46,7 +46,7 @@ means restoring the pre-release `acc.db` backup together with the matching build
 | `runtime.json` | `{url, port, pid}` while running; removed on clean shutdown. Used by the extension and launchers |
 | `tasks/TASK-NNNN/` | Artifacts (`request.md`, `plan.md`, `review.md`, `final-report.md`, `git-diff.patch`, `task.json`, attachments). Outside the repository so they never appear in its diff |
 | `learning/plugins/` | The learning loop's skill plugins ([learning.md](learning.md#skills)): the one part of the data folder agents may read — never write — by name |
-| `trash/`, `worktrees/`, `workspaces/`, `team-worktrees/` | Only from before the work root existed (SEC-3). At start, worktrees and workspaces still recorded here are moved to the work root (`EngineTooling.relocateLegacyWorkFolders`: `git worktree move`, or for a workspace one rename plus `git worktree repair` of each worktree in it, renamed back if a repair fails; Control Center installs in them are set aside to be installed again, since pnpm's links name the old folder; a task whose move fails keeps its folder, is logged, and is tried again at the next start; a move a stop cut off after the folder moved and before the records did is finished from where the folder is — a worktree Git already lists there is taken, a workspace is repaired there and taken, or left there with the reason); `trash/` is still emptied and `team-worktrees/` still swept |
+| `trash/`, `worktrees/`, `workspaces/`, `team-worktrees/` | Only from before the work root existed (SEC-3). At start, worktrees and workspaces still recorded here are moved to the work root (`EngineTooling.relocateLegacyWorkFolders`: `git worktree move`, or for a workspace one rename plus `git worktree repair` of each worktree in it, renamed back if a repair fails; Control Center installs in them are set aside to be installed again, since pnpm's links name the old folder; a task whose move fails keeps its folder, is logged, and is tried again at the next start — meanwhile its agent runs are refused before they start (`runners.launchAgent`, `EngineTooling.insideDataFolder`) and it waits for you with the reason; a move a stop cut off after the folder moved and before the records did is finished from where the folder is — a worktree Git already lists there is taken, a workspace is repaired there and taken, or left there with the reason); `trash/` is still emptied and `team-worktrees/` still swept |
 
 ## Work root (`ACC_WORK_DIR`)
 
@@ -226,4 +226,4 @@ listener stays on loopback. Details: [remote-node.md](remote-node.md).
 - On Windows a background process cannot receive Ctrl+C; stop it with
   `POST /api/service/shutdown` (the stop script does this).
 
-Last verified: 2026-09-27
+Last verified: 2026-09-28

@@ -597,6 +597,13 @@ export class StageRunners {
     const agentName = agents.has(agentId) ? agents.adapter(agentId).displayName : agentId;
     if (!agents.has(agentId)) return { kind: 'failed', errorClass: 'PERMISSION_DENIED', message: `Agent "${agentId}" is not installed in this orchestrator. Reroute the stage to another agent.` };
     if (!agents.isEnabled(agentId)) return { kind: 'failed', errorClass: 'PERMISSION_DENIED', message: `${agentName} is disabled in Settings → Agents & Models. Enable it or reroute the stage.` };
+    if (this.d.tooling.insideDataFolder(opts.cwd)) {
+      return {
+        kind: 'failed',
+        errorClass: 'PERMISSION_DENIED',
+        message: `This task's folder (${opts.cwd}) is still inside the Control Center's data folder, where an agent cannot work without reaching the Control Center's own files. Moving it to the work folder failed at start. Restart the Control Center to try the move again, or cancel the task.`,
+      };
+    }
     if (control.stopReason) return { kind: 'stopped', reason: control.stopReason };
     const level = opts.permissionLevel !== undefined ? (Math.min(opts.permissionLevel, def.permissionLevel) as PermissionLevel) : def.permissionLevel;
     const executionId = newId();

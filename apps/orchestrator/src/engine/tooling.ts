@@ -501,6 +501,15 @@ export class EngineTooling {
   }
 
   /**
+   * Whether `dir` is in the Control Center's data folder, where no agent may work: the self-reference check reads a
+   * call as written, and a task folder there is a `..` away from the token, keys and database. Only a task folder
+   * the move at start could not relocate is still there (`relocateLegacyWorkFolders`); its runs are refused.
+   */
+  insideDataFolder(dir: string): boolean {
+    return isInsidePath(this.d.dataDir, dir);
+  }
+
+  /**
    * Once, at start (SEC-3): worktrees and task workspaces made before the work
    * root existed live in the data folder, whose path an agent may not name.
    * Each is moved to the work root and its task's record follows: a worktree
@@ -508,8 +517,8 @@ export class EngineTooling {
    * agents left beside them) with one rename and `git worktree repair` of each
    * worktree in it, renamed back if a repair fails. Only paths still under the
    * old folders are looked at, so it is idempotent. A task whose move fails
-   * keeps its folder and record (it runs from there as before) and is tried
-   * again at the next start; one whose move a stop cut off after the folder
+   * keeps its folder and record, its agent runs are refused until it moves
+   * (`insideDataFolder`), and it is tried again at the next start; one whose move a stop cut off after the folder
    * moved and before its record did is finished from where the folder is.
    */
   async relocateLegacyWorkFolders(): Promise<{ moved: string[]; kept: Array<{ taskId: string; reason: string }> }> {

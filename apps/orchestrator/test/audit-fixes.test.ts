@@ -72,65 +72,37 @@ describe('F-02: an agent cannot reach the Control Center itself through any tool
     expect(outcome.decision).not.toBe('deny');
   });
 
-  it("lets an isolated task name its own worktree, which lives in the data folder, and nothing past it", async () => {
-    // Seen live (TASK-0022, 2026-09-28): the designer's process.start with cwd = its worktree was refused as the
-    // Control Center's own data folder, so it could not start the app to look at it.
+  it("reads every call as written, so a path into the data folder is refused however it is spelled", async () => {
+    // Review, 2026-09-28: rewriting a task's own folder relative before this check let a climb out of a worktree in
+    // the data folder hide the folder's name. The check reads the call as written, and no agent works in the data
+    // folder any more (runners.launchAgent refuses it). Built as strings: path.join would fold a climb away.
     const worktree = path.join(t.dataDir, 'worktrees', 'shop-1a2b3c', 'TASK-0099');
-    mkdirSync(path.join(worktree, 'src'), { recursive: true });
-    writeFileSync(path.join(worktree, 'src', 'a.txt'), 'in the worktree\n');
-    const own = scope({ cwd: worktree, roots: [worktree], stageLevel: 2, autoApproveUpToLevel: 2, profile: 'general' });
-    const ok = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `Get-Content "${path.join(worktree, 'src', 'a.txt')}"`, cwd: worktree }, origin: 'agent', scope: own });
-    expect(ok.result.summary).not.toMatch(/Control Center's own/);
-    expect(ok.decision).not.toBe('deny');
-    // Climbing out of the worktree reaches the data folder again: refused, written absolute or relative, with a space
-    // or bracket inside the path, or with the root held apart from the climb (review, 2026-09-28). Built as strings:
-    // path.join would fold the climb away before the guard sees it.
+    const own = scope({ cwd: work, roots: [work], stageLevel: 2, autoApproveUpToLevel: 2, profile: 'general' });
     for (const script of [
       `Get-Content "${worktree}\\..\\..\\..\\acc.db"`,
       `Get-Content "${worktree}\\x y\\..\\..\\..\\..\\acc.db"`,
       `Get-Content "${worktree}\\(x)\\..\\..\\..\\..\\acc.db"`,
       `Get-Content "${worktree}"\\..\\..\\..\\acc.db`,
       `$w = "${worktree}"; Get-Content "$w\\..\\..\\..\\acc.db"`,
-      'Get-Content ..\\..\\..\\acc.db',
-      'Get-Content "src\\..\\..\\..\\..\\acc.db"',
       `dir "${path.join(t.dataDir, 'tasks')}"`,
     ]) {
-      const out = await t.services.tools.invoke({ capability: 'shell.run', input: { script, cwd: worktree }, origin: 'agent', scope: own });
+      const out = await t.services.tools.invoke({ capability: 'shell.run', input: { script }, origin: 'agent', scope: own });
       expect(out.decision, script).toBe('deny');
     }
-    // Found by a second review the same day: a climb from the call's own folder, the root passed as an argument, a
-    // climb after a variable.
-    for (const input of [
-      { script: 'Get-Content ..\\..\\..\\..\\acc.db', cwd: 'src' },
-      { script: String.raw`Get-Content "$($args[0])"\..\..\..\acc.db`, args: [worktree] },
-      { script: String.raw`Get-Content "$PWD"\..\..\..\acc.db`, cwd: worktree },
-    ]) {
-      const out = await t.services.tools.invoke({ capability: 'shell.run', input, origin: 'agent', scope: own });
-      expect(out.decision, JSON.stringify(input)).toBe('deny');
-    }
-    // A climb that stays inside the worktree is the task's own folder, and code with relative imports is content.
-    const inside = await t.services.tools.invoke({ capability: 'shell.run', input: { script: 'Get-Content src\\..\\src\\a.txt', cwd: worktree }, origin: 'agent', scope: own });
-    expect(inside.decision).not.toBe('deny');
-    const code = await t.services.tools.invoke({ capability: 'fs.write', input: { path: 'src/ui/deep/b.ts', content: "import x from '../../../../lib/x';\n" }, origin: 'agent', scope: own });
-    expect(code.result.summary).not.toMatch(/Control Center's own/);
-    // Third review: the same by an absolute path, and a package's build read from the folder it runs in.
-    const absolute = await t.services.tools.invoke({ capability: 'fs.write', input: { path: path.join(worktree, 'src', 'c.ts'), content: "import x from '../lib/x';\n" }, origin: 'agent', scope: own });
-    expect(absolute.result.summary).not.toMatch(/Control Center's own/);
-    mkdirSync(path.join(worktree, 'packages', 'web'), { recursive: true });
-    const build = await t.services.tools.invoke({ capability: 'shell.run', input: { script: 'Get-Content ..\\..\\src\\a.txt', cwd: 'packages/web' }, origin: 'agent', scope: own });
-    expect(build.result.summary).not.toMatch(/Control Center's own/);
-    // A `..` anywhere never softens the danger a call is judged at: discarding the whole worktree is still that.
-    const discard = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `git checkout -- "${worktree}"; echo ..`, cwd: worktree }, origin: 'agent', scope: scope({ cwd: worktree, roots: [worktree], stageLevel: 3, autoApproveUpToLevel: 4, profile: 'general' }) });
+    const split = await t.services.tools.invoke({ capability: 'shell.run', input: { script: String.raw`Get-Content "$($args[0])"\..\..\..\acc.db`, args: [worktree] }, origin: 'agent', scope: own });
+    expect(split.decision).toBe('deny');
+  });
+
+  it("classifies a call with the task's own folders relative, the stricter reading counting", async () => {
+    // Discarding the whole task folder, named absolutely, is discarding everything.
+    const level3 = scope({ cwd: work, roots: [work], stageLevel: 3, autoApproveUpToLevel: 4, profile: 'general' });
+    const discard = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `git checkout -- "${work}"` }, origin: 'agent', scope: level3 });
     expect(discard.decision).not.toBe('allow');
-    // Nor a sibling repository's, in a multi-repository task narrowed to one of them.
-    const [shop, api] = [path.join(t.dataDir, 'workspaces', 'TASK-0100', 'shop'), path.join(t.dataDir, 'workspaces', 'TASK-0100', 'shop-api')];
+    // So is a sibling repository's, in a multi-repository task narrowed to one of them.
+    const [shop, api] = [path.join(work, 'shop'), path.join(work, 'shop-api')];
     const multi = scope({ cwd: shop, roots: [shop], repositories: [{ id: 'r1', root: shop }, { id: 'r2', root: api }], stageLevel: 3, autoApproveUpToLevel: 4, profile: 'general' });
     const apiDiscard = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `git -C "${api}" checkout -- "${api}"` }, origin: 'agent', scope: multi });
     expect(apiDiscard.decision).not.toBe('allow');
-    // A sibling task's worktree is not this task's.
-    const sibling = path.join(t.dataDir, 'worktrees', 'shop-1a2b3c', 'TASK-0098');
-    const other = await t.services.tools.invoke({ capability: 'shell.run', input: { script: `dir "${sibling}"` }, origin: 'agent', scope: own });
-    expect(other.decision).toBe('deny');
   });
 });
 

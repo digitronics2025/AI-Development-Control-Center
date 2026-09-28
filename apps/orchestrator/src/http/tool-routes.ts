@@ -32,7 +32,7 @@ const MAX_IMAGES_PER_CALL = 3;
 const flag = z.enum(['true', 'false']).optional().transform((v) => v === 'true');
 /** What the native precheck hook asks about: a shell command, or a file tool's call and the CLI's folder. */
 const precheckBody = z.union([
-  z.object({ command: z.string().max(200_000), cwd: z.string().max(32_768).optional() }),
+  z.object({ command: z.string().max(200_000) }),
   z.object({ tool: z.enum(GUARDED_FILE_TOOLS), input: z.record(z.string(), z.unknown()), cwd: z.string().max(32_768).optional() }),
 ]);
 
@@ -289,7 +289,7 @@ export function registerToolRoutes(app: FastifyInstance, s: AppServices): void {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Only the agent session of a running stage may ask' } });
     }
     const body = precheckBody.parse(request.body);
-    return 'command' in body ? tools.precheck(session, body.command, body.cwd ?? null) : tools.precheckFile(session, body.tool, body.input, body.cwd ?? null);
+    return 'command' in body ? tools.precheck(session, body.command) : tools.precheckFile(session, body.tool, body.input, body.cwd ?? null);
   });
 
   app.get('/api/tool-session/tools', async (request, reply) => {

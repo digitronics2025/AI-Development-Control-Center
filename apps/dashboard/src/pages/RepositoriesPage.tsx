@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudDownload, CloudOff, FolderGit2, FolderOpen, FolderPlus, GitFork, Globe, Lock, Plus, RefreshCw, TriangleAlert, Unlink } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, CheckCircle2, CircleAlert, CloudDownload, CloudOff, FolderGit2, FolderOpen, FolderPlus, GitFork, Globe, Lock, Plus, RefreshCw, Search, TriangleAlert, Unlink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -19,7 +19,7 @@ import {
   type Column,
   type SegmentOption,
 } from '@acc/ui';
-import { isCloneFolderName, parseCloneUrl, type Repository, type RepositoryDownloadSkip, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
+import { isCloneFolderName, parseCloneUrl, repositorySearchText, searchMatches, type Repository, type RepositoryDownloadSkip, type RepositoryAutomationStatus, type RepositorySyncResult, type Settings } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useCloneDefaults, useRepositories, useRepositoryAutomation, useRepositoryMutations, useRunRepositoryAutomation, useSettings, useWorkflows } from '../api/hooks';
 import { useBreadcrumb } from '../app/breadcrumbs';
@@ -329,6 +329,16 @@ export function RepositoriesPage() {
       setParams(next, { replace: true });
     }
   }, [params, setParams]);
+  // The search lives in the URL (?q=) so Back and a shared link keep it; typing replaces the entry instead of stacking history.
+  const query = params.get('q') ?? '';
+  const setQuery = (value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set('q', value);
+    else next.delete('q');
+    setParams(next, { replace: true });
+  };
+  const allRepositories = repositories.data ?? [];
+  const shown = query.trim() ? allRepositories.filter((r) => searchMatches(query, repositorySearchText(r))) : allRepositories;
   const workflowName = (id: string | null) => (id ? (workflows.data?.find((w) => w.id === id)?.name ?? id) : 'Global default');
 
   const columns: Column<Repository>[] = [
@@ -410,26 +420,43 @@ export function RepositoriesPage() {
         }
       />
       <AutomationSummary status={automation.data} settings={settings.data} />
+      {allRepositories.length > 0 ? (
+        <form role="search" className="flex min-w-[220px] items-center gap-2 sm:max-w-sm" onSubmit={(e) => e.preventDefault()}>
+          <label htmlFor="repository-search" className="sr-only">
+            Search repositories
+          </label>
+          <Input id="repository-search" type="search" placeholder="Search by name" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </form>
+      ) : null}
       {repositories.isLoading ? (
         <Skeleton className="h-48" />
       ) : (
         <DataTable
           caption="Repositories"
           columns={columns}
-          rows={repositories.data ?? []}
+          rows={shown}
           rowKey={(r) => r.id}
           onRowClick={(r) => navigate(`/repositories/${r.id}`)}
           empty={
-            <EmptyState
-              icon={FolderGit2}
-              title="No repositories yet"
-              description="Add the local folder of a project you want AI agents to work on."
-              action={
-                <Button variant="primary" icon={Plus} onClick={() => setAddOpen(true)} disabled={!connection.online}>
-                  Add repository
-                </Button>
-              }
-            />
+            allRepositories.length > 0 ? (
+              <EmptyState
+                icon={Search}
+                title={`No repository matches “${query.trim()}”`}
+                description="Search looks at names and folder names, and allows a small typo."
+                action={<Button onClick={() => setQuery('')}>Clear search</Button>}
+              />
+            ) : (
+              <EmptyState
+                icon={FolderGit2}
+                title="No repositories yet"
+                description="Add the local folder of a project you want AI agents to work on."
+                action={
+                  <Button variant="primary" icon={Plus} onClick={() => setAddOpen(true)} disabled={!connection.online}>
+                    Add repository
+                  </Button>
+                }
+              />
+            )
           }
         />
       )}

@@ -264,9 +264,9 @@ export function useSkills(repositoryId: string | undefined) {
   });
 }
 
-export function useRepositories() {
+export function useRepositories(options: { enabled?: boolean } = {}) {
   const api = useApi();
-  return useQuery({ queryKey: keys.repositories, queryFn: ({ signal }) => api.get<Repository[]>('/api/repositories', signal) });
+  return useQuery({ queryKey: keys.repositories, queryFn: ({ signal }) => api.get<Repository[]>('/api/repositories', signal), enabled: options.enabled ?? true });
 }
 
 /** Discovery and background sync state; kept current by `repositoryAutomation` WebSocket messages. */

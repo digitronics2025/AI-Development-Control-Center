@@ -42,6 +42,19 @@ chooses the read-only keys, owners, account, masking default and data map and
 runs Check access; each answer lists its lookups under "Sources". See
 [ask.md](ask.md).
 
+## Command palette and search
+
+Ctrl/Cmd+K opens the palette ([command-palette.tsx](../../packages/ui/src/components/command-palette.tsx));
+its commands come from `GlobalCommands` in [Shell.tsx](../../apps/dashboard/src/app/Shell.tsx)
+plus the current page's. Once something is typed it also lists one row per
+repository (`searchOnly` commands; the list is fetched while the palette is
+open), and Enter opens that repository. Matching is
+[search.ts](../../packages/shared/src/search.ts), shared with the Repositories
+filter: every query word must match a word in any order, as a word start, an
+inner match, or within a typo budget (none under four letters, one up to
+seven, two beyond). Results are ranked, groups by their best row. A repository
+is found by its name and folder name only, never the parent folders.
+
 ## Notifications
 
 Settings → Notifications holds the approvals / failures / completions
@@ -104,7 +117,7 @@ validation; an agent stage also takes **Stage instructions**, a **Tool profile**
 as typed; a visual critique (or a stage that has one) shows **Runs** — Always,
 or "Runs only when user-interface files change" (`when`); changing **Runs as**
 drops the fields the new kind does not take (`when` included),
-`withStageKind`, so a hidden field never blocks saving — [workflow-engine.md](workflow-engine.md#profiles)), Agents, Repositories (+ detail; a Remote column, the automation summary
+`withStageKind`, so a hidden field never blocks saving — [workflow-engine.md](workflow-engine.md#profiles)), Agents, Repositories (+ detail; a **Search by name** box kept in `?q=`, a Remote column, the automation summary
 line and **Check now**, see [repository-automation.md](repository-automation.md); the
 Commands panel ends with **Run only affected unit tests**, see
 [workflow-engine.md](workflow-engine.md#affected-tests-only)),
@@ -351,4 +364,4 @@ only; its attempts follow the retry lineage, not the member count). Tools → Po
 inspector on a phone must be keyboard-scrollable). Covered by
 `e2e/stage-teams.spec.ts` (both themes, 1440 and 390 px, axe).
 
-Last verified: 2026-09-26
+Last verified: 2026-09-29

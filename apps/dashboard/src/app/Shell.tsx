@@ -38,7 +38,8 @@ import {
   useLocalPreference,
   type Command,
 } from '@acc/ui';
-import { useApprovals, useHealth, useSettings } from '../api/hooks';
+import { repositorySearchText } from '@acc/shared';
+import { useApprovals, useHealth, useRepositories, useSettings } from '../api/hooks';
 import { AskDrawerProvider, useAskLauncher } from '../components/ask';
 import { useCrumbs } from './breadcrumbs';
 import { PageErrorBoundary } from './PageErrorBoundary';
@@ -357,6 +358,8 @@ function GlobalCommands() {
   const { pageCommands, paletteOpen, setPaletteOpen } = useCommandRegistry();
   const { mode } = useRuntime();
   const ask = useAskLauncher();
+  // Fetched while the palette is open (cached from the Repositories page when already loaded).
+  const repositories = useRepositories({ enabled: paletteOpen });
   useHotkey('k', (e) => {
     e.preventDefault();
     setPaletteOpen(!paletteOpen);
@@ -378,8 +381,18 @@ function GlobalCommands() {
       { id: 'go-home', label: 'Go to Home', group: 'Go to', icon: House, onSelect: () => navigate('/') },
       ...(mode === 'cloud' ? [{ id: 'go-nodes', label: 'Go to Nodes', group: 'Go to', icon: Server, onSelect: () => navigate('/nodes') }] : []),
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },
+      // One row per repository, found by its name or folder name once something is typed.
+      ...(repositories.data ?? []).map<Command>((r) => ({
+        id: `repo-${r.id}`,
+        label: r.name,
+        group: 'Repositories',
+        icon: FolderGit2,
+        keywords: repositorySearchText(r),
+        searchOnly: true,
+        onSelect: () => navigate(`/repositories/${r.id}`),
+      })),
     ],
-    [pageCommands, navigate, mode, ask],
+    [pageCommands, navigate, mode, ask, repositories.data],
   );
   const queryAction = useMemo(
     () => (ask ? { prefix: '?', group: 'Ask', icon: MessageCircleQuestion, label: (text: string) => `Ask: ${text}`, run: (text: string) => ask.open(text) } : undefined),

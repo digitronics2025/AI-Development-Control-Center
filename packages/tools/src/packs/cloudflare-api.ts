@@ -56,7 +56,7 @@ async function cf(ctx: OperationContext, a: Account, route: string, body?: unkno
 function cfFailure(r: RestResponse, what: string): OperationResult {
   const message = (r.json?.errors?.[0]?.message as string | undefined) ?? (r.text.slice(0, 200) || `HTTP ${r.status}`);
   if (r.status === 401 || r.status === 403) return failure('AUTH_REQUIRED', `Cloudflare refused ${what}: ${message}. The key may lack the read permission for it.`);
-  if (r.status === 404) return failure('FAILED', `${what}: not found (${message}).`);
+  if (r.status === 404) return failure('NOT_FOUND', `${what}: not found (${message}).`);
   if (r.status === 429 || r.status >= 500) return failure('UNAVAILABLE', `Cloudflare is not answering ${what} right now (HTTP ${r.status}).`);
   return failure('FAILED', `${what} failed: ${message}`);
 }
@@ -228,6 +228,8 @@ export function cloudflareApiProvider(): ToolProvider {
           const project = await cf(ctx, a, route);
           if (!project.ok) return cfFailure(project, `Pages project ${input.project}`);
           const productionBranch = typeof project.json?.result?.production_branch === 'string' ? (project.json.result.production_branch as string) : null;
+          // The project's own address (`<name>-xyz.pages.dev` when the plain name was taken).
+          const subdomain = typeof project.json?.result?.subdomain === 'string' && /^[a-z0-9.-]+$/.test(project.json.result.subdomain) ? (project.json.result.subdomain as string) : null;
           const live = pagesDeploymentView(project.json?.result?.canonical_deployment);
           let candidate: PagesDeploymentView | null = null;
           if (input.commit) {
@@ -241,7 +243,7 @@ export function cloudflareApiProvider(): ToolProvider {
           return {
             ok: true,
             summary: candidateLine ? `${liveLine}; ${candidateLine}` : liveLine,
-            output: { project: input.project, productionBranch, live, candidate },
+            output: { project: input.project, productionBranch, subdomain, live, candidate },
             evidence: [liveLine, ...(candidateLine ? [candidateLine] : [])],
             ...net,
           };

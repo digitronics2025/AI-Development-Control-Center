@@ -3,7 +3,7 @@ import path from 'node:path';
 import { AgentGuardError } from '@acc/agent-sdk';
 import { runShell, type ProcessResult } from '@acc/executor';
 import { changesSince, commitPaths, committableTree, pathStatusSince } from '@acc/git';
-import { alwaysRequiresApproval, classifyCommand, redact, sanitizeEnv } from '@acc/security';
+import { alwaysRequiresApproval, redact, sanitizeEnv } from '@acc/security';
 import {
   COMMAND_KIND_LABEL,
   DEFAULT_VERIFY_COMMAND_KINDS,
@@ -13,7 +13,6 @@ import {
   nonBlockingFailure,
   type ArtifactType,
   type CommandKind,
-  type CommandRisk,
   type ErrorClass,
   type EventType,
   type ExecutionStatus,
@@ -24,8 +23,9 @@ import {
   type TestRun,
   type RepositoryCommand,
   isJudgeRole,
+  releaseTarget,
 } from '@acc/shared';
-import { packageScriptLines, withReleaseGate, type RepairPlan, type RepairStrategy } from '@acc/tools';
+import type { RepairPlan, RepairStrategy } from '@acc/tools';
 import type { Bus } from '../bus.js';
 import type { AgentRegistry } from '../services/agents.js';
 import type { ReleaseService } from '../release/service.js';
@@ -38,7 +38,6 @@ import type { BaselineChecks, BaselineWarmup, Classification } from './baseline-
 import type { ContextBuilder, PromptCoverage } from './context.js';
 import { LogSink } from './log-sink.js';
 import { extractOperatorBlockers } from './report.js';
-import { expandPackageScripts } from './script-resolve.js';
 import type { Publisher } from './publisher.js';
 import { FailureIdCollector, hasTestTotals, testFailureSummary, testPassSummary } from './test-summary.js';
 import { targetedCommand, testFilesOf } from './targeted-tests.js';
@@ -249,22 +248,16 @@ export function stageCommands(def: StageDefinition, repo: RepositoryRecord, extr
  * (SEC-1), for the agent's native shell rules; nothing when none does.
  */
 export function releaseBranches(store: Store, task: TaskRecord): { releaseBranches?: Array<{ remote: string; branch: string }> } {
-  const found = taskRepositories(store, task).flatMap(({ repo }) => (repo.release?.method === 'push' ? [{ remote: repo.release.remote, branch: repo.release.branch }] : []));
+  const found = taskRepositories(store, task).flatMap(({ repo }) => {
+    const target = releaseTarget(repo.release);
+    return target ? [target] : [];
+  });
   return found.length ? { releaseBranches: found } : {};
 }
 
-/**
- * The classifier's verdict on a command a stage runs in `workdir`, with the
- * release gate (SEC-1): a command or package script that pushes to one of
- * `releaseBranches` or a production-named branch, or merges a pull request,
- * is Level 5 production, as it is for an agent's tool call — an agent can
- * edit the script a later stage runs.
- */
-export function stageCommandRisk(workdir: string, commandLine: string, releaseBranches: readonly string[]): { level: PermissionLevel; risk: CommandRisk; reasons: string[]; production: boolean } {
-  const c = classifyCommand(expandPackageScripts(workdir, commandLine));
-  const r = withReleaseGate({ level: c.level, risk: c.risk, reasons: c.reasons, production: c.production }, packageScriptLines(workdir, commandLine), { cwd: workdir, releaseBranches });
-  return { level: r.level ?? c.level, risk: r.risk ?? c.risk, reasons: r.reasons ?? c.reasons, production: r.production ?? c.production };
-}
+import { stageCommandRisk } from './command-risk.js';
+
+export { stageCommandRisk };
 
 /**
  * Check kinds the operator waived for this task (AUTOPILOT_GATES_PLAN §3.C):

@@ -17,6 +17,7 @@ import {
   type RemoteLinkState,
   type RemoteNodeStatus,
   type ServerMessage,
+  releaseTarget,
 } from '@acc/shared';
 import { registerSecretValues } from '@acc/security';
 import type { z } from 'zod';
@@ -160,7 +161,7 @@ export class RemoteNodeService {
       (terminalId, text) => this.send({ type: 'event.live', payload: { message: { type: 'terminal.output', terminalId, data: text, cursor: 0, notice: true } } }),
       // A remote terminal is not tied to one repository: a push to any repository's release branch deploys (SEC-1).
       (terminalId, line, before) =>
-        d.terminals.judgeLine(terminalId, line, d.store.listRepositories().flatMap((r) => (r.release?.method === 'push' ? [r.release.branch] : [])), before),
+        d.terminals.judgeLine(terminalId, line, d.store.listRepositories().flatMap((r) => releaseTarget(r.release)?.branch ?? []), before),
     );
     this.dispatcher = new RemoteDispatcher({
       store: this.store,

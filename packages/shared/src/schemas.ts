@@ -291,6 +291,19 @@ const httpsUrlSchema = z
   .max(500)
   .url()
   .refine((v) => /^https:\/\//i.test(v), 'Must be an https:// URL');
+/** A Cloudflare Pages project name, by Cloudflare's own rule: lowercase letters, digits and dashes. */
+export const pagesProjectSchema = z
+  .string()
+  .min(1)
+  .max(58)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, 'Lowercase letters, digits and dashes');
+/** A folder inside the repository: relative, plain names, never climbing out. */
+const relativeDirSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[\w.-]+(?:\/[\w.-]+)*\/?$/, 'A folder inside the repository, such as dist')
+  .refine((v) => !v.split('/').some((part) => part === '..' || part === '.') && !v.startsWith('-'), 'A folder inside the repository, such as dist');
 
 /**
  * How a repository's tested work goes live (docs/plans/RELEASE_STAGE_PLAN.md).
@@ -315,10 +328,39 @@ export const releaseConfigSchema = z.discriminatedUnion('method', [
     manualPaths: z.array(z.string().min(1).max(200)).max(50).default([]),
     timeoutSec: z.number().int().min(60).max(3600).default(900),
   }),
+  /**
+   * `cloudflare` (docs/plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md): push the
+   * task's commit to the branch (so the branch and the live site never
+   * disagree), build that exact commit in a throwaway checkout, and upload the
+   * build to a Cloudflare Pages project through Wrangler — created on the first
+   * release. Live when the project's production deployment is that commit.
+   */
+  z.object({
+    method: z.literal('cloudflare'),
+    remote: gitNameSchema.default('origin'),
+    branch: gitNameSchema.default('main'),
+    pages: z.object({
+      project: pagesProjectSchema,
+      /** The folder the build writes, relative to the repository: what is uploaded. */
+      outputDir: relativeDirSchema.default('dist'),
+    }),
+    /** The live app; defaults to the project's own pages.dev address. */
+    liveUrl: httpsUrlSchema.optional(),
+    manualPaths: z.array(z.string().min(1).max(200)).max(50).default([]),
+    timeoutSec: z.number().int().min(60).max(3600).default(600),
+  }),
 ]);
 export type ReleaseConfig = z.infer<typeof releaseConfigSchema>;
 export type ReleaseConfigInput = z.input<typeof releaseConfigSchema>;
 export type PushReleaseConfig = Extract<ReleaseConfig, { method: 'push' }>;
+export type CloudflareReleaseConfig = Extract<ReleaseConfig, { method: 'cloudflare' }>;
+/** A setting that releases: where its commit is pushed. */
+export type ActiveReleaseConfig = PushReleaseConfig | CloudflareReleaseConfig;
+
+/** The remote branch a release setting pushes to (the SEC-1 release gate guards it), or null when it never releases. */
+export function releaseTarget(config: ReleaseConfig | null | undefined): { remote: string; branch: string } | null {
+  return config && config.method !== 'none' ? { remote: config.remote, branch: config.branch } : null;
+}
 
 export const updateRepositorySchema = z.object({
   name: z.string().min(1).max(80).optional(),

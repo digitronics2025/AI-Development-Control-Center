@@ -1165,9 +1165,10 @@ Repository detail:
 - commands,
 - permissions,
 - Git behavior,
-- release (Off / Push to a branch, with the sentence "Releasing sends work to
-  your live site. It always asks you first." and a **Check setup** action that
-  only reads),
+- release (Off / Push to a branch / Deploy to Cloudflare, with the sentence
+  "Releasing sends work to your live site. It always asks you first." and a
+  **Check setup** action that only reads; Deploy to Cloudflare asks for the
+  Pages project and the build output folder, the live URL optional),
 - task history.
 
 A dirty working tree must be clearly visible.

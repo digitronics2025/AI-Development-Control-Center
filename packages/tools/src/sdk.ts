@@ -211,6 +211,8 @@ export const TOOL_ERROR_CODES = [
   'TIMEOUT',
   'CANCELLED',
   'FAILED',
+  /** The named thing does not exist where it was looked for (a Pages project, a key). */
+  'NOT_FOUND',
   'AUTH_REQUIRED',
   'UNAVAILABLE',
 ] as const;

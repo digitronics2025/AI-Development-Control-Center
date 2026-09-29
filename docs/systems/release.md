@@ -12,7 +12,8 @@ verified_at: 57af61a
 
 Sends a task's tested commit live after **one typed Level 5 approval**, and
 says **Live** only when the hosting provider (or a version URL) shows that exact
-commit. Plan: [RELEASE_STAGE_PLAN.md](../plans/RELEASE_STAGE_PLAN.md).
+commit. Plans: [RELEASE_STAGE_PLAN.md](../plans/RELEASE_STAGE_PLAN.md),
+[CLOUDFLARE_DIRECT_RELEASE_PLAN.md](../plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md).
 Code: [release/service.ts](../../apps/orchestrator/src/release/service.ts),
 the stage runner `runRelease` in
 [runners.ts](../../apps/orchestrator/src/engine/runners.ts).
@@ -26,7 +27,7 @@ longer validates reads as `none`.
 
 | Field | Meaning |
 |---|---|
-| `method` | `none` (never releases) or `push` |
+| `method` | `none` (never releases), `push`, or `cloudflare` (below) |
 | `remote`, `branch` | plain Git names, default `origin` / `main`; no leading `-`, no `..` |
 | `liveUrl` | `https://` only; must answer (status < 500) before anything is sent |
 | `proof.cloudflarePages.project` | Live when the project's canonical (production) deployment is the pushed commit with `latest_stage` `deploy` / `success` |
@@ -35,6 +36,15 @@ longer validates reads as `none`.
 | `timeoutSec` | 60–3600, default 900: how long the proof is polled (every 15 s) |
 
 At least one proof is required. Repository detection never turns release on.
+
+`cloudflare` (**Deploy to Cloudflare**) has `remote`, `branch`, `manualPaths`
+and `timeoutSec` (default 600) as above, plus `pages.project` (Cloudflare's
+naming rule: lowercase, digits, dashes, ≤ 58), `pages.outputDir` (a folder
+inside the repository, default `dist`, never `.` or `..`) and an optional
+`liveUrl` (default: the project's own `*.pages.dev` address, read from
+Cloudflare). Its proof is always the Pages project. `releaseTarget()` in
+[schemas.ts](../../packages/shared/src/schemas.ts) gives the remote branch
+of either method to the SEC-1 release gate.
 
 ## Flow
 
@@ -70,6 +80,37 @@ At least one proof is required. Repository detection never turns release on.
    at once when it is the only proof; otherwise polling runs to `timeoutSec`.
 6. **Outcome** — saved in `tasks.git.release` (`TaskRelease`, no new column),
    written to the `release.md` artifact and to one event.
+
+### Deploy to Cloudflare
+
+The same steps, with a build before the lock and an upload after the push:
+
+- **Before the lock** — the commit must already be a tested tree
+  (`testedTree`), then `cloudflare.pages_status` reads the project: missing
+  (`NOT_FOUND`) → created later; unreadable → refused; a production branch
+  that is not a production name (`PRODUCTION_BRANCH_NAMES`) → refused (the
+  tool would refuse the upload). Unless the project already serves the commit,
+  the commit is **built**: a detached worktree under `<dataDir>/releases`,
+  `prepareDetached` (lockfile install), then each enabled `build` command of
+  `taskRepositoryView` of that checkout, classified with `stageCommandRisk`
+  (anything above Level 4 or always needing approval is refused), run with the
+  sanitized environment; `pages.outputDir` must then hold files (≤ 20,000).
+  Any failure is a refusal: nothing was sent.
+- **Step 3 adds** — the live deployment's commit must be the release commit
+  or its ancestor in the repository ("uploading it would take that version
+  down" otherwise); the live URL must answer only when something is live.
+- **Step 4 adds** — after the push and the lock's release: create the project
+  when missing (`cloudflare.pages_project_create`, production branch =
+  `branch`), then `cloudflare.pages_deploy` of `pages.outputDir` to the
+  project's production branch with `commitHash`, both through
+  `ToolService.invoke` (origin `engine`, operator profile, `preApproved`,
+  scope confined to the build folder, the repository's `cloudflare` key). A
+  refused upload is `failed` ("Sent …, but Cloudflare did not take the
+  upload"); the commit is on the branch, so the Release button's retry skips
+  the push and only uploads. `evidence.deploy` keeps project, created, files,
+  URL, note. A new project's address is read back for the live URL.
+- The build folder is removed after the upload (or refusal); `recover()`
+  empties `<dataDir>/releases` at every start and prunes worktrees.
 
 | State | Meaning | Event |
 |---|---|---|
@@ -133,7 +174,9 @@ The push uses the operator's own Git credential helper, as Source Control's
 pushes do; no token is injected. Live checks are GETs without cookies or
 tokens, redirects not followed. Pages reads go through `ToolService.invoke`
 (`cloudflare.pages_status`, Level 1, read-only, the repository's `cloudflare`
-key; see [tool-system.md](tool-system.md)).
+key; see [tool-system.md](tool-system.md)). A direct release's build and
+upload run only inside that release, after its typed approval; no agent, the
+Chairman or the cloud can start one.
 
 ## Restart
 
@@ -156,4 +199,4 @@ and waits for them to save (`close()`).
   the first was released; the stage updates itself, the button refuses —
   background sync (or a pull) before starting avoids both.
 
-Last verified: 2026-09-26
+Last verified: 2026-09-29

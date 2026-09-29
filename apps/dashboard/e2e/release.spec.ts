@@ -105,6 +105,36 @@ for (const theme of ['dark', 'light'] as const) {
       expect(errors).toEqual([]);
     });
 
+    test('Deploy to Cloudflare asks for a project and a build folder, and its Check setup sends nothing', async ({ page }, testInfo) => {
+      const errors = trackConsoleErrors(page);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/repositories/${repoId}`);
+      const panel = page.getByTestId('release-panel');
+      await panel.getByRole('radio', { name: 'Deploy to Cloudflare' }).click();
+      await expect(panel.getByText(/builds that exact commit in a clean copy and uploads the build to Cloudflare Pages/)).toBeVisible();
+      await expect(panel.getByLabel('Build output folder')).toHaveValue('dist');
+      // A project name Cloudflare would refuse is caught here.
+      await panel.getByLabel('Cloudflare Pages project').fill('My App');
+      await expect(panel.getByText('Lowercase letters, digits and dashes', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+      await panel.getByLabel('Cloudflare Pages project').fill('release-app');
+      await panel.getByLabel('Build output folder').fill('../outside');
+      await expect(panel.getByText('A folder inside the repository, such as dist').first()).toBeVisible();
+      await panel.getByLabel('Build output folder').fill('dist');
+      await panel.getByRole('button', { name: 'Check setup' }).click();
+      const results = page.getByTestId('release-setup-results');
+      await expect(results.getByText(/Remote passed/)).toBeVisible();
+      await expect(results.getByText(/^Wrangler/)).toBeVisible();
+      await expect(results.getByText(/^Build/)).toBeVisible();
+      await page.evaluate(() => {
+        for (const el of [document.scrollingElement, ...document.querySelectorAll('main, [data-scroll-container]')]) if (el) el.scrollTop = 0;
+      });
+      await expectNoAxeViolations(page, testInfo);
+      expect(errors).toEqual([]);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expectNoHorizontalOverflow(page);
+    });
+
     test('the release approval says what is sent and asks for the task id', async ({ page }, testInfo) => {
       const errors = trackConsoleErrors(page);
       await page.setViewportSize({ width: 1440, height: 900 });

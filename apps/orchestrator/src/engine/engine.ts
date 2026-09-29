@@ -130,6 +130,9 @@ export class TaskEngine {
       repositories: d.repositories,
       artifacts: d.artifacts,
       tooling: d.tooling,
+      settings: d.settings,
+      dataDir: d.dataDir,
+      baseEnv: d.baseEnv ?? process.env,
       probe: d.release?.probe,
       pollSeconds: d.release?.pollSeconds,
     });

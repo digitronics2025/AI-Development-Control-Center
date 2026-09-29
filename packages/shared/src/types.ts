@@ -99,6 +99,17 @@ export interface ReleaseEvidence {
   } | null;
   versionUrl?: { url: string; ok: boolean; status: number | null; excerpt: string | null; note: string } | null;
   up?: { url: string; ok: boolean; status: number | null; note: string } | null;
+  /** A direct Cloudflare release: the build of the commit and its upload (docs/plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md). */
+  deploy?: {
+    project: string;
+    /** The project was created by this release (its first). */
+    created: boolean;
+    /** Files in the uploaded folder. */
+    files: number | null;
+    /** The deployment's own address, as Wrangler printed it. */
+    url: string | null;
+    note: string;
+  } | null;
   checkedAt?: Iso | null;
 }
 
@@ -113,7 +124,7 @@ export interface TaskRelease {
   commit: string;
   /** The commit's tree, which matched a tree the task's checks passed on. */
   tree: string | null;
-  target: { remote: string; branch: string; liveUrl: string };
+  target: { remote: string; branch: string; liveUrl: string; method?: 'push' | 'cloudflare'; project?: string | null };
   /** How the release was started: the workflow's Release stage or the Release button. */
   via: 'stage' | 'button';
   approvalId: string | null;

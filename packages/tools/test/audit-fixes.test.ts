@@ -78,7 +78,7 @@ describe('F-05: git.stage / git.commit / git.restore never touch the user\'s pre
     // The task's own file still works.
     expect((await run('git.commit', { paths: ['src/task.ts'], message: 'task change' })).ok).toBe(true);
     expect(readFileSync(path.join(repo, 'src', 'app.ts'), 'utf8')).toBe('user work\n');
-  });
+  }, 30_000); // ~25 Git runs: under 1 s alone, over the default 5 s when the whole suite shares the machine
 });
 
 describe('F-16: the Postgres password never reaches psql argv', () => {

@@ -283,7 +283,13 @@ export function cloudflareProvider(): ToolProvider {
         // Which branch is production is the project's setting on Cloudflare, never the caller's word
         // (audit F-14): common production names are classified production up front, and any other
         // branch is checked against the project before anything is uploaded.
-        input: z.object({ directory: z.string().min(1).max(500), project: z.string().min(1).max(100).regex(/^[\w-]+$/), branch: z.string().min(1).max(100).regex(/^[\w./-]+$/) }),
+        input: z.object({
+          directory: z.string().min(1).max(500),
+          project: z.string().min(1).max(100).regex(/^[\w-]+$/),
+          branch: z.string().min(1).max(100).regex(/^[\w./-]+$/),
+          /** The commit the folder was built from: recorded on the deployment, so its live version can be proved. */
+          commitHash: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+        }),
         level: 4,
         classify: (i) => levelFor(PRODUCTION_BRANCH.test(i.branch) ? 'production' : 'preview', true),
         credentials: CREDENTIALS,
@@ -299,9 +305,13 @@ export function cloudflareProvider(): ToolProvider {
             if (production === null) return failure('DENIED', `Could not confirm ${input.project}'s production branch on Cloudflare, so a deploy to "${input.branch}" cannot be judged a preview. Store a Cloudflare token with Pages read access, or deploy as the production branch (typed approval).`);
             if (production === input.branch) return failure('DENIED', `"${input.branch}" is ${input.project}'s production branch: this is a production deploy and needs your typed approval. Deploy it under that name as production.`);
           }
-          const r = await wrangler(ctx, ['pages', 'deploy', dir, '--project-name', input.project, '--branch', input.branch], 600_000);
+          const commit = input.commitHash ? ['--commit-hash', input.commitHash.toLowerCase(), '--commit-dirty=false'] : [];
+          const r = await wrangler(ctx, ['pages', 'deploy', dir, '--project-name', input.project, '--branch', input.branch, ...commit], 600_000);
           const url = /(https:\/\/\S+\.pages\.dev)/.exec(r.stdout)?.[1] ?? null;
-          return { ...resultOf(r, `Pages deployed${url ? ` at ${url}` : ''}`, { url }), evidence: r.code === 0 && url ? [`pages ${input.branch} → ${url}`] : [] };
+          const uploaded = /Uploaded (\d+) files?/i.exec(r.stdout);
+          const already = /\((\d+) already uploaded\)/i.exec(r.stdout);
+          const files = uploaded ? Number(uploaded[1]) + (already ? Number(already[1]) : 0) : null;
+          return { ...resultOf(r, `Pages deployed${url ? ` at ${url}` : ''}`, { url, files }), evidence: r.code === 0 && url ? [`pages ${input.branch} → ${url}`] : [] };
         },
       }),
       operation({

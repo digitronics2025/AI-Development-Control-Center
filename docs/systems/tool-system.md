@@ -155,9 +155,10 @@ for the line a terminal runs when Enter arrives, however many sends it
 took (`TerminalService.judgeLine`, agents' and the cloud's input alike, after
 the lines that terminal ran before, and together with the earlier lines of a
 command the shell is still reading: [pty.md](pty.md)), and for the commands
-the engine's own stages run (`stageCommandRisk` in
-[runners.ts](../../apps/orchestrator/src/engine/runners.ts): an agent can
-edit a package script a later stage runs). `gitPushTargets` finds a push in
+the engine's own stages run and for a direct release's build
+(`stageCommandRisk` in
+[command-risk.ts](../../apps/orchestrator/src/engine/command-risk.ts): an agent
+can edit a package script a later stage runs). `gitPushTargets` finds a push in
 the ways a line runs one — behind `then`/`do`/`!`/`{`, PowerShell's `if (…) {`, in
 `$(…)` or backticks, in a PowerShell grouping expression given as an argument
 (`Write-Output (git push …)`, `[void](…)`, `@(…)`; not inside quotes), through
@@ -394,12 +395,17 @@ pack, [cloudflare.ts](../../packages/tools/src/packs/cloudflare.ts)) is Level 4:
 it creates an empty direct-upload Pages project that serves nothing until
 `cloudflare.pages_deploy` uploads to it (production branch: Level 5, typed
 approval). Names are Cloudflare's own rule (lowercase, digits, dashes, ≤ 58).
+`cloudflare.pages_deploy` takes an optional `commitHash` (40 hex), passed as
+`--commit-hash … --commit-dirty=false` so the deployment records the commit a
+release proves, and reports the files uploaded. A REST 404 is the error code
+`NOT_FOUND` (a missing project, not a failed read).
 
 `cloudflare.pages_status {project, commit?}` (in the read-only REST pack
 [cloudflare-api.ts](../../packages/tools/src/packs/cloudflare-api.ts), no
 Wrangler needed) is Level 1 and `readOnly`: the Pages project's production
-branch, its canonical (live) deployment — id, commit, latest stage and status,
-URL — and, with `commit`, the newest production deployment built from it. It
+branch, its `subdomain` (the project's own `*.pages.dev` address), its
+canonical (live) deployment — id, commit, latest stage and status, URL — and,
+with `commit`, the newest production deployment built from it. It
 needs the repository's `cloudflare` key; the account comes from a
 `CLOUDFLARE_ACCOUNT_ID` credential or, when the key sees exactly one account,
 from the key. No key → `UNAVAILABLE`. A release reads it through

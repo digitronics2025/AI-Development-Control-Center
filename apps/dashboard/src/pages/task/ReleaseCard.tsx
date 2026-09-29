@@ -8,13 +8,17 @@ import { useConnection } from '../../app/runtime';
 
 const IN_FLIGHT: ReadonlyArray<TaskRelease['state']> = ['publishing', 'proving'];
 
+/** The repository has a release set up. */
+const releases = (repo: Repository | undefined) => Boolean(repo?.release && repo.release.method !== 'none');
+
 /**
  * Whether the Release button may be offered (RELEASE_STAGE_PLAN §3.6): a
- * completed task of a repository that releases by push, with a commit, not
- * already being released or live on that commit, and not across repositories.
+ * completed task of a repository that releases (by push or directly to
+ * Cloudflare), with a commit, not already being released or live on that
+ * commit, and not across repositories.
  */
 export function canRelease(task: TaskDetail, repo: Repository | undefined): boolean {
-  if (task.status !== 'COMPLETED' || repo?.release?.method !== 'push') return false;
+  if (task.status !== 'COMPLETED' || !releases(repo)) return false;
   if (!task.git.commits.length || (task.repositories?.length ?? 1) > 1) return false;
   const r = task.git.release;
   if (r && IN_FLIGHT.includes(r.state)) return false;
@@ -72,7 +76,7 @@ export function ReleaseCard({ task, repo }: { task: TaskDetail; repo: Repository
   const { checkAgain } = useReleaseCommands(task.id);
   const connection = useConnection();
   const { toast } = useFeedback();
-  const configured = repo?.release?.method === 'push';
+  const configured = releases(repo);
   if (!release && !(configured && task.status === 'COMPLETED' && task.git.commits.length)) return null;
 
   if (!release) {
@@ -139,6 +143,13 @@ export function ReleaseCard({ task, repo }: { task: TaskDetail; repo: Repository
             <Check ok={release.publishedAt ? true : release.state === 'refused' || release.state === 'failed' ? false : null} pending={release.state === 'publishing'}>
               {release.publishedAt ? `Sent to ${release.target.remote}/${release.target.branch}` : release.state === 'refused' ? 'Nothing was sent' : `Sending to ${release.target.remote}/${release.target.branch}`}
             </Check>
+            {e.deploy ? (
+              <Check ok={e.deploy.url ? true : release.state === 'failed' ? false : null} pending={release.state === 'publishing'}>
+                Uploaded to Cloudflare Pages {e.deploy.project}
+                {e.deploy.created ? ' (created by this release)' : ''}
+                {e.deploy.files !== null ? ` — ${e.deploy.files} file${e.deploy.files === 1 ? '' : 's'}` : ''}: {e.deploy.note}
+              </Check>
+            ) : null}
             {e.cloudflarePages ? (
               <Check ok={e.cloudflarePages.ok} pending={inFlight}>
                 Cloudflare Pages {e.cloudflarePages.project}: {e.cloudflarePages.note}

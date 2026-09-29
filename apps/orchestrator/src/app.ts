@@ -10,7 +10,7 @@ import { Bus } from './bus.js';
 import { Chairman } from './chairman/chairman.js';
 import { ChairmanChat } from './chairman/chat.js';
 import { Watchdog } from './chairman/watchdog.js';
-import { DEFAULT_PORT } from '@acc/shared';
+import { DEFAULT_PORT, releaseTarget } from '@acc/shared';
 import type { OrchestratorConfig } from './config.js';
 import { migrate, openDatabase, type Db } from './db/database.js';
 import { BaselineChecks } from './engine/baseline-checks.js';
@@ -197,8 +197,7 @@ export function createServices(
     events: (taskId, type, message, data, stageId) => engine.publisher.event(taskId, type, message, data ?? {}, stageId ?? null),
     privileged,
     releaseBranch: (repositoryId) => {
-      const release = store.getRepository(repositoryId)?.release;
-      return release?.method === 'push' ? release.branch : null;
+      return releaseTarget(store.getRepository(repositoryId)?.release)?.branch ?? null;
     },
     checkpoints: (taskId) => ({
       create: async (label) => {

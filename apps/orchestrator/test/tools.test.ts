@@ -102,6 +102,8 @@ describe('operator tool calls and policy', () => {
     expect(listed.length).toBeLessThanOrEqual(60);
     expect(listed[0]).toMatch(/^cloudflare\./);
     for (const cap of ['cloudflare.logs_query', 'cloudflare.d1_query', 'browser.open', 'browser.act', 'verify.web', 'process.start', 'web.search', 'web.read']) expect(listed, cap).toContain(cap);
+    // A release's own reads are callable by id but never crowd an agent's capped list.
+    for (const cap of ['cloudflare.worker_status', 'cloudflare.d1_pending_migrations']) expect(listed, cap).not.toContain(cap);
     t.services.tools.closeSession(session.id);
   });
 

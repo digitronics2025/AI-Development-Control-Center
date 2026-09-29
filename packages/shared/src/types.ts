@@ -97,10 +97,15 @@ export interface ReleaseEvidence {
     candidate?: { deploymentId: string; stage: string | null; status: string | null; url: string | null } | null;
     note: string;
   } | null;
+  /** A direct Worker release: the Worker's only live version records the commit (`workers/message`). */
+  cloudflareWorker?: { name: string; ok: boolean; versionId: string | null; commit: string | null; note: string } | null;
   versionUrl?: { url: string; ok: boolean; status: number | null; excerpt: string | null; note: string } | null;
   up?: { url: string; ok: boolean; status: number | null; note: string } | null;
   /** A direct Cloudflare release: the build of the commit and its upload (docs/plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md). */
   deploy?: {
+    /** What was deployed: a Pages site (absent on releases before Workers) or a Worker. */
+    kind?: 'pages' | 'worker';
+    /** The Pages project or the Worker. */
     project: string;
     /** The project was created by this release (its first). */
     created: boolean;
@@ -124,7 +129,8 @@ export interface TaskRelease {
   commit: string;
   /** The commit's tree, which matched a tree the task's checks passed on. */
   tree: string | null;
-  target: { remote: string; branch: string; liveUrl: string; method?: 'push' | 'cloudflare'; project?: string | null };
+  /** `project`: the Pages project or the Worker a direct release deploys (`kind` says which). `liveUrl` is empty for a Worker with no address. */
+  target: { remote: string; branch: string; liveUrl: string; method?: 'push' | 'cloudflare'; kind?: 'pages' | 'worker'; project?: string | null };
   /** How the release was started: the workflow's Release stage or the Release button. */
   via: 'stage' | 'button';
   approvalId: string | null;

@@ -138,6 +138,119 @@ export function wranglerConfigValue(cwd: string, key: 'name' | 'account_id'): st
   return null;
 }
 
+/** JSONC as JSON: comments outside strings removed, trailing commas dropped. */
+function stripJsonc(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const next = text[i + 1];
+    if (inString) {
+      out += c;
+      if (c === '\\') {
+        out += next ?? '';
+        i++;
+      } else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+    } else if (c === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && next === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i++;
+    } else out += c;
+  }
+  return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
+/**
+ * The Worker a folder's Wrangler config deploys: its top-level `name`, or with
+ * `environment` that environment's own `name`, else `<name>-<environment>` as
+ * Wrangler names it. Null when there is no config or no name.
+ */
+export function workerNameFromConfig(cwd: string, environment: string | null = null): string | null {
+  for (const file of ['wrangler.jsonc', 'wrangler.json']) {
+    let text: string;
+    try {
+      text = readFileSync(path.join(cwd, file), 'utf8');
+    } catch {
+      continue;
+    }
+    try {
+      const config = JSON.parse(stripJsonc(text)) as { name?: unknown; env?: Record<string, { name?: unknown }> };
+      const top = typeof config.name === 'string' ? config.name : null;
+      if (!environment) return top;
+      const own = config.env?.[environment]?.name;
+      return typeof own === 'string' ? own : top ? `${top}-${environment}` : null;
+    } catch {
+      return null;
+    }
+  }
+  let toml: string;
+  try {
+    toml = readFileSync(path.join(cwd, 'wrangler.toml'), 'utf8');
+  } catch {
+    return null;
+  }
+  const lines = toml.split(/\r?\n/);
+  const firstHeader = lines.findIndex((l) => /^\s*\[/.test(l));
+  const top = (firstHeader === -1 ? lines : lines.slice(0, firstHeader)).map((l) => /^\s*name\s*=\s*"([^"]+)"/.exec(l)?.[1]).find(Boolean) ?? null;
+  if (!environment) return top;
+  const header = lines.findIndex((l) => l.trim() === `[env.${environment}]`);
+  if (header !== -1) {
+    for (let i = header + 1; i < lines.length && !/^\s*\[/.test(lines[i]!); i++) {
+      const m = /^\s*name\s*=\s*"([^"]+)"/.exec(lines[i]!);
+      if (m) return m[1]!;
+    }
+  }
+  return top ? `${top}-${environment}` : null;
+}
+
+/**
+ * The D1 databases (their `database_name`) a folder's Wrangler config binds:
+ * the top level, or with `environment` that environment's own list (Wrangler
+ * does not inherit bindings into an environment).
+ */
+export function d1DatabasesFromConfig(cwd: string, environment: string | null = null): string[] {
+  for (const file of ['wrangler.jsonc', 'wrangler.json']) {
+    let text: string;
+    try {
+      text = readFileSync(path.join(cwd, file), 'utf8');
+    } catch {
+      continue;
+    }
+    try {
+      const config = JSON.parse(stripJsonc(text)) as { d1_databases?: unknown; env?: Record<string, { d1_databases?: unknown }> };
+      const list = environment ? config.env?.[environment]?.d1_databases : config.d1_databases;
+      return Array.isArray(list) ? list.map((d) => (d as { database_name?: unknown }).database_name).filter((n): n is string => typeof n === 'string' && /^[\w-]+$/.test(n)) : [];
+    } catch {
+      return [];
+    }
+  }
+  let toml: string;
+  try {
+    toml = readFileSync(path.join(cwd, 'wrangler.toml'), 'utf8');
+  } catch {
+    return [];
+  }
+  const header = environment ? `[[env.${environment}.d1_databases]]` : '[[d1_databases]]';
+  const names: string[] = [];
+  const lines = toml.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.trim() !== header) continue;
+    for (let j = i + 1; j < lines.length && !/^\s*\[/.test(lines[j]!); j++) {
+      const m = /^\s*database_name\s*=\s*"([\w-]+)"/.exec(lines[j]!);
+      if (m) names.push(m[1]!);
+    }
+  }
+  return names;
+}
+
 async function cfApi(ctx: OperationContext, token: string, route: string, body?: unknown): Promise<{ ok: boolean; status: number; json: any }> {
   const res = await fetch(`${CF_API}${route}`, {
     method: body === undefined ? 'GET' : 'POST',
@@ -312,6 +425,54 @@ export function cloudflareProvider(): ToolProvider {
           const already = /\((\d+) already uploaded\)/i.exec(r.stdout);
           const files = uploaded ? Number(uploaded[1]) + (already ? Number(already[1]) : 0) : null;
           return { ...resultOf(r, `Pages deployed${url ? ` at ${url}` : ''}`, { url, files }), evidence: r.code === 0 && url ? [`pages ${input.branch} → ${url}`] : [] };
+        },
+      }),
+      operation({
+        id: 'cloudflare.worker_deploy',
+        title: 'Deploy a Worker by its config',
+        description:
+          "`wrangler deploy` of the Worker the folder's Wrangler config names (with `environment`, that environment's), recording `message` on the new version so its live version can be proved. It serves traffic at once: your typed approval. `dryRun` bundles and checks the config without uploading (Level 2).",
+        input: z.object({
+          environment: z.string().min(1).max(60).regex(/^[A-Za-z0-9][\w-]*$/).optional(),
+          message: z.string().min(1).max(100).regex(/^[\w .:#/-]+$/, 'Letters, digits, spaces and . : # / - only'),
+          dryRun: z.boolean().default(false),
+        }),
+        level: 5,
+        classify: (i) => (i.dryRun ? { level: 2, reasons: ['Bundles the Worker without uploading'], effects: [] } : levelFor('production', true)),
+        credentials: CREDENTIALS,
+        async run(input, ctx) {
+          const env = input.environment ? ['--env', input.environment] : [];
+          if (input.dryRun) {
+            const out = path.join(ctx.tempDir, `wrangler-dry-run-${Date.now()}`);
+            mkdirSync(out, { recursive: true });
+            return resultOf(await wrangler(ctx, ['deploy', '--dry-run', '--outdir', out, ...env], 300_000), 'Dry run: the Worker bundles and its config is valid');
+          }
+          const r = await wrangler(ctx, ['deploy', ...env, '--message', input.message], 600_000);
+          const versionId = /Current Version ID:\s*([0-9a-f-]{36})/i.exec(r.stdout)?.[1] ?? null;
+          const name = /Uploaded\s+([a-z0-9][a-z0-9-]*)\s/i.exec(r.stdout)?.[1] ?? null;
+          const urls = [...new Set([...r.stdout.matchAll(/https:\/\/[^\s)'"]+/g)].map((m) => m[0]).filter((u) => !/(?:dash|developers)\.cloudflare\.com/.test(u)))];
+          return { ...resultOf(r, `Worker deployed${name ? ` (${name})` : ''}${versionId ? `, version ${versionId}` : ''}`, { name, versionId, urls }), evidence: r.code === 0 ? [`worker ${name ?? '?'} version ${versionId ?? '?'}`] : [] };
+        },
+      }),
+      operation({
+        id: 'cloudflare.d1_pending_migrations',
+        title: 'D1 migrations not yet applied',
+        description:
+          "Which migrations of a live D1 database (named in the folder's Wrangler config, with `environment` that environment's) are not applied on Cloudflare yet. Reads only; applying is `cloudflare.d1_migrations`.",
+        input: z.object({ database: dbName, environment: z.string().min(1).max(60).regex(/^[A-Za-z0-9][\w-]*$/).optional() }),
+        level: 2,
+        // A release's own check; agents list migrations with cloudflare.d1_migrations.
+        unlisted: true,
+        classify: () => ({ level: 2, reasons: ['Reads which migrations a live D1 database has not applied'], effects: ['network', 'production'] }),
+        credentials: CREDENTIALS,
+        async run(input, ctx) {
+          const r = await wrangler(ctx, ['d1', 'migrations', 'list', input.database, '--remote', ...(input.environment ? ['--env', input.environment] : [])], 180_000);
+          if (r.code !== 0) return resultOf(r, '');
+          const text = `${r.stdout}\n${r.stderr}`;
+          const pending = [...new Set([...text.matchAll(/\b(\d{4,}_[\w.-]+\.sql)\b/g)].map((m) => m[1]!))];
+          // Wrangler says so when nothing waits; anything else it printed without a migration name cannot be read as "none".
+          if (!pending.length && !/No migrations to apply/i.test(text)) return failure('FAILED', `Could not read which migrations of ${input.database} are pending from Wrangler's answer.`, { stdout: clip(r.stdout) });
+          return { ...resultOf(r, pending.length ? `${input.database}: ${pending.length} migration${pending.length === 1 ? '' : 's'} not applied` : `${input.database}: every migration is applied`, { database: input.database, pending }) };
         },
       }),
       operation({

@@ -6,6 +6,8 @@ import { useReleaseSetupCheck } from '../api/hooks';
 import { useConnection } from '../app/runtime';
 
 type ReleaseMethod = ReleaseConfig['method'];
+/** What a direct Cloudflare release deploys. */
+type CloudflareKind = 'pages' | 'worker';
 
 /** The Release panel's form, as text fields (RELEASE_STAGE_PLAN §3.2, CLOUDFLARE_DIRECT_RELEASE_PLAN). */
 export interface ReleaseForm {
@@ -14,19 +16,28 @@ export interface ReleaseForm {
   branch: string;
   liveUrl: string;
   pagesProject: string;
+  /** Direct Cloudflare release: a Pages site or a Worker. */
+  target: CloudflareKind;
   /** Direct Cloudflare release: the folder the build writes. */
   outputDir: string;
+  /** Worker release: the Worker to pin (empty: the one the Wrangler config names) and its Wrangler environment. */
+  workerName: string;
+  workerEnv: string;
   versionUrl: string;
   manualPaths: string;
   timeoutMin: string;
 }
 
-const EMPTY: ReleaseForm = { method: 'none', remote: 'origin', branch: 'main', liveUrl: '', pagesProject: '', outputDir: 'dist', versionUrl: '', manualPaths: '', timeoutMin: '15' };
+const EMPTY: ReleaseForm = { method: 'none', remote: 'origin', branch: 'main', liveUrl: '', pagesProject: '', target: 'pages', outputDir: 'dist', workerName: '', workerEnv: '', versionUrl: '', manualPaths: '', timeoutMin: '15' };
 
 export function releaseForm(config: ReleaseConfig | undefined): ReleaseForm {
   if (!config || config.method === 'none') return EMPTY;
   const common = { remote: config.remote, branch: config.branch, manualPaths: config.manualPaths.join('\n'), timeoutMin: String(Math.round(config.timeoutSec / 60)) };
-  if (config.method === 'cloudflare') return { ...EMPTY, ...common, method: 'cloudflare', liveUrl: config.liveUrl ?? '', pagesProject: config.pages.project, outputDir: config.pages.outputDir };
+  if (config.method === 'cloudflare') {
+    return config.worker
+      ? { ...EMPTY, ...common, method: 'cloudflare', target: 'worker', liveUrl: config.liveUrl ?? '', workerName: config.worker.name ?? '', workerEnv: config.worker.environment ?? '' }
+      : { ...EMPTY, ...common, method: 'cloudflare', target: 'pages', liveUrl: config.liveUrl ?? '', pagesProject: config.pages?.project ?? '', outputDir: config.pages?.outputDir ?? 'dist' };
+  }
   return { ...EMPTY, ...common, method: 'push', liveUrl: config.liveUrl, pagesProject: config.proof.cloudflarePages?.project ?? '', versionUrl: config.proof.versionUrl ?? '' };
 }
 
@@ -39,7 +50,11 @@ export function releaseConfig(form: ReleaseForm): ReleaseConfig {
     timeoutSec: Math.round((Number(form.timeoutMin) || 0) * 60),
   };
   if (form.method === 'cloudflare') {
-    return { method: 'cloudflare', ...common, pages: { project: form.pagesProject.trim(), outputDir: form.outputDir.trim() }, ...(form.liveUrl.trim() ? { liveUrl: form.liveUrl.trim() } : {}) };
+    const live = form.liveUrl.trim() ? { liveUrl: form.liveUrl.trim() } : {};
+    if (form.target === 'worker') {
+      return { method: 'cloudflare', ...common, worker: { ...(form.workerName.trim() ? { name: form.workerName.trim() } : {}), ...(form.workerEnv.trim() ? { environment: form.workerEnv.trim() } : {}) }, ...live };
+    }
+    return { method: 'cloudflare', ...common, pages: { project: form.pagesProject.trim(), outputDir: form.outputDir.trim() }, ...live };
   }
   return {
     method: 'push',
@@ -70,7 +85,11 @@ export function releaseErrors(form: ReleaseForm): Record<string, string> {
           ? second === 'outputDir'
             ? 'outputDir'
             : 'pagesProject'
-          : first === 'timeoutSec'
+          : first === 'worker'
+            ? second === 'environment'
+              ? 'workerEnv'
+              : 'workerName'
+            : first === 'timeoutSec'
             ? 'timeoutMin'
             : (first ?? 'method');
     out[key] ??= key === 'timeoutMin' ? 'Between 1 and 60 minutes' : issue.message;
@@ -82,7 +101,13 @@ const HELPER: Record<ReleaseMethod, string> = {
   none: 'Tasks never release. Their Release stage is skipped without asking.',
   push: "After its checks pass, a task asks you to push its commit to this branch. Your host (for example Cloudflare Pages connected to Git) builds it; the task shows Live only when the host serves that commit.",
   cloudflare:
-    'After its checks pass, a task asks you once, then pushes its commit to this branch, builds that exact commit in a clean copy and uploads the build to Cloudflare Pages — creating the project on the first release. The task shows Live only when Cloudflare serves that commit.',
+    'After its checks pass, a task asks you once, then pushes its commit to this branch, builds that exact commit in a clean copy and deploys it to Cloudflare — creating the site or Worker on the first release. The task shows Live only when Cloudflare serves that commit.',
+};
+
+const TARGET_HELPER: Record<CloudflareKind, string> = {
+  pages: 'A static site: the build folder is uploaded to a Cloudflare Pages project.',
+  worker:
+    "An app with a server side: deployed with wrangler deploy, as the Worker its Wrangler config (wrangler.jsonc, .json or .toml) names. A release never applies database migrations: it waits until you have applied them.",
 };
 
 function SetupResult({ result }: { result: ReleaseSetupCheck }) {
@@ -160,6 +185,33 @@ export function ReleasePanel({ repositoryId, form, onChange }: { repositoryId: s
                 </Field>
               </div>
               {direct ? (
+                <FieldGroup label="What to deploy" inline helper={TARGET_HELPER[form.target]}>
+                  <SegmentedControl<CloudflareKind>
+                    label="What to deploy"
+                    value={form.target}
+                    onValueChange={(target) => set({ target })}
+                    options={[
+                      { value: 'pages', label: 'Site (Pages)' },
+                      { value: 'worker', label: 'Worker' },
+                    ]}
+                  />
+                </FieldGroup>
+              ) : null}
+              {direct && form.target === 'worker' ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Worker name" optional error={errors.workerName ?? null} helper="Empty: the name in the Wrangler config. Set: a release whose config names another Worker is refused.">
+                      <Input value={form.workerName} onChange={(e) => set({ workerName: e.target.value })} className="font-mono" spellCheck={false} placeholder="my-api" />
+                    </Field>
+                    <Field label="Wrangler environment" optional error={errors.workerEnv ?? null} helper="Deploys with --env and this name. Empty: the config's top level.">
+                      <Input value={form.workerEnv} onChange={(e) => set({ workerEnv: e.target.value })} className="font-mono" spellCheck={false} placeholder="production" />
+                    </Field>
+                  </div>
+                  <Field label="Live URL" optional error={errors.liveUrl ?? null} helper="Your own domain or route, if the Worker has one (https). Empty: its workers.dev address.">
+                    <Input value={form.liveUrl} onChange={(e) => set({ liveUrl: e.target.value })} className="font-mono" spellCheck={false} placeholder="https://api.example.com/" inputMode="url" />
+                  </Field>
+                </>
+              ) : direct ? (
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="Cloudflare Pages project" error={errors.pagesProject ?? null} helper="Lowercase letters, digits and dashes. Created on the first release when it does not exist. Uses the repository's Cloudflare key.">

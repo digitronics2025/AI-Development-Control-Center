@@ -273,6 +273,12 @@ export interface ToolOperation<I = any, O = any> {
   /** Runs until stopped (dev servers): the call returns once it is up. */
   longRunning?: boolean;
   /**
+   * Plumbing for the Control Center itself (a release's reads): left out of an
+   * agent's tool list, which is capped, so it never crowds out what agents use.
+   * Still callable by id (acc_call_capability) and shown to the operator.
+   */
+  unlisted?: boolean;
+  /**
    * Paid calls only (image and video generation): what this call is expected to
    * cost, given the operator's per-model prices. ToolService's spend gate
    * reserves it before the call and refuses the call when paid generation is off

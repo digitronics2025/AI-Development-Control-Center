@@ -26,8 +26,10 @@ import {
   RELEASE_STATE_LABEL,
   nonBlockingFailure,
   supersededRun,
+  cloudflareTarget,
   type ActiveReleaseConfig,
   type CloudflareReleaseConfig,
+  type CloudflareTarget,
   type EventType,
   type ReleaseEvidence,
   type ReleaseSetupCheck,
@@ -46,6 +48,7 @@ import type { EngineTooling } from '../engine/tooling.js';
 import type { TaskViews } from '../engine/views.js';
 import type { ArtifactService } from '../services/artifacts.js';
 import type { RepositoryCoordinator } from '../services/repository-coordinator.js';
+import { d1DatabasesFromConfig, workerNameFromConfig, type WorkerVersionView } from '@acc/tools';
 import { detectToolingSync, type RepositoryService } from '../services/repositories.js';
 import type { SettingsService } from '../services/settings.js';
 import { scanOutgoing } from '../source-control/preflight.js';
@@ -211,23 +214,31 @@ export class ReleaseService {
     return repo.release.method === 'none' ? null : repo.release;
   }
 
-  /** What proves a release live: the same reads for both methods. */
-  private proofOf(config: ActiveReleaseConfig, liveUrl: string): ProofConfig {
-    return config.method === 'push'
-      ? { liveUrl: config.liveUrl, proof: config.proof, timeoutSec: config.timeoutSec }
-      : { liveUrl, proof: { cloudflarePages: { project: config.pages.project } }, timeoutSec: config.timeoutSec };
+  /**
+   * What proves a release live, for both methods: the setting's proofs, or for
+   * a direct release the Pages project or the Worker the release record names
+   * (a Worker's name comes from its commit's Wrangler config).
+   */
+  private proofOf(config: ActiveReleaseConfig, target: TaskRelease['target']): ProofConfig {
+    if (config.method === 'push') return { liveUrl: config.liveUrl, proof: config.proof, timeoutSec: config.timeoutSec };
+    const what = cloudflareTarget(config);
+    return what.kind === 'pages'
+      ? { liveUrl: target.liveUrl, proof: { cloudflarePages: { project: what.project } }, timeoutSec: config.timeoutSec }
+      : { liveUrl: target.liveUrl, proof: target.project ? { cloudflareWorker: { name: target.project } } : {}, timeoutSec: config.timeoutSec };
   }
 
   /** Where a release goes, as its record keeps it. */
   private targetOf(config: ActiveReleaseConfig): TaskRelease['target'] {
-    return config.method === 'push'
-      ? { remote: config.remote, branch: config.branch, liveUrl: config.liveUrl, method: 'push' }
-      : { remote: config.remote, branch: config.branch, liveUrl: this.liveUrlOf(config, null), method: 'cloudflare', project: config.pages.project };
+    if (config.method === 'push') return { remote: config.remote, branch: config.branch, liveUrl: config.liveUrl, method: 'push' };
+    const what = cloudflareTarget(config);
+    return what.kind === 'pages'
+      ? { remote: config.remote, branch: config.branch, liveUrl: this.liveUrlOf(config, null), method: 'cloudflare', kind: 'pages', project: what.project }
+      : { remote: config.remote, branch: config.branch, liveUrl: config.liveUrl ?? '', method: 'cloudflare', kind: 'worker', project: what.name };
   }
 
-  /** A direct release's live address: the one set, else the project's own pages.dev address. */
+  /** A Pages release's live address: the one set, else the project's own pages.dev address. */
   private liveUrlOf(config: CloudflareReleaseConfig, site: PagesSite | null): string {
-    return config.liveUrl ?? `https://${site?.subdomain ?? `${config.pages.project}.pages.dev`}/`;
+    return config.liveUrl ?? `https://${site?.subdomain ?? `${config.pages?.project ?? ''}.pages.dev`}/`;
   }
 
   isRunning(taskId: string): boolean {
@@ -248,12 +259,24 @@ export class ReleaseService {
     const sha = short(task.git.commits.at(-1));
     const affected = affectedOnly(this.d.store, task, repo.id) ? ' Unit tests on this commit covered only the tests affected by the change.' : '';
     if (config.method === 'cloudflare') {
-      const project = config.pages.project;
+      const what = cloudflareTarget(config);
+      const manual = config.manualPaths.length ? config.manualPaths.join(', ') : 'your manual paths';
+      if (what.kind === 'worker') {
+        const name = what.name ?? workerNameFromConfig(repo.path, what.environment) ?? 'named in its Wrangler config';
+        const deploy = `wrangler deploy${what.environment ? ` --env ${what.environment}` : ''}`;
+        return {
+          action: `Deploy ${sha} to Cloudflare Worker ${name}`,
+          reason: `Releasing sends work to your live app. ${repo.name}: push ${sha} to ${config.remote}/${config.branch}, build that exact commit in a clean copy, check it with a Wrangler dry run, and deploy it with ${deploy} (the Worker is created on the first release). It serves traffic at once. Live when the Worker's only live version is ${sha}${config.liveUrl ? ` and ${config.liveUrl} answers` : ''}.${affected}`,
+          riskExplanation: `Only the commit that passed this task's checks, built from a clean copy of it; the push is a fast-forward, never forced, and your working folder is not touched. Nothing is sent or deployed if ${config.branch} has moved, if the live Worker runs a version this commit does not contain or is in a gradual rollout, if the build or dry run fails, if one of its D1 databases has migrations not yet applied (a release never applies them), if a file under ${manual} changed, or if the commits include secret material.`,
+          environment: 'production',
+        };
+      }
+      const project = what.project;
       const where = config.liveUrl ?? `its ${project} address`;
       return {
         action: `Deploy ${sha} to Cloudflare Pages ${project}`,
-        reason: `Releasing sends work to your live site. ${repo.name}: push ${sha} to ${config.remote}/${config.branch}, build that exact commit in a clean copy, and upload ${config.pages.outputDir} to Cloudflare Pages ${project} (created on the first release). Live when ${project} serves ${sha} and ${where} answers.${affected}`,
-        riskExplanation: `Only the commit that passed this task's checks, built from a clean copy of it; the push is a fast-forward, never forced, and your working folder is not touched. Nothing is sent or uploaded if ${config.branch} has moved, if the live site serves a version this commit does not contain, if the build fails, if a file under ${config.manualPaths.length ? config.manualPaths.join(', ') : 'your manual paths'} changed, or if the commits include secret material.`,
+        reason: `Releasing sends work to your live site. ${repo.name}: push ${sha} to ${config.remote}/${config.branch}, build that exact commit in a clean copy, and upload ${what.outputDir} to Cloudflare Pages ${project} (created on the first release). Live when ${project} serves ${sha} and ${where} answers.${affected}`,
+        riskExplanation: `Only the commit that passed this task's checks, built from a clean copy of it; the push is a fast-forward, never forced, and your working folder is not touched. Nothing is sent or uploaded if ${config.branch} has moved, if the live site serves a version this commit does not contain, if the build fails, if a file under ${manual} changed, or if the commits include secret material.`,
         environment: 'production',
       };
     }
@@ -289,6 +312,7 @@ export class ReleaseService {
     const repo = this.repo(task);
     const config = this.config(repo);
     const cf = config?.method === 'cloudflare' ? config : null;
+    const target: CloudflareTarget | null = cf ? cloudflareTarget(cf) : null;
     const sha = task.git.commits.at(-1) ?? null;
     let record: TaskRelease = {
       state: 'publishing',
@@ -308,41 +332,69 @@ export class ReleaseService {
       '',
       `- Commit: ${sha ?? '—'}`,
       `- Target: ${record.target.remote}/${record.target.branch}`,
-      ...(cf ? [`- Deploy: Cloudflare Pages ${cf.pages.project}, ${cf.pages.outputDir} built from the commit`] : []),
+      ...(target ? [target.kind === 'pages' ? `- Deploy: Cloudflare Pages ${target.project}, ${target.outputDir} built from the commit` : `- Deploy: Cloudflare Worker ${target.name ?? '(named in the commit\'s Wrangler config)'}${target.environment ? `, environment ${target.environment}` : ''}, built from the commit`] : []),
       `- Live URL: ${record.target.liveUrl}`,
       `- Started by: ${opts.via === 'stage' ? 'the Release stage' : 'the Release button'}, approved by you`,
       '',
     ];
     const step = (line: string) => log.push(`- ${line}`);
     this.save(taskId, record);
-    this.event(taskId, 'RELEASE_APPROVED', `Release approved: ${short(sha)} to ${record.target.remote}/${record.target.branch}${cf ? ` and Cloudflare Pages ${cf.pages.project}` : ''}`, { commit: sha, target: record.target, approvalId: opts.approvalId, approvedBy: 'operator' }, opts.stageId);
+    this.event(taskId, 'RELEASE_APPROVED', `Release approved: ${short(sha)} to ${record.target.remote}/${record.target.branch}${target ? ` and ${targetLabel(target)}` : ''}`, { commit: sha, target: record.target, approvalId: opts.approvalId, approvedBy: 'operator' }, opts.stageId);
 
     let unlock: (() => void) | null = null;
     let build: Build | null = null;
     let site: PagesSite | null = null;
+    /** What serves the app on Cloudflare before this release: its deployment or version, and the commit recorded on it. */
+    let live: { id: string; commit: string | null } | null = null;
+    let existed = false;
     let alreadyLive = false;
     try {
       if (!config) throw new Refusal('No release is set up for this repository any more.');
       if (!sha) throw new Refusal('Nothing was committed, so there is nothing to release.');
       if (isMultiRepository(this.d.store, task)) throw new Refusal('A task across several repositories is not released this way.');
 
-      if (cf) {
-        // Before the lock: the project as Cloudflare has it, and the build — minutes of work that must not hold
-        // Source Control up. Only a tested commit is built.
+      if (cf && target) {
+        // Before the lock: what Cloudflare serves now, and the build — minutes of work that must not hold Source
+        // Control up. Only a tested commit is built.
         record.tree = await this.testedTree(task, repo, sha);
-        site = await this.pagesSite(task, repo, cf.pages.project);
-        if (site.exists && site.productionBranch && !isProductionName(site.productionBranch)) {
-          throw new Refusal(`Cloudflare Pages ${cf.pages.project} treats "${site.productionBranch}" as its production branch, which is not a production branch name (${PRODUCTION_BRANCH_NAMES.join(', ')}). Rename it on Cloudflare, or release by push.`);
+        if (target.kind === 'pages') {
+          site = await this.pagesSite(task, repo, target.project);
+          if (site.exists && site.productionBranch && !isProductionName(site.productionBranch)) {
+            throw new Refusal(`Cloudflare Pages ${target.project} treats "${site.productionBranch}" as its production branch, which is not a production branch name (${PRODUCTION_BRANCH_NAMES.join(', ')}). Rename it on Cloudflare, or release by push.`);
+          }
+          record = { ...record, target: { ...record.target, liveUrl: this.liveUrlOf(cf, site) } };
+          step(
+            site.exists
+              ? `Cloudflare Pages ${target.project} exists (production branch ${site.productionBranch ?? '?'}) and serves ${site.live ? short(site.live.commit) : 'nothing yet'}.`
+              : `Cloudflare Pages ${target.project} does not exist yet: this release creates it (production branch ${cf.branch}).`,
+          );
+          existed = site.exists;
+          live = site.live ? { id: site.live.id, commit: site.live.commit } : null;
+          alreadyLive = Boolean(site.live?.commit && sameCommit(site.live.commit, sha) && site.live.stage === 'deploy' && site.live.status === 'success');
+          if (alreadyLive) step(`${target.project} already serves ${short(sha)}: nothing to build or upload.`);
+          else build = await this.build(task, repo, cf, sha, step, opts);
+        } else {
+          // A Worker is named by the commit's own Wrangler config: build first, then read what serves that name.
+          build = await this.build(task, repo, cf, sha, step, opts);
+          const name = build.workerName!;
+          const worker = await this.workerSite(task, repo, name);
+          const serving = worker.versions;
+          if (serving.length > 1 || (serving[0] && serving[0].percentage < 100)) {
+            throw new Refusal(`Worker ${name} is in a gradual rollout (${serving.map((v) => `${v.id.slice(0, 8)} at ${v.percentage}%`).join(', ')}): finish or roll it back on Cloudflare first, then release.`);
+          }
+          const current = serving[0] ?? null;
+          const commit = current ? commitIn(current.message) : null;
+          existed = worker.exists;
+          live = current ? { id: current.id, commit } : null;
+          record = { ...record, target: { ...record.target, project: name, liveUrl: cf.liveUrl ?? worker.workersDev ?? '' } };
+          step(
+            worker.exists
+              ? `Cloudflare Worker ${name} exists and runs ${current ? `version ${current.id.slice(0, 8)}${commit ? ` (commit ${short(commit)})` : ' (no commit recorded on it)'}` : 'nothing yet'}.`
+              : `Cloudflare Worker ${name} does not exist yet: this release creates it.`,
+          );
+          alreadyLive = Boolean(commit && sameCommit(commit, sha));
+          if (alreadyLive) step(`${name} already runs ${short(sha)}: nothing to deploy.`);
         }
-        record = { ...record, target: { ...record.target, liveUrl: this.liveUrlOf(cf, site) } };
-        step(
-          site.exists
-            ? `Cloudflare Pages ${cf.pages.project} exists (production branch ${site.productionBranch ?? '?'}) and serves ${site.live ? short(site.live.commit) : 'nothing yet'}.`
-            : `Cloudflare Pages ${cf.pages.project} does not exist yet: this release creates it (production branch ${cf.branch}).`,
-        );
-        alreadyLive = Boolean(site.live?.commit && sameCommit(site.live.commit, sha) && site.live.stage === 'deploy' && site.live.status === 'success');
-        if (alreadyLive) step(`${cf.pages.project} already serves ${short(sha)}: nothing to build or upload.`);
-        else build = await this.build(task, repo, cf, sha, step, opts);
       }
 
       // Steps 1–4 hold the repository's writer lock: no Source Control mutation runs meanwhile.
@@ -393,21 +445,20 @@ export class ReleaseService {
         step(`${config.remote}/${config.branch} is already at ${short(sha)}: nothing to push${cf ? '' : ', only the proof runs'}.`);
       }
       if (cf) {
-        // An upload replaces what is live: never with a commit that lacks it (another task's, a manual upload's).
-        const live = site!.live;
+        // A deploy replaces what is live: never with a commit that lacks it (another task's, a manual upload's).
         if (live?.commit && !alreadyLive) {
           const known = await revParse(repo.path, `${live.commit}^{commit}`);
           if (!known || !(known === sha || (await isAncestor(repo.path, known, sha)))) {
-            throw new Refusal(`The live site serves ${short(live.commit)}, which this commit does not contain: uploading it would take that version down. Bring ${short(live.commit)} into ${config.branch} first, then release.`);
+            throw new Refusal(`The live ${target?.kind === 'worker' ? 'Worker runs' : 'site serves'} ${short(live.commit)}, which this commit does not contain: deploying it would take that version down. Bring ${short(live.commit)} into ${config.branch} first, then release.`);
           }
         }
-        record.evidence.before = site!.exists ? { deploymentId: live?.id ?? null, commit: live?.commit ?? null } : null;
-        if (live) {
+        record.evidence.before = existed ? { deploymentId: live?.id ?? null, commit: live?.commit ?? null } : null;
+        if (live && record.target.liveUrl) {
           const up = await this.upCheck(record.target.liveUrl);
           record.evidence.up = up;
-          if (!up.ok) throw new Refusal(`The live site isn't answering (${up.note}); nothing was sent.`);
-          step(`${record.target.liveUrl} answers (${up.note}); it serves ${short(live.commit)} now.`);
-        } else step('Nothing is live on Cloudflare yet: this is the first deployment.');
+          if (!up.ok) throw new Refusal(`The live app isn't answering (${up.note}); nothing was sent.`);
+          step(`${record.target.liveUrl} answers (${up.note}); it runs ${live.commit ? short(live.commit) : 'a version with no commit recorded'} now.`);
+        } else if (!live) step('Nothing is live on Cloudflare yet: this is the first deployment.');
       } else if (config.method === 'push') {
         const up = await this.upCheck(config.liveUrl);
         record.evidence.up = up;
@@ -435,21 +486,26 @@ export class ReleaseService {
       this.d.repositories.invalidate(repo.id);
       step(already ? `Already on ${config.remote}/${config.branch}.` : `Pushed ${sha} to ${config.remote}/${config.branch} (fast-forward).`);
       record = { ...record, publishedAt: now() };
-      if (cf && build) {
-        const deployed = await this.deployPages(task, repo, cf, site!, build, sha);
+      const deploying = Boolean(cf && target && build && !alreadyLive);
+      if (cf && target && build && !alreadyLive) {
+        const deployed = target.kind === 'pages' ? await this.deployPages(task, repo, cf, site!, build, sha) : await this.deployWorker(task, repo, cf, target, build, sha, existed);
         record.evidence.deploy = deployed.evidence;
         if (!deployed.ok) {
-          record = { ...record, state: 'failed', reason: `Sent ${short(sha)} to ${config.remote}/${config.branch}, but Cloudflare did not take the upload: ${deployed.evidence.note}. The previous version stays live; release again to retry the upload.` };
+          record = { ...record, state: 'failed', reason: `Sent ${short(sha)} to ${config.remote}/${config.branch}, but Cloudflare did not take the ${target.kind === 'pages' ? 'upload' : 'deploy'}: ${deployed.evidence.note}. The previous version stays live; release again to retry the ${target.kind === 'pages' ? 'upload' : 'deploy'}.` };
           step(record.reason!);
           return await this.finish(taskId, record, opts.stageId, log);
         }
-        if (deployed.subdomain && !cf.liveUrl) record = { ...record, target: { ...record.target, liveUrl: `https://${deployed.subdomain}/` } };
-        step(`Uploaded ${deployed.evidence.files ?? '?'} files from ${cf.pages.outputDir} to Cloudflare Pages ${cf.pages.project}${deployed.evidence.created ? ' (created it)' : ''}${deployed.evidence.url ? `: ${deployed.evidence.url}` : ''}.`);
+        if (deployed.liveUrl && !cf.liveUrl) record = { ...record, target: { ...record.target, liveUrl: deployed.liveUrl } };
+        step(
+          target.kind === 'pages'
+            ? `Uploaded ${deployed.evidence.files ?? '?'} files from ${target.outputDir} to Cloudflare Pages ${target.project}${deployed.evidence.created ? ' (created it)' : ''}${deployed.evidence.url ? `: ${deployed.evidence.url}` : ''}.`
+            : `Deployed ${deployed.evidence.project}${deployed.evidence.created ? ' (created it)' : ''}: ${deployed.evidence.note}.`,
+        );
       }
       record = { ...record, state: 'proving' };
       this.save(taskId, record);
       const sent = already ? `${short(sha)} was already on ${config.remote}/${config.branch}` : `Sent ${short(sha)} to ${config.remote}/${config.branch}`;
-      this.event(taskId, 'RELEASE_PUBLISHED', `${sent}${cf && build ? ` and uploaded it to Cloudflare Pages ${cf.pages.project}` : ''}; checking that it is live`, { commit: sha, target: record.target }, opts.stageId);
+      this.event(taskId, 'RELEASE_PUBLISHED', `${sent}${deploying && target ? ` and deployed it to ${targetLabel(target, record.target.project)}` : ''}; checking that it is live`, { commit: sha, target: record.target }, opts.stageId);
     } catch (error) {
       if (!(error instanceof Refusal)) throw error;
       record = { ...record, state: 'refused', reason: error.message, refusal: error instanceof Moved ? 'moved' : null };
@@ -461,7 +517,7 @@ export class ReleaseService {
     }
 
     // 5–6. Prove, outside the lock: Source Control stays usable while the host builds.
-    record = await this.prove(taskId, record, this.proofOf(config, record.target.liveUrl), opts);
+    record = await this.prove(taskId, record, this.proofOf(config, record.target), opts);
     step(this.outcomeLine(record));
     return this.finish(taskId, record, opts.stageId, log);
   }
@@ -507,8 +563,10 @@ export class ReleaseService {
   /**
    * Build the commit in a throwaway checkout: dependencies from its lockfile,
    * then the repository's build commands as detected in those very files —
-   * only ones that need no approval — and the output folder must hold files.
-   * A refusal (nothing is sent yet) for anything that goes wrong.
+   * only ones that need no approval. For Pages the output folder must then
+   * hold files; for a Worker its Wrangler config must name it, Wrangler's dry
+   * run must bundle it, and none of its D1 databases may have migrations
+   * waiting. A refusal (nothing is sent yet) for anything that goes wrong.
    */
   private async build(task: TaskRecord, repo: RepositoryRecord, config: CloudflareReleaseConfig, sha: string, step: (line: string) => void, opts: Pick<RunOptions, 'stopped'>): Promise<Build> {
     const slug = `${repo.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}-${repo.id.slice(0, 6)}`;
@@ -527,6 +585,7 @@ export class ReleaseService {
       for (const command of builds) {
         const shown = redact(command.command);
         const risk = stageCommandRisk(dir, command.command, [config.branch]);
+        // A Worker's own `wrangler deploy` is the release's job, never its build's.
         if (alwaysRequiresApproval(risk) || risk.level > 4) throw new Refusal(`The build command "${shown}" is Level ${risk.level} (${risk.reasons.join(', ')}): a release runs only a build that needs no approval.`);
         const tail: string[] = [];
         const handle = runShell({
@@ -547,12 +606,14 @@ export class ReleaseService {
         if (result.exitCode !== 0) throw new Refusal(`The build failed ("${shown}", exit ${result.exitCode}): ${tail.slice(-8).join(' | ').slice(0, 600)}`);
         step(`Built with "${shown}" in a clean copy of ${short(sha)}.`);
       }
-      const output = path.join(dir, config.pages.outputDir);
+      const what = cloudflareTarget(config);
+      if (what.kind === 'worker') return { dir, files: 0, workerName: await this.checkWorker(task, repo, what, dir, step) };
+      const output = path.join(dir, what.outputDir);
       const files = countFiles(output, PAGES_MAX_FILES + 1);
-      if (!files) throw new Refusal(builds.length ? `The build left nothing in ${config.pages.outputDir}: nothing to upload.` : `No build command, and ${config.pages.outputDir} is not in the commit: nothing to upload.`);
-      if (files > PAGES_MAX_FILES) throw new Refusal(`${config.pages.outputDir} holds more than ${PAGES_MAX_FILES} files, over Cloudflare Pages' limit.`);
-      step(`${config.pages.outputDir} holds ${files} file${files === 1 ? '' : 's'} to upload.`);
-      return { dir, files };
+      if (!files) throw new Refusal(builds.length ? `The build left nothing in ${what.outputDir}: nothing to upload.` : `No build command, and ${what.outputDir} is not in the commit: nothing to upload.`);
+      if (files > PAGES_MAX_FILES) throw new Refusal(`${what.outputDir} holds more than ${PAGES_MAX_FILES} files, over Cloudflare Pages' limit.`);
+      step(`${what.outputDir} holds ${files} file${files === 1 ? '' : 's'} to upload.`);
+      return { dir, files, workerName: null };
     } catch (error) {
       await this.discardBuild(repo, dir);
       throw error;
@@ -565,6 +626,87 @@ export class ReleaseService {
     if (existsSync(dir) && isInside(this.buildRoot(), dir)) await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }).catch(() => undefined);
   }
 
+  /** A tool call for a direct release, confined to its build folder, approved by the release's typed approval. */
+  private async invokeInBuild(task: TaskRecord, repo: RepositoryRecord, dir: string, capability: string, input: Record<string, unknown>, timeoutMs: number) {
+    const { repositories: _r, ...base } = this.d.tooling.scope(task, repo, { level: 5, stageId: task.currentStageId, cwd: dir, profile: 'operator' });
+    return this.d.tooling.tools.invoke({ capability, input, origin: 'engine', scope: { ...base, roots: [dir], protectedPaths: [] }, preApproved: true, timeoutMs });
+  }
+
+  /**
+   * A Worker in its clean copy, before anything is sent: the name its Wrangler
+   * config gives (and the one the setting pins, if any), Wrangler's dry run,
+   * and no D1 migration waiting on Cloudflare — a release never applies one,
+   * as a migration cannot be undone. Returns the Worker's name.
+   */
+  private async checkWorker(task: TaskRecord, repo: RepositoryRecord, what: Extract<CloudflareTarget, { kind: 'worker' }>, dir: string, step: (line: string) => void): Promise<string> {
+    const env = what.environment;
+    const name = workerNameFromConfig(dir, env);
+    if (!name) throw new Refusal(`The commit has no Wrangler config (wrangler.jsonc, wrangler.json or wrangler.toml) that names the Worker${env ? ` for the environment ${env}` : ''}.`);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 63) throw new Refusal(`"${name}" is not a Worker name Cloudflare accepts (lowercase letters, digits and dashes).`);
+    if (what.name && name !== what.name) throw new Refusal(`The commit's Wrangler config deploys the Worker "${name}", but this repository releases "${what.name}". Fix the config or the setting, then release.`);
+    const dry = await this.invokeInBuild(task, repo, dir, 'cloudflare.worker_deploy', { ...(env ? { environment: env } : {}), message: 'dry run', dryRun: true }, 300_000);
+    if (!dry.result.ok) throw new Refusal(`Wrangler's dry run of ${name} failed: ${redact(dry.result.error?.message ?? dry.result.summary).slice(0, 400)}`);
+    step(`Wrangler's dry run bundles ${name} and accepts its config.`);
+    for (const database of d1DatabasesFromConfig(dir, env)) {
+      const read = await this.invokeInBuild(task, repo, dir, 'cloudflare.d1_pending_migrations', { database, ...(env ? { environment: env } : {}) }, 180_000);
+      if (!read.result.ok) throw new Refusal(`Could not tell whether the D1 database ${database} has migrations waiting: ${redact(read.result.error?.message ?? read.result.summary).slice(0, 300)}`);
+      const pending = ((read.result.output as { pending?: unknown } | undefined)?.pending ?? []) as string[];
+      if (pending.length) {
+        throw new Refusal(`The D1 database ${database} has ${pending.length} migration${pending.length === 1 ? '' : 's'} not applied on Cloudflare (${list(pending)}). A migration cannot be undone, so a release never applies one: apply ${pending.length === 1 ? 'it' : 'them'} yourself first, then release.`);
+      }
+      step(`D1 ${database}: every migration is applied.`);
+    }
+    return name;
+  }
+
+  /** The Worker as Cloudflare has it now (a missing one is `exists: false`); a refusal when it cannot be read. */
+  private async workerSite(task: TaskRecord, repo: RepositoryRecord, name: string): Promise<WorkerSite> {
+    const r = await this.workerStatus(task, repo, name);
+    if (r.ok) return { exists: true, versions: r.versions, workersDev: r.workersDev };
+    if (r.code === 'NOT_FOUND') return { exists: false, versions: [], workersDev: null };
+    throw new Refusal(`Cloudflare could not be read (${r.note}); nothing was sent.`);
+  }
+
+  /** Read a Worker's live versions through the tool layer (Level 1, read-only, the repository's `cloudflare` key). */
+  private async workerStatus(task: TaskRecord, repo: RepositoryRecord, name: string): Promise<{ ok: true; versions: WorkerVersionView[]; workersDev: string | null } | { ok: false; code: string; note: string; permanent: boolean }> {
+    try {
+      const outcome = await this.d.tooling.tools.invoke({
+        capability: 'cloudflare.worker_status',
+        input: { name },
+        origin: 'engine',
+        scope: { ...this.d.tooling.scope(task, repo, { level: 1, stageId: task.currentStageId }), profile: 'operator' },
+        preApproved: true,
+        timeoutMs: 60_000,
+      });
+      const r = outcome.result;
+      if (!r.ok) {
+        const code = r.error?.code ?? 'FAILED';
+        return { ok: false, code, note: redact(r.error?.message ?? r.summary).slice(0, 300), permanent: ['AUTH_REQUIRED', 'INVALID_INPUT', 'DENIED', 'UNKNOWN_CAPABILITY', 'NOT_INSTALLED', 'NOT_FOUND'].includes(code) || /No Cloudflare key|sees \d+ accounts/.test(r.summary) };
+      }
+      const out = r.output as { versions?: WorkerVersionView[]; workersDev?: string | null } | undefined;
+      return { ok: true, versions: out?.versions ?? [], workersDev: out?.workersDev ?? null };
+    } catch (error) {
+      return { ok: false, code: 'FAILED', note: redact((error as Error).message).slice(0, 300), permanent: false };
+    }
+  }
+
+  /**
+   * The deploy (step 4, after the push): `wrangler deploy` in the clean copy
+   * with `<task> <commit>` recorded on the new version, through the tool
+   * layer with the repository's Cloudflare key. Its live address is read back
+   * (workers.dev) unless the setting names one.
+   */
+  private async deployWorker(task: TaskRecord, repo: RepositoryRecord, config: CloudflareReleaseConfig, what: Extract<CloudflareTarget, { kind: 'worker' }>, build: Build, sha: string, existed: boolean): Promise<{ ok: boolean; liveUrl: string | null; evidence: NonNullable<ReleaseEvidence['deploy']> }> {
+    const name = build.workerName!;
+    const evidence = (note: string, extra: Partial<NonNullable<ReleaseEvidence['deploy']>> = {}): NonNullable<ReleaseEvidence['deploy']> => ({ kind: 'worker', project: name, created: false, files: null, url: null, note: redact(note).slice(0, 400), ...extra });
+    const r = await this.invokeInBuild(task, repo, build.dir, 'cloudflare.worker_deploy', { ...(what.environment ? { environment: what.environment } : {}), message: `${task.id} ${sha}` }, 15 * 60_000);
+    if (!r.result.ok) return { ok: false, liveUrl: null, evidence: evidence(r.result.error?.message ?? r.result.summary) };
+    const out = r.result.output as { versionId?: string | null; urls?: string[] } | undefined;
+    const after = config.liveUrl ? null : await this.workerStatus(task, repo, name);
+    const liveUrl = config.liveUrl ?? (after?.ok ? after.workersDev : null);
+    return { ok: true, liveUrl, evidence: evidence(`version ${out?.versionId ?? '?'}${out?.urls?.length ? ` at ${out.urls.join(', ')}` : ''}`, { created: !existed, url: out?.urls?.[0] ?? liveUrl }) };
+  }
+
   /**
    * The upload (step 4, after the push): create the project on the first
    * release, then upload the build to its production branch with the commit
@@ -572,25 +714,26 @@ export class ReleaseService {
    * repository's Cloudflare key, confined to the build folder; the typed
    * approval of this release is the approval they need.
    */
-  private async deployPages(task: TaskRecord, repo: RepositoryRecord, config: CloudflareReleaseConfig, site: PagesSite, build: Build, sha: string): Promise<{ ok: boolean; subdomain: string | null; evidence: NonNullable<ReleaseEvidence['deploy']> }> {
-    const project = config.pages.project;
+  private async deployPages(task: TaskRecord, repo: RepositoryRecord, config: CloudflareReleaseConfig, site: PagesSite, build: Build, sha: string): Promise<{ ok: boolean; liveUrl: string | null; evidence: NonNullable<ReleaseEvidence['deploy']> }> {
+    const what = cloudflareTarget(config) as Extract<CloudflareTarget, { kind: 'pages' }>;
+    const project = what.project;
     const { repositories: _r, ...base } = this.d.tooling.scope(task, repo, { level: 5, stageId: task.currentStageId, cwd: build.dir, profile: 'operator' });
     const scope = { ...base, roots: [build.dir], protectedPaths: [] };
-    const evidence = (note: string, extra: Partial<NonNullable<ReleaseEvidence['deploy']>> = {}): NonNullable<ReleaseEvidence['deploy']> => ({ project, created: false, files: build.files, url: null, note: redact(note).slice(0, 400), ...extra });
+    const evidence = (note: string, extra: Partial<NonNullable<ReleaseEvidence['deploy']>> = {}): NonNullable<ReleaseEvidence['deploy']> => ({ kind: 'pages', project, created: false, files: build.files, url: null, note: redact(note).slice(0, 400), ...extra });
     let created = false;
     let branch = site.productionBranch ?? config.branch;
     if (!site.exists) {
       const made = await this.d.tooling.tools.invoke({ capability: 'cloudflare.pages_project_create', input: { project, productionBranch: config.branch }, origin: 'engine', scope, preApproved: true, timeoutMs: 180_000 });
-      if (!made.result.ok) return { ok: false, subdomain: null, evidence: evidence(`the project could not be created: ${made.result.error?.message ?? made.result.summary}`) };
+      if (!made.result.ok) return { ok: false, liveUrl: null, evidence: evidence(`the project could not be created: ${made.result.error?.message ?? made.result.summary}`) };
       created = true;
       branch = config.branch;
     }
-    const up = await this.d.tooling.tools.invoke({ capability: 'cloudflare.pages_deploy', input: { directory: config.pages.outputDir, project, branch, commitHash: sha }, origin: 'engine', scope, preApproved: true, timeoutMs: 15 * 60_000 });
+    const up = await this.d.tooling.tools.invoke({ capability: 'cloudflare.pages_deploy', input: { directory: what.outputDir, project, branch, commitHash: sha }, origin: 'engine', scope, preApproved: true, timeoutMs: 15 * 60_000 });
     const out = up.result.output as { url?: string | null; files?: number | null } | undefined;
-    if (!up.result.ok) return { ok: false, subdomain: null, evidence: evidence(up.result.error?.message ?? up.result.summary, { created }) };
+    if (!up.result.ok) return { ok: false, liveUrl: null, evidence: evidence(up.result.error?.message ?? up.result.summary, { created }) };
     // A new project's address is known only once it exists (`<name>-xyz.pages.dev` when the plain name was taken).
     const after = created ? await this.pagesSite(task, repo, project).catch(() => null) : site;
-    return { ok: true, subdomain: after?.subdomain ?? null, evidence: evidence(up.result.summary, { created, files: out?.files ?? build.files, url: out?.url ?? null }) };
+    return { ok: true, liveUrl: after?.subdomain ? `https://${after.subdomain}/` : null, evidence: evidence(up.result.summary, { created, files: out?.files ?? build.files, url: out?.url ?? null }) };
   }
 
   /**
@@ -610,12 +753,13 @@ export class ReleaseService {
       record = { ...record, evidence: { ...evidence, ...(record.evidence.deploy ? { deploy: record.evidence.deploy } : {}) } };
       const pages = evidence.cloudflarePages;
       const failedBuild = pages?.candidate && ['failure', 'failed', 'canceled', 'cancelled'].includes(pages.candidate.status ?? '') && !pages.ok;
-      const allOk = (!config.proof.cloudflarePages || pages?.ok) && (!config.proof.versionUrl || evidence.versionUrl?.ok) && evidence.up?.ok;
+      const workerProof = evidence.cloudflareWorker;
+      const allOk = (!config.proof.cloudflarePages || pages?.ok) && (!config.proof.cloudflareWorker || workerProof?.ok) && (!config.proof.versionUrl || evidence.versionUrl?.ok) && (!config.liveUrl || evidence.up?.ok);
       if (allOk) return { ...record, state: 'live', liveConfirmedAt: now(), reason: null };
       if (failedBuild) return { ...record, state: 'failed', reason: `Cloudflare Pages reported the build of ${short(record.commit)} ${pages!.candidate!.stage ?? ''} ${pages!.candidate!.status}; the previous version stays live.${pages!.candidate!.url ? ` Build: ${pages!.candidate!.url}` : ''}`.replace(/\s+/g, ' ') };
       // A provider that cannot be read at all (no key, wrong account) will not start answering by waiting.
-      const unreadable = config.proof.cloudflarePages && pages?.permanent && !config.proof.versionUrl;
-      if (unreadable) return { ...record, state: 'published_unconfirmed', reason: `Sent, but Cloudflare could not be read to confirm it: ${pages!.note}` };
+      const unreadable = !config.proof.versionUrl && ((config.proof.cloudflarePages && pages?.permanent) || (config.proof.cloudflareWorker && workerProof?.permanent));
+      if (unreadable) return { ...record, state: 'published_unconfirmed', reason: `Sent, but Cloudflare could not be read to confirm it: ${(pages ?? workerProof)!.note}` };
       this.save(taskId, record);
       if (opts.stopped?.()) return { ...record, state: 'published_unconfirmed', reason: `Sent; checking was stopped before it was confirmed live. Use Check again. Last seen: ${this.pending(record)}` };
       if (Date.now() >= deadline) return { ...record, state: 'published_unconfirmed', reason: `Sent, but not confirmed live within ${Math.round(config.timeoutSec / 60)} min. Last seen: ${this.pending(record)}` };
@@ -624,8 +768,32 @@ export class ReleaseService {
   }
 
   /** One read of every configured proof. */
-  private async gather(task: TaskRecord, repo: RepositoryRecord, config: ProofConfig, sha: string, before: ReleaseEvidence['before']): Promise<ReleaseEvidence & { cloudflarePages?: (NonNullable<ReleaseEvidence['cloudflarePages']> & { permanent?: boolean }) | null }> {
-    const evidence: ReleaseEvidence & { cloudflarePages?: (NonNullable<ReleaseEvidence['cloudflarePages']> & { permanent?: boolean }) | null } = { before, checkedAt: now() };
+  private async gather(task: TaskRecord, repo: RepositoryRecord, config: ProofConfig, sha: string, before: ReleaseEvidence['before']): Promise<Gathered> {
+    const evidence: Gathered = { before, checkedAt: now() };
+    if (config.proof.cloudflareWorker) {
+      const name = config.proof.cloudflareWorker.name;
+      const status = await this.workerStatus(task, repo, name);
+      const versions = status.ok ? status.versions : [];
+      const only = versions.length === 1 && versions[0]!.percentage === 100 ? versions[0]! : null;
+      const commit = only ? commitIn(only.message) : null;
+      const ok = status.ok && Boolean(commit && sameCommit(commit, sha));
+      evidence.cloudflareWorker = {
+        name,
+        ok,
+        versionId: only?.id ?? versions[0]?.id ?? null,
+        commit,
+        note: !status.ok
+          ? status.note
+          : ok
+            ? `runs ${short(sha)} (version ${only!.id.slice(0, 8)}, all traffic)`
+            : versions.length > 1
+              ? `is in a gradual rollout: ${versions.map((v) => `${v.id.slice(0, 8)} at ${v.percentage}%`).join(', ')}`
+              : versions.length
+                ? `runs ${commit ? short(commit) : 'a version with no commit recorded'}, not ${short(sha)} yet`
+                : `has no live version yet`,
+        permanent: !status.ok && status.permanent,
+      };
+    }
     if (config.proof.cloudflarePages) {
       const project = config.proof.cloudflarePages.project;
       const status = await this.pagesStatus(task, repo, project, sha);
@@ -665,7 +833,7 @@ export class ReleaseService {
         note: r.error ? `no answer: ${redact(r.error)}` : ok ? `shows ${short(sha)}` : `HTTP ${r.status}, does not show ${short(sha)}`,
       };
     }
-    evidence.up = await this.upCheck(config.liveUrl);
+    if (config.liveUrl) evidence.up = await this.upCheck(config.liveUrl);
     return evidence;
   }
 
@@ -706,7 +874,7 @@ export class ReleaseService {
 
   private pending(record: TaskRelease): string {
     const e = record.evidence;
-    return [e.cloudflarePages ? `Pages ${e.cloudflarePages.note}` : null, e.versionUrl ? `version URL ${e.versionUrl.note}` : null, e.up ? `site ${e.up.note}` : null].filter(Boolean).join('; ');
+    return [e.cloudflarePages ? `Pages ${e.cloudflarePages.note}` : null, e.cloudflareWorker ? `Worker ${e.cloudflareWorker.name} ${e.cloudflareWorker.note}` : null, e.versionUrl ? `version URL ${e.versionUrl.note}` : null, e.up ? `site ${e.up.note}` : null].filter(Boolean).join('; ');
   }
 
   private outcomeLine(record: TaskRelease): string {
@@ -726,7 +894,7 @@ export class ReleaseService {
     const where = `${record.target.remote}/${record.target.branch}`;
     const data = { commit: record.commit, target: record.target, state: record.state, evidence: record.evidence, reason: record.reason };
     const events: Record<Exclude<TaskRelease['state'], 'publishing' | 'proving'>, [EventType, string]> = {
-      live: ['RELEASE_LIVE', `Live: ${record.target.liveUrl} serves ${sha}`],
+      live: ['RELEASE_LIVE', `Live: ${record.target.liveUrl || (record.target.project ? `Worker ${record.target.project}` : 'the app')} serves ${sha}`],
       published_unconfirmed: ['RELEASE_UNCONFIRMED', `Sent ${sha} to ${where}, not confirmed live: ${record.reason ?? ''}`],
       failed: ['RELEASE_FAILED', `Release of ${sha} failed: ${record.reason ?? ''}`],
       refused: ['RELEASE_REFUSED', `Release refused, nothing sent: ${record.reason ?? ''}`],
@@ -744,7 +912,8 @@ export class ReleaseService {
       '',
       ...(evidence.before ? [`- Before: deployment ${evidence.before.deploymentId ?? '—'} served ${evidence.before.commit ?? '—'}`] : []),
       ...(evidence.cloudflarePages ? [`- Cloudflare Pages ${evidence.cloudflarePages.project}: ${evidence.cloudflarePages.note}${evidence.cloudflarePages.url ? ` (${evidence.cloudflarePages.url})` : ''}`] : []),
-      ...(evidence.deploy ? [`- Upload to Cloudflare Pages ${evidence.deploy.project}${evidence.deploy.created ? ' (created by this release)' : ''}: ${evidence.deploy.note}${evidence.deploy.url ? ` (${evidence.deploy.url})` : ''}`] : []),
+      ...(evidence.deploy ? [`- ${evidence.deploy.kind === 'worker' ? 'Deploy of Cloudflare Worker' : 'Upload to Cloudflare Pages'} ${evidence.deploy.project}${evidence.deploy.created ? ' (created by this release)' : ''}: ${evidence.deploy.note}${evidence.deploy.url ? ` (${evidence.deploy.url})` : ''}`] : []),
+      ...(evidence.cloudflareWorker ? [`- Cloudflare Worker ${evidence.cloudflareWorker.name}: ${evidence.cloudflareWorker.note}`] : []),
       ...(evidence.versionUrl ? [`- Version URL ${evidence.versionUrl.url}: ${evidence.versionUrl.note}${evidence.versionUrl.excerpt ? ` — "${evidence.versionUrl.excerpt}"` : ''}`] : []),
       ...(evidence.up ? [`- Live URL ${evidence.up.url}: ${evidence.up.note}`] : []),
       ...(evidence.checkedAt ? [`- Checked at ${evidence.checkedAt}`] : []),
@@ -830,7 +999,7 @@ export class ReleaseService {
     this.save(taskId, proving);
     this.running.add(taskId);
     const stage = this.syntheticStage(task, 'Check again');
-    this.track(this.prove(taskId, proving, this.proofOf(config, record.target.liveUrl), {})
+    this.track(this.prove(taskId, proving, this.proofOf(config, record.target), {})
       .then((done) => this.finish(taskId, done, stage.id, [`# Check again: ${task.id}`, '', `- Commit: ${done.commit}`, `- Target: ${done.target.remote}/${done.target.branch}`, '', `- Only the proof ran; nothing was sent.`, `- ${this.outcomeLine(done)}`]))
       // Not running once the result is saved: closing the synthetic stage does not hold up another Check again.
       .finally(() => this.running.delete(taskId))
@@ -1007,14 +1176,20 @@ export class ReleaseService {
 
   /**
    * Check setup of a direct release: Wrangler can act for the repository's
-   * Cloudflare key, the project exists or will be created, something is
-   * there to build or upload, and the live site answers once there is one.
+   * Cloudflare key, the Pages project or Worker exists or will be created,
+   * something is there to build, upload or deploy, and the live app answers
+   * once there is one.
    */
   private async checkCloudflareSetup(repo: RepositoryRecord, config: CloudflareReleaseConfig): Promise<Array<{ name: string; ok: boolean; detail: string }>> {
     const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-    const project = config.pages.project;
     const who = await this.readForRepo(repo, 'cloudflare.whoami', {});
     checks.push({ name: 'Wrangler', ok: who.ok, detail: who.ok ? `signed in through the repository's Cloudflare key (${who.note})` : who.note });
+    const what = cloudflareTarget(config);
+    if (what.kind === 'worker') {
+      checks.push(...(await this.checkWorkerSetup(repo, config, what)));
+      return checks;
+    }
+    const project = what.project;
     const status = await this.readForRepo(repo, 'cloudflare.pages_status', { project });
     const out = status.output as { productionBranch?: string | null; subdomain?: string | null; live?: PagesDeployment | null } | undefined;
     if (status.ok) {
@@ -1028,10 +1203,48 @@ export class ReleaseService {
     }
     const detected = detectToolingSync(repo.path);
     const build = [...repo.commands.filter((c) => c.enabled && c.kind === 'build'), ...detected.commands.filter((c) => c.kind === 'build')][0] ?? null;
-    const committed = countFiles(path.join(repo.path, config.pages.outputDir), 1) > 0;
-    checks.push({ name: 'Build', ok: Boolean(build) || committed, detail: build ? `"${redact(build.command)}" builds ${config.pages.outputDir} from a clean copy of the commit` : committed ? `no build command: ${config.pages.outputDir} is uploaded as committed` : `nothing to build yet: no build command and no ${config.pages.outputDir} folder. A task must add a build script that writes ${config.pages.outputDir} before the first release (its builders are told so).` });
+    const committed = countFiles(path.join(repo.path, what.outputDir), 1) > 0;
+    checks.push({ name: 'Build', ok: Boolean(build) || committed, detail: build ? `"${redact(build.command)}" builds ${what.outputDir} from a clean copy of the commit` : committed ? `no build command: ${what.outputDir} is uploaded as committed` : `nothing to build yet: no build command and no ${what.outputDir} folder. A task must add a build script that writes ${what.outputDir} before the first release (its builders are told so).` });
     if (config.liveUrl || out?.live) {
       const url = this.liveUrlOf(config, status.ok ? { exists: true, productionBranch: out?.productionBranch ?? null, subdomain: out?.subdomain ?? null, live: out?.live ?? null } : null);
+      const up = await this.upCheck(url);
+      checks.push({ name: 'Live URL', ok: up.ok, detail: `${url}: ${up.note}` });
+    }
+    return checks;
+  }
+
+  /** Check setup of a Worker release: its Wrangler config and name, what runs on Cloudflare now, and the address. */
+  private async checkWorkerSetup(repo: RepositoryRecord, config: CloudflareReleaseConfig, what: Extract<CloudflareTarget, { kind: 'worker' }>): Promise<Array<{ name: string; ok: boolean; detail: string }>> {
+    const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+    const env = what.environment;
+    const named = workerNameFromConfig(repo.path, env);
+    const name = named ?? what.name;
+    if (!named) {
+      checks.push({ name: 'Wrangler config', ok: false, detail: `no Wrangler config (wrangler.jsonc, wrangler.json or wrangler.toml) names the Worker${env ? ` for the environment ${env}` : ''} yet. A task must add one before the first release (its builders are told so).` });
+    } else if (what.name && named !== what.name) {
+      checks.push({ name: 'Wrangler config', ok: false, detail: `it deploys the Worker "${named}", but this setting releases "${what.name}"` });
+    } else {
+      const databases = d1DatabasesFromConfig(repo.path, env);
+      checks.push({ name: 'Wrangler config', ok: true, detail: `deploys the Worker ${named}${env ? ` (environment ${env})` : ''}${databases.length ? `; D1: ${databases.join(', ')} (a release refuses while one has migrations not applied)` : ''}` });
+    }
+    let workersDev: string | null = null;
+    if (name) {
+      const status = await this.readForRepo(repo, 'cloudflare.worker_status', { name });
+      const out = status.output as { versions?: WorkerVersionView[]; workersDev?: string | null } | undefined;
+      workersDev = out?.workersDev ?? null;
+      const versions = out?.versions ?? [];
+      if (status.ok) {
+        const rollout = versions.length > 1 || (versions[0] !== undefined && versions[0].percentage < 100);
+        const commit = versions.length === 1 ? commitIn(versions[0]!.message) : null;
+        checks.push({ name: 'Cloudflare Worker', ok: !rollout, detail: rollout ? `${name} is in a gradual rollout (${versions.map((v) => `${v.id.slice(0, 8)} at ${v.percentage}%`).join(', ')}): finish it first` : `${name} exists; it runs ${versions.length ? (commit ? `commit ${short(commit)}` : `version ${versions[0]!.id.slice(0, 8)} (no commit recorded)`) : 'nothing yet'}` });
+      } else if (status.code === 'NOT_FOUND') {
+        checks.push({ name: 'Cloudflare Worker', ok: true, detail: `${name} does not exist yet: the first release creates it` });
+      } else {
+        checks.push({ name: 'Cloudflare Worker', ok: false, detail: `${name}: ${status.note}` });
+      }
+    }
+    const url = config.liveUrl ?? workersDev;
+    if (url) {
       const up = await this.upCheck(url);
       checks.push({ name: 'Live URL', ok: up.ok, detail: `${url}: ${up.note}` });
     }
@@ -1152,9 +1365,24 @@ export class ReleaseService {
 
 /** What proves a release live: the reads both methods share. */
 interface ProofConfig {
+  /** Empty: nothing to open (a Worker with no workers.dev address and none set). */
   liveUrl: string;
-  proof: { cloudflarePages?: { project: string }; versionUrl?: string };
+  proof: { cloudflarePages?: { project: string }; cloudflareWorker?: { name: string }; versionUrl?: string };
   timeoutSec: number;
+}
+
+/** One read of every proof, with whether an unreadable provider will stay so. */
+type Gathered = ReleaseEvidence & {
+  cloudflarePages?: (NonNullable<ReleaseEvidence['cloudflarePages']> & { permanent?: boolean }) | null;
+  cloudflareWorker?: (NonNullable<ReleaseEvidence['cloudflareWorker']> & { permanent?: boolean }) | null;
+};
+
+/** A Worker as Cloudflare has it now. */
+interface WorkerSite {
+  exists: boolean;
+  /** The live deployment's versions: one at 100%, or several during a gradual rollout. */
+  versions: WorkerVersionView[];
+  workersDev: string | null;
 }
 
 /** A Pages project as Cloudflare has it now. */
@@ -1169,7 +1397,20 @@ interface PagesSite {
 /** A commit built in a throwaway checkout under `<dataDir>/releases`. */
 interface Build {
   dir: string;
+  /** Pages: files in the output folder. */
   files: number;
+  /** Worker: the name its commit's Wrangler config deploys. */
+  workerName: string | null;
+}
+
+/** A full commit id recorded in a Worker version's message (`<task> <commit>`), or null. */
+function commitIn(message: string | null): string | null {
+  return message?.match(/\b[0-9a-f]{40}\b/i)?.[0]?.toLowerCase() ?? null;
+}
+
+/** "Cloudflare Pages x" or "Cloudflare Worker y", for the timeline. */
+function targetLabel(target: CloudflareTarget, workerName: string | null = null): string {
+  return target.kind === 'pages' ? `Cloudflare Pages ${target.project}` : `Cloudflare Worker ${workerName ?? target.name ?? '(named in its Wrangler config)'}`;
 }
 
 /** Cloudflare Pages takes at most this many files in one deployment. */

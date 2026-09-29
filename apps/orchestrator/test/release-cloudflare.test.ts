@@ -34,10 +34,20 @@ interface Deployment {
   files: number;
   index: string;
 }
+interface WorkerVersion {
+  id: string;
+  percentage: number;
+  message: string | null;
+}
 interface CfState {
   project?: { name: string; productionBranch: string } | null;
   deployments?: Deployment[];
   failDeploy?: boolean;
+  /** The stand-in Worker: the versions of its live deployment, and every deploy recorded. */
+  worker?: { name: string; live: WorkerVersion[]; deploys: Array<{ message: string | null; env: string | null }> } | null;
+  dryRuns?: number;
+  /** D1 database name → migrations not applied on "Cloudflare". */
+  pending?: Record<string, string[]>;
 }
 const readState = (): CfState => (existsSync(STATE) ? (JSON.parse(readFileSync(STATE, 'utf8')) as CfState) : {});
 const writeState = (s: CfState) => writeFileSync(STATE, JSON.stringify(s));
@@ -55,6 +65,27 @@ if (args[0] === 'pages' && args[1] === 'project' && args[2] === 'create') {
   s.project = { name: args[3], productionBranch: flag('--production-branch') };
   fs.writeFileSync(STATE, JSON.stringify(s));
   console.log('Successfully created the project');
+  process.exit(0);
+}
+if (args[0] === 'deploy') {
+  if (args.includes('--dry-run')) { s.dryRuns = (s.dryRuns || 0) + 1; fs.writeFileSync(STATE, JSON.stringify(s)); console.log('--dry-run: exiting now.'); process.exit(0); }
+  const cfg = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8').split('\\n').filter((l) => !l.trim().startsWith('//')).join('\\n'));
+  const name = cfg.name;
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-' + String((s.worker && s.worker.deploys.length) || 0).padStart(12, '0');
+  const deploys = [...((s.worker && s.worker.deploys) || []), { message: flag('--message') || null, env: flag('--env') || null }];
+  s.worker = { name, live: [{ id, percentage: 100, message: flag('--message') || null }], deploys };
+  fs.writeFileSync(STATE, JSON.stringify(s));
+  console.log('Uploaded ' + name + ' (1.20 sec)');
+  console.log('Deployed ' + name + ' triggers (0.30 sec)');
+  console.log('  https://' + name + '.acc-test.workers.dev');
+  console.log('Current Version ID: ' + id);
+  process.exit(0);
+}
+if (args[0] === 'd1' && args[1] === 'migrations' && args[2] === 'list') {
+  const waiting = (s.pending || {})[args[3]] || [];
+  if (!waiting.length) { console.log('No migrations to apply!'); process.exit(0); }
+  console.log('Migrations to be applied:');
+  for (const m of waiting) console.log('| ' + m + ' |');
   process.exit(0);
 }
 if (args[0] === 'pages' && args[1] === 'deploy') {
@@ -84,6 +115,17 @@ beforeAll(async () => {
     const u = new URL(req.url!, 'http://x');
     const base = `/cf/accounts/${ACCOUNT}/pages/projects/shop`;
     const s = readState();
+    // Workers: the live deployment, each version's annotations, and the workers.dev address.
+    const scripts = `/cf/accounts/${ACCOUNT}/workers/scripts/shop-api`;
+    if (u.pathname === `/cf/accounts/${ACCOUNT}/workers/subdomain`) return json(200, { success: true, result: { subdomain: 'acc-test' } });
+    if (u.pathname.startsWith(scripts)) {
+      if (!s.worker) return json(404, { success: false, errors: [{ message: 'This Worker does not exist on your account.' }] });
+      if (u.pathname === `${scripts}/deployments`) return json(200, { success: true, result: { deployments: [{ id: 'dep-live', created_on: new Date().toISOString(), versions: s.worker.live.map((v) => ({ version_id: v.id, percentage: v.percentage })) }] } });
+      if (u.pathname === `${scripts}/subdomain`) return json(200, { success: true, result: { enabled: true } });
+      const version = s.worker.live.find((v) => u.pathname === `${scripts}/versions/${v.id}`);
+      if (version) return json(200, { success: true, result: { id: version.id, annotations: version.message ? { 'workers/message': version.message } : {}, metadata: { created_on: new Date().toISOString() } } });
+      return json(404, { success: false, errors: [{ message: 'not found' }] });
+    }
     const deps = (s.deployments ?? []).map((d, i) => ({ id: `deployment-${i + 1}`, url: `https://d${i + 1}.shop-xyz.pages.dev`, latest_stage: { name: 'deploy', status: 'success' }, deployment_trigger: { metadata: { commit_hash: d.commit, branch: d.branch } }, created_on: new Date().toISOString() }));
     if (!s.project) return json(404, { success: false, errors: [{ message: 'Project not found.' }] });
     if (u.pathname === base) return json(200, { success: true, result: { name: 'shop', subdomain: 'shop-xyz.pages.dev', production_branch: s.project.productionBranch, canonical_deployment: deps.at(-1) ?? null } });
@@ -99,6 +141,7 @@ afterAll(() => {
 
 /** The live site answers once something was uploaded. */
 const probe: Probe = async (url) => {
+  if (url.startsWith('https://shop-api.acc-test.workers.dev')) return readState().worker ? { status: 200, body: '{"ok":true}', error: null } : { status: null, body: '', error: 'no such host' };
   if (!url.startsWith('https://shop-xyz.pages.dev')) return { status: null, body: '', error: 'unknown host' };
   const last = readState().deployments?.at(-1);
   return last ? { status: 200, body: last.index, error: null } : { status: null, body: '', error: 'no such host' };
@@ -122,9 +165,24 @@ const BUILD = "const fs = require('fs');\nfs.mkdirSync('dist/assets', { recursiv
 const LEFTOVER_BUILD = "if (!require('fs').existsSync('.cache/ok')) { console.error('missing .cache/ok'); process.exit(1); }\n" + BUILD;
 const LEFTOVER_TEST = "node -e \"require('fs').mkdirSync('.cache',{recursive:true});require('fs').writeFileSync('.cache/ok','1');console.log('3 passed')\"";
 
-async function releaseRepo(opts: { build?: string; test?: string } = {}): Promise<{ repo: string; remote: string }> {
+/** A Worker's Wrangler config, with a comment and a D1 database, as a real one has. */
+const WRANGLER = `{
+  // The stand-in API Worker.
+  "name": "shop-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "d1_databases": [{ "binding": "DB", "database_name": "shop-db", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}
+`;
+
+async function releaseRepo(opts: { build?: string; test?: string; worker?: boolean } = {}): Promise<{ repo: string; remote: string }> {
   const repo = await makeRepo({ scripts: { test: opts.test ?? 'node -e "console.log(\'3 passed\')"', build: 'node build.js' } });
   writeFileSync(path.join(repo, 'build.js'), opts.build ?? BUILD);
+  if (opts.worker) {
+    writeFileSync(path.join(repo, 'wrangler.jsonc'), WRANGLER);
+    mkdirSync(path.join(repo, 'src'), { recursive: true });
+    writeFileSync(path.join(repo, 'src', 'index.js'), "export default { fetch() { return new Response('{\"ok\":true}'); } };\n");
+  }
   writeFileSync(path.join(repo, '.gitignore'), 'dist/\n.cache/\n');
   const bin = path.join(repo, 'node_modules', '.bin');
   mkdirSync(bin, { recursive: true });
@@ -141,7 +199,7 @@ async function releaseRepo(opts: { build?: string; test?: string } = {}): Promis
   return { repo, remote };
 }
 
-async function setup(release: ReleaseConfigInput = DIRECT, repoOptions: { build?: string; test?: string } = {}) {
+async function setup(release: ReleaseConfigInput = DIRECT, repoOptions: { build?: string; test?: string; worker?: boolean } = {}) {
   t = await createTestApp({ release: { probe, pollSeconds: 0.05 }, baseEnv: { ...process.env, ACC_CF_API_BASE: cfBase } });
   const { repo, remote } = await releaseRepo(repoOptions);
   const repositoryId = await addRepo(t, repo, { release });
@@ -279,6 +337,123 @@ describe('direct Cloudflare release', () => {
     expect(byName['Cloudflare Pages']).toMatchObject({ ok: true, detail: 'shop does not exist yet: the first release creates it (production branch main)' });
     expect(byName.Build).toMatchObject({ ok: true, detail: expect.stringContaining('builds dist from a clean copy of the commit') });
     expect(byName['Live URL']).toBeUndefined();
+    expect(res.body.ok).toBe(true);
+    expect(readState()).toEqual({});
+  }, 120_000);
+});
+
+const WORKER: ReleaseConfigInput = { method: 'cloudflare', remote: 'origin', branch: 'main', worker: {}, manualPaths: [], timeoutSec: 60 };
+
+describe('direct Cloudflare release of a Worker', () => {
+  it('accepts a Pages site or a Worker, never both or neither', () => {
+    const ok = (extra: Record<string, unknown>) => releaseConfigSchema.safeParse({ method: 'cloudflare', ...extra }).success;
+    expect(ok({ worker: {} })).toBe(true);
+    expect(ok({ worker: { name: 'shop-api', environment: 'production' } })).toBe(true);
+    expect(ok({})).toBe(false);
+    expect(ok({ pages: { project: 'shop' }, worker: {} })).toBe(false);
+    for (const name of ['Shop', 'shop_api', '-api', 'a'.repeat(64)]) expect(ok({ worker: { name } }), name).toBe(false);
+    for (const environment of ['-prod', 'prod env', 'a;b']) expect(ok({ worker: { environment } }), environment).toBe(false);
+  });
+
+  it('deploys the tested commit as the Worker its config names, recording the commit, and proves it live', async () => {
+    const { remote, repositoryId } = await setup(WORKER, { worker: true });
+    const id = await fullTask(repositoryId);
+    const approval = await approveRelease(id);
+    const sha = t!.services.store.getTask(id)!.git.commits.at(-1)!;
+    expect(approval.action).toBe(`Deploy ${sha.slice(0, 7)} to Cloudflare Worker shop-api`);
+    expect(approval.reason).toContain('check it with a Wrangler dry run, and deploy it with wrangler deploy');
+    expect(approval.riskExplanation).toContain('if one of its D1 databases has migrations not yet applied');
+
+    const r = await waitRelease(id, ['live', 'failed', 'refused', 'published_unconfirmed']);
+    expect(r.reason).toBeNull();
+    expect(r.state).toBe('live');
+    expect(r.target).toMatchObject({ method: 'cloudflare', kind: 'worker', project: 'shop-api', liveUrl: 'https://shop-api.acc-test.workers.dev/' });
+    expect(r.evidence.deploy).toMatchObject({ kind: 'worker', project: 'shop-api', created: true, url: 'https://shop-api.acc-test.workers.dev' });
+    expect(r.evidence.cloudflareWorker).toMatchObject({ name: 'shop-api', ok: true, commit: sha });
+    expect(r.evidence.up).toMatchObject({ ok: true, status: 200 });
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(sha);
+    const state = readState();
+    expect(state.dryRuns).toBe(1);
+    expect(state.worker!.deploys).toEqual([{ message: `${id} ${sha}`, env: null }]);
+    expect(buildsLeft()).toEqual([]);
+    const log = readFileSync(path.join(t!.dataDir, 'tasks', id, 'release.md'), 'utf8');
+    expect(log).toContain("Wrangler's dry run bundles shop-api and accepts its config.");
+    expect(log).toContain('D1 shop-db: every migration is applied.');
+    expect(log).toContain('Cloudflare Worker shop-api does not exist yet: this release creates it.');
+  }, 240_000);
+
+  it('deploys an assets-only Worker (a static site: no main, the build fills assets)', async () => {
+    const { repositoryId } = await setup(WORKER, { worker: true });
+    // The same app, served as static assets: the Wrangler config has no entry point and no database.
+    const repoPath = t!.services.store.getRepository(repositoryId)!.path;
+    writeFileSync(path.join(repoPath, 'wrangler.jsonc'), '{\n  // A static site on Workers.\n  "name": "shop-api",\n  "compatibility_date": "2026-09-01",\n  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" }\n}\n');
+    await run(repoPath, ['commit', '-am', 'serve as static assets']);
+    await run(repoPath, ['push', 'origin', 'main']);
+    const id = await fullTask(repositoryId);
+    await approveRelease(id);
+    const sha = t!.services.store.getTask(id)!.git.commits.at(-1)!;
+    const r = await waitRelease(id, ['live', 'failed', 'refused', 'published_unconfirmed']);
+    expect(r.reason).toBeNull();
+    expect(r.state).toBe('live');
+    expect(r.evidence.cloudflareWorker).toMatchObject({ ok: true, commit: sha });
+    const log = readFileSync(path.join(t!.dataDir, 'tasks', id, 'release.md'), 'utf8');
+    expect(log).toContain('Built with "npm run build" in a clean copy');
+    expect(log).not.toContain('D1 ');
+    const prompt = readFileSync(path.join(t!.dataDir, 'tasks', id, 'implementation-prompt.md'), 'utf8');
+    expect(prompt).toContain('a static site needs only `assets`');
+  }, 240_000);
+
+  it('never applies a D1 migration: it refuses while one is waiting, and sends nothing', async () => {
+    writeState({ pending: { 'shop-db': ['0002_add_orders.sql'] } });
+    const { remote, repositoryId, before } = await setup(WORKER, { worker: true });
+    const id = await fullTask(repositoryId);
+    await approveRelease(id);
+    const r = await waitRelease(id, ['live', 'failed', 'refused', 'published_unconfirmed']);
+    expect(r.state).toBe('refused');
+    expect(r.reason).toContain('The D1 database shop-db has 1 migration not applied on Cloudflare (0002_add_orders.sql)');
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(before.remote);
+    expect(readState().worker ?? null).toBeNull();
+    expect(buildsLeft()).toEqual([]);
+  }, 240_000);
+
+  it('refuses a Worker in a gradual rollout, and one whose live version the commit does not contain', async () => {
+    writeState({ worker: { name: 'shop-api', live: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000001', percentage: 60, message: null }, { id: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000002', percentage: 40, message: null }], deploys: [] } });
+    const { remote, repositoryId, before } = await setup(WORKER, { worker: true });
+    const first = await fullTask(repositoryId);
+    await approveRelease(first);
+    let r = await waitRelease(first, ['live', 'failed', 'refused', 'published_unconfirmed']);
+    expect(r.state).toBe('refused');
+    expect(r.reason).toContain('Worker shop-api is in a gradual rollout (aaaaaaaa at 60%, aaaaaaaa at 40%)');
+    await waitForStatus(t!, first, ['COMPLETED'], 60_000);
+
+    writeState({ worker: { name: 'shop-api', live: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000003', percentage: 100, message: `OTHER-TASK ${'e'.repeat(40)}` }], deploys: [] } });
+    const req = await t!.api('POST', `/api/tasks/${first}/release`, {});
+    expect((await t!.api('POST', `/api/approvals/${req.body.approval.id}/approve`, { confirmation: first })).status).toBe(200);
+    r = (await waitFor(() => release(first), (x) => x !== null && x.state !== 'publishing' && !(x.reason ?? '').includes('gradual rollout'), 60_000, 'the second release to finish'))!;
+    expect(r.state).toBe('refused');
+    expect(r.reason).toContain(`The live Worker runs ${'e'.repeat(7)}, which this commit does not contain`);
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(before.remote);
+    expect(readState().worker!.deploys).toEqual([]);
+  }, 300_000);
+
+  it('refuses a commit whose Wrangler config names another Worker than the one pinned', async () => {
+    const { remote, repositoryId, before } = await setup({ ...WORKER, worker: { name: 'billing-api' } }, { worker: true });
+    const id = await fullTask(repositoryId);
+    await approveRelease(id);
+    const r = await waitRelease(id, ['live', 'failed', 'refused', 'published_unconfirmed']);
+    expect(r.state).toBe('refused');
+    expect(r.reason).toContain('The commit\'s Wrangler config deploys the Worker "shop-api", but this repository releases "billing-api"');
+    expect(await run(remote, ['rev-parse', 'refs/heads/main'])).toBe(before.remote);
+    expect(readState().dryRuns ?? 0).toBe(0);
+  }, 240_000);
+
+  it('Check setup reads the config and Cloudflare, and creates nothing', async () => {
+    const { repositoryId } = await setup(WORKER, { worker: true });
+    const res = await t!.api('POST', `/api/repositories/${repositoryId}/release/check`, {});
+    const byName = Object.fromEntries((res.body.checks as Array<{ name: string; ok: boolean; detail: string }>).map((c) => [c.name, c]));
+    expect(byName.Wrangler).toMatchObject({ ok: true });
+    expect(byName['Wrangler config']).toMatchObject({ ok: true, detail: 'deploys the Worker shop-api; D1: shop-db (a release refuses while one has migrations not applied)' });
+    expect(byName['Cloudflare Worker']).toMatchObject({ ok: true, detail: 'shop-api does not exist yet: the first release creates it' });
     expect(res.body.ok).toBe(true);
     expect(readState()).toEqual({});
   }, 120_000);

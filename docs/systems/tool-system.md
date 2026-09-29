@@ -400,6 +400,23 @@ approval). Names are Cloudflare's own rule (lowercase, digits, dashes, ≤ 58).
 release proves, and reports the files uploaded. A REST 404 is the error code
 `NOT_FOUND` (a missing project, not a failed read).
 
+`cloudflare.worker_deploy {environment?, message, dryRun}` (Wrangler pack) is
+`wrangler deploy` of the Worker the folder's Wrangler config names, with
+`--message` recorded on the version (Level 5, production; `dryRun`:
+`--dry-run --outdir`, Level 2); it reports the Worker name, `Current Version
+ID` and the addresses Wrangler printed. `cloudflare.d1_pending_migrations
+{database, environment?}` (Level 2) lists a live D1 database's migrations not
+yet applied (`wrangler d1 migrations list --remote`); an answer it cannot read
+is a failure, never "none". `cloudflare.worker_status {name}` (REST pack,
+Level 1, `readOnly`) gives the newest deployment's versions — id, traffic
+percentage, `workers/message`, `workers/tag` — and the `workers.dev` address
+when it is on; a missing Worker is `NOT_FOUND`. `workerNameFromConfig` and
+`d1DatabasesFromConfig` read `wrangler.jsonc`/`.json` (comments allowed) or
+`wrangler.toml`.
+Both reads are `unlisted` (an operation option): the release's own plumbing,
+left out of an agent's capped tool list (`sessionTools`) and still callable by
+id; agents use `cloudflare.d1_migrations` and `cloudflare.deployments`.
+
 `cloudflare.pages_status {project, commit?}` (in the read-only REST pack
 [cloudflare-api.ts](../../packages/tools/src/packs/cloudflare-api.ts), no
 Wrangler needed) is Level 1 and `readOnly`: the Pages project's production

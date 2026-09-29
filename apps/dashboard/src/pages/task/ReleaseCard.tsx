@@ -145,9 +145,14 @@ export function ReleaseCard({ task, repo }: { task: TaskDetail; repo: Repository
             </Check>
             {e.deploy ? (
               <Check ok={e.deploy.url ? true : release.state === 'failed' ? false : null} pending={release.state === 'publishing'}>
-                Uploaded to Cloudflare Pages {e.deploy.project}
+                {e.deploy.kind === 'worker' ? `Deployed Cloudflare Worker ${e.deploy.project}` : `Uploaded to Cloudflare Pages ${e.deploy.project}`}
                 {e.deploy.created ? ' (created by this release)' : ''}
-                {e.deploy.files !== null ? ` — ${e.deploy.files} file${e.deploy.files === 1 ? '' : 's'}` : ''}: {e.deploy.note}
+                {e.deploy.files !== null && e.deploy.kind !== 'worker' ? ` — ${e.deploy.files} file${e.deploy.files === 1 ? '' : 's'}` : ''}: {e.deploy.note}
+              </Check>
+            ) : null}
+            {e.cloudflareWorker ? (
+              <Check ok={e.cloudflareWorker.ok} pending={inFlight}>
+                Cloudflare Worker {e.cloudflareWorker.name}: {e.cloudflareWorker.note}
               </Check>
             ) : null}
             {e.cloudflarePages ? (

@@ -38,11 +38,20 @@ longer validates reads as `none`.
 At least one proof is required. Repository detection never turns release on.
 
 `cloudflare` (**Deploy to Cloudflare**) has `remote`, `branch`, `manualPaths`
-and `timeoutSec` (default 600) as above, plus `pages.project` (Cloudflare's
-naming rule: lowercase, digits, dashes, ≤ 58), `pages.outputDir` (a folder
-inside the repository, default `dist`, never `.` or `..`) and an optional
-`liveUrl` (default: the project's own `*.pages.dev` address, read from
-Cloudflare). Its proof is always the Pages project. `releaseTarget()` in
+and `timeoutSec` (default 600) as above, an optional `liveUrl`, and exactly one
+target (`cloudflareTarget()`):
+
+- `pages: { project, outputDir }` — `project` by Cloudflare's rule (lowercase,
+  digits, dashes, ≤ 58), `outputDir` a folder inside the repository (default
+  `dist`, never `.` or `..`); `liveUrl` defaults to the project's own
+  `*.pages.dev` address. Proof: the Pages project.
+- `worker: { name?, environment? }` — the Worker its commit's Wrangler config
+  names (`workerNameFromConfig`: top-level `name`, or the environment's own,
+  else `<name>-<environment>`); `name` pins it (a config naming another is
+  refused); `environment` deploys with `--env`. `liveUrl` defaults to its
+  `workers.dev` address when that is on (read from Cloudflare), else none.
+  Proof: the Worker's live version. An assets-only Worker (a static site:
+  `assets.directory`, no `main`) is the same path. `releaseTarget()` in
 [schemas.ts](../../packages/shared/src/schemas.ts) gives the remote branch
 of either method to the SEC-1 release gate.
 
@@ -111,6 +120,30 @@ The same steps, with a build before the lock and an upload after the push:
   URL, note. A new project's address is read back for the live URL.
 - The build folder is removed after the upload (or refusal); `recover()`
   empties `<dataDir>/releases` at every start and prunes worktrees.
+
+A **Worker** (`worker`) differs where a Worker differs:
+
+- **Before the lock** it builds first (the name is in the commit's Wrangler
+  config), then `checkWorker`: the config names a valid Worker (and the pinned
+  one, if set); `cloudflare.worker_deploy` with `dryRun` bundles it; and for
+  every D1 database the config binds (`d1DatabasesFromConfig`, per environment)
+  `cloudflare.d1_pending_migrations` must list none — **a release never
+  applies a migration** (it cannot be undone); the operator applies it first,
+  and the next release goes through. Then `cloudflare.worker_status` reads what
+  runs: missing → created by the deploy; unreadable → refused; more than one
+  version, or one below 100%, → refused (a gradual rollout); the live version's
+  commit is the 40-hex id in its `workers/message` (none → unknown, allowed).
+- **Step 3 / 4** are the same checks and push; the deploy is
+  `cloudflare.worker_deploy` (`wrangler deploy [--env] --message "<task>
+  <commit>"`) in the clean copy, `preApproved` by the release. A refused deploy
+  after the push is `failed` ("…did not take the deploy"); the button retries.
+  The live address is read back (`workersDev`) unless `liveUrl` is set.
+- **Proof** (`evidence.cloudflareWorker`): exactly one live version at 100%
+  whose message names the commit; the live URL answers when there is one.
+  `recover()` and Check again work as for Pages.
+- **Check setup** reads Wrangler, the config (name, D1 databases), the Worker
+  (exists, runs which commit, not mid-rollout) and the address; creates
+  nothing.
 
 | State | Meaning | Event |
 |---|---|---|
@@ -199,4 +232,4 @@ and waits for them to save (`close()`).
   the first was released; the stage updates itself, the button refuses —
   background sync (or a pull) before starting avoids both.
 
-Last verified: 2026-09-29
+Last verified: 2026-09-29 (Workers added)

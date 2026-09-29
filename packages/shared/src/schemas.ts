@@ -289,18 +289,30 @@ const gitNameSchema = z
 const httpsUrlSchema = z
   .string()
   .max(500)
-  .url()
+  .url('An https:// address, such as https://app.example.com/')
   .refine((v) => /^https:\/\//i.test(v), 'Must be an https:// URL');
 /** A Cloudflare Pages project name, by Cloudflare's own rule: lowercase letters, digits and dashes. */
 export const pagesProjectSchema = z
   .string()
-  .min(1)
-  .max(58)
+  .min(1, 'Enter the Pages project name, such as my-app')
+  .max(58, 'At most 58 characters')
   .regex(/^[a-z0-9][a-z0-9-]*$/, 'Lowercase letters, digits and dashes');
+/** A Worker name, by Cloudflare's rule: lowercase letters, digits and dashes, at most 63. */
+export const workerNameSchema = z
+  .string()
+  .min(1, 'Enter the Worker name, such as my-api')
+  .max(63, 'At most 63 characters')
+  .regex(/^[a-z0-9][a-z0-9-]*$/, 'Lowercase letters, digits and dashes');
+/** A Wrangler environment name (`--env`): letters, digits, dashes and underscores. */
+const wranglerEnvSchema = z
+  .string()
+  .min(1, 'Enter the environment name, such as production')
+  .max(60, 'At most 60 characters')
+  .regex(/^[A-Za-z0-9][\w-]*$/, 'Letters, digits, dashes and underscores');
 /** A folder inside the repository: relative, plain names, never climbing out. */
 const relativeDirSchema = z
   .string()
-  .min(1)
+  .min(1, 'Enter the folder your build writes, such as dist')
   .max(200)
   .regex(/^[\w.-]+(?:\/[\w.-]+)*\/?$/, 'A folder inside the repository, such as dist')
   .refine((v) => !v.split('/').some((part) => part === '..' || part === '.') && !v.startsWith('-'), 'A folder inside the repository, such as dist');
@@ -331,24 +343,38 @@ export const releaseConfigSchema = z.discriminatedUnion('method', [
   /**
    * `cloudflare` (docs/plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md): push the
    * task's commit to the branch (so the branch and the live site never
-   * disagree), build that exact commit in a throwaway checkout, and upload the
-   * build to a Cloudflare Pages project through Wrangler — created on the first
-   * release. Live when the project's production deployment is that commit.
+   * disagree), build that exact commit in a throwaway checkout, and deploy it
+   * through Wrangler — either `pages` (upload the build to a Pages project,
+   * created on the first release) or `worker` (`wrangler deploy` of the
+   * Worker its Wrangler config names, the commit recorded on the version).
+   * Exactly one of the two. Live when Cloudflare serves that commit.
    */
-  z.object({
-    method: z.literal('cloudflare'),
-    remote: gitNameSchema.default('origin'),
-    branch: gitNameSchema.default('main'),
-    pages: z.object({
-      project: pagesProjectSchema,
-      /** The folder the build writes, relative to the repository: what is uploaded. */
-      outputDir: relativeDirSchema.default('dist'),
-    }),
-    /** The live app; defaults to the project's own pages.dev address. */
-    liveUrl: httpsUrlSchema.optional(),
-    manualPaths: z.array(z.string().min(1).max(200)).max(50).default([]),
-    timeoutSec: z.number().int().min(60).max(3600).default(600),
-  }),
+  z
+    .object({
+      method: z.literal('cloudflare'),
+      remote: gitNameSchema.default('origin'),
+      branch: gitNameSchema.default('main'),
+      pages: z
+        .object({
+          project: pagesProjectSchema,
+          /** The folder the build writes, relative to the repository: what is uploaded. */
+          outputDir: relativeDirSchema.default('dist'),
+        })
+        .optional(),
+      worker: z
+        .object({
+          /** The Worker this repository deploys; when set, a commit whose Wrangler config names another is refused. */
+          name: workerNameSchema.optional(),
+          /** A Wrangler environment (`--env`); absent: the config's top level. */
+          environment: wranglerEnvSchema.optional(),
+        })
+        .optional(),
+      /** The live app; defaults to the Pages project's pages.dev address or the Worker's workers.dev address. */
+      liveUrl: httpsUrlSchema.optional(),
+      manualPaths: z.array(z.string().min(1).max(200)).max(50).default([]),
+      timeoutSec: z.number().int().min(60).max(3600).default(600),
+    })
+    .refine((c) => Boolean(c.pages) !== Boolean(c.worker), { message: 'Choose what to deploy: a Pages site or a Worker', path: ['pages'] }),
 ]);
 export type ReleaseConfig = z.infer<typeof releaseConfigSchema>;
 export type ReleaseConfigInput = z.input<typeof releaseConfigSchema>;
@@ -356,6 +382,15 @@ export type PushReleaseConfig = Extract<ReleaseConfig, { method: 'push' }>;
 export type CloudflareReleaseConfig = Extract<ReleaseConfig, { method: 'cloudflare' }>;
 /** A setting that releases: where its commit is pushed. */
 export type ActiveReleaseConfig = PushReleaseConfig | CloudflareReleaseConfig;
+
+/** What a direct Cloudflare release deploys: a Pages site or a Worker. */
+export type CloudflareTarget =
+  | { kind: 'pages'; project: string; outputDir: string }
+  | { kind: 'worker'; name: string | null; environment: string | null };
+
+export function cloudflareTarget(config: CloudflareReleaseConfig): CloudflareTarget {
+  return config.pages ? { kind: 'pages', ...config.pages } : { kind: 'worker', name: config.worker?.name ?? null, environment: config.worker?.environment ?? null };
+}
 
 /** The remote branch a release setting pushes to (the SEC-1 release gate guards it), or null when it never releases. */
 export function releaseTarget(config: ReleaseConfig | null | undefined): { remote: string; branch: string } | null {

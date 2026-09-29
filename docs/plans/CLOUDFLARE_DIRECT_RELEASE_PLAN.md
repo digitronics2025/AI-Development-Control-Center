@@ -19,7 +19,7 @@ A third setting, **Deploy to Cloudflare**, makes the Release stage do that itsel
 | Deploy mechanism | `cloudflare.pages_deploy` / `cloudflare.pages_project_create` through `ToolService.invoke` (origin `engine`, operator profile, `preApproved` by the release's typed approval), scope confined to the build folder | The repository's brokered `cloudflare` key; no Wrangler login, no token in a file or environment. |
 | Proof | `cloudflare.pages_status`: the canonical deployment is the commit (`--commit-hash`) with deploy/success, and the live URL (the set one, else the project's `subdomain`) answers | The same proof as a Git-connected Pages release. |
 | Replacing what is live | Refused when the live deployment's commit is unknown here or not an ancestor of the release commit | An upload replaces the whole site; it must never take down another task's release. |
-| Workers | Not in this setting | A Worker deploy brings bindings, D1 migrations and secrets; it needs its own plan. The setting is `pages: {…}` so a `worker` target can be added beside it. |
+| Workers | Added 2026-09-29 as `worker: { name?, environment? }` beside `pages` (exactly one) | Built in the clean copy, checked by Wrangler's dry run, deployed with `wrangler deploy --message "<task> <commit>"`; Live when the only live version (100%) names the commit. D1: a release refuses while a bound database has migrations not applied — it never applies one. Gradual rollouts are refused. Secrets stay with `secret-custody` (Wrangler refuses a deploy missing a `secrets.required` one, which shows as a failed deploy). An assets-only Worker (static site) is the same path. |
 
 ## 3. Irreversible effects
 

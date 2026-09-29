@@ -143,6 +143,17 @@ async function database(ctx: OperationContext, a: Account, value: string) {
 // ----- Pages (docs/plans/RELEASE_STAGE_PLAN.md §3.7) ------------------------------------
 
 /** A Pages deployment as a release proof reads it. */
+/** One version of a Worker's live deployment, as `cloudflare.worker_status` reports it. */
+export interface WorkerVersionView {
+  id: string;
+  /** Share of traffic, 0–100. */
+  percentage: number;
+  /** `workers/message` (`wrangler deploy --message`): a release records its commit here. */
+  message: string | null;
+  tag: string | null;
+  createdOn: string | null;
+}
+
 export interface PagesDeploymentView {
   id: string;
   commit: string | null;
@@ -247,6 +258,45 @@ export function cloudflareApiProvider(): ToolProvider {
             evidence: [liveLine, ...(candidateLine ? [candidateLine] : [])],
             ...net,
           };
+        },
+      }),
+      operation({
+        id: 'cloudflare.worker_status',
+        title: 'Worker live version',
+        description:
+          "Which version of a Worker serves traffic now — its message and tag, where a release records its commit — how much traffic each version gets (more than one: a gradual rollout), and the Worker's workers.dev address when that is on. Reads only.",
+        input: z.object({ name: z.string().min(1).max(63).regex(/^[a-z0-9][a-z0-9-]*$/, 'A Worker name') }),
+        level: 1,
+        readOnly: true,
+        // A release's proof; agents see deployments with cloudflare.deployments.
+        unlisted: true,
+        credentials: CREDENTIALS,
+        classify: () => ({ level: 1, effects: ['network'], reasons: ['Reads which version a Worker serves'], writes: false }),
+        async run(input, ctx) {
+          const a = await pagesAccount(ctx);
+          if (!isAccount(a)) return a;
+          const route = `/workers/scripts/${pathSegment(input.name)}`;
+          const deployments = await cf(ctx, a, `${route}/deployments`);
+          if (!deployments.ok) return cfFailure(deployments, `Worker ${input.name}`);
+          const all = ((deployments.json?.result?.deployments ?? []) as Array<{ id?: unknown; created_on?: unknown; versions?: Array<{ version_id?: unknown; percentage?: unknown }> }>).filter((d) => typeof d.id === 'string');
+          // The live deployment is the newest one.
+          const live = [...all].sort((x, y) => String(y.created_on ?? '').localeCompare(String(x.created_on ?? '')))[0] ?? null;
+          const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+          const versions: WorkerVersionView[] = [];
+          for (const v of (live?.versions ?? []).slice(0, 4)) {
+            const id = str(v.version_id);
+            if (!id || !/^[0-9a-f-]{36}$/i.test(id)) continue;
+            const one = await cf(ctx, a, `${route}/versions/${id}`);
+            const annotations = (one.ok ? (one.json?.result?.annotations ?? {}) : {}) as Record<string, unknown>;
+            versions.push({ id, percentage: Number(v.percentage ?? 0), message: str(annotations['workers/message']), tag: str(annotations['workers/tag']), createdOn: str(one.json?.result?.metadata?.created_on) });
+          }
+          const [account, own] = await Promise.all([cf(ctx, a, '/workers/subdomain'), cf(ctx, a, `${route}/subdomain`)]);
+          const subdomain = account.ok ? str(account.json?.result?.subdomain) : null;
+          const workersDev = subdomain && /^[a-z0-9-]+$/.test(subdomain) && own.ok && own.json?.result?.enabled === true ? `https://${input.name}.${subdomain}.workers.dev/` : null;
+          const summary = versions.length
+            ? `${input.name} serves ${versions.map((v) => `${v.id.slice(0, 8)} (${v.percentage}%${v.message ? `, "${v.message.slice(0, 60)}"` : ''})`).join(' and ')}`
+            : `${input.name} has no live deployment`;
+          return { ok: true, summary, output: { name: input.name, deploymentId: str(live?.id), versions, workersDev }, evidence: [summary], ...net };
         },
       }),
       operation({

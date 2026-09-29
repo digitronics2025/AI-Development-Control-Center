@@ -52,7 +52,8 @@ export { dimensions, sanitizeSvg, sniff, type MediaKind } from './packs/media-fi
 export { contrastRatio, lintLine, parseColor, readThemeTokens } from './packs/design.js';
 export { DEFAULT_MEDIA_PRICES, decodeJob, encodeJob, estimate as estimateMediaCost, type MediaPriceUnit } from './packs/media-fal.js';
 export { refreshedPath, locateInstalled } from './packs/installer.js';
-export { resetCloudflareCatalog } from './packs/cloudflare-api.js';
+export { resetCloudflareCatalog, type WorkerVersionView } from './packs/cloudflare-api.js';
+export { d1DatabasesFromConfig, workerNameFromConfig } from './packs/cloudflare.js';
 
 /** Every built-in provider (V2 plan §6). MCP servers are added at runtime by the gateway. */
 export function builtinProviders(): ToolProvider[] {

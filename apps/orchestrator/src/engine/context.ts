@@ -5,6 +5,7 @@ import { changesSince, diffSince, diffLineStats, packDiff, status as gitStatus, 
 import { redact } from '@acc/security';
 import { resolveInside } from '@acc/tools';
 import {
+  cloudflareTarget,
   nonBlockingFailure,
   COMMAND_KIND_LABEL,
   DEFAULT_VERIFY_COMMAND_KINDS,
@@ -39,7 +40,14 @@ const MAX_TEXT_ATTACHMENT = 50_000;
 function releaseFacts(repo: RepositoryRecord): string[] {
   const r = repo.release;
   if (r.method === 'cloudflare') {
-    return [`- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, built from a clean copy with the \`build\` command, and the \`${r.pages.outputDir}\` folder is uploaded to Cloudflare Pages \`${r.pages.project}\`. The build must write the whole site to \`${r.pages.outputDir}\`, as static files that need no server.`];
+    const what = cloudflareTarget(r);
+    if (what.kind === 'worker') {
+      const env = what.environment ? ` --env ${what.environment}` : '';
+      return [
+        `- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, built from a clean copy with the \`build\` command (if any), checked with \`wrangler deploy --dry-run${env}\`, and deployed as a Cloudflare Worker with \`wrangler deploy${env}\`. The Wrangler config (wrangler.jsonc, wrangler.json or wrangler.toml at the repository root) must name the Worker${what.name ? ` \`${what.name}\`` : ''}${what.environment ? ` in its \`${what.environment}\` environment` : ''}: a static site needs only \`assets\` (for example \`{ "directory": "./dist", "not_found_handling": "single-page-application" }\`, filled by the build) and no \`main\`; code that runs on the server adds \`main\`. Do not run \`wrangler deploy\` yourself. A release refuses while a D1 database has migrations not applied on Cloudflare, so a new migration waits for the operator to apply it.`,
+      ];
+    }
+    return [`- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, built from a clean copy with the \`build\` command, and the \`${what.outputDir}\` folder is uploaded to Cloudflare Pages \`${what.project}\`. The build must write the whole site to \`${what.outputDir}\`, as static files that need no server.`];
   }
   if (r.method === 'push') return [`- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, which your host builds and serves at ${r.liveUrl}.`];
   return [];

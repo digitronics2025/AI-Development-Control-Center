@@ -111,8 +111,11 @@ for (const theme of ['dark', 'light'] as const) {
       await page.goto(`/repositories/${repoId}`);
       const panel = page.getByTestId('release-panel');
       await panel.getByRole('radio', { name: 'Deploy to Cloudflare' }).click();
-      await expect(panel.getByText(/builds that exact commit in a clean copy and uploads the build to Cloudflare Pages/)).toBeVisible();
+      await expect(panel.getByText(/builds that exact commit in a clean copy and deploys it to Cloudflare/)).toBeVisible();
+      await expect(panel.getByRole('radio', { name: 'Site (Pages)' })).toBeChecked();
       await expect(panel.getByLabel('Build output folder')).toHaveValue('dist');
+      // An empty project name says what to type, in plain words.
+      await expect(panel.getByText('Enter the Pages project name, such as my-app')).toBeVisible();
       // A project name Cloudflare would refuse is caught here.
       await panel.getByLabel('Cloudflare Pages project').fill('My App');
       await expect(panel.getByText('Lowercase letters, digits and dashes', { exact: true })).toBeVisible();
@@ -126,6 +129,17 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(results.getByText(/Remote passed/)).toBeVisible();
       await expect(results.getByText(/^Wrangler/)).toBeVisible();
       await expect(results.getByText(/^Build/)).toBeVisible();
+      // A Worker instead: its own fields, and a Check setup that reads the Wrangler config (this repository has none).
+      await panel.getByRole('radio', { name: 'Worker' }).click();
+      await expect(panel.getByText(/An app with a server side: deployed with wrangler deploy/)).toBeVisible();
+      await expect(panel.getByLabel('Build output folder')).toHaveCount(0);
+      await panel.getByLabel('Worker name').fill('My API');
+      await expect(panel.getByText('Lowercase letters, digits and dashes', { exact: true })).toBeVisible();
+      await panel.getByLabel('Worker name').fill('');
+      await panel.getByLabel('Wrangler environment').fill('production');
+      await panel.getByRole('button', { name: 'Check setup' }).click();
+      await expect(results.getByText(/Wrangler config failed/)).toBeVisible();
+      await expect(results.getByText(/Remote passed/)).toBeVisible();
       await page.evaluate(() => {
         for (const el of [document.scrollingElement, ...document.querySelectorAll('main, [data-scroll-container]')]) if (el) el.scrollTop = 0;
       });

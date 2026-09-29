@@ -14,6 +14,8 @@ export interface CapabilityInfo {
   category: ToolCategory;
   level: PermissionLevel;
   providers: string[];
+  /** Every provider marks it `unlisted`: not in an agent's tool list. */
+  unlisted?: boolean;
 }
 
 /**
@@ -77,6 +79,7 @@ export class ToolRegistry {
           category: first.provider.category,
           level: Math.min(...list.map((r) => r.operation.level)) as PermissionLevel,
           providers: list.map((r) => r.provider.id),
+          ...(list.every((r) => r.operation.unlisted) ? { unlisted: true } : {}),
         };
       })
       .sort((a, b) => a.id.localeCompare(b.id));

@@ -1082,7 +1082,7 @@ export class ToolService {
         const listed = profileIncludes(PROFILES[scope.profile], cap.id) || scope.escalated.has(cap.id);
         if (!listed || cap.level > Math.min(scope.stageLevel, ceiling)) continue;
       }
-      if (session.kind === 'agent' && NATIVE_OVERLAP.test(cap.id)) continue;
+      if (session.kind === 'agent' && (NATIVE_OVERLAP.test(cap.id) || cap.unlisted)) continue;
       const route = this.router.route({ capability: cap.id, detection: (id) => this.health.get(id) });
       if (scope.designSession && route.ok && route.route.provider.id.startsWith('mcp:')) continue;
       // Providers never checked yet count as available: the first call detects them.

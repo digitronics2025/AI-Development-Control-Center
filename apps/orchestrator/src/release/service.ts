@@ -333,7 +333,8 @@ export class ReleaseService {
       `- Commit: ${sha ?? '—'}`,
       `- Target: ${record.target.remote}/${record.target.branch}`,
       ...(target ? [target.kind === 'pages' ? `- Deploy: Cloudflare Pages ${target.project}, ${target.outputDir} built from the commit` : `- Deploy: Cloudflare Worker ${target.name ?? '(named in the commit\'s Wrangler config)'}${target.environment ? `, environment ${target.environment}` : ''}, built from the commit`] : []),
-      `- Live URL: ${record.target.liveUrl}`,
+      // A Worker with no address set gets its workers.dev one once Cloudflare is read; the evidence names it.
+      `- Live URL: ${record.target.liveUrl || "the Worker's workers.dev address, read from Cloudflare"}`,
       `- Started by: ${opts.via === 'stage' ? 'the Release stage' : 'the Release button'}, approved by you`,
       '',
     ];

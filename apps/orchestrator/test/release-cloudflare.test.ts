@@ -400,6 +400,7 @@ describe('direct Cloudflare release of a Worker', () => {
     expect(log).toContain("Wrangler's dry run bundles shop-api and accepts its config.");
     expect(log).toContain('D1 shop-db: every migration is applied.');
     expect(log).toContain('Cloudflare Worker shop-api does not exist yet: this release creates it.');
+    expect(log).toContain("- Live URL: the Worker's workers.dev address, read from Cloudflare");
   }, 240_000);
 
   it('deploys an assets-only Worker (a static site: no main, the build fills assets)', async () => {

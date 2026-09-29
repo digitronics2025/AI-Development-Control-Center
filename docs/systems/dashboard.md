@@ -177,8 +177,11 @@ worktrees** on its page.
 
 **Releases** ([release.md](release.md)). Repository detail has a **Release**
 panel ([ReleasePanel.tsx](../../apps/dashboard/src/pages/ReleasePanel.tsx)):
-Off / Push to a branch, remote, branch, live URL, the proofs (Cloudflare Pages
-project, version URL — at least one), manual paths and the wait, validated
+Off / Push to a branch / Deploy to Cloudflare, remote, branch, live URL, the
+proofs of a push (Cloudflare Pages project, version URL — at least one), for
+Deploy to Cloudflare the Worker name and Wrangler environment (a Worker only;
+a Pages setting saved earlier shows read-only with **Switch to a Worker**),
+manual paths and the wait, validated
 with the orchestrator's own `releaseConfigSchema`, saved with **Save
 Changes**; **Check setup** checks the form as it is (saved or not) and lists
 each read-only check with an icon and words. The task list and task header

@@ -291,6 +291,17 @@ describe('check costs', () => {
     return (await t.services.context.build(task, def, { id: 'x', createdAt: new Date().toISOString() } as never)).prompt;
   };
 
+  it('tell the builders which folder a direct Cloudflare release uploads, and nothing when the repository never releases', async () => {
+    const direct = await addRepo(t, await makeRepo(), { release: { method: 'cloudflare', pages: { project: 'shop', outputDir: 'web/dist' } } });
+    const quiet = await addRepo(t, await makeRepo());
+    const id = await createTask(t, direct, 'Build it', { start: false });
+    for (const stage of ['implement', 'plan']) {
+      const prompt = await promptFor(id, stage);
+      expect(prompt, stage).toContain('the `web/dist` folder is uploaded to Cloudflare Pages `shop`. The build must write the whole site to `web/dist`');
+    }
+    expect(await promptFor(await createTask(t, quiet, 'Build it', { start: false }), 'implement')).not.toContain('- Release:');
+  });
+
   it("give the review every check's latest result, not only the last stage's (an App check after Test)", async () => {
     const repo = await addRepo(t, await makeRepo());
     const id = await createTask(t, repo, 'Build it', { start: false });

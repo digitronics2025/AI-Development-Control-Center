@@ -30,6 +30,21 @@ const UNKNOWN_COVERAGE = 'Diff coverage unknown — read every changed file list
 const MAX_DIFF_CHARS = 150_000;
 const MAX_SECTION_CHARS = 60_000;
 const MAX_TEXT_ATTACHMENT = 50_000;
+/**
+ * How the repository's work goes live, for the agents that build it: a direct
+ * Cloudflare release uploads one folder, so the build must write the site
+ * there (CLOUDFLARE_DIRECT_RELEASE_PLAN). Nothing for a repository that never
+ * releases.
+ */
+function releaseFacts(repo: RepositoryRecord): string[] {
+  const r = repo.release;
+  if (r.method === 'cloudflare') {
+    return [`- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, built from a clean copy with the \`build\` command, and the \`${r.pages.outputDir}\` folder is uploaded to Cloudflare Pages \`${r.pages.project}\`. The build must write the whole site to \`${r.pages.outputDir}\`, as static files that need no server.`];
+  }
+  if (r.method === 'push') return [`- Release: after its checks pass and the operator approves, the commit is pushed to ${r.remote}/${r.branch}, which your host builds and serves at ${r.liveUrl}.`];
+  return [];
+}
+
 /** `{{verification_commands}}` of a repository with no checks yet: the task's own scripts become its checks (task-checks.ts). */
 const NO_CHECKS_YET =
   'None configured yet. Checks this task adds become its gates: `test`, `build`, `lint` and `typecheck` scripts in package.json (and a `dev` script using Vite, Next or Wrangler for the app check) run after implementation. A new app needs a `test` script with real tests, or the Test stage stops and asks the operator.';
@@ -334,6 +349,7 @@ export class ContextBuilder {
       `- Task branch: ${task.git.taskBranch ?? 'not created yet'}`,
       `- Baseline commit: ${task.git.baselineCommit ?? 'not recorded yet'}`,
       commands.length ? `- Configured commands:\n${commands.map((c) => `  ${c}`).join('\n')}` : '- Configured commands: none',
+      ...releaseFacts(repo),
     ].join('\n');
   }
 

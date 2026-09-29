@@ -1029,7 +1029,7 @@ export class ReleaseService {
     const detected = detectToolingSync(repo.path);
     const build = [...repo.commands.filter((c) => c.enabled && c.kind === 'build'), ...detected.commands.filter((c) => c.kind === 'build')][0] ?? null;
     const committed = countFiles(path.join(repo.path, config.pages.outputDir), 1) > 0;
-    checks.push({ name: 'Build', ok: Boolean(build) || committed, detail: build ? `"${redact(build.command)}" builds ${config.pages.outputDir} from a clean copy of the commit` : committed ? `no build command: ${config.pages.outputDir} is uploaded as committed` : `no build command, and there is no ${config.pages.outputDir} folder: add a build script that writes ${config.pages.outputDir}` });
+    checks.push({ name: 'Build', ok: Boolean(build) || committed, detail: build ? `"${redact(build.command)}" builds ${config.pages.outputDir} from a clean copy of the commit` : committed ? `no build command: ${config.pages.outputDir} is uploaded as committed` : `nothing to build yet: no build command and no ${config.pages.outputDir} folder. A task must add a build script that writes ${config.pages.outputDir} before the first release (its builders are told so).` });
     if (config.liveUrl || out?.live) {
       const url = this.liveUrlOf(config, status.ok ? { exists: true, productionBranch: out?.productionBranch ?? null, subdomain: out?.subdomain ?? null, live: out?.live ?? null } : null);
       const up = await this.upCheck(url);

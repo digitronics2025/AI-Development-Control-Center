@@ -389,6 +389,12 @@ set up it is saved within seconds, even while MyVault is locked
 ([credential-broker.md](credential-broker.md#delivery-box)). `CredentialHost`
 gains optional `generate` and `deployGate` for this.
 
+`cloudflare.pages_project_create {project, productionBranch = main}` (Wrangler
+pack, [cloudflare.ts](../../packages/tools/src/packs/cloudflare.ts)) is Level 4:
+it creates an empty direct-upload Pages project that serves nothing until
+`cloudflare.pages_deploy` uploads to it (production branch: Level 5, typed
+approval). Names are Cloudflare's own rule (lowercase, digits, dashes, ≤ 58).
+
 `cloudflare.pages_status {project, commit?}` (in the read-only REST pack
 [cloudflare-api.ts](../../packages/tools/src/packs/cloudflare-api.ts), no
 Wrangler needed) is Level 1 and `readOnly`: the Pages project's production

@@ -305,6 +305,19 @@ export function cloudflareProvider(): ToolProvider {
         },
       }),
       operation({
+        id: 'cloudflare.pages_project_create',
+        title: 'Create a Pages project',
+        description: 'Create an empty Pages project for direct uploads, with the branch whose deploys are production. Serves nothing until a deploy; `cloudflare.pages_deploy` uploads to it.',
+        input: z.object({ project: z.string().min(1).max(58).regex(/^[a-z0-9][a-z0-9-]*$/, 'Lowercase letters, digits and dashes'), productionBranch: z.string().min(1).max(100).regex(/^[\w./-]+$/).default('main') }),
+        level: 4,
+        classify: () => ({ level: 4, risk: 'elevated', reasons: ['Creates a Pages project on the Cloudflare account (it serves nothing until a deploy)'], effects: ['infrastructure', 'network'] }),
+        credentials: CREDENTIALS,
+        async run(input, ctx) {
+          const r = await wrangler(ctx, ['pages', 'project', 'create', input.project, '--production-branch', input.productionBranch], 120_000);
+          return { ...resultOf(r, `Created Pages project ${input.project} (production branch ${input.productionBranch})`, { project: input.project, productionBranch: input.productionBranch, url: r.code === 0 ? `https://${input.project}.pages.dev` : null }), evidence: r.code === 0 ? [`pages project ${input.project} created`] : [] };
+        },
+      }),
+      operation({
         id: 'cloudflare.tail',
         title: 'Tail Worker logs',
         description: 'Collect live logs from a deployed Worker for a few seconds.',

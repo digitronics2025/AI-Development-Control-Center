@@ -239,6 +239,13 @@ describe('F-14: production is decided by the resource, not by a label the caller
     expect(risk('cloudflare.pages_deploy', { directory: 'dist', project: 'site', branch: 'feature-x' }).level).toBe(4);
   });
 
+  it('creates a Pages project at Level 4 and accepts only a Cloudflare-valid name', () => {
+    expect(risk('cloudflare.pages_project_create', { project: 'simple-calc' })).toMatchObject({ level: 4 });
+    const input = op('cloudflare.pages_project_create').input;
+    expect(input.parse({ project: 'simple-calc' })).toEqual({ project: 'simple-calc', productionBranch: 'main' });
+    for (const bad of ['Simple-Calc', '-calc', 'calc;rm', 'a'.repeat(59)]) expect(() => input.parse({ project: bad }), bad).toThrow();
+  });
+
   it('refuses a non-production-named branch it cannot check against Cloudflare', async () => {
     const os = await import('node:os');
     const o = op('cloudflare.pages_deploy');

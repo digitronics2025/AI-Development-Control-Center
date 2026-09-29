@@ -92,6 +92,14 @@ Stage Team workers included) fails with the message in its execution and waits
 for the operator like any other `PERMISSION_DENIED`. Simulated agents declare 5,
 `Simulated agents`, and `pluginDirs` only for the simulated `claude`.
 
+The launch door also **spaces launches of one CLI** (`LAUNCH_SPACING_MS`, 6 s,
+in [agents.ts](../../apps/orchestrator/src/services/agents.ts)): a launch waits
+until the previous launch of the same agent has run that long or ended. Two
+Claude Code processes started together with an expired sign-in both refresh it
+and the loser fails "Claude Code process is refreshing it or exited
+mid-refresh"; a Stage Team's side-by-side Investigate workers did that twice
+in TASK-0029 and the stage was handed to Codex. Simulated agents never wait.
+
 ### Tested CLI versions
 
 [agents.compat.json](../../packages/agent-sdk/agents.compat.json) names, per

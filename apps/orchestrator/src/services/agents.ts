@@ -24,6 +24,15 @@ const NO_CAPABILITIES: AgentCapabilities = {
 export class AgentNotFoundError extends Error {}
 
 /**
+ * How long a launch of an agent CLI waits for the launch of the same CLI just
+ * before it (or until that run ends). Two Claude Code processes started
+ * together with an expired sign-in both refresh it, and the one that loses
+ * fails "Claude Code process is refreshing it or exited mid-refresh" — a
+ * Stage Team's side-by-side workers did exactly that twice (TASK-0029).
+ */
+export const LAUNCH_SPACING_MS = 6_000;
+
+/**
  * Registry of agent adapters plus their persisted configuration, last health
  * result and model catalog. Health checks run on start, on demand, and
  * before every launch (inside the adapter's subscription guard).
@@ -34,6 +43,8 @@ export class AgentRegistry {
   /** The Control Center's own data folder and port, denied in every run's native rules (SEC-3); set at start. */
   private controlCenter: AgentRuntimeOptions['controlCenter'];
   private isolation: Omit<AgentRunAs, 'account'> | null = null;
+  /** Per agent, the launch the next one waits for (LAUNCH_SPACING_MS). */
+  private readonly launchTurns = new Map<string, Promise<void>>();
 
   constructor(
     private readonly store: Store,
@@ -42,6 +53,7 @@ export class AgentRegistry {
     adapters: AgentAdapter[],
     private readonly baseEnv: NodeJS.ProcessEnv = process.env,
     private readonly meter: UsageMeter | null = null,
+    private readonly launchSpacingMs: number = LAUNCH_SPACING_MS,
   ) {
     for (const adapter of adapters) {
       this.adapters.set(adapter.id, adapter);
@@ -101,7 +113,15 @@ export class AgentRegistry {
     const info = { agentId, capabilities: adapter.usageCapabilities, model: input.model, attribution };
     const blocked = this.meter?.blockReason(info) ?? null;
     if (blocked) throw new AgentGuardError(blocked, 'PERMISSION_DENIED');
-    const handle = await adapter.execute(input);
+    const settled = await this.launchTurn(agentId, adapter);
+    let handle: AgentExecutionHandle;
+    try {
+      handle = await adapter.execute(input);
+    } catch (error) {
+      settled(Promise.resolve());
+      throw error;
+    }
+    settled(handle.done);
     const dispatch = this.meter?.dispatched({ ...info, executionId: input.executionId, billing: this.billing(agentId, adapter), effort: input.effort, prompt: input.prompt }) ?? null;
     const done = handle.done.then(
       (result) => {
@@ -114,6 +134,36 @@ export class AgentRegistry {
       },
     );
     return { ...handle, done };
+  }
+
+  /**
+   * Wait for this agent's previous launch to get going, then take the turn.
+   * The returned function hands the turn on once this run has had
+   * `launchSpacingMs` to start (sign in, refresh its token) or has ended.
+   * Simulated agents sign in to nothing and never wait.
+   */
+  private async launchTurn(agentId: string, adapter: AgentAdapter): Promise<(done: Promise<unknown>) => void> {
+    if (adapter.usageCapabilities.provider === 'simulated' || this.launchSpacingMs <= 0) return () => undefined;
+    const before = this.launchTurns.get(agentId) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => (release = resolve));
+    const next = before.then(() => mine);
+    this.launchTurns.set(agentId, next);
+    // The chain forgets itself once nothing queues after this launch.
+    void next.then(() => {
+      if (this.launchTurns.get(agentId) === next) this.launchTurns.delete(agentId);
+    });
+    await before;
+    return (done) => {
+      const timer = setTimeout(release, this.launchSpacingMs);
+      void done.then(
+        () => undefined,
+        () => undefined,
+      ).finally(() => {
+        clearTimeout(timer);
+        release();
+      });
+    };
   }
 
   runtimeOptions(id: string): AgentRuntimeOptions {

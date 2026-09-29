@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { git } from '@acc/git';
 import { releaseConfigSchema, type ReleaseConfigInput, type TaskRelease } from '@acc/shared';
 import type { Probe } from '../src/release/service.js';
-import { addRepo, createTask, createTestApp, makeRepo, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, seedLegacyPagesRelease, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 /**
  * Direct Cloudflare releases (docs/plans/CLOUDFLARE_DIRECT_RELEASE_PLAN.md):
@@ -202,7 +202,9 @@ async function releaseRepo(opts: { build?: string; test?: string; worker?: boole
 async function setup(release: ReleaseConfigInput = DIRECT, repoOptions: { build?: string; test?: string; worker?: boolean } = {}) {
   t = await createTestApp({ release: { probe, pollSeconds: 0.05 }, baseEnv: { ...process.env, ACC_CF_API_BASE: cfBase } });
   const { repo, remote } = await releaseRepo(repoOptions);
-  const repositoryId = await addRepo(t, repo, { release });
+  const legacyPages = release.method === 'cloudflare' && Boolean(release.pages);
+  const repositoryId = await addRepo(t, repo, legacyPages ? undefined : { release });
+  if (legacyPages) seedLegacyPagesRelease(t, repositoryId, release);
   await t.services.credentials.create({ name: 'cf-deploy', kind: 'cloudflare', envVar: null, description: 'test', repositoryIds: [repositoryId], value: ['cf', 'test', 'key'].join('-') });
   await t.services.credentials.create({ name: 'cf-account', kind: 'other', envVar: 'CLOUDFLARE_ACCOUNT_ID', description: 'test', repositoryIds: [repositoryId], value: ACCOUNT });
   const before = { remote: await run(remote, ['rev-parse', 'refs/heads/main']), head: await run(repo, ['rev-parse', 'HEAD']), status: await run(repo, ['status', '--porcelain']) };
@@ -242,6 +244,24 @@ describe('setting', () => {
     expect(parse({ project: 'shop', outputDir: 'apps/web/dist' })).toBe(true);
     for (const outputDir of ['../outside', '/abs', 'dist/../..', '.', '-rf', 'a b']) expect(parse({ project: 'shop', outputDir }), outputDir).toBe(false);
     for (const project of ['Shop', '-shop', 'shop;rm', 'a'.repeat(59)]) expect(parse({ project }), project).toBe(false);
+  });
+
+  it('new settings deploy a Worker: a Pages target is refused unless it is the one saved before, unchanged', async () => {
+    t = await createTestApp();
+    const id = await addRepo(t, await makeRepo());
+    const patch = (release: ReleaseConfigInput) => t!.api('PATCH', `/api/repositories/${id}`, { release });
+    const refused = await patch(DIRECT);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.message).toContain('Deploy to Cloudflare releases a Worker');
+    expect(t.services.store.getRepository(id)!.release).toEqual({ method: 'none' });
+    // A repository saved with Pages before keeps saving as it is (other fields may change), but cannot move to another project.
+    seedLegacyPagesRelease(t, id, DIRECT);
+    expect((await patch({ ...DIRECT, timeoutSec: 120 })).status).toBe(200);
+    expect((await patch({ ...DIRECT, pages: { project: 'other', outputDir: 'dist' } })).status).toBe(400);
+    // Switching it to a Worker is always allowed, and there is no way back.
+    expect((await patch({ method: 'cloudflare', worker: {} })).status).toBe(200);
+    expect(t.services.store.getRepository(id)!.release).toMatchObject({ method: 'cloudflare', worker: {} });
+    expect((await patch(DIRECT)).status).toBe(400);
   });
 });
 

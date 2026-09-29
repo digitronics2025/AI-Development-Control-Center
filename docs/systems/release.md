@@ -39,9 +39,18 @@ At least one proof is required. Repository detection never turns release on.
 
 `cloudflare` (**Deploy to Cloudflare**) has `remote`, `branch`, `manualPaths`
 and `timeoutSec` (default 600) as above, an optional `liveUrl`, and exactly one
-target (`cloudflareTarget()`):
+target (`cloudflareTarget()`). **New settings are always a Worker** (operator
+decision 2026-09-29): `RepositoryService.update`
+([repositories.ts](../../apps/orchestrator/src/services/repositories.ts))
+refuses a `pages` target with `INVALID_INPUT` (HTTP 400) unless it equals the
+one already saved, so a setting saved before keeps working and saving its
+other fields still works, but no repository can gain or move a Pages target.
+The Release panel offers no target choice: a saved Pages setting shows as a
+read-only warning banner with **Switch to a Worker** (one way). The schema
+still parses `pages`, so stored settings stay readable. Tests seed one with
+`seedLegacyPagesRelease` (test/helpers.ts).
 
-- `pages: { project, outputDir }` — `project` by Cloudflare's rule (lowercase,
+- `pages: { project, outputDir }` (saved settings only) — `project` by Cloudflare's rule (lowercase,
   digits, dashes, ≤ 58), `outputDir` a folder inside the repository (default
   `dist`, never `.` or `..`); `liveUrl` defaults to the project's own
   `*.pages.dev` address. Proof: the Pages project.
@@ -51,7 +60,10 @@ target (`cloudflareTarget()`):
   refused); `environment` deploys with `--env`. `liveUrl` defaults to its
   `workers.dev` address when that is on (read from Cloudflare), else none.
   Proof: the Worker's live version. An assets-only Worker (a static site:
-  `assets.directory`, no `main`) is the same path. `releaseTarget()` in
+  `assets.directory`, no `main`) is the same path. Builders are told
+  (`releaseFacts` in [context.ts](../../apps/orchestrator/src/engine/context.ts))
+  to create `wrangler.jsonc` with `name`, `compatibility_date` and `assets`
+  when the repository has none, and never to set up Pages. `releaseTarget()` in
 [schemas.ts](../../packages/shared/src/schemas.ts) gives the remote branch
 of either method to the SEC-1 release gate.
 
@@ -232,4 +244,4 @@ and waits for them to save (`close()`).
   the first was released; the stage updates itself, the button refuses —
   background sync (or a pull) before starting avoids both.
 
-Last verified: 2026-09-29 (Workers added)
+Last verified: 2026-09-29 (Workers added; new settings Worker-only)

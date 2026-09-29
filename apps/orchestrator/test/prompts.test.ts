@@ -7,7 +7,7 @@ import { git } from '@acc/git';
 import { PROMPT_PLACEHOLDERS, placeholdersIn, unknownPlaceholders, type CommandKind, type TestRun } from '@acc/shared';
 import { RUN_CONTEXT, renderTemplate } from '../src/engine/context.js';
 import { SKILLS_PROMPT_SECTION } from '../src/engine/tooling.js';
-import { addRepo, createTask, createTestApp, makeRepo, ROOT, waitFor, waitForStatus, type TestApp } from './helpers.js';
+import { addRepo, createTask, createTestApp, makeRepo, ROOT, seedLegacyPagesRelease, waitFor, waitForStatus, type TestApp } from './helpers.js';
 
 const PROMPTS_DIR = path.join(ROOT, 'prompts');
 const templates = Object.fromEntries(readdirSync(PROMPTS_DIR).map((f) => [f.replace(/\.md$/, ''), readFileSync(path.join(PROMPTS_DIR, f), 'utf8')]));
@@ -291,14 +291,20 @@ describe('check costs', () => {
     return (await t.services.context.build(task, def, { id: 'x', createdAt: new Date().toISOString() } as never)).prompt;
   };
 
-  it('tell the builders which folder a direct Cloudflare release uploads, and nothing when the repository never releases', async () => {
-    const direct = await addRepo(t, await makeRepo(), { release: { method: 'cloudflare', pages: { project: 'shop', outputDir: 'web/dist' } } });
+  it('tell the builders a direct Cloudflare release is a Worker they set up, and nothing when the repository never releases', async () => {
+    const direct = await addRepo(t, await makeRepo(), { release: { method: 'cloudflare', worker: {} } });
     const quiet = await addRepo(t, await makeRepo());
     const id = await createTask(t, direct, 'Build it', { start: false });
     for (const stage of ['implement', 'plan']) {
       const prompt = await promptFor(id, stage);
-      expect(prompt, stage).toContain('the `web/dist` folder is uploaded to Cloudflare Pages `shop`. The build must write the whole site to `web/dist`');
+      expect(prompt, stage).toContain('deployed as a Cloudflare Worker with `wrangler deploy`');
+      expect(prompt, stage).toContain('When the repository has no Wrangler config yet, create `wrangler.jsonc` with `name` (lowercase letters, digits and dashes');
+      expect(prompt, stage).toContain('never set up Cloudflare Pages');
     }
+    // A Pages setting saved before Workers still tells its builders the folder it uploads.
+    const legacy = await addRepo(t, await makeRepo());
+    seedLegacyPagesRelease(t, legacy, { method: 'cloudflare', pages: { project: 'shop', outputDir: 'web/dist' } });
+    expect(await promptFor(await createTask(t, legacy, 'Build it', { start: false }), 'implement')).toContain('the `web/dist` folder is uploaded to Cloudflare Pages `shop`. The build must write the whole site to `web/dist`');
     expect(await promptFor(await createTask(t, quiet, 'Build it', { start: false }), 'implement')).not.toContain('- Release:');
   });
 

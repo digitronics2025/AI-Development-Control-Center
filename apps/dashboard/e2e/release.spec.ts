@@ -105,39 +105,27 @@ for (const theme of ['dark', 'light'] as const) {
       expect(errors).toEqual([]);
     });
 
-    test('Deploy to Cloudflare asks for a project and a build folder, and its Check setup sends nothing', async ({ page }, testInfo) => {
+    test('Deploy to Cloudflare deploys a Worker (Pages is not offered), and its Check setup sends nothing', async ({ page }, testInfo) => {
       const errors = trackConsoleErrors(page);
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(`/repositories/${repoId}`);
       const panel = page.getByTestId('release-panel');
       await panel.getByRole('radio', { name: 'Deploy to Cloudflare' }).click();
       await expect(panel.getByText(/builds that exact commit in a clean copy and deploys it to Cloudflare/)).toBeVisible();
-      await expect(panel.getByRole('radio', { name: 'Site (Pages)' })).toBeChecked();
-      await expect(panel.getByLabel('Build output folder')).toHaveValue('dist');
-      // An empty project name says what to type, in plain words.
-      await expect(panel.getByText('Enter the Pages project name, such as my-app')).toBeVisible();
-      // A project name Cloudflare would refuse is caught here.
-      await panel.getByLabel('Cloudflare Pages project').fill('My App');
-      await expect(panel.getByText('Lowercase letters, digits and dashes', { exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
-      await panel.getByLabel('Cloudflare Pages project').fill('release-app');
-      await panel.getByLabel('Build output folder').fill('../outside');
-      await expect(panel.getByText('A folder inside the repository, such as dist').first()).toBeVisible();
-      await panel.getByLabel('Build output folder').fill('dist');
-      await panel.getByRole('button', { name: 'Check setup' }).click();
-      const results = page.getByTestId('release-setup-results');
-      await expect(results.getByText(/Remote passed/)).toBeVisible();
-      await expect(results.getByText(/^Wrangler/)).toBeVisible();
-      await expect(results.getByText(/^Build/)).toBeVisible();
-      // A Worker instead: its own fields, and a Check setup that reads the Wrangler config (this repository has none).
-      await panel.getByRole('radio', { name: 'Worker' }).click();
-      await expect(panel.getByText(/An app with a server side: deployed with wrangler deploy/)).toBeVisible();
+      // Worker only: no choice of target, no Pages project and no upload folder.
+      await expect(panel.getByText(/A static site is a Worker with static assets and no server code/)).toBeVisible();
+      await expect(panel.getByRole('radio', { name: 'Site (Pages)' })).toHaveCount(0);
+      await expect(panel.getByLabel('Cloudflare Pages project')).toHaveCount(0);
       await expect(panel.getByLabel('Build output folder')).toHaveCount(0);
+      // A Worker name Cloudflare would refuse is caught here.
       await panel.getByLabel('Worker name').fill('My API');
       await expect(panel.getByText('Lowercase letters, digits and dashes', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
       await panel.getByLabel('Worker name').fill('');
       await panel.getByLabel('Wrangler environment').fill('production');
+      // Check setup reads the Wrangler config (this repository has none).
       await panel.getByRole('button', { name: 'Check setup' }).click();
+      const results = page.getByTestId('release-setup-results');
       await expect(results.getByText(/Wrangler config failed/)).toBeVisible();
       await expect(results.getByText(/Remote passed/)).toBeVisible();
       await page.evaluate(() => {

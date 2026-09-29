@@ -12,7 +12,7 @@ import { newId, now, type RepositoryRecord, type Store } from '../store/store.js
 export class RepositoryError extends Error {
   constructor(
     message: string,
-    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'INVALID_URL' | 'DUPLICATE' | 'IN_USE' | 'CLONE_FAILED' | 'CREATE_FAILED',
+    readonly code: 'NOT_FOUND' | 'INVALID_PATH' | 'INVALID_URL' | 'INVALID_INPUT' | 'DUPLICATE' | 'IN_USE' | 'CLONE_FAILED' | 'CREATE_FAILED',
   ) {
     super(message);
   }
@@ -311,7 +311,13 @@ export class RepositoryService {
   }
 
   async update(id: string, patch: UpdateRepositoryInput): Promise<Repository> {
-    this.record(id);
+    const current = this.record(id);
+    // New apps deploy to Cloudflare as Workers. A Pages target is kept only where it was saved before, unchanged.
+    const pages = patch.release?.method === 'cloudflare' ? patch.release.pages : undefined;
+    const saved = current.release.method === 'cloudflare' ? current.release.pages : undefined;
+    if (pages && !(saved && saved.project === pages.project && saved.outputDir === pages.outputDir)) {
+      throw new RepositoryError('Deploy to Cloudflare releases a Worker: a new Cloudflare Pages target cannot be set. Choose a Worker.', 'INVALID_INPUT');
+    }
     const ids = new Set<string>();
     for (const command of patch.commands ?? []) {
       if (ids.has(command.id)) throw new RepositoryError(`Command id "${command.id}" is used twice`, 'DUPLICATE');

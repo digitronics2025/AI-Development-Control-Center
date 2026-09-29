@@ -1,12 +1,12 @@
 import { CheckCircle2, ShieldCheck, XCircle } from 'lucide-react';
-import { Button, Field, FieldGroup, Input, Panel, SegmentedControl, Textarea, cn } from '@acc/ui';
+import { Banner, Button, Field, FieldGroup, Input, Panel, SegmentedControl, Textarea, cn } from '@acc/ui';
 import { releaseConfigSchema, type ReleaseConfig, type ReleaseSetupCheck } from '@acc/shared';
 import { errorMessage } from '../api/client';
 import { useReleaseSetupCheck } from '../api/hooks';
 import { useConnection } from '../app/runtime';
 
 type ReleaseMethod = ReleaseConfig['method'];
-/** What a direct Cloudflare release deploys. */
+/** What a direct Cloudflare release deploys. New settings are always a Worker; `pages` is only a setting saved before that. */
 type CloudflareKind = 'pages' | 'worker';
 
 /** The Release panel's form, as text fields (RELEASE_STAGE_PLAN §3.2, CLOUDFLARE_DIRECT_RELEASE_PLAN). */
@@ -28,7 +28,7 @@ export interface ReleaseForm {
   timeoutMin: string;
 }
 
-const EMPTY: ReleaseForm = { method: 'none', remote: 'origin', branch: 'main', liveUrl: '', pagesProject: '', target: 'pages', outputDir: 'dist', workerName: '', workerEnv: '', versionUrl: '', manualPaths: '', timeoutMin: '15' };
+const EMPTY: ReleaseForm = { method: 'none', remote: 'origin', branch: 'main', liveUrl: '', pagesProject: '', target: 'worker', outputDir: 'dist', workerName: '', workerEnv: '', versionUrl: '', manualPaths: '', timeoutMin: '15' };
 
 export function releaseForm(config: ReleaseConfig | undefined): ReleaseForm {
   if (!config || config.method === 'none') return EMPTY;
@@ -104,11 +104,8 @@ const HELPER: Record<ReleaseMethod, string> = {
     'After its checks pass, a task asks you once, then pushes its commit to this branch, builds that exact commit in a clean copy and deploys it to Cloudflare — creating the site or Worker on the first release. The task shows Live only when Cloudflare serves that commit.',
 };
 
-const TARGET_HELPER: Record<CloudflareKind, string> = {
-  pages: 'A static site: the build folder is uploaded to a Cloudflare Pages project.',
-  worker:
-    "An app with a server side: deployed with wrangler deploy, as the Worker its Wrangler config (wrangler.jsonc, .json or .toml) names. A release never applies database migrations: it waits until you have applied them.",
-};
+const WORKER_HELPER =
+  'Deployed as a Cloudflare Worker with wrangler deploy, named by its Wrangler config (wrangler.jsonc, .json or .toml). A static site is a Worker with static assets and no server code. A release never applies database migrations: it waits until you have applied them.';
 
 function SetupResult({ result }: { result: ReleaseSetupCheck }) {
   return (
@@ -184,21 +181,22 @@ export function ReleasePanel({ repositoryId, form, onChange }: { repositoryId: s
                   <Input value={form.branch} onChange={(e) => set({ branch: e.target.value })} className="font-mono" spellCheck={false} />
                 </Field>
               </div>
-              {direct ? (
-                <FieldGroup label="What to deploy" inline helper={TARGET_HELPER[form.target]}>
-                  <SegmentedControl<CloudflareKind>
-                    label="What to deploy"
-                    value={form.target}
-                    onValueChange={(target) => set({ target })}
-                    options={[
-                      { value: 'pages', label: 'Site (Pages)' },
-                      { value: 'worker', label: 'Worker' },
-                    ]}
-                  />
-                </FieldGroup>
+              {direct && form.target === 'pages' ? (
+                <Banner
+                  tone="warning"
+                  title={`Deploys to Cloudflare Pages project ${form.pagesProject}`}
+                  actions={
+                    <Button size="compact" onClick={() => set({ target: 'worker' })}>
+                      Switch to a Worker
+                    </Button>
+                  }
+                >
+                  New apps deploy as Workers. This setting was saved before that and keeps working until you switch it; a Pages setting cannot be made again.
+                </Banner>
               ) : null}
               {direct && form.target === 'worker' ? (
                 <>
+                  <p className="text-small text-fg-secondary">{WORKER_HELPER}</p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="Worker name" optional error={errors.workerName ?? null} helper="Empty: the name in the Wrangler config. Set: a release whose config names another Worker is refused.">
                       <Input value={form.workerName} onChange={(e) => set({ workerName: e.target.value })} className="font-mono" spellCheck={false} placeholder="my-api" />
@@ -214,11 +212,11 @@ export function ReleasePanel({ repositoryId, form, onChange }: { repositoryId: s
               ) : direct ? (
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Cloudflare Pages project" error={errors.pagesProject ?? null} helper="Lowercase letters, digits and dashes. Created on the first release when it does not exist. Uses the repository's Cloudflare key.">
-                      <Input value={form.pagesProject} onChange={(e) => set({ pagesProject: e.target.value })} className="font-mono" spellCheck={false} placeholder="my-app" />
+                    <Field label="Cloudflare Pages project" error={errors.pagesProject ?? null} helper="Saved before new apps moved to Workers; it cannot be changed. Uses the repository's Cloudflare key.">
+                      <Input value={form.pagesProject} readOnly className="font-mono" spellCheck={false} />
                     </Field>
                     <Field label="Build output folder" error={errors.outputDir ?? null} helper="The folder your build writes; it is uploaded as the site.">
-                      <Input value={form.outputDir} onChange={(e) => set({ outputDir: e.target.value })} className="font-mono" spellCheck={false} placeholder="dist" />
+                      <Input value={form.outputDir} readOnly className="font-mono" spellCheck={false} />
                     </Field>
                   </div>
                   <Field label="Live URL" optional error={errors.liveUrl ?? null} helper="Your own domain, if the app has one (https). Empty: the project's pages.dev address.">

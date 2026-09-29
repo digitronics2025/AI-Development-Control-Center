@@ -72,7 +72,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof RepositoryError) {
-      const status = { NOT_FOUND: 404, INVALID_PATH: 400, INVALID_URL: 400, DUPLICATE: 409, IN_USE: 409, CLONE_FAILED: 502, CREATE_FAILED: 500 }[error.code];
+      const status = { NOT_FOUND: 404, INVALID_PATH: 400, INVALID_URL: 400, INVALID_INPUT: 400, DUPLICATE: 409, IN_USE: 409, CLONE_FAILED: 502, CREATE_FAILED: 500 }[error.code];
       return sendError(reply, status, error.code, error.message);
     }
     if (error instanceof WorkflowError) {

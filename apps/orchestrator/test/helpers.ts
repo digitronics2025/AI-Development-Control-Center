@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { SimulatedAgentAdapter, type AgentAdapter } from '@acc/agent-sdk';
 import { git } from '@acc/git';
-import type { TaskStatus } from '@acc/shared';
+import { releaseConfigSchema, type ReleaseConfigInput, type TaskStatus } from '@acc/shared';
 import type { FastifyInstance } from 'fastify';
 import { createServices, type AppServices } from '../src/app.js';
 import { defaultWorkDir, type OrchestratorConfig } from '../src/config.js';
@@ -147,6 +147,15 @@ export async function repoWithSkill(name = 'file-census', description = 'Count t
   mkdirSync(path.join(repo, '.claude', 'skills', name), { recursive: true });
   writeFileSync(path.join(repo, '.claude', 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nBody\n`);
   return repo;
+}
+
+/**
+ * A Cloudflare Pages release setting as one saved before new apps moved to
+ * Workers: the API refuses to make one now, so tests of the Pages path write
+ * it the way it was stored.
+ */
+export function seedLegacyPagesRelease(t: TestApp, repositoryId: string, release: ReleaseConfigInput): void {
+  t.services.store.updateRepository(repositoryId, { release: releaseConfigSchema.parse(release) });
 }
 
 export async function addRepo(t: TestApp, repoPath: string, settings?: Record<string, unknown>): Promise<string> {

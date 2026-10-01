@@ -357,8 +357,12 @@ tree kill (`liveFamily`): descendants by parent links plus the listener on its
 port, each created after it started — so a server whose wrapper already ended
 (`npm run dev` on Windows) is still stopped, and a wrapper that ends while its
 server runs keeps the process live instead of `exited` (TASK-0027 left two Vite
-servers holding its worktree). A server started by other means (a detached shell command) is not
-tracked and still ends only with the task. Processes stop as a
+servers holding its worktree). On Linux, a unique non-secret ownership marker is inherited by each managed
+process and its descendants. The manager reads `/proc` in batches of 64 to find
+a detached server even after its wrapper exits and rechecks ownership immediately
+before signaling it; a listening port alone grants no ownership. Other servers
+stay running. macOS retains process-group cleanup. An unmanaged detached shell
+command remains outside this tracking. Processes stop as a
 tree when the task's loop exits in any state other than running/queued, on
 completion and cancel, and at shutdown. After a crash, rows still marked live
 are killed only if the pid's creation time (Win32_Process, or `ps -o lstart`)
@@ -462,4 +466,4 @@ credential, checkpoint and session routes in their own docs. Realtime:
 
 Tools detected in a folder are cached 10 minutes; when a worktree's background dependency install ends, `ToolService.forgetFolder(cwd)` drops that folder's entries, so a tool (a local Wrangler) found missing during the install is found afterwards ([checkpoints.md](checkpoints.md)).
 
-Last verified: 2026-09-28
+Last verified: 2026-10-01

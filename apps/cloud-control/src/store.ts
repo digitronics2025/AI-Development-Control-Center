@@ -14,8 +14,16 @@ import {
   type PublicJwk,
   type RemoteCommand,
 } from '@acc/shared';
-import type { CommandWait } from './hub.js';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { nowIso } from './http.js';
+
+export interface CommandWait {
+  status: CloudCommandView['status'];
+  command: CloudCommandView;
+  /** The node's answer when it finished within the wait. */
+  outcome?: { httpStatus: number; body: unknown };
+  error?: { code: string; message: string };
+}
 
 /**
  * D1 persistence for the control plane (docs/systems/cloud-control.md §Data).
@@ -150,12 +158,19 @@ export class CloudStore {
   }
 
   async setRepositories(id: string, repositories: NodeRepository[]): Promise<void> {
+    const localIds = repositories.map((r) => r.localId);
+    if (new Set(localIds).size !== localIds.length) throw new Error('Duplicate node repository local id');
     const ts = nowIso();
     await this.db.batch([
-      this.db.prepare('DELETE FROM node_repositories WHERE node_id = ?').bind(id),
+      this.db.prepare('DELETE FROM node_repositories WHERE node_id = ? AND local_id NOT IN (SELECT value FROM json_each(?))').bind(id, JSON.stringify(localIds)),
       ...repositories.map((r) =>
         this.db
-          .prepare('INSERT INTO node_repositories (node_id, local_id, name, fingerprint, remote_host, default_branch, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .prepare(`INSERT INTO node_repositories (node_id, local_id, name, fingerprint, remote_host, default_branch, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(node_id, local_id) DO UPDATE SET name=excluded.name, fingerprint=excluded.fingerprint,
+              remote_host=excluded.remote_host, default_branch=excluded.default_branch, updated_at=excluded.updated_at
+            WHERE node_repositories.name IS NOT excluded.name OR node_repositories.fingerprint IS NOT excluded.fingerprint
+              OR node_repositories.remote_host IS NOT excluded.remote_host OR node_repositories.default_branch IS NOT excluded.default_branch`)
           .bind(id, r.localId, r.name, r.fingerprint, r.remoteHost, r.defaultBranch, ts),
       ),
     ]);

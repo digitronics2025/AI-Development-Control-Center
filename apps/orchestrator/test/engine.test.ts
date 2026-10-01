@@ -391,7 +391,9 @@ describe('failure handling', () => {
     expect(task.blocker).toMatchObject({ errorClass: 'PERMISSION_DENIED', stageKey: 'build' });
     expect(t.services.store.latestStage(id, 'look')!.status).toBe('SUCCESS');
     // The Level 2 stage never reached the adapter.
-    expect(levels).toEqual([1]);
+    // The read-only stage may be prompted again; every actual run must remain Level 1.
+    expect(levels.length).toBeGreaterThan(0);
+    expect(levels.every((level) => level === 1)).toBe(true);
     const build = t.services.store.listExecutions(id).filter((e) => e.stageId === t.services.store.latestStage(id, 'build')!.id);
     expect(build.length).toBeGreaterThan(0);
     for (const e of build) {

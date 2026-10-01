@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-09-24
+> Last verified: 2026-10-01
 
 ## Pieces
 
@@ -191,6 +191,12 @@ owner's review and accept only `main`. The workflows hold no Cloudflare secrets
 yet (they would go in through secret-custody as environment secrets), so today
 every release runs from the operator's shell with `pnpm cloud:deploy:production`.
 
+## Repository snapshot write cost
+
+`CloudStore.setRepositories` keeps one atomic snapshot per node: delete only missing local IDs, insert new records, and update only changed name/fingerprint/remote-host/default-branch fields. Unchanged rows retain `updated_at` (last content change; no reader treats it as node liveness). The JSON membership list keeps the delete below D1's parameter cap for large inventories. Duplicate local IDs still reject the complete snapshot without writes. An empty snapshot removes only that node's repositories.
+
+Round 2 C1 baseline: 50–85K writes/day, about 80% repository replacement; expected saving 1.5–2M/month. Claims/proof: [change-claims.md](../change-claims.md). Production release remains manual and is pending outside this read-only cloud task. The checked-in production config enables traces at 0.1 sampling; the plan's “traces off” precondition cannot be confirmed. No observability setting is changed.
+
 ## Data ownership
 
 The machine owns the truth: the task database, files, diffs, credentials and
@@ -222,7 +228,11 @@ D1/R2/DO) with a test Access key set and the real orchestrator as the node —
 on a fresh checkout) the harness serves a placeholder page through `--assets`
 instead of failing; the assets these tests touch are only the Worker's gate. The
 local dev proxy resets a reused socket now and then, so the harness talks to it
-without keep-alive (`httpJson`, and `httpBytes` for hash-checked downloads). `pnpm e2e:cloud`: the cloud
+without keep-alive (`httpJson`, and `httpBytes` for hash-checked downloads).
+Fixture shutdown clears its ten-second fallback timer on child exit (also on
+a stop error), instead of keeping the Vitest worker alive until its own
+termination deadline; exit, timeout and failure cleanup have regression tests.
+`pnpm e2e:cloud`: the cloud
 dashboard in a browser against that Worker and a paired simulated-agent node,
 both themes, five viewports, axe
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)).

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readFile, readdir } from 'node:fs/promises';
 import { powershellJson, resolveShell, runScript, runShell, type ProcessHandle, type ShellKind } from '@acc/executor';
 import { redact, sanitizeEnv } from '@acc/security';
 import type { BillingMode, TaskProcess, TaskProcessStatus } from '@acc/shared';
@@ -9,6 +10,34 @@ import { newId, now } from '../store/store.js';
 import type { TaskProcessRecord, ToolStore } from './store.js';
 
 const execFileAsync = promisify(execFile);
+const OWNER_ENV = 'ACC_TASK_PROCESS_OWNER';
+
+/** An inherited, unique ownership marker survives both reparenting and a detached process group. */
+async function linuxOwned(pid: number, owner: string): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
+  try {
+    const env = await readFile(`/proc/${pid}/environ`, 'utf8');
+    return env.split('\0').includes(`${OWNER_ENV}=${owner}`);
+  } catch {
+    // Gone, inaccessible or unreadable: never signal a process we cannot prove we own.
+    return false;
+  }
+}
+
+async function linuxFamily(owner: string): Promise<number[]> {
+  try {
+    const pids = (await readdir('/proc')).filter((entry) => /^\d+$/.test(entry)).map(Number);
+    const found: number[] = [];
+    for (let offset = 0; offset < pids.length; offset += 64) {
+      const batch = pids.slice(offset, offset + 64);
+      const owned = await Promise.all(batch.map((pid) => linuxOwned(pid, owner)));
+      batch.forEach((pid, index) => { if (owned[index]) found.push(pid); });
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
 
 interface FamilyRow {
   pid: number;
@@ -134,9 +163,11 @@ export class ProcessManager {
    * listens on the port it was started for. Only processes created after it
    * was started count, and a child only when created after its (still
    * running) parent, so a reused process id never pulls in an unrelated
-   * program. Linux and macOS stop the whole process group instead: empty there.
+   * program. Linux also finds detached descendants by their inherited unique
+   * ownership marker; a port alone never grants ownership. macOS stops the group.
    */
-  private async liveFamily(record: Pick<TaskProcessRecord, 'pid' | 'processStartedAt' | 'port' | 'url'>): Promise<number[]> {
+  private async liveFamily(record: Pick<TaskProcessRecord, 'id' | 'pid' | 'processStartedAt' | 'port' | 'url'>): Promise<number[]> {
+    if (process.platform === 'linux') return linuxFamily(record.id);
     const { pid: rootPid, processStartedAt: since } = record;
     if (process.platform !== 'win32' || !since || !rootPid) return [];
     const port = record.port ?? portOf(record.url);
@@ -176,6 +207,11 @@ export class ProcessManager {
 
   /** Refresh the set of child processes (a shell's dev server is its child, and holds the port). */
   private async learnDescendants(id: string, rootPid: number): Promise<void> {
+    if (process.platform === 'linux') {
+      const live = this.live.get(id);
+      for (const pid of await linuxFamily(id)) live?.descendants.add(pid);
+      return;
+    }
     if (process.platform !== 'win32') return this.learnPosixDescendants(id, rootPid);
     const shell = await resolveShell('powershell');
     if (!shell) return;
@@ -230,9 +266,9 @@ export class ProcessManager {
 
   async start(input: StartProcessInput): Promise<TaskProcessRecord> {
     const { base, billing } = this.env();
-    const env = { ...sanitizeEnv(base, billing).env, ...(input.env ?? {}), ...(input.port ? { PORT: String(input.port) } : {}) };
-    const url = input.readyUrl ?? (input.port ? `http://127.0.0.1:${input.port}` : null);
     const id = newId();
+    const env = { ...sanitizeEnv(base, billing).env, ...(input.env ?? {}), ...(input.port ? { PORT: String(input.port) } : {}), [OWNER_ENV]: id };
+    const url = input.readyUrl ?? (input.port ? `http://127.0.0.1:${input.port}` : null);
     const record: TaskProcessRecord = {
       id,
       taskId: input.taskId,
@@ -312,7 +348,10 @@ export class ProcessManager {
       const family = await this.liveFamily(current);
       await live.handle.cancel();
       await Promise.race([live.handle.done, new Promise((r) => setTimeout(r, 5000))]);
-      for (const pid of family) await this.killTree(pid);
+      for (const pid of family) {
+        // Recheck immediately before signaling: a PID may have been reused since discovery.
+        if (process.platform !== 'linux' || await linuxOwned(pid, current.id)) await this.killTree(pid);
+      }
       this.live.delete(id);
     }
     const after = this.store.process(id)!;

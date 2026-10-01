@@ -5,14 +5,13 @@ import {
   REMOTE_LIMITS,
   REMOTE_MIN_PROTOCOL_VERSION,
   REMOTE_PROTOCOL_VERSION,
-  type CloudCommandView,
   type CloudFrame,
   type NodeFrame,
   type RemoteCommand,
 } from '@acc/shared';
 import type { Env } from './env.js';
 import { log, nowIso } from './http.js';
-import { CloudStore, commandFromRow, commandView, waitFromRow } from './store.js';
+import { CloudStore, commandFromRow, commandView, waitFromRow, type CommandWait } from './store.js';
 
 /**
  * The realtime hub (docs/systems/cloud-control.md §Hub). One instance per
@@ -46,13 +45,7 @@ export interface RpcReply {
   encoding: 'utf8' | 'base64';
 }
 
-export interface CommandWait {
-  status: CloudCommandView['status'];
-  command: CloudCommandView;
-  /** The node's answer when it finished within the wait. */
-  outcome?: { httpStatus: number; body: unknown };
-  error?: { code: string; message: string };
-}
+export type { CommandWait } from './store.js';
 
 /** Heartbeats are written to D1 at most this often per node. */
 const TOUCH_EVERY_MS = 60_000;

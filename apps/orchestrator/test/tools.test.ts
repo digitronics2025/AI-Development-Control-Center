@@ -262,11 +262,20 @@ describe('task processes', () => {
     const server = path.join(repoPath, 'orphan-server.cjs');
     writeFileSync(server, "require('http').createServer((q, s) => s.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');\n");
     const wrapper = path.join(repoPath, 'wrapper.cjs');
-    writeFileSync(wrapper, `require('child_process').spawn(process.execPath, [${JSON.stringify(server)}], { stdio: 'inherit', detached: true, windowsHide: true }).unref();\n`);
+    // Linux and Windows cover a detached server. macOS uses the owned process group.
+    writeFileSync(wrapper, `require('child_process').spawn(process.execPath, [${JSON.stringify(server)}], { stdio: 'inherit', detached: ${process.platform !== 'darwin'}, windowsHide: true }).unref();\n`);
     const proc = await t.services.processes.start({ taskId: 'TASK-W', stageId: 'STAGE-IMPLEMENT', name: 'wrapped server', command: `node "${wrapper}"`, cwd: repoPath, port, readyTimeoutSec: 30 });
     expect(proc.status).toBe('healthy');
-    expect(await t.services.processes.stopForStage('TASK-W', 'STAGE-IMPLEMENT', 'Implement ended')).toEqual(['wrapped server']);
-    await waitFor(async () => (await fetch(`http://127.0.0.1:${port}`).then(() => 'up', () => 'down')), (v) => v === 'down', 15_000, 'orphaned server to stop');
+    const otherPort = port + 1;
+    const unrelated = http.createServer((_request, response) => response.end('unrelated'));
+    await new Promise<void>((resolve) => unrelated.listen(otherPort, '127.0.0.1', resolve));
+    try {
+      expect(await t.services.processes.stopForStage('TASK-W', 'STAGE-IMPLEMENT', 'Implement ended')).toEqual(['wrapped server']);
+      await waitFor(async () => (await fetch(`http://127.0.0.1:${port}`).then(() => 'up', () => 'down')), (v) => v === 'down', 15_000, 'orphaned server to stop');
+      expect(await fetch(`http://127.0.0.1:${otherPort}`).then((response) => response.text())).toBe('unrelated');
+    } finally {
+      await new Promise<void>((resolve, reject) => unrelated.close((error) => error ? reject(error) : resolve()));
+    }
   }, 90_000);
 
   it("closes the terminals one stage's agent opened when that stage ends, and no other stage's", async () => {

@@ -8,6 +8,7 @@ sources:
   - packages/executor/**
   - packages/agent-claude/test/conformance.test.ts
   - packages/agent-codex/test/conformance.test.ts
+  - apps/orchestrator/test/engine.test.ts
 verified_at: 57af61a
 ---
 
@@ -91,6 +92,11 @@ The refusal sits in the one launch door, so a stage (`runners.launchAgent`,
 Stage Team workers included) fails with the message in its execution and waits
 for the operator like any other `PERMISSION_DENIED`. Simulated agents declare 5,
 `Simulated agents`, and `pluginDirs` only for the simulated `claude`.
+
+The engine regression requires at least one permitted read-only run and checks
+that every actual run stays at Level 1, including a follow-up prompt. It also
+requires the Level 2 stage to fail before the adapter starts, with its refused
+execution recorded. A permitted retry does not alter the permission ceiling.
 
 The launch door also **spaces launches of one CLI** (`LAUNCH_SPACING_MS`, 6 s,
 in [agents.ts](../../apps/orchestrator/src/services/agents.ts)): a launch waits
@@ -203,6 +209,14 @@ never come. A failure with no explaining line reads as `describeExit`: "Claude
 Code crashed (fatal internal error) · Windows status 0xC0000409", not a raw
 protocol line.
 
+## Release verification
+
+The root Vitest gate defaults to two workers because native shell and Workers
+fixtures spawn additional processes. An explicit `--maxWorkers` can override
+this. The release gate keeps all performance assertions and real-shell tests;
+see [pty.md](pty.md#gotchas) for prompt synchronization on Windows and
+[cloud-control.md](cloud-control.md) for runtime fixture cleanup.
+
 ## Observed on the operator's machine (2026-09-24)
 
 - Codex 0.156.1 accepts the default model; with credits back it runs end to
@@ -222,4 +236,4 @@ protocol line.
   closed tool set a run with 794 skills starts at ~65k (2026-09-24). Turn off
   **Load my CLI customisations** per agent for leaner runs.
 
-Last verified: 2026-09-28
+Last verified: 2026-10-01

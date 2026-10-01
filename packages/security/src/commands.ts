@@ -43,7 +43,7 @@ export interface CommandClassification {
 }
 
 interface Pattern {
-  test: RegExp;
+  test: Pick<RegExp, 'test'>;
   risk: CommandRisk;
   level: PermissionLevel;
   reason: string;
@@ -91,6 +91,24 @@ const DATA_LOSS_CONFIG = new RegExp(
   'i',
 );
 
+/**
+ * The old `git checkout|switch … --force` regexp scanned the remaining segment
+ * again at every `git`, taking quadratic time on a long line without a flag.
+ * Read command starts, flags and separators once, keeping the same lexical
+ * rule: any checkout/switch before a force flag in the segment counts.
+ */
+function discardsWorkingTree(text: string): boolean {
+  if (/\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)|\bgit\s+restore\s+(?:--\S+\s+)*\.(?:\s|$)/i.test(text)) return true;
+  const tokens = /\bgit\s+(?:checkout|switch)\b|[;&|]|\s(?:-f|--force|--discard-changes)(?:\s|$)/gi;
+  let checkout = false;
+  for (let token = tokens.exec(text); token; token = tokens.exec(text)) {
+    if (/^[;&|]$/.test(token[0])) checkout = false;
+    else if (/^git/i.test(token[0])) checkout = true;
+    else if (checkout) return true;
+  }
+  return false;
+}
+
 /** Rules applied to each command segment (original, alias-expanded, and without Git's global options). */
 const PATTERNS: Pattern[] = [
   // ---- Destructive file-system operations ------------------------------------------------
@@ -106,7 +124,7 @@ const PATTERNS: Pattern[] = [
   // `git clean` with a force flag anywhere (`-fd`, `-d -f`, `--force`) deletes untracked files (audit F-13).
   { test: /\bgit\s+clean\b(?=[^;&|]*\s(?:-[a-z]*f[a-z]*|--force)(?:\s|$))/i, risk: 'dangerous', level: 5, reason: 'Deletes untracked files', effects: ['git', 'filesystem'] },
   { test: /\bgit\s+reset\s+--hard\b/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
-  { test: /\bgit\s+checkout\s+(?:--\s+)?\.(?:\s|$)|\bgit\s+restore\s+(?:--\S+\s+)*\.(?:\s|$)|\bgit\s+(?:checkout|switch)\b[^;&|]*\s(?:-f|--force|--discard-changes)(?:\s|$)/i, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
+  { test: { test: discardsWorkingTree }, risk: 'dangerous', level: 5, reason: 'Discards uncommitted work', effects: ['git', 'filesystem'] },
   // The same, written otherwise: the tree as `"."`, `'.'`, `./` or `:/`, after `--`, options or a tree-ish
   // (`git checkout HEAD -- .`, `git restore -s HEAD .`) (review, 2026-09-28). Added beside the rule above, so nothing it
   // rates is rated lower; each run of words stops at the next bare `git`, so a long line is read once.

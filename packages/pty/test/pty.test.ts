@@ -1,10 +1,12 @@
 import os from 'node:os';
+import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { resolveShell, type ShellInfo } from '@acc/executor';
 import type { IPty } from 'node-pty';
 import { PtyManager, PtySession } from '../src/index.js';
 
 const powershell = await resolveShell('powershell');
+const bash = await resolveShell('bash');
 
 // Fake credentials are assembled at runtime so no credential-shaped literal lives in the repository.
 const fake = (...parts: string[]) => parts.join('');
@@ -79,48 +81,75 @@ async function until(fn: () => boolean, timeoutMs = 20_000): Promise<void> {
   }
 }
 
-describe.skipIf(!powershell)('PtyManager (real ConPTY)', () => {
-  it('runs an interactive shell: input, streamed output, cursor reads, resize and exit', async () => {
-    const manager = new PtyManager();
-    const session = await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-1', kind: 'agent' } });
+async function interactiveShell(shell: ShellInfo): Promise<void> {
+  const manager = new PtyManager();
+  try {
+    const session = await manager.create({ shell, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-1', kind: 'agent' } });
     const events: string[] = [];
     session.onEvent((e) => events.push(e.type));
-    session.write('Write-Output ("pty-" + (6 * 7))\r');
-    await until(() => session.read().output.includes('pty-42'));
+    const output = (since = 0) => stripVTControlCharacters(session.read(since).output);
+    session.write(shell.kind === 'powershell' ? 'Write-Output ("pty-" + (6 * 7))\r' : 'printf "pty-%s\\n" "$((6 * 7))"\r');
+    await until(() => output().includes('pty-42'));
     const first = session.read();
-    session.write('$x = Read-Host "Name"\r');
-    await until(() => session.read(first.cursor).output.includes('Name'));
+    // Echoed input must not look like the prompt we wait for. Keep Read-Host
+    // and its result in one command so pasted follow-up input cannot race the
+    // shell's line editor after Read-Host finishes (real ConPTY on Windows).
+    session.write(shell.kind === 'powershell'
+      ? '$x = Read-Host ("pty-" + "name"); Write-Output ("hello " + $x)\r'
+      : 'read -r -p "pty-""name: " x; printf "hello %s\\n" "$x"\r');
+    await until(() => output(first.cursor).includes('pty-name:'));
     session.write('Ada\r');
-    session.write('Write-Output "hello $x"\r');
-    await until(() => session.read(first.cursor).output.includes('hello Ada'));
+    await until(() => output(first.cursor).includes('hello Ada'));
     session.resize(100, 40);
     expect(session.snapshot()).toMatchObject({ cols: 100, rows: 40, taskId: 'TASK-1', ownerKind: 'agent' });
     session.write('exit 3\r');
     await until(() => session.exited);
     expect(session.read().exitCode).toBe(3);
     expect(events).toContain('exit');
+  } finally {
+    await manager.killAll();
+  }
+}
+
+describe.skipIf(!bash)('PtyManager (real Bash terminal)', () => {
+  it('waits for an actual input prompt, then streams the reply and exits', async () => {
+    await interactiveShell(bash!);
+  }, 60_000);
+});
+
+describe.skipIf(!powershell)('PtyManager (real ConPTY)', () => {
+  it('runs an interactive shell: input, streamed output, cursor reads, resize and exit', async () => {
+    await interactiveShell(powershell!);
   }, 60_000);
 
   it('kills the whole tree on close and for a finished task', async () => {
     const manager = new PtyManager({ maxSessions: 2 });
-    const a = await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-2', kind: 'agent' } });
-    await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-3', kind: 'operator' } });
-    await expect(manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: null, kind: 'operator' } })).rejects.toThrow(/At most 2/);
-    a.write('Start-Sleep -Seconds 60\r');
-    expect(await manager.killForTask('TASK-2')).toBe(1);
-    await until(() => a.exited);
-    await manager.killAll();
-    expect(manager.list().every((s) => s.exited)).toBe(true);
+    try {
+      const a = await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-2', kind: 'agent' } });
+      await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: 'TASK-3', kind: 'operator' } });
+      await expect(manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, owner: { taskId: null, kind: 'operator' } })).rejects.toThrow(/At most 2/);
+      a.write('Start-Sleep -Seconds 60\r');
+      expect(await manager.killForTask('TASK-2')).toBe(1);
+      await until(() => a.exited);
+      await manager.killAll();
+      expect(manager.list().every((s) => s.exited)).toBe(true);
+    } finally {
+      await manager.killAll();
+    }
   }, 60_000);
 
   it('keeps a bounded history and reports truncation', async () => {
     const manager = new PtyManager();
-    const s = await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, historyChars: 2000, owner: { taskId: null, kind: 'operator' } });
-    s.write('1..400 | ForEach-Object { "line $_ of output" }\r');
-    await until(() => s.read().output.includes('line 400 of output'));
-    const all = s.read(0);
-    expect(all.truncated).toBe(true);
-    expect(all.output.length).toBeLessThan(6000);
-    await s.kill();
+    try {
+      const s = await manager.create({ shell: powershell!, cwd: os.tmpdir(), env: process.env, historyChars: 2000, owner: { taskId: null, kind: 'operator' } });
+      s.write('1..400 | ForEach-Object { "line $_ of output" }\r');
+      await until(() => s.read().output.includes('line 400 of output'));
+      const all = s.read(0);
+      expect(all.truncated).toBe(true);
+      expect(all.output.length).toBeLessThan(6000);
+      await s.kill();
+    } finally {
+      await manager.killAll();
+    }
   }, 60_000);
 });

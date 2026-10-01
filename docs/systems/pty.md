@@ -97,5 +97,10 @@ to the shell. See [remote-node.md](remote-node.md#terminals).
 - Killing with `taskkill` before ConPTY's own kill made node-pty's console
   list agent print "AttachConsole failed"; the bundled-DLL mode avoids the
   agent entirely.
+- The real-shell tests wait for a prompt assembled at runtime, not text in
+  the echoed command. Input and its reply run in one command, avoiding a
+  race between Read-Host and the next pasted command on Windows. The same
+  input/cursor/resize/exit contract runs with real Bash when available; all
+  native fixtures close their sessions even after an assertion fails.
 
-Last verified: 2026-09-24
+Last verified: 2026-10-01

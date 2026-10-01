@@ -186,6 +186,12 @@ in a cluster of flags (`bash -lc "…"`, `sh -ec "…"`) as they do `bash -c`,
 reading a quoted `-c` argument as the shell does (backslash escapes inside
 double quotes, `'\''` inside single quotes), so a nested
 `bash -c "bash -c \"…\""` unwraps too.
+The checkout/switch force rule scans command starts, flags and separators
+once. It preserves the previous lexical classification (including quoted
+mentions and an intervening `git` word) without repeatedly scanning the rest
+of a long segment; the old regexp could take quadratic time. Regression tests
+compare the old rule across spellings and boundaries and keep the existing
+speed limits, including a force flag at the end of a 208 KB command.
 Also Level 5: recursive deletes in any shell (including `rimraf`, `shutil.rmtree`,
 recursive `rmSync`), disk formatting,
 destroying backups, history rewrites and Git data loss (`reset --hard`, `clean` with any force
@@ -504,4 +510,4 @@ Revocation from the cloud or the admin CLI stops the node for good.
   skips it; nothing else does.
 - Redaction is conservative: values such as `API_KEY=absent` are masked too.
 
-Last verified: 2026-09-28
+Last verified: 2026-10-01

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { splitCommands } from '../src/shell-parse.js';
 import {
   classifyCommand,
   expandsHistory,
@@ -893,6 +894,30 @@ describe('discarding the whole working tree, however the tree is written', () =>
     const started = Date.now();
     for (const line of ['git checkout '.repeat(8000), `${'git restore '.repeat(8000)} --staged`]) classifyCommand(line);
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('keeps the existing lexical force rule, including quotes and separator boundaries', () => {
+    const previous = /\bgit\s+(?:checkout|switch)\b[^;&|]*\s(?:-f|--force|--discard-changes)(?:\s|$)/i;
+    for (const head of ['git checkout', 'GIT SWITCH', 'git\ncheckout', 'echo "git checkout', 'git checkout-feature', 'git status']) {
+      for (const middle of [' main ', ' git unknown ', '; echo ', ' && echo ', '\n echo ', ' | echo ']) {
+        for (const flag of ['-f', '--force', '--discard-changes', '--forceful', '-ff', '-F']) {
+          for (const end of ['', ' ', ';', '"']) {
+            const line = head + middle + flag + end;
+            const result = classifyCommand(line);
+            const previouslyForced = splitCommands(line).some((segment) => previous.test(segment.text));
+            expect(result.reasons.includes('Discards uncommitted work'), line).toBe(previouslyForced);
+            if (previouslyForced) expect(result).toMatchObject({ level: 5, risk: 'dangerous', readOnly: false });
+          }
+        }
+      }
+    }
+  });
+
+  it('still refuses a force flag at the end of a long repeated command', () => {
+    const line = `${'git checkout '.repeat(16_000)} --force`;
+    const started = performance.now();
+    expect(classifyCommand(line)).toMatchObject({ level: 5, reasons: expect.arrayContaining(['Discards uncommitted work']) });
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

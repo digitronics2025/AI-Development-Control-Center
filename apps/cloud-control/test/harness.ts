@@ -5,6 +5,7 @@ import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { stopChildAndWait } from './child-exit.js';
 
 /**
  * Runs the Worker in the real Workers runtime (`wrangler dev`, local D1, R2
@@ -171,11 +172,9 @@ export async function startCloud(options: { vars?: Record<string, string>; port?
   const kill = async () => {
     const c = child as ChildProcess | null;
     if (!c || c.exitCode !== null) return;
-    await new Promise<void>((resolve) => {
-      c.once('exit', () => resolve());
+    await stopChildAndWait(c, () => {
       if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(c.pid), '/T', '/F'], { stdio: 'ignore' });
       else c.kill('SIGTERM');
-      setTimeout(resolve, 10_000);
     });
   };
 

@@ -228,7 +228,11 @@ D1/R2/DO) with a test Access key set and the real orchestrator as the node —
 on a fresh checkout) the harness serves a placeholder page through `--assets`
 instead of failing; the assets these tests touch are only the Worker's gate. The
 local dev proxy resets a reused socket now and then, so the harness talks to it
-without keep-alive (`httpJson`, and `httpBytes` for hash-checked downloads). `pnpm e2e:cloud`: the cloud
+without keep-alive (`httpJson`, and `httpBytes` for hash-checked downloads).
+Fixture shutdown clears its ten-second fallback timer on child exit (also on
+a stop error), instead of keeping the Vitest worker alive until its own
+termination deadline; exit, timeout and failure cleanup have regression tests.
+`pnpm e2e:cloud`: the cloud
 dashboard in a browser against that Worker and a paired simulated-agent node,
 both themes, five viewports, axe
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)).

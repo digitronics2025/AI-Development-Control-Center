@@ -209,6 +209,14 @@ never come. A failure with no explaining line reads as `describeExit`: "Claude
 Code crashed (fatal internal error) · Windows status 0xC0000409", not a raw
 protocol line.
 
+## Release verification
+
+The root Vitest gate defaults to two workers because native shell and Workers
+fixtures spawn additional processes. An explicit `--maxWorkers` can override
+this. The release gate keeps all performance assertions and real-shell tests;
+see [pty.md](pty.md#gotchas) for prompt synchronization on Windows and
+[cloud-control.md](cloud-control.md) for runtime fixture cleanup.
+
 ## Observed on the operator's machine (2026-09-24)
 
 - Codex 0.156.1 accepts the default model; with credits back it runs end to

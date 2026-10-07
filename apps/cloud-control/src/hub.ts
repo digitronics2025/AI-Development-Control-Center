@@ -22,7 +22,7 @@ import { CloudStore, commandFromRow, commandView, waitFromRow, type CommandWait 
  */
 
 type Attachment =
-  | { kind: 'node'; nodeId: string; protocol: number; lastTouch: number }
+  | { kind: 'node'; nodeId: string; protocol: number; lastTouch: number; lastSeenWrite?: number }
   | { kind: 'browser'; user: string; signedInAt: number; logs: string[]; terminals: string[] };
 
 /** Terminal keystrokes need a sign-in no older than this (the same rule as opening one). */
@@ -47,7 +47,11 @@ export interface RpcReply {
 
 export type { CommandWait } from './store.js';
 
-/** Heartbeats are written to D1 at most this often per node. */
+/**
+ * Revocation and idle leases are checked at most this often per node, and
+ * `last_seen_at` is written at most this often: not at all while event batches
+ * (which write it too) keep it fresh, so the heartbeat then only reads.
+ */
 const TOUCH_EVERY_MS = 60_000;
 /** Close node sockets older than this so every connection is re-authenticated regularly. */
 const MAX_NODE_SOCKET_AGE_MS = 12 * 60 * 60_000;
@@ -313,6 +317,7 @@ export class WorkspaceHub extends DurableObject<Env> {
           return;
         }
         await this.store.markConnected(nodeId, { os: f.payload.os, appVersion: f.payload.appVersion, protocolVersion: f.payload.protocolVersion });
+        ws.serializeAttachment({ ...a, lastSeenWrite: Date.now() });
         const ackedSeq = await this.store.lastEventSeq(nodeId);
         this.sendNode(nodeId, { type: 'session.welcome', payload: { nodeId, protocolVersion: REMOTE_PROTOCOL_VERSION, minProtocolVersion: REMOTE_MIN_PROTOCOL_VERSION, ackedSeq, serverTime: nowIso() } });
         this.pushSubscriptions();
@@ -330,20 +335,22 @@ export class WorkspaceHub extends DurableObject<Env> {
         return;
       case 'node.heartbeat': {
         const now = Date.now();
-        if (now - a.lastTouch > TOUCH_EVERY_MS) {
-          ws.serializeAttachment({ ...a, lastTouch: now });
-          // A revocation written straight to D1 (emergency CLI) ends the live socket within a minute.
-          if (!(await this.store.touch(nodeId))) {
-            this.sendNode(nodeId, { type: 'node.revoked', payload: { reason: 'revoked' } });
-            ws.close(4003, 'revoked');
-          } else {
-            await this.store.releaseIdleLeases(nodeId); // catches anything the event path could not decide yet
-          }
+        const check = now - a.lastTouch > TOUCH_EVERY_MS;
+        const write = now - (a.lastSeenWrite ?? 0) >= TOUCH_EVERY_MS;
+        if (!check && !write) return;
+        ws.serializeAttachment({ ...a, lastTouch: check ? now : a.lastTouch, lastSeenWrite: write ? now : a.lastSeenWrite });
+        // A revocation written straight to D1 (emergency CLI) ends the live socket within a minute.
+        if (!(write ? await this.store.touch(nodeId) : await this.store.isActive(nodeId))) {
+          this.sendNode(nodeId, { type: 'node.revoked', payload: { reason: 'revoked' } });
+          ws.close(4003, 'revoked');
+        } else if (check) {
+          await this.store.releaseIdleLeases(nodeId); // catches anything the event path could not decide yet
         }
         return;
       }
       case 'event.batch': {
-        const { fresh, ackedSeq } = await this.store.ingest(nodeId, f.payload.events);
+        const { fresh, ackedSeq, advanced } = await this.store.ingest(nodeId, f.payload.events);
+        if (advanced) ws.serializeAttachment({ ...(this.attachment(ws) as Extract<Attachment, { kind: 'node' }>), lastSeenWrite: Date.now() });
         this.sendNode(nodeId, { type: 'sync.ack', payload: { upToSeq: ackedSeq } });
         for (const e of fresh) if (e.kind === 'message' && fromNodeAllowed(e.payload as Record<string, unknown>)) this.broadcast(e.payload as Record<string, unknown>, nodeId);
         return;

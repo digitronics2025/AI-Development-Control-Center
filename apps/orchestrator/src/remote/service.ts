@@ -82,6 +82,16 @@ export const DEFAULT_TIMINGS = {
   uploadMs: 20_000,
 };
 
+/**
+ * Mirrored types whose messages repeat with nothing changed but a check time
+ * (`checkedAt`): a repository after every background Git status, the agents
+ * after a health check. Such a repeat goes out live only (no D1 write in the
+ * cloud) unless the mirror's copy is older than this.
+ */
+const UNCHANGED_REPEAT_TYPES: ReadonlySet<string> = new Set(['repository', 'agents']);
+export const MIRROR_REFRESH_MS = 6 * 60 * 60_000;
+const contentFingerprint = (message: unknown): string => JSON.stringify(message, (key, value: unknown) => (key === 'checkedAt' ? undefined : value));
+
 /** Seal binding for the node private key: purpose + node id. */
 const identityBinding = (nodeId: string) => `remote-node-identity:${nodeId}`;
 /** Batches the node keeps in flight before waiting for acknowledgements. */
@@ -140,6 +150,8 @@ export class RemoteNodeService {
   private flushTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private readonly detailTimers = new Map<string, NodeJS.Timeout>();
+  /** Last mirrored content per entity key, for UNCHANGED_REPEAT_TYPES. */
+  private readonly mirrored = new Map<string, { fingerprint: string; at: number }>();
   private readonly logSubscriptions = new Set<string>();
   private readonly terminalSubscriptions = new Set<string>();
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -645,7 +657,18 @@ export class RemoteNodeService {
     if (!clean) return;
     if (message.type === 'terminal.output') this.grants.touch(message.terminalId);
     if (MIRRORED_MESSAGE_TYPES.has(message.type)) {
-      this.store.enqueue(entityKey(message), 'message', clean);
+      const key = entityKey(message);
+      if (UNCHANGED_REPEAT_TYPES.has(message.type)) {
+        const fingerprint = contentFingerprint(clean);
+        const last = this.mirrored.get(key);
+        if (last && last.fingerprint === fingerprint && Date.now() - last.at < MIRROR_REFRESH_MS) {
+          // Nothing but a check time changed: browsers still see it, the cloud mirror is not rewritten.
+          if (this.welcomed && !(this.connection && this.connection.bufferedAmount() > 4 * 1024 * 1024)) this.send({ type: 'event.live', payload: { message: clean } });
+          return;
+        }
+        this.remember(key, clean, fingerprint);
+      } else if (message.type === 'repository.deleted') this.mirrored.delete(key);
+      this.store.enqueue(key, 'message', clean);
       if (message.type === 'task') this.scheduleDetail(message.task.id);
       this.scheduleFlush();
       return;
@@ -655,6 +678,10 @@ export class RemoteNodeService {
     if (this.connection && this.connection.bufferedAmount() > 4 * 1024 * 1024) return; // a slow link drops live noise, never mirrored state
     this.send({ type: 'event.live', payload: { message: clean } });
   };
+
+  private remember(key: string, clean: unknown, fingerprint = contentFingerprint(clean)): void {
+    this.mirrored.set(key, { fingerprint, at: Date.now() });
+  }
 
   private scheduleDetail(taskId: string): void {
     if (this.detailTimers.has(taskId)) return;
@@ -684,6 +711,7 @@ export class RemoteNodeService {
   }
 
   private async enqueueFullResync(): Promise<void> {
+    this.mirrored.clear();
     const tasks = this.d.store.listTasks({ limit: RESYNC_TASKS });
     for (const rec of tasks) {
       const clean = this.egress.message({ type: 'task', task: this.d.views.summary(rec) });
@@ -695,13 +723,19 @@ export class RemoteNodeService {
       if (clean) this.store.enqueue(`approval:${rec.id}`, 'message', clean);
     }
     const agents = this.egress.message({ type: 'agents', agents: this.d.agents.list() });
-    if (agents) this.store.enqueue('agents', 'message', agents);
+    if (agents) {
+      this.store.enqueue('agents', 'message', agents);
+      this.remember('agents', agents);
+    }
     // Repositories too, so the cloud can list them (and start queued tasks) while the node is away.
     const repositories = await this.d.repositories.list();
     if (!this.welcomed) return; // stopped meanwhile; the flag stays set for the next welcome
     for (const repository of repositories) {
       const clean = this.egress.message({ type: 'repository', repository });
-      if (clean) this.store.enqueue(`repository:${repository.id}`, 'message', clean);
+      if (clean) {
+        this.store.enqueue(`repository:${repository.id}`, 'message', clean);
+        this.remember(`repository:${repository.id}`, clean);
+      }
     }
     const to = new Date();
     const from = new Date(to.getTime() - USAGE_BACKFILL_DAYS * 86_400_000);

@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-10-01
+> Last verified: 2026-10-07
 
 ## Pieces
 
@@ -135,12 +135,18 @@ anything else is `application/octet-stream`, and every relayed answer carries
 `Content-Security-Policy: default-src 'none'; sandbox` (binary operations also
 `Content-Disposition: attachment`), so nothing a node returns runs as a page on
 the signed-in origin. Terminal keystrokes need a sign-in younger than one hour,
-as opening a terminal does. Nodes send heartbeats; the hub
-writes `last_seen_at` at most once a minute and checks revocation on that write.
+as opening a terminal does. Nodes send heartbeats (every 30 s); the hub checks
+revocation and idle leases at most once a minute, and writes `last_seen_at` at
+most once a minute — not at all while event batches (which write it too) have
+just done so, when the revocation check is a one-row read instead. A node's
+status therefore still turns `degraded` 2 minutes after its last sign of life.
 
 ## Retention (daily cron)
 
-Cloud copies only; nodes keep their own history. A replaced artifact or log
+The Worker's own `17 3 * * *` cron, not the hub: it runs whether or not a node
+is connected (confirmed 04–07/10/2026, every day a success with no node
+online; the hub's hourly alarm only renews node sockets). Cloud copies only;
+nodes keep their own history. A replaced artifact or log
 chunk deletes its previous R2 object, a failed re-upload keeps the stored
 copy's hash, and an artifact the node marks `local_only` is deleted from R2 and
 no longer served. Artifact bytes, log chunks and
@@ -180,6 +186,7 @@ must be reinstalled.
 | List nodes | `pnpm cloud:admin nodes --env production` |
 | Roll back code | `wrangler rollback <version-id> --env production` (or the Rollback workflow) |
 | Roll back data | D1 Time Travel: `wrangler d1 time-travel restore acc-control-production --timestamp <iso> --env production` |
+| Observability | [wrangler.jsonc](../../apps/cloud-control/wrangler.jsonc) keeps Workers Logs on at full sampling (`head_sampling_rate: 1`) and sets `traces.enabled: false` in every block, so a release switches tracing off on Cloudflare (Observability bills ingestion from 01/12/2026; logs carry the triage evidence). Takes effect only at the next manual release of each environment. |
 
 Both rollbacks and a deliberately failing migration were exercised on staging
 (plan Ledger, step 22). CI ([ci.yml](../../.github/workflows/ci.yml)) runs a static
@@ -195,7 +202,7 @@ every release runs from the operator's shell with `pnpm cloud:deploy:production`
 
 `CloudStore.setRepositories` keeps one atomic snapshot per node: delete only missing local IDs, insert new records, and update only changed name/fingerprint/remote-host/default-branch fields. Unchanged rows retain `updated_at` (last content change; no reader treats it as node liveness). The JSON membership list keeps the delete below D1's parameter cap for large inventories. Duplicate local IDs still reject the complete snapshot without writes. An empty snapshot removes only that node's repositories.
 
-Round 2 C1 baseline: 50–85K writes/day, about 80% repository replacement; expected saving 1.5–2M/month. Claims/proof: [change-claims.md](../change-claims.md). Production release remains manual and is pending outside this read-only cloud task. The checked-in production config enables traces at 0.1 sampling; the plan's “traces off” precondition cannot be confirmed. No observability setting is changed.
+Round 2 C1 baseline: 50–85K writes/day, about 80% repository replacement; expected saving 1.5–2M/month. Claims/proof: [change-claims.md](../change-claims.md). Production release remains manual and is pending outside this read-only cloud task.
 
 ## Data ownership
 
@@ -207,6 +214,21 @@ agents, usage, manifests, `safe_sync` artifact bytes and log chunks — plus its
 own records (nodes, pairing codes, commands, leases, audit). Losing the cloud
 loses no work; restoring an older D1 makes the node resend everything
 (`ackedSeq` went backwards → full resync).
+
+Mirror writes happen on change only ([store.ts](../../apps/cloud-control/src/store.ts)
+`eventStatements`): an entity, task, task detail or usage event identical to the
+stored row is an upsert that changes nothing (zero rows written). For entities,
+`$.status.checkedAt` (a repository's last Git check) does not count as a change,
+and an unchanged row is still refreshed once it is 6 hours old
+(`ENTITY_REFRESH_MS`, accepted up to 15 minutes early because the node times
+its 6-hour refresh from when it queued the copy, not from when the cloud stored
+it). A copy that waited offline in the node's outbox is stored much later than it
+was queued, so a refresh is also accepted when the stored `status.checkedAt` is
+that window older than the incoming one: the node's own check times, unaffected
+by delivery delay. An offline "Checked" time is therefore at most that stale.
+`detail_updated_at` is when the detail last changed. The batch cursor
+(`nodes.last_event_seq`) is still written on every batch: a cursor behind the
+node's would make it run a full resync on the next welcome.
 
 ## Gotchas
 

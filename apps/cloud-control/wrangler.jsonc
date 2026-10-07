@@ -4,6 +4,9 @@
 // block repeats them. No workers.dev or preview URL is ever published: the Worker is
 // reachable only on its custom hostnames, and the control hostname sits behind
 // Cloudflare Access (the Worker verifies the Access token as well).
+// Workers Logs stay on at full sampling; traces are explicitly off in every block
+// (Observability starts billing ingestion on 01/12/2026; logs carry the triage evidence).
+// `enabled: false` rather than omitting `traces`, so a deploy actually turns them off.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "acc-cloud-control-dev",
@@ -28,7 +31,7 @@
     { "name": "COMMAND_LIMITER", "namespace_id": "4103", "simple": { "limit": 300, "period": 60 } }
   ],
   "triggers": { "crons": ["17 3 * * *"] },
-  "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
   "vars": {
     "ENVIRONMENT": "development",
     "CONTROL_HOSTS": "127.0.0.1,localhost",
@@ -54,7 +57,7 @@
         { "name": "COMMAND_LIMITER", "namespace_id": "4203", "simple": { "limit": 300, "period": 60 } }
       ],
       "triggers": { "crons": ["17 3 * * *"] },
-      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
       "vars": {
         "ENVIRONMENT": "staging",
         "CONTROL_HOSTS": "acc-staging.dr-badawi-abdalsalam.com",
@@ -80,7 +83,7 @@
         { "name": "COMMAND_LIMITER", "namespace_id": "4303", "simple": { "limit": 300, "period": 60 } }
       ],
       "triggers": { "crons": ["17 3 * * *"] },
-      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": true, "head_sampling_rate": 0.1 } },
+      "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
       "vars": {
         "ENVIRONMENT": "production",
         "CONTROL_HOSTS": "acc.dr-badawi-abdalsalam.com",

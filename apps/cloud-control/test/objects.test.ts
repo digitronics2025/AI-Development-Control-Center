@@ -89,6 +89,24 @@ describe('event batches', () => {
     again.ws.close();
   });
 
+  it('checks a heartbeat after fresh writes by reading, and still ends a socket revoked straight in D1', async () => {
+    const node = await manualNode();
+    const conn = await node.connect();
+    const seen = async () => (await cloud.d1(`SELECT last_seen_at FROM nodes WHERE id = '${node.nodeId}'`))[0].last_seen_at as string;
+    const before = await seen();
+    // The hello just wrote last_seen_at: the first heartbeat checks revocation without writing it again.
+    conn.send('node.heartbeat', { activeTasks: 0, outboxDepth: 0 });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await seen()).toBe(before);
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    // The emergency CLI revokes in D1 only; the next due check (here a read) closes the socket.
+    const second = await node.connect();
+    const closed = new Promise<number>((resolve) => second.ws.once('close', (code) => resolve(code)));
+    await cloud.d1(`UPDATE nodes SET revoked_at = '2026-10-07T00:00:00.000Z', revoked_by = 'cli' WHERE id = '${node.nodeId}'`);
+    second.send('node.heartbeat', { activeTasks: 0, outboxDepth: 0 });
+    expect(await closed).toBe(4003);
+  });
+
   it('rejects malformed and oversize frames without storing anything', async () => {
     const node = await manualNode();
     const conn = await node.connect();

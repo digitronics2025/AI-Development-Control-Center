@@ -186,6 +186,7 @@ must be reinstalled.
 | List nodes | `pnpm cloud:admin nodes --env production` |
 | Roll back code | `wrangler rollback <version-id> --env production` (or the Rollback workflow) |
 | Roll back data | D1 Time Travel: `wrangler d1 time-travel restore acc-control-production --timestamp <iso> --env production` |
+| Observability | [wrangler.jsonc](../../apps/cloud-control/wrangler.jsonc) keeps Workers Logs on at full sampling (`head_sampling_rate: 1`) and sets `traces.enabled: false` in every block, so a release switches tracing off on Cloudflare (Observability bills ingestion from 01/12/2026; logs carry the triage evidence). Takes effect only at the next manual release of each environment. |
 
 Both rollbacks and a deliberately failing migration were exercised on staging
 (plan Ledger, step 22). CI ([ci.yml](../../.github/workflows/ci.yml)) runs a static
@@ -201,7 +202,7 @@ every release runs from the operator's shell with `pnpm cloud:deploy:production`
 
 `CloudStore.setRepositories` keeps one atomic snapshot per node: delete only missing local IDs, insert new records, and update only changed name/fingerprint/remote-host/default-branch fields. Unchanged rows retain `updated_at` (last content change; no reader treats it as node liveness). The JSON membership list keeps the delete below D1's parameter cap for large inventories. Duplicate local IDs still reject the complete snapshot without writes. An empty snapshot removes only that node's repositories.
 
-Round 2 C1 baseline: 50–85K writes/day, about 80% repository replacement; expected saving 1.5–2M/month. Claims/proof: [change-claims.md](../change-claims.md). Production release remains manual and is pending outside this read-only cloud task. The checked-in production config enables traces at 0.1 sampling; the plan's “traces off” precondition cannot be confirmed. No observability setting is changed.
+Round 2 C1 baseline: 50–85K writes/day, about 80% repository replacement; expected saving 1.5–2M/month. Claims/proof: [change-claims.md](../change-claims.md). Production release remains manual and is pending outside this read-only cloud task.
 
 ## Data ownership
 

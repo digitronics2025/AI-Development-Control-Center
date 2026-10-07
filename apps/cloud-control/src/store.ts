@@ -39,6 +39,13 @@ export const OFFLINE_AFTER_MS = 5 * 60_000;
 const RESULT_BODY_CHARS = 256 * 1024;
 /** Lease safety net: a remote task that never reports an end frees its repository after this. */
 export const LEASE_TTL_MS = 24 * 60 * 60_000;
+/**
+ * A mirrored entity whose content did not change is not rewritten, except to
+ * refresh it this often: a repository's `status.checkedAt` moves on every Git
+ * status check, and rewriting the row for that alone was most of the node's D1
+ * writes. The offline mirror's "Checked" time is therefore at most this old.
+ */
+export const ENTITY_REFRESH_MS = 6 * 60 * 60_000;
 
 interface NodeRow {
   id: string;
@@ -151,6 +158,11 @@ export class CloudStore {
   async touch(id: string): Promise<boolean> {
     const r = await this.db.prepare('UPDATE nodes SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL').bind(nowIso(), id).run();
     return r.meta.changes > 0;
+  }
+
+  /** The revocation check of a heartbeat that does not need to write `last_seen_at`. */
+  async isActive(id: string): Promise<boolean> {
+    return (await this.db.prepare('SELECT 1 AS ok FROM nodes WHERE id = ? AND revoked_at IS NULL').bind(id).first<{ ok: number }>()) !== null;
   }
 
   async setCapabilities(id: string, capabilities: NodeCapabilities): Promise<void> {
@@ -360,9 +372,10 @@ export class CloudStore {
   /**
    * Store one batch atomically: events at or below the node's cursor are
    * duplicates and skipped; the cursor moves to the batch's last sequence.
-   * Returns the events that were new, for browser fan-out.
+   * Returns the events that were new, for browser fan-out, and whether the
+   * cursor moved (which also wrote `last_seen_at`).
    */
-  async ingest(nodeId: string, events: OutboxEvent[]): Promise<{ fresh: OutboxEvent[]; ackedSeq: number }> {
+  async ingest(nodeId: string, events: OutboxEvent[]): Promise<{ fresh: OutboxEvent[]; ackedSeq: number; advanced: boolean }> {
     const cursor = await this.lastEventSeq(nodeId);
     const fresh = events.filter((e) => e.seq > cursor).sort((a, b) => a.seq - b.seq);
     const last = Math.max(cursor, ...events.map((e) => e.seq));
@@ -371,7 +384,7 @@ export class CloudStore {
     for (const e of fresh) statements.push(...this.eventStatements(nodeId, e, ts));
     statements.push(this.db.prepare('UPDATE nodes SET last_event_seq = ?, last_seen_at = ? WHERE id = ? AND last_event_seq < ?').bind(last, ts, nodeId, last));
     await this.db.batch(statements);
-    return { fresh, ackedSeq: last };
+    return { fresh, ackedSeq: last, advanced: last > cursor };
   }
 
   private eventStatements(nodeId: string, e: OutboxEvent, ts: string): D1PreparedStatement[] {
@@ -379,12 +392,21 @@ export class CloudStore {
     if (!p || typeof p !== 'object') return [];
     if (e.kind === 'taskDetail') {
       if (typeof p.taskId !== 'string') return [];
-      return [this.db.prepare('UPDATE cloud_tasks SET detail = ?, detail_updated_at = ? WHERE node_id = ? AND task_id = ?').bind(JSON.stringify(p.detail ?? null), ts, nodeId, p.taskId)];
+      const detail = JSON.stringify(p.detail ?? null);
+      // Written on change only; detail_updated_at is when the detail last changed.
+      return [this.db.prepare('UPDATE cloud_tasks SET detail = ?, detail_updated_at = ? WHERE node_id = ? AND task_id = ? AND detail IS NOT ?').bind(detail, ts, nodeId, p.taskId, detail)];
     }
+    // Written on change only (ENTITY_REFRESH_MS). `$.status.checkedAt` is a repository's last Git check, not a change.
+    const refreshBefore = new Date(Date.parse(ts) - ENTITY_REFRESH_MS).toISOString();
     const entity = (kind: string, id: string, json: unknown, taskId: string | null = null) =>
       this.db
-        .prepare('INSERT INTO cloud_entities (node_id, kind, entity_id, task_id, updated_at, json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (node_id, kind, entity_id) DO UPDATE SET json = excluded.json, task_id = excluded.task_id, updated_at = excluded.updated_at')
-        .bind(nodeId, kind, id, taskId, ts, JSON.stringify(json));
+        .prepare(
+          `INSERT INTO cloud_entities (node_id, kind, entity_id, task_id, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (node_id, kind, entity_id) DO UPDATE SET json = excluded.json, task_id = excluded.task_id, updated_at = excluded.updated_at
+           WHERE cloud_entities.task_id IS NOT excluded.task_id OR cloud_entities.updated_at < ?
+             OR json_remove(cloud_entities.json, '$.status.checkedAt') IS NOT json_remove(excluded.json, '$.status.checkedAt')`,
+        )
+        .bind(nodeId, kind, id, taskId, ts, JSON.stringify(json), refreshBefore);
     switch (p.type) {
       case 'task': {
         const t = p.task as Record<string, any>;
@@ -392,7 +414,8 @@ export class CloudStore {
           this.db
             .prepare(
               `INSERT INTO cloud_tasks (node_id, task_id, repository_id, repository_name, title, status, version, created_at, updated_at, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT (node_id, task_id) DO UPDATE SET repository_id = excluded.repository_id, repository_name = excluded.repository_name, title = excluded.title, status = excluded.status, version = excluded.version, updated_at = excluded.updated_at, summary = excluded.summary`,
+               ON CONFLICT (node_id, task_id) DO UPDATE SET repository_id = excluded.repository_id, repository_name = excluded.repository_name, title = excluded.title, status = excluded.status, version = excluded.version, updated_at = excluded.updated_at, summary = excluded.summary
+               WHERE cloud_tasks.summary IS NOT excluded.summary`,
             )
             .bind(nodeId, String(t.id), t.repositoryId ?? null, t.repositoryName ?? null, String(t.title ?? ''), String(t.status), Number(t.version ?? 0), String(t.createdAt ?? ts), String(t.updatedAt ?? ts), JSON.stringify(t)),
         ];
@@ -422,7 +445,7 @@ export class CloudStore {
         const u = p.event as Record<string, any>;
         return [
           this.db
-            .prepare('INSERT INTO cloud_usage_events (node_id, event_id, task_id, provider, model, started_at, display_cost_nanos, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (node_id, event_id) DO UPDATE SET display_cost_nanos = excluded.display_cost_nanos, json = excluded.json')
+            .prepare('INSERT INTO cloud_usage_events (node_id, event_id, task_id, provider, model, started_at, display_cost_nanos, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (node_id, event_id) DO UPDATE SET display_cost_nanos = excluded.display_cost_nanos, json = excluded.json WHERE cloud_usage_events.display_cost_nanos IS NOT excluded.display_cost_nanos OR cloud_usage_events.json IS NOT excluded.json')
             .bind(nodeId, String(u.id), u.taskId ?? null, u.provider ?? null, u.model ?? null, String(u.startedAt), u.displayCostNanos ?? null, JSON.stringify(u)),
         ];
       }

@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-10-01
+> Last verified: 2026-10-07
 
 ## Pieces
 
@@ -135,12 +135,18 @@ anything else is `application/octet-stream`, and every relayed answer carries
 `Content-Security-Policy: default-src 'none'; sandbox` (binary operations also
 `Content-Disposition: attachment`), so nothing a node returns runs as a page on
 the signed-in origin. Terminal keystrokes need a sign-in younger than one hour,
-as opening a terminal does. Nodes send heartbeats; the hub
-writes `last_seen_at` at most once a minute and checks revocation on that write.
+as opening a terminal does. Nodes send heartbeats (every 30 s); the hub checks
+revocation and idle leases at most once a minute, and writes `last_seen_at` at
+most once a minute — not at all while event batches (which write it too) have
+just done so, when the revocation check is a one-row read instead. A node's
+status therefore still turns `degraded` 2 minutes after its last sign of life.
 
 ## Retention (daily cron)
 
-Cloud copies only; nodes keep their own history. A replaced artifact or log
+The Worker's own `17 3 * * *` cron, not the hub: it runs whether or not a node
+is connected (confirmed 04–07/10/2026, every day a success with no node
+online; the hub's hourly alarm only renews node sockets). Cloud copies only;
+nodes keep their own history. A replaced artifact or log
 chunk deletes its previous R2 object, a failed re-upload keeps the stored
 copy's hash, and an artifact the node marks `local_only` is deleted from R2 and
 no longer served. Artifact bytes, log chunks and
@@ -207,6 +213,16 @@ agents, usage, manifests, `safe_sync` artifact bytes and log chunks — plus its
 own records (nodes, pairing codes, commands, leases, audit). Losing the cloud
 loses no work; restoring an older D1 makes the node resend everything
 (`ackedSeq` went backwards → full resync).
+
+Mirror writes happen on change only ([store.ts](../../apps/cloud-control/src/store.ts)
+`eventStatements`): an entity, task, task detail or usage event identical to the
+stored row is an upsert that changes nothing (zero rows written). For entities,
+`$.status.checkedAt` (a repository's last Git check) does not count as a change,
+and an unchanged row is still refreshed once it is 6 hours old
+(`ENTITY_REFRESH_MS`), so an offline "Checked" time is at most that stale.
+`detail_updated_at` is when the detail last changed. The batch cursor
+(`nodes.last_event_seq`) is still written on every batch: a cursor behind the
+node's would make it run a full resync on the next welcome.
 
 ## Gotchas
 

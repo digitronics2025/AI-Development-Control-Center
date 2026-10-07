@@ -166,6 +166,14 @@ its sequence. Task details are debounced (2 s) and capped at 900 KB (stages
 trimmed to the last 100). A full resync sends the last 500 tasks, details of
 the latest 100, pending approvals, agents, repositories and 30 days of usage.
 
+A `repository` or `agents` event identical to the last one mirrored for that
+entity except for `checkedAt` (every background Git status and agent health
+check moves it) is sent as `event.live` only — browsers stay current, the
+cloud writes nothing — until the mirrored copy is 6 hours old
+(`MIRROR_REFRESH_MS`). Before this, repository status checks were most of the
+cloud's D1 writes (~3 100 entity rewrites a day with the PC online). The memory
+of what was mirrored is in-process: a restart or a full resync starts it again.
+
 Nothing is queued while remote control is switched off (`enabled = false`), so
 switching it off flags a full resync: when it is switched back on, the welcome
 sends everything again and the cloud copy catches up (found in the production
@@ -276,4 +284,4 @@ Worker: `apps/cloud-control/test/*.test.ts` (see
 
 `workUnit` realtime messages are live-only (never mirrored); `task.workUnits` reads `GET /api/tasks/:id/work-units`. Units hold no local paths; a worker's checkout path appears only in its execution's `cwd`, which egress already scrubs ([stage-teams.md](stage-teams.md)).
 
-Last verified: 2026-09-26
+Last verified: 2026-10-07

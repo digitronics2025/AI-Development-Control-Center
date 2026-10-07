@@ -183,6 +183,28 @@ describe('connection', () => {
     expect(mirrored!.payload.task.status).toBe('COMPLETED');
   });
 
+  it('sends a repository repeat that only moved its check time live, without a mirror write', async () => {
+    const r = await relay();
+    const t = await app();
+    const repositoryId = await addRepo(t, await makeRepo());
+    await t.services.remote.pair({ relayUrl: r.url, code: r.newPairingToken(), label: 'PC' });
+    await waitFor(() => t.services.remote.status().state, (s) => s === 'connected', 15_000);
+    const mirroredRepo = () => r.events.filter((e) => e.payload?.type === 'repository' && e.payload.repository?.id === repositoryId);
+    const liveRepo = () => r.frames.filter((f) => f.type === 'event.live' && (f.payload as { message?: { type?: string } }).message?.type === 'repository');
+    // The welcome's full resync mirrors the repository once.
+    await waitFor(() => mirroredRepo().length, (n) => n >= 1, 15_000, 'repository mirrored by the resync');
+    const mirroredBefore = mirroredRepo().length;
+    const liveBefore = liveRepo().length;
+    await t.services.repositories.refresh(repositoryId);
+    await t.services.repositories.refresh(repositoryId);
+    await waitFor(() => liveRepo().length, (n) => n >= liveBefore + 2, 15_000, 'repeats sent live');
+    expect(mirroredRepo().length).toBe(mirroredBefore);
+    // A real change is mirrored again.
+    expect((await t.api('PATCH', `/api/repositories/${repositoryId}`, { name: 'Renamed for the mirror' })).status).toBe(200);
+    const renamed = await waitFor(() => mirroredRepo().find((e) => e.payload.repository.name === 'Renamed for the mirror'), Boolean, 15_000, 'change mirrored');
+    expect(renamed).toBeTruthy();
+  });
+
   it('keeps the local service fully usable when the cloud is unreachable', async () => {
     const r = await relay();
     const t = await app();

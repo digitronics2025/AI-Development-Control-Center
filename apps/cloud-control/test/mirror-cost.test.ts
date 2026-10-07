@@ -70,6 +70,18 @@ describe('mirror ingest writes on change only, against SQLite', () => {
     expect(JSON.parse(entityJson()).status.checkedAt).toBe('2026-10-07T09:00:00.000Z');
   });
 
+  it('accepts a node refresh that lands minutes before the copy is 6 hours old, not hours before', async () => {
+    // The node times its refresh from when it queued the last copy; the cloud stored it a flush later.
+    await store.ingest('one', [repository('2026-10-07T01:00:00.000Z')]);
+    sqlite.prepare('UPDATE cloud_entities SET updated_at = ?').run(new Date(Date.now() - 5 * 60 * 60_000).toISOString());
+    await store.ingest('one', [repository('2026-10-07T06:00:00.000Z')]);
+    expect(JSON.parse(entityJson()).status.checkedAt).toBe('2026-10-07T01:00:00.000Z');
+    sqlite.prepare('UPDATE cloud_entities SET updated_at = ?').run(new Date(Date.now() - ENTITY_REFRESH_MS + 5 * 60_000).toISOString());
+    await store.ingest('one', [repository('2026-10-07T07:00:00.000Z')]);
+    expect(writes.at(-1)).toBe(1);
+    expect(JSON.parse(entityJson()).status.checkedAt).toBe('2026-10-07T07:00:00.000Z');
+  });
+
   it('compares array entities (agents) and the other mirrored kinds without error', async () => {
     const agents = (state: string) => message({ type: 'agents', agents: [{ id: 'claude', health: { state, checkedAt: '2026-10-07T01:00:00.000Z' } }] });
     await store.ingest('one', [agents('ready')]);

@@ -46,6 +46,13 @@ export const LEASE_TTL_MS = 24 * 60 * 60_000;
  * writes. The offline mirror's "Checked" time is therefore at most this old.
  */
 export const ENTITY_REFRESH_MS = 6 * 60 * 60_000;
+/**
+ * The node refreshes an unchanged repository/agents copy every ENTITY_REFRESH_MS
+ * (its `MIRROR_REFRESH_MS`), timed from when it queued the last one; the row's
+ * `updated_at` is when the cloud stored it, a flush later. Accepting a refresh
+ * slightly early keeps that jitter from rejecting one and doubling the staleness.
+ */
+const ENTITY_REFRESH_TOLERANCE_MS = 15 * 60_000;
 
 interface NodeRow {
   id: string;
@@ -397,7 +404,7 @@ export class CloudStore {
       return [this.db.prepare('UPDATE cloud_tasks SET detail = ?, detail_updated_at = ? WHERE node_id = ? AND task_id = ? AND detail IS NOT ?').bind(detail, ts, nodeId, p.taskId, detail)];
     }
     // Written on change only (ENTITY_REFRESH_MS). `$.status.checkedAt` is a repository's last Git check, not a change.
-    const refreshBefore = new Date(Date.parse(ts) - ENTITY_REFRESH_MS).toISOString();
+    const refreshBefore = new Date(Date.parse(ts) - ENTITY_REFRESH_MS + ENTITY_REFRESH_TOLERANCE_MS).toISOString();
     const entity = (kind: string, id: string, json: unknown, taskId: string | null = null) =>
       this.db
         .prepare(

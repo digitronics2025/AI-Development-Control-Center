@@ -219,7 +219,9 @@ Mirror writes happen on change only ([store.ts](../../apps/cloud-control/src/sto
 stored row is an upsert that changes nothing (zero rows written). For entities,
 `$.status.checkedAt` (a repository's last Git check) does not count as a change,
 and an unchanged row is still refreshed once it is 6 hours old
-(`ENTITY_REFRESH_MS`), so an offline "Checked" time is at most that stale.
+(`ENTITY_REFRESH_MS`, accepted up to 15 minutes early because the node times
+its 6-hour refresh from when it queued the copy, not from when the cloud stored
+it), so an offline "Checked" time is at most that stale.
 `detail_updated_at` is when the detail last changed. The batch cursor
 (`nodes.last_event_seq`) is still written on every batch: a cursor behind the
 node's would make it run a full resync on the next welcome.

@@ -222,7 +222,10 @@ stored row is an upsert that changes nothing (zero rows written). For entities,
 and an unchanged row is still refreshed once it is 6 hours old
 (`ENTITY_REFRESH_MS`, accepted up to 15 minutes early because the node times
 its 6-hour refresh from when it queued the copy, not from when the cloud stored
-it), so an offline "Checked" time is at most that stale.
+it). A copy that waited offline in the node's outbox is stored much later than it
+was queued, so a refresh is also accepted when the stored `status.checkedAt` is
+that window older than the incoming one: the node's own check times, unaffected
+by delivery delay. An offline "Checked" time is therefore at most that stale.
 `detail_updated_at` is when the detail last changed. The batch cursor
 (`nodes.last_event_seq`) is still written on every batch: a cursor behind the
 node's would make it run a full resync on the next welcome.

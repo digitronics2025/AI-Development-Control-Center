@@ -51,6 +51,13 @@ export const ENTITY_REFRESH_MS = 6 * 60 * 60_000;
  * (its `MIRROR_REFRESH_MS`), timed from when it queued the last one; the row's
  * `updated_at` is when the cloud stored it, a flush later. Accepting a refresh
  * slightly early keeps that jitter from rejecting one and doubling the staleness.
+ * A copy that waited offline in the node's outbox lands far later than it was
+ * queued, so a repository refresh is also accepted on the node's own clock: when
+ * the stored `status.checkedAt` is a refresh window (less the tolerance) older
+ * than the incoming one. The node only refreshes on a fresh check at least that
+ * long after it queued the stored copy, so the two check times are always that
+ * far apart; arrival time alone would reject the refresh and leave the mirror's
+ * "Checked" time up to twelve hours old.
  */
 const ENTITY_REFRESH_TOLERANCE_MS = 15 * 60_000;
 
@@ -405,15 +412,19 @@ export class CloudStore {
     }
     // Written on change only (ENTITY_REFRESH_MS). `$.status.checkedAt` is a repository's last Git check, not a change.
     const refreshBefore = new Date(Date.parse(ts) - ENTITY_REFRESH_MS + ENTITY_REFRESH_TOLERANCE_MS).toISOString();
-    const entity = (kind: string, id: string, json: unknown, taskId: string | null = null) =>
-      this.db
+    const entity = (kind: string, id: string, json: unknown, taskId: string | null = null) => {
+      const checkedAt = Date.parse(String((json as Record<string, any> | null)?.status?.checkedAt ?? ''));
+      const checkedBefore = Number.isNaN(checkedAt) ? null : new Date(checkedAt - ENTITY_REFRESH_MS + ENTITY_REFRESH_TOLERANCE_MS).toISOString();
+      return this.db
         .prepare(
           `INSERT INTO cloud_entities (node_id, kind, entity_id, task_id, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (node_id, kind, entity_id) DO UPDATE SET json = excluded.json, task_id = excluded.task_id, updated_at = excluded.updated_at
            WHERE cloud_entities.task_id IS NOT excluded.task_id OR cloud_entities.updated_at < ?
+             OR (? IS NOT NULL AND json_extract(cloud_entities.json, '$.status.checkedAt') < ?)
              OR json_remove(cloud_entities.json, '$.status.checkedAt') IS NOT json_remove(excluded.json, '$.status.checkedAt')`,
         )
-        .bind(nodeId, kind, id, taskId, ts, JSON.stringify(json), refreshBefore);
+        .bind(nodeId, kind, id, taskId, ts, JSON.stringify(json), refreshBefore, checkedBefore, checkedBefore);
+    };
     switch (p.type) {
       case 'task': {
         const t = p.task as Record<string, any>;

@@ -82,6 +82,19 @@ describe('mirror ingest writes on change only, against SQLite', () => {
     expect(JSON.parse(entityJson()).status.checkedAt).toBe('2026-10-07T07:00:00.000Z');
   });
 
+  it('accepts a refresh after a copy that waited offline, judged by the node\'s own check times', async () => {
+    // The previous copy sat in the node's outbox and was stored just now, long after it was queued.
+    await store.ingest('one', [repository('2026-10-07T01:00:00.000Z')]);
+    sqlite.prepare('UPDATE cloud_entities SET updated_at = ?').run(new Date().toISOString());
+    // A copy checked minutes later is still only a check-time change and is not written.
+    await store.ingest('one', [repository('2026-10-07T01:30:00.000Z')]);
+    expect(writes.at(-1)).toBe(0);
+    // The node's 6-hour refresh, timed from when it queued that copy, is accepted.
+    await store.ingest('one', [repository('2026-10-07T07:00:00.000Z')]);
+    expect(writes.at(-1)).toBe(1);
+    expect(JSON.parse(entityJson()).status.checkedAt).toBe('2026-10-07T07:00:00.000Z');
+  });
+
   it('compares array entities (agents) and the other mirrored kinds without error', async () => {
     const agents = (state: string) => message({ type: 'agents', agents: [{ id: 'claude', health: { state, checkedAt: '2026-10-07T01:00:00.000Z' } }] });
     await store.ingest('one', [agents('ready')]);

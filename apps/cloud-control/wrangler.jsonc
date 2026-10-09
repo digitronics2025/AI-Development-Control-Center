@@ -30,7 +30,7 @@
     { "name": "AUTH_LIMITER", "namespace_id": "4102", "simple": { "limit": 60, "period": 60 } },
     { "name": "COMMAND_LIMITER", "namespace_id": "4103", "simple": { "limit": 300, "period": 60 } }
   ],
-  "triggers": { "crons": ["17 3 * * *"] },
+  "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] },
   "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
   "vars": {
     "ENVIRONMENT": "development",
@@ -42,6 +42,16 @@
   "env": {
     "staging": {
       "name": "acc-cloud-control-staging",
+      "version_metadata": {"binding":"CF_VERSION_METADATA"},
+      "services": [
+        {"binding":"OPS_MESSENGER","service":"whatsapp-inbox-saas"},
+        {"binding":"OPS_WEBSITE","service":"digitronics-website"},
+        {"binding":"OPS_SALES","service":"sales-analyzer-api"},
+        {"binding":"OPS_PRODUCT_HUNTER","service":"product-hunter"},
+        {"binding":"OPS_RIHLA","service":"rihla-ai"},
+        {"binding":"OPS_APPLYBRIDGE","service":"applybridge"}
+      ],
+
       "workers_dev": false,
       "preview_urls": false,
       "routes": [
@@ -56,10 +66,14 @@
         { "name": "AUTH_LIMITER", "namespace_id": "4202", "simple": { "limit": 60, "period": 60 } },
         { "name": "COMMAND_LIMITER", "namespace_id": "4203", "simple": { "limit": 300, "period": 60 } }
       ],
-      "triggers": { "crons": ["17 3 * * *"] },
+      "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] },
       "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
       "vars": {
         "ENVIRONMENT": "staging",
+        "OPS_ENABLED": "true",
+        "OPS_INVESTIGATION_ENABLED": "false",
+        "OPS_RECOVERY_ENABLED": "false",
+        "OPS_OWNER_EMAIL": "contact@tenten.ma",
         "CONTROL_HOSTS": "acc-staging.dr-badawi-abdalsalam.com",
         "RELAY_HOSTS": "acc-relay-staging.dr-badawi-abdalsalam.com",
         "ACCESS_TEAM_DOMAIN": "",
@@ -68,6 +82,16 @@
     },
     "production": {
       "name": "acc-cloud-control",
+      "version_metadata": {"binding":"CF_VERSION_METADATA"},
+      "services": [
+        {"binding":"OPS_MESSENGER","service":"whatsapp-inbox-saas"},
+        {"binding":"OPS_WEBSITE","service":"digitronics-website"},
+        {"binding":"OPS_SALES","service":"sales-analyzer-api"},
+        {"binding":"OPS_PRODUCT_HUNTER","service":"product-hunter"},
+        {"binding":"OPS_RIHLA","service":"rihla-ai"},
+        {"binding":"OPS_APPLYBRIDGE","service":"applybridge"}
+      ],
+
       "workers_dev": false,
       "preview_urls": false,
       "routes": [
@@ -82,10 +106,14 @@
         { "name": "AUTH_LIMITER", "namespace_id": "4302", "simple": { "limit": 60, "period": 60 } },
         { "name": "COMMAND_LIMITER", "namespace_id": "4303", "simple": { "limit": 300, "period": 60 } }
       ],
-      "triggers": { "crons": ["17 3 * * *"] },
+      "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] },
       "observability": { "enabled": true, "head_sampling_rate": 1, "traces": { "enabled": false } },
       "vars": {
         "ENVIRONMENT": "production",
+        "OPS_ENABLED": "true",
+        "OPS_RECOVERY_ENABLED": "true",
+        "OPS_INVESTIGATION_ENABLED": "true",
+        "OPS_OWNER_EMAIL": "contact@tenten.ma",
         "CONTROL_HOSTS": "acc.dr-badawi-abdalsalam.com",
         "RELAY_HOSTS": "acc-relay.dr-badawi-abdalsalam.com",
         "ACCESS_TEAM_DOMAIN": "sparkling-breeze-b580.cloudflareaccess.com",

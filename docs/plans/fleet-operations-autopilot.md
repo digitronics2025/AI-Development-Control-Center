@@ -120,29 +120,29 @@ The resulting system would give you automatic detection, a persistent investigat
 
 ## Steps
 
-- [ ] 1. Register apps and runtime contracts — done when: validated identities, dependencies, release methods and real schedules are stored — check: `pnpm cloud:test -- operations`
-- [ ] 2. Durable monitoring and delivery — done when: incidents and retryable deliveries survive restart — check: `pnpm cloud:test -- operations`
-- [ ] 3. Missing activity and service monitoring — done when: indexed bounded due checks distinguish unknown from healthy — check: `pnpm cloud:test -- operations`
-- [ ] 4. Classify failures and business attention — done when: financial, staff, budget and uncertain-send alerts never authorize repair — check: `pnpm cloud:test -- operations`
-- [ ] 5. Deduplicate and correlate investigations — done when: repeats update one incident and recurrences escalate — check: `pnpm cloud:test -- operations`
-- [ ] 6. Link existing task investigations — done when: typed commands preserve leases and offline safety — check: `pnpm cloud:test -- operations`
-- [ ] 7. Scoped app recovery — done when: bounded procedures check native preconditions and verify effects — check: `manual: app adapter contract and recovery tests`
+- [x] 1. Register apps and runtime contracts — done when: validated identities, dependencies, release methods and real schedules are stored — check: `pnpm cloud:test -- operations`
+- [x] 2. Durable monitoring and delivery — done when: incidents and retryable deliveries survive restart — check: `pnpm cloud:test -- operations`
+- [x] 3. Missing activity and service monitoring — done when: indexed bounded due checks distinguish unknown from healthy — check: `pnpm cloud:test -- operations`
+- [x] 4. Classify failures and business attention — done when: financial, staff, budget and uncertain-send alerts never authorize repair — check: `pnpm cloud:test -- operations`
+- [x] 5. Deduplicate and correlate investigations — done when: repeats update one incident and recurrences escalate — check: `pnpm cloud:test -- operations`
+- [x] 6. Link existing task investigations — done when: typed commands preserve leases and offline safety — check: `pnpm cloud:test -- operations`
+- [x] 7. Scoped app recovery — done when: bounded procedures check native preconditions and verify effects — check: `manual: app adapter contract and recovery tests`
 - [ ] 8. Code-repair workflow — done when: tasks enforce stages, attempt limits and existing release gates — check: `manual: task integration tests and production node readiness`
-- [ ] 9. Evidence before resolution — done when: untrusted or old evidence cannot resolve incidents — check: `pnpm cloud:test -- operations`
+- [x] 9. Evidence before resolution — done when: untrusted or old evidence cannot resolve incidents — check: `pnpm cloud:test -- operations`
 - [ ] 10. Owner reporting and fallback — done when: incident changes reach owner and daily review includes all bots — check: `manual: real owner report and scheduled review configuration`
-- [ ] 11. Future apps and bots — done when: validated registration includes new sources without weakening group consent — check: `manual: source registration and authorization tests`
-- [ ] 12. Bounded costs and offline execution — done when: limits, indexed plans, concurrency and stale-action guards are tested — check: `pnpm cloud:test -- operations`
+- [x] 11. Future apps and bots — done when: validated registration includes new sources without weakening group consent — check: `manual: source registration and authorization tests`
+- [x] 12. Bounded costs and offline execution — done when: limits, indexed plans, concurrency and stale-action guards are tested — check: `pnpm cloud:test -- operations`
 - [ ] 13. Controlled rollout — done when: failure scenarios pass and intended production versions and outcomes are observed — check: `manual: deployed version, downstream probes and failure matrix`
 
 ## Tail
 
-- [ ] T1. Adversarial review — done when: findings fixed or recorded — check: `git diff --stat` reviewed hunk by hunk
-- [ ] T2. Similar-issue sweep — done when: related auth, outboxes and query paths checked — check: `manual: Ledger sweep results`
-- [ ] T3. Full applicable checks — done when: repository check passes — check: `pnpm check`
-- [ ] T4. Documentation — done when: owning system docs and follow-ups reflect behavior — check: `pnpm docs:guard`
+- [x] T1. Adversarial review — done when: findings fixed or recorded — check: `git diff --stat` reviewed hunk by hunk
+- [x] T2. Similar-issue sweep — done when: related auth, outboxes and query paths checked — check: `manual: Ledger sweep results`
+- [x] T3. Full applicable checks — done when: repository check passes — check: `pnpm check`
+- [x] T4. Documentation — done when: owning system docs and follow-ups reflect behavior — check: `pnpm docs:guard`
 - [ ] T5. Scoped commit and push — done when: exact source revision is saved remotely — check: `git log origin/main..HEAD --oneline`
 - [ ] T6. Live verification — done when: supported releases and downstream results verified — check: `manual: release receipts and runtime evidence`
-- [ ] T7. Downstream claims — done when: probe and deadline registered — check: `manual: docs claims entry`
+- [x] T7. Downstream claims — done when: probe and deadline registered — check: `manual: docs claims entry`
 
 ## Ledger
 
@@ -150,3 +150,16 @@ The resulting system would give you automatic detection, a persistent investigat
 - 2026-10-09 — Production node is offline (last seen October 3); Desktop Commander is also offline. Finish cloud and independent work; code execution proof must remain explicitly blocked until a real node runs it. No simulated node is production proof.
 - 2026-10-09 — Production Control Center is manually released, not Workers Builds. User explicitly authorized implementation, migration and release; preserve supported staged release sequence and authentication gates. Do not create GitHub Actions.
 - 2026-10-09 — Available conversation context retained above; detailed recovery matrix and resolution criteria are expanded in the owning system documentation during implementation.
+
+- 2026-10-09 — Steps 1, 2, 4, 5: actual Workers/D1 tests passed concurrent dedupe, restart persistence, source isolation, nontechnical decision-only handling and cost-budget rejection. Nine validated seed manifests; unsupported job receipts are not invented. Other steps remain open until their tests and runtime evidence exist.
+
+- 2026-10-09 — Final local gates: Control Center full check 2,335 tests; Messenger full suite 3,102 tests plus affected-source, owner-scope and native recovery checks. Browser verification covered 83 journeys: 81 passed initially; two stale WebSocket test patterns were corrected and all four send-control journeys passed. No product UI behavior was changed to satisfy those mocks.
+- 2026-10-09 — Added a per-tick 48-D1-statement ceiling (each batch statement counted), single-batch registry bootstrap, metadata-only unconnected jobs and permission inheritance. Actual local Workers tests prove pending investigations resume on later ticks without exceeding D1 Free; remote tasks inherit the machine's current ceiling rather than trying to raise it.
+- 2026-10-09 — Accounting runtime inventory: 25 named Workers deployed, one print-agent Worker config absent. Actual schedules were read through Cloudflare; dispatcher/stocktake/Google Sheets/DR schedules differ from source. Registry records actual live cron metadata without changing those production schedules or the existing cost monitor's held baseline.
+- 2026-10-09 — Unavoidable release verification blocker: runtime egress policy allows Cloudflare/GitHub APIs but not the control/relay/Messenger public domains. CONNECT 403 comes from the workspace proxy, not an app response. User authorized all available actions, but no runtime tool can edit the policy. Do not convert this into a successful smoke check or bypass the proxy.
+
+- 2026-10-09 — Final suites: Messenger 3,103 passed, one existing skip, 274 files; latest affected tests 34 passed and OAuth protocol seven passed after replacing a hardcoded test-only secret with runtime randomness. Typecheck/lint/build/local migrations/DB wiring and clean-tree hygiene passed. Control Center full rerun passed 2,331 tests but one existing four-test upload suite timed out starting its fixture; targeted upload + operations rerun passed all 15 tests. Latest typecheck/lint/docs guard passed. The earlier complete full check passed 2,335 tests. Browser evidence is 81 full-run passes plus all four corrected send-control journeys, not an invented single green run.
+- 2026-10-09 — Source failure matrix verified: concurrent retries/identity conflicts, native downstream delivery versus API acceptance, stale backup/ARK receipts, financial/budget/staff/uncertain-send classification, recurring prevention incident, dependency cycles, offline waiting, current test-node typed task, inherited permission ceilings, real local Worker restart, indexed candidate queries, bounded owner registry and future-bot dynamic reader discovery. A real production execution/release failure remains unprovable while the paired node is offline.
+- 2026-10-09 — Installed purpose-specific bridge/reader/registration/health/recovery/owner-notification credentials in Control Center production and Messenger, plus health and an independent read-only summary credential in staging. Values generated in memory and stored only in Cloudflare. No legacy sender/session key rotated. Saved pre-change deployment versions: Control Center 570631aa-118a-442b-bb09-a918aaeedbdd; staging dd2d1507-2224-4a36-81a6-23a1b3e73e61; Messenger 6df8566e-58ef-425c-b82c-9301eb7a4b6f. Secret bindings alone are not a source release or a successful handshake.
+- 2026-10-09 — Owner onboarding supports the existing Access broker so clients need not retain the cross-service master key. Future producers receive only their individual credentials. CLI verifies producer secret names and fails if an earlier lost response left credentials missing; it never silently rotates them. Existing legacy bots are reused by the trusted owner provisioner without new impersonating sender keys.
+- 2026-10-09 — Global app-creation/fleet registration workflow updated and secret-scanned. Fixed non-executable hook/scanner metadata so Linux checkouts actually run the blocking secret gate. The offline PC has not received a synchronization receipt; repository publication is not PC synchronization.

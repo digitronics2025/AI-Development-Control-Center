@@ -1,0 +1,443 @@
+[
+  {
+    "id": "tenten_accounting",
+    "name": "TenTen Accounting",
+    "repository": "TenTen-maroc/tenten-accounting-in",
+    "services": [
+      {
+        "name": "tenten-accounting-in-saas-new",
+        "kind": "pages",
+        "release": "pages_git",
+        "deployed": true
+      },
+      {
+        "name": "tenten-saas-accounting-health-digest-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-attachments-cleanup-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-backup-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-cheque-links-digest-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-cheque-links-nightly-sweep-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "45 2 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-diagnose-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 */2 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-digitronics-stock-reconcile-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 2 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-digitronics-stock-sync-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "*/1 * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-dr-backup",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 5 * * *",
+          "0 7 * * *",
+          "0 8 * * *",
+          "30 5 * * *",
+          "*/5 * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-email",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-executive-report-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-google-sheet-sync-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 6-20/2 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-iptv-auto-expire-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 1 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-jumia-auto-link-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 3 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-learning-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 3 * * sun"
+        ]
+      },
+      {
+        "name": "tenten-saas-messenger-digest-sweep-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0,30 * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-open-balance-nightly-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "30 2 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-orphan-sweep-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "30 3 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-print-agent-ws",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": false,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-print-job-cleanup-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": []
+      },
+      {
+        "name": "tenten-saas-promo-sweep-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "5 0 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-receivables-notifications-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-scheduler-tick",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "* * * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-stocktake-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 */6 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-tenant-backup",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 19 * * *",
+          "0 20 * * *",
+          "0 21 * * *",
+          "0 22 * * *"
+        ]
+      },
+      {
+        "name": "tenten-saas-tva-encaissement-drift-scheduler",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true,
+        "crons": [
+          "0 9 * * *"
+        ]
+      }
+    ],
+    "dependencies": [],
+    "notificationSources": [
+      "tenten_accounting"
+    ],
+    "jobs": [
+      {
+        "id": "scheduler_dispatcher",
+        "intervalSeconds": 300,
+        "graceSeconds": 7200,
+        "cron": "* * * * *",
+        "heartbeatExpected": false
+      },
+      {
+        "id": "stocktake_anomaly_digest",
+        "intervalSeconds": 21600,
+        "graceSeconds": 7200,
+        "cron": "0 */6 * * *",
+        "heartbeatExpected": false
+      }
+    ],
+    "recovery": "native_only"
+  },
+  {
+    "id": "digitronics_website",
+    "name": "DigiTronics website and AI brain",
+    "repository": "TenTen-maroc/DigiTronics.ma",
+    "services": [
+      {
+        "name": "digitronics-website",
+        "kind": "worker",
+        "release": "workers_builds",
+        "deployed": true
+      }
+    ],
+    "dependencies": [
+      "tenten_accounting"
+    ],
+    "notificationSources": [
+      "digitronics_brain",
+      "digitronics_call_desk"
+    ],
+    "jobs": [],
+    "recovery": "native_only"
+  },
+  {
+    "id": "sales_analyzer",
+    "name": "Sales Analyzer",
+    "repository": "digitronics2025/sales-analyzer",
+    "services": [
+      {
+        "name": "sales-analyzer-api",
+        "kind": "worker",
+        "release": "workers_builds",
+        "deployed": true
+      }
+    ],
+    "dependencies": [
+      "tenten_accounting"
+    ],
+    "notificationSources": [
+      "sales_analyzer"
+    ],
+    "jobs": [
+      {
+        "id": "inventory_sync",
+        "intervalSeconds": 900,
+        "graceSeconds": 1800,
+        "heartbeatExpected": false
+      },
+      {
+        "id": "report_delivery",
+        "intervalSeconds": 1800,
+        "graceSeconds": 3600,
+        "cron": "0,30 * * * *",
+        "heartbeatExpected": false
+      }
+    ],
+    "recovery": "native_only"
+  },
+  {
+    "id": "messenger",
+    "name": "DigiTronics Messenger",
+    "repository": "TenTen-maroc/whatsapp-inbox-saas",
+    "services": [
+      {
+        "name": "whatsapp-inbox-saas",
+        "kind": "worker",
+        "release": "workers_builds",
+        "deployed": true
+      }
+    ],
+    "dependencies": [
+      "digitronics_website"
+    ],
+    "notificationSources": [],
+    "jobs": [],
+    "recovery": "native_only"
+  },
+  {
+    "id": "ark_console",
+    "name": "ARK local backups",
+    "repository": "digitronics2025/ARK-Console",
+    "services": [
+      {
+        "name": "Owner PC backup console",
+        "kind": "desktop",
+        "release": "device",
+        "deployed": true
+      }
+    ],
+    "dependencies": [],
+    "notificationSources": [
+      "ark_console"
+    ],
+    "jobs": [
+      {
+        "id": "nightly_copy_check",
+        "intervalSeconds": 86400,
+        "graceSeconds": 7200,
+        "heartbeatExpected": false
+      }
+    ],
+    "recovery": "investigation"
+  },
+  {
+    "id": "control_center",
+    "name": "AI Development Control Center",
+    "repository": "digitronics2025/AI-Development-Control-Center",
+    "services": [
+      {
+        "name": "acc-cloud-control",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true
+      },
+      {
+        "name": "Paired Windows execution node",
+        "kind": "desktop",
+        "release": "device",
+        "deployed": true
+      }
+    ],
+    "dependencies": [
+      "messenger"
+    ],
+    "notificationSources": [
+      "control_center"
+    ],
+    "jobs": [],
+    "recovery": "investigation"
+  },
+  {
+    "id": "product_hunter",
+    "name": "Product Hunter",
+    "repository": "TenTen-maroc/Product-Hunter",
+    "services": [
+      {
+        "name": "product-hunter",
+        "kind": "worker",
+        "release": "workers_builds",
+        "deployed": true
+      }
+    ],
+    "dependencies": [],
+    "notificationSources": [],
+    "jobs": [],
+    "recovery": "investigation"
+  },
+  {
+    "id": "rihla",
+    "name": "Rihla",
+    "repository": "TenTen-maroc/rihla",
+    "services": [
+      {
+        "name": "rihla-ai",
+        "kind": "worker",
+        "release": "manual",
+        "deployed": true
+      }
+    ],
+    "dependencies": [],
+    "notificationSources": [],
+    "jobs": [],
+    "recovery": "investigation"
+  },
+  {
+    "id": "applybridge",
+    "name": "Applybridge",
+    "repository": "TenTen-maroc/applybridge",
+    "services": [
+      {
+        "name": "applybridge",
+        "kind": "worker",
+        "release": "workers_builds",
+        "deployed": true
+      }
+    ],
+    "dependencies": [],
+    "notificationSources": [],
+    "jobs": [],
+    "recovery": "investigation"
+  }
+]

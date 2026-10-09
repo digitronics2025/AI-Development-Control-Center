@@ -18,6 +18,7 @@ import { PAIRING_TTL_MS, secretHash } from '../auth/node.js';
 import type { Env } from '../env.js';
 import type { CommandWait, RpcReply } from '../hub.js';
 import { clientIp, DASHBOARD_CSP, fromBase64url, HttpError, isoIn, json, log, randomToken, readJson } from '../http.js';
+import { operationsApi } from '../operations/routes.js';
 import { offlineRead } from '../offline.js';
 import { CloudStore, commandView, waitFromRow } from '../store.js';
 
@@ -75,6 +76,7 @@ export async function handleControl(request: Request, env: Env, requestId: strin
 
   if (path.startsWith('/api/')) {
     if (request.method !== 'GET' && request.method !== 'HEAD') assertSameOrigin(request, url);
+    if (path.startsWith('/api/cloud/operations/') && env.OPS_ENABLED === 'true') return operationsApi(request, env, identity);
     if (path.startsWith('/api/cloud/')) return cloudApi(request, env, url, identity, requestId);
     return proxy(request, env, url, identity, requestId);
   }

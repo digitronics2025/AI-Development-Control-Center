@@ -1,6 +1,6 @@
 # Cloudflare cost cut claims
 
-Last verified: 2026-10-07 (D1 query analytics, read-only). No deployment or production configuration change is authorized from this container.
+Last verified: 2026-10-07 (D1 query analytics, read-only). The 09/10/2026 fleet-supervision request separately authorizes its rollout; prior cost-cut baselines remain observational and no plan or budget increase is authorized.
 
 | Item | Plan baseline | Proof the morning after deployment | State |
 | --- | --- | --- | --- |
@@ -8,3 +8,16 @@ Last verified: 2026-10-07 (D1 query analytics, read-only). No deployment or prod
 | C2 | 02/10/2026 with the PC online all day: 9 300 rows written — `cloud_entities` upserts 6 278 (repository rows rewritten because `status.checkedAt` moved), batch cursor 1 854, heartbeat `last_seen_at` 841. Retention cron already runs daily with no node (04–07/10) | The first full day with the PC online after both the Worker release and the PC update: `cloud_entities` rows written ≤ 1 000/day, heartbeat `UPDATE nodes SET last_seen_at` ≤ 1 000/day (no higher than before), total rows written ≤ 3 500/day; the dashboard's repositories still show current status, and offline "Checked" is ≤ 6 h old | Prepared; manual Worker release and PC update pending |
 
 Traces: since 07/10/2026 the repository's wrangler config sets `traces.enabled: false` for staging and production (Workers Logs unchanged at full sampling). It reaches Cloudflare only with the next manual release of each environment; until then the live Worker keeps the setting of its last release (the previous config traced at 0.1; the live setting was not read, only GraphQL and Workers Logs are permitted here). Proof after release: the Worker's Settings → Observability shows Traces off, and Workers Logs still return events for `acc-cloud-control`. Deadline: before 01/12/2026, when Observability starts billing ingestion.
+
+## Fleet supervision admission limits
+
+Claim: deterministic cron and transition-only health events add no paid AI-provider
+health requests; indexed due/cursor/recovery candidate queries avoid full app
+database scans. Hard caps are admission limits, not Cloudflare billing guarantees.
+Probe: after the first complete production UTC day, inspect D1 query analytics
+for ops tables and the new indexed native outbox lookup; compare rows read/written
+and Worker invocations to the prior day, preserving unrelated cost monitors.
+Deadline: first full day after a verified fleet-operations release. Record actual
+Worker version and completed cron receipt in the implementation plan before
+claiming production monitoring. A repaired job additionally needs fresh native
+downstream proof; an offline PC cannot establish code repair.

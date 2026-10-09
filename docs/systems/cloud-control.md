@@ -7,7 +7,7 @@ sources:
   - apps/dashboard/src/pages/NodesPage.tsx
   - apps/dashboard/e2e-cloud/**
   - .github/workflows/**
-verified_at: 57af61a
+verified_at: b758eac
 ---
 
 # Cloud control plane
@@ -18,7 +18,10 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-10-07
+> Last verified: 2026-10-09
+
+Fleet supervision and its separate owner/scoped machine routes are documented in
+[fleet-operations.md](fleet-operations.md). Code repairs still execute on paired nodes.
 
 ## Pieces
 
@@ -30,6 +33,7 @@ evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 | Durable Object `WorkspaceHub` | [src/hub.ts](../../apps/cloud-control/src/hub.ts): one object, holds every node and browser WebSocket (Hibernation API, tags `node`, `node:<id>`, `browser`) |
 | Rate limits | pairing 20/min, unauthenticated requests 60/min per IP, actions 300/min per person |
 | Cron `17 3 * * *` | retention (below) |
+| Cron `*/5 * * * *` | bounded durable fleet operations ([fleet-operations.md](fleet-operations.md)) |
 
 Hostnames (dr-badawi-abdalsalam.com): production `acc.` (people) and
 `acc-relay.` (machines); staging `acc-staging.` and `acc-relay-staging.`.
@@ -39,7 +43,7 @@ Hostnames (dr-badawi-abdalsalam.com): production `acc.` (people) and
 ## Two hostnames, two trust boundaries
 
 `CONTROL_HOSTS` serve people: the dashboard, `/api/*`, `/ws`. `RELAY_HOSTS`
-serve machines: `/node/v1/*` only. A relay path on the control host, or
+serve machines: `/node/v1/*` and separately authenticated `/ops/v1/*`. A relay path on the control host, or
 anything else on the relay host, is 404. `/health` answers `{ok:true}` on both
 and reveals nothing.
 

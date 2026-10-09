@@ -2,6 +2,9 @@ import type { Env } from './env.js';
 import { errorResponse, HttpError, json, log, withSecurityHeaders } from './http.js';
 import { handleControl } from './routes/control.js';
 import { handleRelay } from './routes/relay.js';
+import { operationsIngress } from './operations/routes.js';
+import { tickOperations } from './operations/monitor.js';
+import { OperationsStore } from './operations/store.js';
 import { CloudStore } from './store.js';
 
 export { WorkspaceHub } from './hub.js';
@@ -32,7 +35,8 @@ export default {
       // Liveness only; reveals nothing.
       if (url.pathname === '/health' && request.method === 'GET') return withSecurityHeaders(json({ ok: true }), requestId);
       let response: Response;
-      if (isRelayPath && relay) response = await handleRelay(request, env, requestId);
+      if (url.pathname.startsWith('/ops/v1/') && relay && env.OPS_ENABLED === 'true') response = await operationsIngress(request, env);
+      else if (isRelayPath && relay) response = await handleRelay(request, env, requestId);
       else if (!isRelayPath && control) response = await handleControl(request, env, requestId);
       else throw new HttpError(404, 'NOT_FOUND', 'Not found');
       // WebSocket upgrades pass through untouched.
@@ -51,7 +55,12 @@ export default {
   },
 
   /** Daily retention: cloud copies only; nodes keep their own history. */
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    if (controller.cron === '*/5 * * * *') {
+      if (env.OPS_ENABLED === 'true') await tickOperations(env);
+      return;
+    }
+    if (env.OPS_ENABLED === 'true') await new OperationsStore(env.DB).prune();
     const { r2Keys } = await new CloudStore(env.DB).prune();
     for (let i = 0; i < r2Keys.length; i += 1000) await env.ARTIFACTS.delete(r2Keys.slice(i, i + 1000));
     log('info', 'retention.pruned', { objects: r2Keys.length });

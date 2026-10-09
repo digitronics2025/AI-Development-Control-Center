@@ -1,7 +1,26 @@
+import type { QueryBudget } from './operations/query-budget.js';
 import type { WorkspaceHub } from './hub.js';
 
 export interface Env {
   DB: D1Database;
+  OPS_ENABLED?: string;
+  OPS_QUERY_BUDGET?: QueryBudget;
+  OPS_RECOVERY_ENABLED?: string;
+  OPS_REGISTRATION_TOKEN?: string;
+  OPS_HEALTH_TOKEN?: string;
+  OPS_INVESTIGATION_ENABLED?: string;
+  OPS_OWNER_EMAIL?: string;
+  OPS_BRIDGE_TOKEN?: string;
+  OPS_READER_TOKEN?: string;
+  OPS_NOTIFICATION_TOKEN?: string;
+  OPS_MESSENGER?: Fetcher;
+  OPS_WEBSITE?: Fetcher;
+  OPS_SALES?: Fetcher;
+  OPS_PRODUCT_HUNTER?: Fetcher;
+  OPS_RIHLA?: Fetcher;
+  OPS_APPLYBRIDGE?: Fetcher;
+  CF_VERSION_METADATA?: {id:string;tag:string;timestamp:string};
+  OPS_RECOVERY_TOKEN?: string;
   ARTIFACTS: R2Bucket;
   HUB: DurableObjectNamespace<WorkspaceHub>;
   ASSETS: Fetcher;

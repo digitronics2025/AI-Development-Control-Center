@@ -39,6 +39,14 @@ if (/ACCESS_JWKS/.test(config)) {
   process.exit(1);
 }
 // 2. Schema first.
+// Existing environments must have scoped operational credentials before code
+// can activate monitoring. Never compensate with a historical broad token.
+const existingSecrets=JSON.parse(wrangler(['secret','list','--env',env,'--format','json'],{capture:true})||'[]');
+const requiredOps=env==='production'?['OPS_BRIDGE_TOKEN','OPS_READER_TOKEN','OPS_REGISTRATION_TOKEN','OPS_HEALTH_TOKEN','OPS_RECOVERY_TOKEN','OPS_NOTIFICATION_TOKEN']:['OPS_HEALTH_TOKEN'];
+if(/"OPS_ENABLED"\s*:\s*"true"/.test(config)) {
+  const missing=requiredOps.filter(name=>!existingSecrets.some(s=>s.name===name));
+  if(missing.length){console.error(`✗ Missing scoped operations credentials: ${missing.join(', ')}. No migration or release was attempted.`);process.exit(1);}
+}
 console.log(`• Applying D1 migrations to ${DATABASES[env]}…`);
 wrangler(['d1', 'migrations', 'apply', DATABASES[env], '--remote', '--env', env]);
 

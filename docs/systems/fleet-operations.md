@@ -5,20 +5,21 @@ sources:
   - apps/cloud-control/operations/**
   - apps/cloud-control/migrations/0002_fleet_operations.sql
   - apps/cloud-control/test/operations.test.ts
-verified_at: b758eac
+verified_at: 7fe58f1
 ---
 
 # Fleet operations
 
-> Last verified: 2026-10-09 — local Workers/D1 and native Messenger tests. Production rollout receipts belong in the implementation plan; local tests are not production repair proof.
+> Last verified: 2026-10-09 — local Workers/D1, native Messenger tests and three actual monitor-only staging completions. Production supervision and repairs are not released; exact receipts and blockers belong in the implementation plan.
 
 The existing cloud control plane owns the durable app registry, incidents,
 probes, daily budgets, recovery receipts and owner-delivery outbox. Its five-minute
 cron evaluates bounded due work, not every application database. Messenger
 captures owner bot warnings in the message transaction and forwards immutable
 IDs immediately for internal ingestion, with its fifteen-minute cron as retry.
-Dot reads operations through the existing account-scoped, read-only Messenger
-MCP tool `read_app_operations`. No native Dot chat-creation API was established;
+The implemented account-scoped Messenger MCP tool `read_app_operations` is
+pending the server release; the current connection still exposes six notification
+tools. No native Dot chat-creation API was established;
 investigations use actual Control Center tasks and their existing conversations.
 
 ## Trust and credentials
@@ -137,11 +138,36 @@ parent is safely pruned. Messenger prunes only sent/verified thirty-day receipts
 Messenger's own hourly deterministic watchdog observes the supervisor heartbeat,
 execution-node activity, monitoring admission limit and delivery backlog. It
 writes an idempotent owner bot message and existing Web Push on state changes.
-This covers a supervisor outage while Messenger is available. It does not cover
-a simultaneous Messenger/supervisor outage: independent email setup is blocked
-by the current Cloudflare token's email-routing permission (403), and no disabled
-customer or Telegram channel is repurposed. A user's phone must allow the existing
-Messenger push subscription for phone delivery.
+This covers a supervisor outage while Messenger is available. The separately
+hosted ChatGPT task **Check app availability** is saved and enabled hourly as
+an independent fallback. It checks reader access, reads the actual Messenger KV
+scheduler timestamp through Cloudflare, and checks production supervisor
+readiness without depending on either app's notification bot. Until production
+`OPS_ENABLED` is true, absence of a supervisor tick is pending rollout rather
+than an outage. Once enabled it reads one runtime row and one indexed oldest
+pending notice: at most two D1 statements per run. Stale supervisor completion
+(20 minutes), stale Messenger scheduler (45 minutes), blocked notice delivery
+(30 minutes) or unavailable evidence can be reported through the hosted task.
+The first scheduled execution and actual phone-push delivery remain unobserved.
+Independent email setup is blocked by the current token's email-routing
+permission (403); no disabled customer or Telegram channel is repurposed.
+
+The separate **Review Messenger notifications** task is saved and enabled at
+09:00 Asia/Shanghai, starting 2026-10-10. Authenticated review paginated all
+2,388 available messages through checkpoint `2026-10-09T17:52:36.000Z`; unread
+counts stayed unchanged. Future runs refresh every channel-list page, backfill
+new bots once and use incremental successful checkpoints. Without supported
+persistent task state they disclose the limitation and use an overlapping
+24-hour review plus searches for unresolved alerts, not repeated whole-history
+scans. Reporting groups still require explicit consent. The existing temporary
+customer-reply monitor's complete prompt, enabled state and schedule are unchanged.
+
+Private plugin 1.0.2 publishes these discovery and evidence instructions while
+preserving its App binding, permissions, audience and presentation. Its optional
+operations guidance explicitly labels unavailable supervision as pending.
+Prepared server/plugin 1.1.0 capabilities are not represented as live. Platform
+automation availability and quota are separate from the Workers/D1 admission
+guards; no paid provider probe or plan increase was enabled.
 
 ## Registration and release
 

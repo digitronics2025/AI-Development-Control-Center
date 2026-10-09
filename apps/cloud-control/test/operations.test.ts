@@ -7,7 +7,7 @@ import { OPS_LIMITS, validProof, type OpsEvent } from '../src/operations/contrac
 let cloud: Cloud;
 let token: string;
 const source = 'ops_test_app';
-const app = {id:source,name:'Operations test app',repository:'example/operations',services:[{name:'test-worker',kind:'worker',release:'workers_builds',deployed:true}],dependencies:[],notificationSources:['test_bot'],jobs:[{id:'nightly_backup',intervalSeconds:86400,graceSeconds:7200}]};
+const app = {id:source,name:'Operations test app',repository:'example/operations',services:[{name:'test-worker',kind:'worker',release:'workers_builds',deployed:true}],dependencies:[],notificationSources:['test_bot'],jobs:[{id:'nightly_backup',intervalSeconds:86400,graceSeconds:7200,proofKind:'backup_artifact_and_mirror'}]};
 const makeEvent = (id: string,extra: Record<string,unknown> = {}) => ({id,appId:source,resource:'database',operation:'database_backup',signature:'mirror_missing',classification:'technical',outcome:'failed',occurredAt:new Date().toISOString(),title:'Backup mirror is missing',detail:'Dump exists, off-provider mirror not verified.',...extra});
 const send = (event: unknown, credential = token) => httpJson(cloud.url,'POST','/ops/v1/events',event,{authorization:`Bearer ${credential}`});
 beforeAll(async () => {
@@ -94,6 +94,14 @@ describe('fleet operations real Workers runtime and D1', () => {
       await cloud.api('POST','/api/cloud/operations/tick',{});
       expect((await cloud.d1("SELECT COUNT(*) n FROM remote_commands WHERE idempotency_key LIKE 'ops:%'"))[0].n).toBe(1);
     } finally {await node.close();}
+  });
+  it('rejects weak job heartbeats and resolves missing activity only from the registered downstream receipt',async()=>{
+    expect((await send(makeEvent('weak_job_receipt_001',{jobId:'nightly_backup',outcome:'healthy',proof:{kind:'job_result',observedAt:new Date().toISOString(),reference:'HTTP accepted'}}))).status).toBe(400);
+    await send(makeEvent('spoof_job_receipt_001',{resource:'nightly_backup',operation:'job_health',signature:'missing_heartbeat',outcome:'healthy',proof:{kind:'job_result',observedAt:new Date().toISOString(),reference:'Liveness without the registered job identity'}}));
+    expect((await cloud.d1("SELECT state FROM ops_incidents WHERE operation='job_health'"))[0].state).not.toBe('resolved');
+    expect((await send(makeEvent('native_job_receipt_001',{jobId:'nightly_backup',outcome:'healthy',proof:{kind:'backup_artifact_and_mirror',observedAt:new Date().toISOString(),reference:'Current native artifact and off-provider mirror'}}))).status).toBe(200);
+    expect((await cloud.d1("SELECT state FROM ops_incidents WHERE operation='job_health'"))[0].state).toBe('resolved');
+    expect((await cloud.d1("SELECT last_success_at FROM ops_jobs WHERE id='nightly_backup'"))[0].last_success_at).toBeTruthy();
   });
   it('opens a separate prevention investigation after three recurrences even when the outage recovers', async () => {
     for(let n=0;n<3;n++) {

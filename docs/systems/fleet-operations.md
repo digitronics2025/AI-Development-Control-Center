@@ -79,7 +79,9 @@ or uncertain customer resend.
 
 Registered schedules with `heartbeatExpected:false` document a known cadence
 without falsely treating a missing integration as a failed job. Enable only
-once the producer emits validated success receipts. A registered producer can
+once the producer emits validated success receipts and the job contract declares
+its required `proofKind`. A liveness/HTTP receipt cannot substitute for a backup
+artifact, provider delivery or inventory reconciliation. A registered producer can
 publish a same-job heartbeat with its per-app credential; intervals and grace
 are deadlines, never permission to rerun jobs.
 
@@ -177,3 +179,8 @@ The first unavailable health observation creates an unknown-health incident;
 subsequent unchanged observations do not generate events. Environments with
 both action flags disabled do not repeatedly reserve action budgets. This keeps
 monitor-only staging within its intended deterministic checking allowance.
+
+Verified same-job native receipts update the indexed deadline and resolve the
+corresponding missing-activity incident atomically, even when the normal producer
+operation has another fingerprint. Healthy prose without job identity, weak
+proof types and stale receipts cannot close a missing-activity incident.

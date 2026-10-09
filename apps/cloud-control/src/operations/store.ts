@@ -34,6 +34,8 @@ export class OperationsStore {
     const now = Date.now(), at = Date.parse(e.occurredAt);
     if (at > now + 60_000 || now - at > 7 * 86400_000) throw new HttpError(400,'OPS_STALE_EVENT','Event timestamp is out of range.');
     if (e.jobId && !await this.db.prepare('SELECT id FROM ops_jobs WHERE app_id=? AND id=? AND enabled=1').bind(e.appId,e.jobId).first()) throw new HttpError(400,'OPS_JOB_NOT_FOUND','Unknown or disabled job.');
+    const job=e.jobId?JSON.parse(app.contract).jobs.find((j:{id:string})=>j.id===e.jobId) as {proofKind?:string}|undefined:undefined;
+    if(e.jobId&&e.outcome==='healthy'&&(!job?.proofKind||!e.proof||e.proof.kind!==job.proofKind||Date.parse(e.proof.observedAt)>now+60000||now-Date.parse(e.proof.observedAt)>15*60000))throw new HttpError(400,'OPS_JOB_PROOF','A fresh native receipt of the registered job proof kind is required.');
     if (e.dependencyId && !JSON.parse(app.contract).dependencies.includes(e.dependencyId)) throw new HttpError(400,'OPS_DEPENDENCY','Dependency is not registered for this app.');
     if (!allowProof && (e.proof || e.outcome === 'healthy')) throw new HttpError(403,'OPS_PROOF_SOURCE','Notification text cannot establish recovery.');
     const hash = await sha256Hex(JSON.stringify(e));
@@ -54,10 +56,18 @@ export class OperationsStore {
     const g = [e.appId,e.id,nonce];
     const statements = [this.db.prepare('INSERT INTO ops_events(app_id,id,payload_hash,received_at,ingestion_nonce,incident_id) VALUES(?,?,?,?,?,?) ON CONFLICT(app_id,id) DO NOTHING')
       .bind(e.appId,e.id,hash,received,nonce,e.outcome === 'healthy' && !old ? null : incidentId)];
-    if (e.jobId && e.outcome === 'healthy' && e.proof && validProof(e,'1970-01-01T00:00:00.000Z',now)) {
+    if (e.jobId && e.outcome === 'healthy' && e.proof) {
       statements.push(this.db.prepare(`UPDATE ops_jobs SET last_success_at=?,next_due_at=strftime('%Y-%m-%dT%H:%M:%fZ',?, '+'||(interval_seconds+grace_seconds)||' seconds')
         WHERE app_id=? AND id=? AND enabled=1 AND (last_success_at IS NULL OR last_success_at<?) AND ${guard}`)
         .bind(e.proof.observedAt,e.proof.observedAt,e.appId,e.jobId,e.proof.observedAt,...g));
+      const missedId=`incident_${(await sha256Hex(JSON.stringify([e.appId,e.jobId,'job_health','missing_heartbeat']))).slice(0,32)}`;
+      // A real same-job receipt closes the missing-activity incident, even
+      // when the producer's normal operation/resource fingerprint differs.
+      statements.push(this.db.prepare(`UPDATE ops_incidents SET state='resolved',resolved_at=?,proof=?,detail=?,version=version+1,next_action_at=?
+        WHERE id=? AND state<>'resolved' AND failed_at<=? AND ${guard}`).bind(received,JSON.stringify(e.proof),`Verified same-job native receipt: ${e.proof.reference}. Observed ${e.proof.observedAt}.`,received,missedId,e.proof.observedAt,...g));
+      statements.push(this.db.prepare(`INSERT INTO ops_delivery(id,incident_id,version,body,next_due_at)
+        SELECT id||':'||version,id,version,json_object('title',title,'detail',detail,'appId',app_id,'state',state,'incidentId',id),?
+        FROM ops_incidents WHERE id=? AND state='resolved' AND resolved_at=? AND ${guard} ON CONFLICT(incident_id,version) DO NOTHING`).bind(received,missedId,received,...g));
     }
     // A recovered outage can still need prevention. Give it a distinct durable
     // incident, so a rapid healthy receipt cannot erase the investigation.
@@ -71,7 +81,7 @@ export class OperationsStore {
       SELECT id||':'||version,id,version,json_object('title',title,'detail',detail,'appId',app_id,'state',state,'incidentId',id),?
       FROM ops_incidents WHERE id=? AND version=1 AND ${guard} ON CONFLICT(incident_id,version) DO NOTHING`).bind(received,preventionId,...g));
     if (e.outcome === 'healthy') {
-      if (old && old.classification === 'technical' && validProof(e,old.failed_at,now)) statements.push(this.db.prepare(`UPDATE ops_incidents SET state='resolved',resolved_at=?,proof=?,version=version+1,next_action_at=?
+      if (old && old.classification === 'technical' && old.operation!=='job_health' && validProof(e,old.failed_at,now)) statements.push(this.db.prepare(`UPDATE ops_incidents SET state='resolved',resolved_at=?,proof=?,version=version+1,next_action_at=?
         WHERE id=? AND state<>'resolved' AND failed_at<=? AND ${guard}`).bind(received,JSON.stringify(e.proof),received,incidentId,e.proof!.observedAt,...g));
     } else {
       const cutoff = new Date(now-7*86400_000).toISOString();

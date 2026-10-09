@@ -262,3 +262,10 @@ termination deadline; exit, timeout and failure cleanup have regression tests.
 dashboard in a browser against that Worker and a paired simulated-agent node,
 both themes, five viewports, axe
 ([e2e-cloud/](../../apps/dashboard/e2e-cloud/)).
+
+Fleet operation checks count individual D1 statements (48 maximum/tick), defer
+work durably at the quota boundary, and skip action budgeting when both action
+flags are off. First unavailable health observations are visible. Enabled job
+contracts require an explicit proof kind; only fresh same-job native evidence
+updates deadlines or resolves missing activity. See the owning fleet operations
+contract for scopes, read-only staging and rollout blockers.

@@ -172,3 +172,8 @@ Access-authenticated `/api/cloud/operations/onboard`; an app-creation broker may
 supply an ephemeral `OPS_ACCESS_JWT` to the CLI instead of retaining the shared
 registration authority. The CLI verifies individual producer secret names;
 metadata success with missing credentials is a blocked onboarding result.
+
+The first unavailable health observation creates an unknown-health incident;
+subsequent unchanged observations do not generate events. Environments with
+both action flags disabled do not repeatedly reserve action budgets. This keeps
+monitor-only staging within its intended deterministic checking allowance.

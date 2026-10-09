@@ -6,8 +6,8 @@ import { OperationsStore, type Incident } from './store.js';
 const next = (seconds: number) => new Date(Date.now()+seconds*1000).toISOString();
 /** Fixed services and paths, never a URL or command supplied by an alert. */
 export async function probeServices(env: Env, ops: OperationsStore): Promise<number> {
-  const due = (await ops.db.prepare('SELECT p.app_id,p.state FROM ops_probes p JOIN ops_apps a ON a.id=p.app_id WHERE a.enabled=1 AND a.owner_email=? AND p.next_due_at<=? ORDER BY p.next_due_at LIMIT 2')
-    .bind(env.OPS_OWNER_EMAIL??'',nowIso()).all<{app_id:string;state:string}>()).results;
+  const due = (await ops.db.prepare('SELECT p.app_id,p.state,p.observed_at FROM ops_probes p JOIN ops_apps a ON a.id=p.app_id WHERE a.enabled=1 AND a.owner_email=? AND p.next_due_at<=? ORDER BY p.next_due_at LIMIT 2')
+    .bind(env.OPS_OWNER_EMAIL??'',nowIso()).all<{app_id:string;state:string;observed_at:string|null}>()).results;
   let checked = 0;
   for (const p of due) {
     if((env.OPS_QUERY_BUDGET?.remaining??Infinity)<24)break;
@@ -34,7 +34,7 @@ export async function probeServices(env: Env, ops: OperationsStore): Promise<num
         detail=state==='healthy'?'Verified service response. This does not verify backups, business records or delivery.':'Service or scheduler readiness could not be established.';
       }
     } catch { /* A network failure is unknown health, never an empty successful check. */ }
-    if (state!==p.state) {
+    if (state!==p.state||!p.observed_at) {
       await ops.ingest({id:`probe:${p.app_id}:${now}`,appId:p.app_id,resource:'service',operation:'service_health',signature:'unavailable',classification:'technical',outcome:state==='healthy'?'healthy':'unknown',occurredAt:now,
         title:`${p.app_id} service monitoring`,detail,...(state==='healthy'?{proof:{kind:'job_result',observedAt:now,reference:'service adapter response'}}:{})},p.app_id);
     }

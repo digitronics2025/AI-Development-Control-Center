@@ -40,8 +40,8 @@ export async function tickOperations(env: Env): Promise<Record<string,number|str
     await env.DB.prepare('UPDATE ops_jobs SET next_due_at=? WHERE app_id=? AND id=? AND next_due_at=?').bind(after(3600),j.app_id,j.id,j.next_due_at).run();
     missed++;
   }
-  const actionable = (await env.DB.prepare("SELECT i.* FROM ops_incidents i JOIN ops_apps a ON a.id=i.app_id WHERE i.state IN ('detected','waiting_execution','investigating','recovering','verifying') AND i.next_action_at<=? AND a.enabled=1 AND a.owner_email=? ORDER BY i.next_action_at LIMIT ?")
-    .bind(nowIso(),env.OPS_OWNER_EMAIL??'',OPS_LIMITS.incidentsPerTick).all<Incident>()).results;
+  const actionable = (env.OPS_INVESTIGATION_ENABLED==='true'||env.OPS_RECOVERY_ENABLED==='true') ? (await env.DB.prepare("SELECT i.* FROM ops_incidents i JOIN ops_apps a ON a.id=i.app_id WHERE i.state IN ('detected','waiting_execution','investigating','recovering','verifying') AND i.next_action_at<=? AND a.enabled=1 AND a.owner_email=? ORDER BY i.next_action_at LIMIT ?")
+    .bind(nowIso(),env.OPS_OWNER_EMAIL??'',OPS_LIMITS.incidentsPerTick).all<Incident>()).results : [];
   for (const i of actionable) {
     // Includes native-verification timeout plus a typed investigation, and
     // reserves the final runtime receipt even at the Free-plan ceiling.

@@ -11,7 +11,7 @@ status: in-progress
 > are saved on main; full local checks and affected browser journeys passed.
 > Messenger PR 47 merged, and its main build passed 3,210 tests before the new
 > migration cost gate rejected unreviewed 0202/0203. No new production release
-> is verified. Owner-environment Control Center release, actual billing/source
+> is verified. Network-capable authorized Control Center release, actual billing/source
 > bounds, connected execution node, authenticated new capabilities, native
 > canary proof and elapsed 48-hour/seven-day windows remain required. See the
 > current [fleet system map](../systems/fleet-operations.md#registration-and-release)

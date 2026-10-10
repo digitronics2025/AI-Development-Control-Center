@@ -197,8 +197,10 @@ row inspection, so neither a total source bound nor billing headroom is proved.
 Do not bypass this guard or infer free capacity from the database size. The
 unapproved cost-review draft and provider receipts are in Messenger's
 [release evidence](https://github.com/TenTen-maroc/whatsapp-inbox-saas/blob/main/docs/plans/fleet-supervision/release-evidence.md).
-This repository's AGENTS.md requires owner-environment manual deployment;
-cloud sessions cannot publish it. The owner node is offline, so subscription
+The revised AGENTS.md permits authorized cloud deployment through the supported
+scripts after prerequisite checks. Public app hosts are still denied by this
+environment's enforced network policy; changing repository text does not fix
+that transport blocker. The owner node is offline, so subscription
 execution, recovery canary, phone push and the elapsed observation windows remain
 unverified. Old staging ticks do not count toward the new candidate's acceptance.
 

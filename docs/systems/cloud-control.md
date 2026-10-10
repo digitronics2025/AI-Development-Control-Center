@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-10-09
+> Last verified: 2026-10-10 — authorized cloud-release policy and enforced public-host network denial checked; no new deployment is claimed.
 
 Fleet supervision and its separate owner/scoped machine routes are documented in
 [fleet-operations.md](fleet-operations.md). Code repairs still execute on paired nodes.
@@ -193,14 +193,34 @@ must be reinstalled.
 | Observability | [wrangler.jsonc](../../apps/cloud-control/wrangler.jsonc) keeps Workers Logs on at full sampling (`head_sampling_rate: 1`) and sets `traces.enabled: false` in every block, so a release switches tracing off on Cloudflare (Observability bills ingestion from 01/12/2026; logs carry the triage evidence). Takes effect only at the next manual release of each environment. |
 
 Both rollbacks and a deliberately failing migration were exercised on staging
-(plan Ledger, step 22). CI ([ci.yml](../../.github/workflows/ci.yml)) runs a static
-gate on ready PRs and the full local and cloud suites on Windows on `main` (and on
-manual dispatch); releases are manual (`deploy-cloud.yml`, `rollback-cloud.yml`).
-`deploy-cloud.yml` first runs a `gate` job: the ref must be `main` and `ci.yml` must
-have a successful push or manual run (not a PR run) for that exact commit. The GitHub environments `staging` and `production` require the
-owner's review and accept only `main`. The workflows hold no Cloudflare secrets
-yet (they would go in through secret-custody as environment secrets), so today
-every release runs from the operator's shell with `pnpm cloud:deploy:production`.
+(plan Ledger, step 22). Current policy keeps GitHub Actions disabled and these
+Workers outside Workers Builds; pushing main does not release them. The supported
+scripts run from an authorized local or cloud environment. The former blanket
+cloud-session ban was a repository instruction, not a Cloudflare requirement;
+on 2026-10-10 it was replaced with prerequisite and proof gates in AGENTS.md and
+CLAUDE.md. Full-autopilot authorization covers routine release, but never grants
+permission to bypass network policy, migration cost checks or scoped credentials.
+
+Before remote mutation, check the clean tested revision, actual migration cost
+inputs, configured credentials and public-host reachability/full smoke support.
+Then use the staged script and verify the exact deployed version and complete
+smoke checks; merely uploading successfully is not release acceptance. These are
+operator/agent prerequisites: deploy.mjs itself currently performs its smoke check
+after upload, so it must not be used to discover an environment's network denial.
+The paired owner PC is needed for subscription-authenticated investigations on
+that node, independently of publishing the cloud Worker.
+
+Managed cloud sessions keep proxy and CA trust; use `NODE_USE_ENV_PROXY=1` for the
+Node entrypoint. On 2026-10-10 the environment reported an enforced restricted
+policy allowing Cloudflare's API, GitHub and package presets, but excluding the
+public app hosts. A read-only staging relay request confirmed `Tunnel connection
+failed: 403 Forbidden` before reaching Cloudflare. The required additional host
+allowlist for this rollout is `acc-staging.dr-badawi-abdalsalam.com`,
+`acc-relay-staging.dr-badawi-abdalsalam.com`, `acc.dr-badawi-abdalsalam.com`,
+`acc-relay.dr-badawi-abdalsalam.com` and `messenger.digitronics.app`. Add only
+those hosts through environment configuration, then verify policy enforcement
+and run the existing checks. No available tool in this session can edit that
+network policy. Billing inputs remain a separate release blocker.
 
 ## Repository snapshot write cost
 

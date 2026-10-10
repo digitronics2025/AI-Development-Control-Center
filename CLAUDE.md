@@ -2,9 +2,9 @@
 - **Not connected to Workers Builds — deployed by hand.** Workers: `acc-cloud-control` (production) and `acc-cloud-control-staging`. Pushing to `main` does NOT deploy. After a manual deploy, check the live URL answers.
 - GitHub Actions is OFF.
   Do not add deploy steps to Actions.
-- Local direct release (only when asked or builds are broken): `pnpm cloud:deploy:staging`, then `pnpm cloud:deploy:production`.
+- Authorized direct release, from local or cloud: `pnpm cloud:deploy:staging`, then `pnpm cloud:deploy:production` after staging acceptance and required callees are live.
   Rollback: `npx wrangler rollback`.
-- Cloud sessions: never run `wrangler deploy`; ask the owner to deploy.
+- Cloud sessions may release when the user has authorized it, including an explicit full-autopilot request. Use the supported scripts above from a clean, tested revision, with scoped configured credentials and reviewed migration costs. Before any remote mutation, verify the target hosts are reachable through the environment's approved network policy and the full smoke check can run; verify the exact live version and smoke checks afterward. When a managed proxy is configured, set `NODE_USE_ENV_PROXY=1` and preserve its CA trust. A denied host, unknown cost input or missing credential is a blocker: do not bypass it, use raw `wrangler deploy` to skip gates, or repeatedly retry. The owner PC is required only for work that actually executes on that paired node.
 - Never print or commit secret values. Secrets live in Cloudflare.
 
 <!-- BEGIN operator-conventions: regenerated from digitronics2025/claude-config -->

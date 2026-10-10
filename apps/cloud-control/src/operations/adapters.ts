@@ -1,16 +1,15 @@
 import { sha256Hex } from '@acc/shared';
 import type { Env } from '../env.js';
 import { nowIso } from '../http.js';
+import type { DueProbe } from './due-work.js';
 import { OperationsStore, type Incident } from './store.js';
 
 const next = (seconds: number) => new Date(Date.now()+seconds*1000).toISOString();
 /** Fixed services and paths, never a URL or command supplied by an alert. */
-export async function probeServices(env: Env, ops: OperationsStore): Promise<number> {
-  const due = (await ops.db.prepare('SELECT p.app_id,p.state,p.observed_at FROM ops_probes p JOIN ops_apps a ON a.id=p.app_id WHERE a.enabled=1 AND a.owner_email=? AND p.next_due_at<=? ORDER BY p.next_due_at LIMIT 2')
-    .bind(env.OPS_OWNER_EMAIL??'',nowIso()).all<{app_id:string;state:string;observed_at:string|null}>()).results;
+export async function probeServices(env: Env, ops: OperationsStore,due:DueProbe[]): Promise<number> {
   let checked = 0;
   for (const p of due) {
-    if((env.OPS_QUERY_BUDGET?.remaining??Infinity)<24)break;
+    if((env.OPS_QUERY_BUDGET?.remaining??Infinity)<24){ops.budgetLimited=true;break;}
     if (!(await ops.reserve('checks',12))) break;
     // Rihla's current health endpoint scans its cost ledger; do not poll it.
     const binding = p.app_id==='messenger' ? env.OPS_MESSENGER : p.app_id==='digitronics_website' ? env.OPS_WEBSITE : p.app_id==='sales_analyzer' ? env.OPS_SALES : p.app_id==='product_hunter' ? env.OPS_PRODUCT_HUNTER : p.app_id==='applybridge' ? env.OPS_APPLYBRIDGE : null;
@@ -52,7 +51,7 @@ export async function probeServices(env: Env, ops: OperationsStore): Promise<num
 
 /** One bounded native recovery, followed by independent downstream verification. */
 export async function recoverNative(env: Env, ops: OperationsStore, i: Incident): Promise<boolean> {
-  if (env.OPS_RECOVERY_ENABLED!=='true'||i.app_id!=='messenger'||i.operation!=='outbox_reconcile'||i.classification!=='technical'||!env.OPS_MESSENGER||!env.OPS_RECOVERY_TOKEN) return false;
+  if (i.app_id!=='messenger'||i.operation!=='outbox_reconcile'||i.classification!=='technical'||!env.OPS_MESSENGER||!env.OPS_RECOVERY_TOKEN) return false;
   const receipt=await ops.db.prepare('SELECT id,state,created_at,verify_after FROM ops_recoveries WHERE incident_id=? AND recurrence=?').bind(i.id,i.recurrence_count).first<{id:string;state:string;created_at:string;verify_after:string}>();
   if (receipt) {
     if (receipt.verify_after>nowIso()) return true;
@@ -70,6 +69,7 @@ export async function recoverNative(env: Env, ops: OperationsStore, i: Incident)
     await ops.db.prepare('UPDATE ops_recoveries SET verify_after=? WHERE id=?').bind(next(900),receipt.id).run();
     return Date.now()-Date.parse(receipt.created_at)<3600000;
   }
+  if(env.OPS_RECOVERY_ENABLED!=='true')return false;
   if (!(await ops.reserve('checks',50))) return true;
   const id=`recovery_${(await sha256Hex(`${i.id}:${i.recurrence_count}`)).slice(0,32)}_1`;
   const claimed=await ops.db.prepare("INSERT INTO ops_recoveries(id,incident_id,recurrence,state,created_at,verify_after) VALUES(?,?,?,'claimed',?,?) ON CONFLICT(incident_id,recurrence) DO NOTHING RETURNING id")

@@ -5,6 +5,7 @@ import { clientIp, HttpError, json, readJson } from '../http.js';
 import { eventSchema, OPS_LIMITS } from './contracts.js';
 import { tickOperations } from './monitor.js';
 import { OperationsStore } from './store.js';
+import { operationsStatus } from './summary.js';
 
 export async function operationsApi(request: Request, env: Env, identity: AccessIdentity): Promise<Response> {
   if (!env.OPS_OWNER_EMAIL || identity.email.toLowerCase()!==env.OPS_OWNER_EMAIL.toLowerCase()) throw new HttpError(403,'OPS_OWNER','Operations access is restricted to its configured owner.');
@@ -32,7 +33,7 @@ export async function operationsApi(request: Request, env: Env, identity: Access
     if(row)await ownedApp(store,row.app_id,identity.email.toLowerCase());
     return json({incident:row});
   }
-  if (path===`${base}/status` && request.method==='GET') return json({runtime:await env.DB.prepare("SELECT last_tick_at,last_completed_at,last_result,next_tick_at FROM ops_runtime WHERE id='fleet'").first(),limits:OPS_LIMITS});
+  if (path===`${base}/status` && request.method==='GET') return json({...await operationsStatus(env,identity.email.toLowerCase()),limits:OPS_LIMITS});
   if (path===`${base}/tick` && request.method==='POST') return json(await tickOperations(env));
   throw new HttpError(404,'NOT_FOUND','Operations route not found.');
 }
@@ -67,11 +68,7 @@ export async function operationsIngress(request: Request, env: Env): Promise<Res
     if(!env.OPS_OWNER_EMAIL)throw new HttpError(503,'OPS_NOT_CONFIGURED','Operations owner is missing.');
     if(appId)await ownedApp(store,appId,env.OPS_OWNER_EMAIL);
     return json(appId ? await store.page(appId,new URL(request.url).searchParams.get('cursor')??undefined) : {
-      apps:await store.registry.list(env.OPS_OWNER_EMAIL),runtime:await env.DB.prepare("SELECT last_tick_at,last_completed_at,last_result FROM ops_runtime WHERE id='fleet'").first(),
-      probes:(await env.DB.prepare('SELECT p.app_id,p.state,p.observed_at,p.next_due_at FROM ops_probes p JOIN ops_apps a ON a.id=p.app_id WHERE a.owner_email=? ORDER BY p.app_id LIMIT 64').bind(env.OPS_OWNER_EMAIL).all()).results,
-      nodes:(await env.DB.prepare('SELECT id,label,last_seen_at FROM nodes WHERE revoked_at IS NULL AND paired_by=? ORDER BY last_seen_at DESC LIMIT 4').bind(env.OPS_OWNER_EMAIL).all()).results,
-      notificationBacklog:!!await env.DB.prepare("SELECT id FROM ops_delivery WHERE state='pending' AND created_at<? LIMIT 1").bind(new Date(Date.now()-3600000).toISOString()).first(),
-      budget:await env.DB.prepare('SELECT units,events,tasks,notifications FROM ops_budget WHERE day=?').bind(new Date().toISOString().slice(0,10)).first(),limits:OPS_LIMITS});
+      apps:await store.registry.list(env.OPS_OWNER_EMAIL),...await operationsStatus(env,env.OPS_OWNER_EMAIL),limits:OPS_LIMITS});
   }
   throw new HttpError(404,'NOT_FOUND','Not found.');
 }

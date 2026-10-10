@@ -7,7 +7,7 @@ sources:
   - apps/dashboard/src/pages/NodesPage.tsx
   - apps/dashboard/e2e-cloud/**
   - .github/workflows/**
-verified_at: 7fe58f1
+verified_at: e215cf5
 ---
 
 # Cloud control plane
@@ -269,3 +269,13 @@ flags are off. First unavailable health observations are visible. Enabled job
 contracts require an explicit proof kind; only fresh same-job native evidence
 updates deadlines or resolves missing activity. See the owning fleet operations
 contract for scopes, read-only staging and rollout blockers.
+
+## Owner fleet Operations
+
+The cloud-only /operations route reads the owner-scoped registry, status and
+25-item incident pages. A native task link selects its actual execution node;
+no investigation is started by viewing a page. Shared UI controls support mobile
+and desktop in both themes. Queries cache for five minutes, stop while hidden,
+and reuse existing task-event invalidation. Monitoring stamps reject future
+values; offline nodes, absent job receipt contracts, budget-limited coverage and
+held actions stay explicit. See fleet-operations.md for release and cost gates.

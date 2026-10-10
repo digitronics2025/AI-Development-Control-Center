@@ -111,8 +111,8 @@
       "vars": {
         "ENVIRONMENT": "production",
         "OPS_ENABLED": "true",
-        "OPS_RECOVERY_ENABLED": "true",
-        "OPS_INVESTIGATION_ENABLED": "true",
+        "OPS_RECOVERY_ENABLED": "false",
+        "OPS_INVESTIGATION_ENABLED": "false",
         "OPS_OWNER_EMAIL": "contact@tenten.ma",
         "CONTROL_HOSTS": "acc.dr-badawi-abdalsalam.com",
         "RELAY_HOSTS": "acc-relay.dr-badawi-abdalsalam.com",

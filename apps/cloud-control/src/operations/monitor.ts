@@ -1,12 +1,13 @@
 import { commandPayloadHash, createTaskSchema, sha256Hex, REMOTE_MIN_PROTOCOL_VERSION, type RemoteCommand } from '@acc/shared';
 import type { Env } from '../env.js';
-import { nowIso } from '../http.js';
+import { HttpError, nowIso } from '../http.js';
 import { CloudStore } from '../store.js';
 import { probeServices, recoverNative } from './adapters.js';
 import { OPS_LIMITS } from './contracts.js';
 import { OperationsStore, type Incident } from './store.js';
 import seedApps from '../../operations/fleet.json';
 import { QueryBudget } from './query-budget.js';
+import { dueWorkQuery,parseDueWork,type DueNotice } from './due-work.js';
 
 const after = (seconds: number) => new Date(Date.now()+seconds*1000).toISOString();
 /** One bounded tick, claimed atomically. No request logs, full DB scans or AI health polling. */
@@ -22,36 +23,45 @@ export async function tickOperations(env: Env): Promise<Record<string,number|str
     // same registry used for onboarding; unsupported receipts stay disabled.
     await store.registry.bootstrap(seedApps,env.OPS_OWNER_EMAIL);
   }
-  if (!(await store.reserve('checks',4))) {
+  if (!(await store.reserve('checks',4,Date.now(),true))) {
     const result={budgetLimited:1,version:env.CF_VERSION_METADATA?.id??'local'};
     await env.DB.prepare("UPDATE ops_runtime SET last_result=?,last_completed_at=? WHERE id='fleet'").bind(JSON.stringify(result),nowIso()).run();
     return result;
   }
-  const probed = await probeServices(env,store);
+  // Mandatory evidence/notice work precedes new incidents and optional probes.
+  // Reaching either ceiling leaves due rows intact and marks incomplete coverage.
+  let budgetLimited=false;
   let missed = 0, investigations = 0;
-  const due = (await env.DB.prepare('SELECT j.* FROM ops_jobs j JOIN ops_apps a ON a.id=j.app_id WHERE j.enabled=1 AND j.next_due_at<=? AND a.enabled=1 AND a.owner_email=? ORDER BY j.next_due_at LIMIT ?')
-    .bind(now,env.OPS_OWNER_EMAIL??'',OPS_LIMITS.checksPerTick).all<{app_id:string;id:string;next_due_at:string;last_success_at:string|null}>()).results;
-  for (const j of due) {
-    if(queries.remaining<14)break;
-    // A missing success is evidence of missing activity, never proof that a backup failed.
-    const e = {id:`missing:${j.id}:${j.next_due_at}`,appId:j.app_id,resource:j.id,operation:'job_health',signature:'missing_heartbeat',classification:'technical',outcome:'unknown',occurredAt:now,
-      title:`Missing activity: ${j.id}`,detail:`No verified success by ${j.next_due_at}. Last success: ${j.last_success_at ?? 'not observed'}. Check deployment, credentials, scheduler and downstream result.`};
-    await store.ingest(e,j.app_id);
-    await env.DB.prepare('UPDATE ops_jobs SET next_due_at=? WHERE app_id=? AND id=? AND next_due_at=?').bind(after(3600),j.app_id,j.id,j.next_due_at).run();
-    missed++;
-  }
-  const actionable = (env.OPS_INVESTIGATION_ENABLED==='true'||env.OPS_RECOVERY_ENABLED==='true') ? (await env.DB.prepare("SELECT i.* FROM ops_incidents i JOIN ops_apps a ON a.id=i.app_id WHERE i.state IN ('detected','waiting_execution','investigating','recovering','verifying') AND i.next_action_at<=? AND a.enabled=1 AND a.owner_email=? ORDER BY i.next_action_at LIMIT ?")
-    .bind(nowIso(),env.OPS_OWNER_EMAIL??'',OPS_LIMITS.incidentsPerTick).all<Incident>()).results : [];
-  for (const i of actionable) {
-    // Includes native-verification timeout plus a typed investigation, and
-    // reserves the final runtime receipt even at the Free-plan ceiling.
-    if(queries.remaining<24)break;
+  const actionableQuery=dueWorkQuery(env.OPS_OWNER_EMAIL??'',now,env.OPS_INVESTIGATION_ENABLED==='true'||env.OPS_RECOVERY_ENABLED==='true');
+  const dueWork=parseDueWork((await env.DB.prepare(actionableQuery.sql).bind(...actionableQuery.params).all<{kind:string;payload:string}>()).results);
+  for (const i of dueWork.incidents) {
+    if(queries.remaining<24){budgetLimited=true;break;}
     if (!(await store.reserve('checks',4))) break;
     if (!await recoverNative(env,store,i)) await investigate(env,store,i);
     investigations++;
   }
-  const delivered = await drainOwnerNotifications(env,store);
-  const result = {probed,missed,actionsChecked:investigations,delivered,statements:queries.used+1,version:env.CF_VERSION_METADATA?.id ?? 'local'};
+  const delivered = await drainOwnerNotifications(env,store,dueWork.notices);
+  for (const j of dueWork.jobs) {
+    if(queries.remaining<14){budgetLimited=true;break;}
+    // A missing success is evidence of missing activity, never proof that a backup failed.
+    const e = {id:`missing:${j.id}:${j.next_due_at}`,appId:j.app_id,resource:j.id,operation:'job_health',signature:'missing_heartbeat',classification:'technical',outcome:'unknown',occurredAt:now,
+      title:`Missing activity: ${j.id}`,detail:`No verified success by ${j.next_due_at}. Last success: ${j.last_success_at ?? 'not observed'}. Check deployment, credentials, scheduler and downstream result.`};
+    try {await store.ingest(e,j.app_id);} catch(error) {
+      if(error instanceof HttpError && error.code==='OPS_BUDGET'){budgetLimited=true;break;}
+      throw error;
+    }
+    await env.DB.prepare('UPDATE ops_jobs SET next_due_at=? WHERE app_id=? AND id=? AND next_due_at=?').bind(after(3600),j.app_id,j.id,j.next_due_at).run();
+    missed++;
+  }
+  let probed=0;
+  if(queries.remaining>=24)try {probed=await probeServices(env,store,dueWork.probes);} catch(error) {
+    if(error instanceof HttpError&&error.code==='OPS_BUDGET')budgetLimited=true;
+    else throw error;
+  }
+  const result = {probed,missed,actionsChecked:investigations,delivered,budgetLimited:budgetLimited||store.budgetLimited||queries.remaining<24?1:0,statements:queries.used+1,
+    // The final PK completion update is excluded, explicitly, to avoid a
+    // second receipt write merely to account for the first receipt write.
+    rowsReadBeforeCompletion:queries.rowsRead,rowsWrittenBeforeCompletion:queries.rowsWritten,version:env.CF_VERSION_METADATA?.id ?? 'local'};
   await env.DB.prepare('UPDATE ops_runtime SET last_result=?,last_completed_at=? WHERE id=\'fleet\'').bind(JSON.stringify(result),nowIso()).run();
   return result;
 }
@@ -135,14 +145,12 @@ async function defer(ops: OperationsStore,i: Incident,seconds: number): Promise<
 }
 
 /** Durable owner-only delivery; independent fallback is owned by Messenger's cron. */
-async function drainOwnerNotifications(env: Env, ops: OperationsStore): Promise<number> {
+async function drainOwnerNotifications(env: Env, ops: OperationsStore, due: DueNotice[]): Promise<number> {
   if (!env.OPS_MESSENGER || !env.OPS_NOTIFICATION_TOKEN || !env.OPS_OWNER_EMAIL) return 0;
   const now = nowIso();
-  const due = (await ops.db.prepare("SELECT d.id,d.incident_id,d.body,d.attempts FROM ops_delivery d JOIN ops_incidents i ON i.id=d.incident_id JOIN ops_apps a ON a.id=i.app_id WHERE d.state='pending' AND d.next_due_at<=? AND a.owner_email=? ORDER BY d.next_due_at LIMIT ?")
-    .bind(now,env.OPS_OWNER_EMAIL,OPS_LIMITS.deliveriesPerTick).all<{id:string;incident_id:string;body:string;attempts:number}>()).results;
   let delivered = 0;
   for (const item of due) {
-    if((env.OPS_QUERY_BUDGET?.remaining??Infinity)<6)break;
+    if((env.OPS_QUERY_BUDGET?.remaining??Infinity)<6){ops.budgetLimited=true;break;}
     if (!(await ops.reserve('notifications',8))) break;
     const lease = after(300);
     const claim = await ops.db.prepare("UPDATE ops_delivery SET lease_until=?,next_due_at=?,attempts=attempts+1 WHERE id=? AND state='pending' AND next_due_at<=? RETURNING id")
@@ -151,7 +159,7 @@ async function drainOwnerNotifications(env: Env, ops: OperationsStore): Promise<
     const b = JSON.parse(item.body) as {title:string;detail:string;appId:string;state:string;incidentId:string};
     const payload = {sourceApp:'fleet_operations',recipientEmail:env.OPS_OWNER_EMAIL,title:b.title,
       body:`${b.appId}: ${b.state}\n${b.detail}\nIncident: ${b.incidentId}`,severity:b.state==='resolved'?'info':'warn',
-      dedupeKey:`fleet:${item.id}`.slice(0,128),deepLink:`https://${env.CONTROL_HOSTS.split(',')[0]}/api/cloud/operations/incidents/${b.incidentId}`};
+      dedupeKey:`fleet:${item.id}`.slice(0,128),deepLink:`https://${env.CONTROL_HOSTS.split(',')[0]}/operations?appId=${encodeURIComponent(b.appId)}&incidentId=${encodeURIComponent(b.incidentId)}`};
     try {
       const response = await env.OPS_MESSENGER.fetch(new Request('https://messenger.digitronics.app/api/v1/internal/notifications/ingest',{
         method:'POST',headers:{authorization:`Bearer ${env.OPS_NOTIFICATION_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(8000)}));

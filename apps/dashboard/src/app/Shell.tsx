@@ -171,6 +171,7 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
       ))}
       {mode === 'local' ? <NavEntry item={{ to: '/learning', label: 'Learning', icon: GraduationCap }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       {mode === 'cloud' ? <NavEntry item={{ to: '/nodes', label: 'Nodes', icon: Server }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
+      {mode === 'cloud' ? <NavEntry item={{ to: '/operations', label: 'Operations', icon: ShieldCheck }} collapsed={collapsed} onNavigate={onNavigate} /> : null}
       <div className="flex-1" />
       <NavEntry item={{ to: '/settings', label: 'Settings', icon: SettingsIcon }} collapsed={collapsed} onNavigate={onNavigate} />
       <ServiceStatus collapsed={collapsed} />
@@ -380,6 +381,7 @@ function GlobalCommands() {
       ...(mode === 'local' ? [{ id: 'go-learning', label: 'Go to Learning', group: 'Go to', icon: GraduationCap, onSelect: () => navigate('/learning') }] : []),
       { id: 'go-home', label: 'Go to Home', group: 'Go to', icon: House, onSelect: () => navigate('/') },
       ...(mode === 'cloud' ? [{ id: 'go-nodes', label: 'Go to Nodes', group: 'Go to', icon: Server, onSelect: () => navigate('/nodes') }] : []),
+      ...(mode === 'cloud' ? [{ id: 'go-operations', label: 'Go to Operations', group: 'Go to', icon: ShieldCheck, onSelect: () => navigate('/operations') }] : []),
       { id: 'open-settings', label: 'Open Settings', group: 'Go to', icon: SettingsIcon, onSelect: () => navigate('/settings') },
       // One row per repository, found by its name or folder name once something is typed.
       ...(repositories.data ?? []).map<Command>((r) => ({

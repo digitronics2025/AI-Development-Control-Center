@@ -3,6 +3,8 @@ import { addRepo, createTestApp, makeRepo, simAdapters, waitFor } from '../../or
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startCloud, httpJson, USER, type Cloud } from './harness.js';
 import { OPS_LIMITS, validProof, type OpsEvent } from '../src/operations/contracts.js';
+import { actionableIncidentQuery } from '../src/operations/due-incidents.js';
+import { dueWorkQuery } from '../src/operations/due-work.js';
 
 let cloud: Cloud;
 let token: string;
@@ -124,9 +126,29 @@ describe('fleet operations real Workers runtime and D1', () => {
     expect(JSON.stringify(jobs)).toContain('idx_ops_jobs_due');
     const incidents = await cloud.d1("EXPLAIN QUERY PLAN SELECT * FROM ops_incidents WHERE state IN ('detected','waiting_execution') AND next_action_at<'2030' ORDER BY next_action_at LIMIT 2");
     expect(JSON.stringify(incidents)).toContain('idx_ops_incidents_due');
+    const query=actionableIncidentQuery(USER,new Date().toISOString(),true);
+    const bounded=await cloud.d1('EXPLAIN QUERY PLAN '+query.sql.replace(/\?/g,()=>`'${query.params.shift()!}'`));
+    expect(JSON.stringify(bounded)).toContain('idx_ops_incidents_due');
+    const age=await cloud.d1("EXPLAIN QUERY PLAN SELECT created_at FROM ops_delivery WHERE state='pending' ORDER BY created_at LIMIT 1");
+    expect(JSON.stringify(age)).toContain('idx_ops_delivery_age');
+    const status=(await cloud.api('GET','/api/cloud/operations/status')).body;
+    expect(status.nodes.every((n:{connected:unknown;protocolReady:unknown})=>typeof n.connected==='boolean'&&typeof n.protocolReady==='boolean')).toBe(true);
     await cloud.d1(`UPDATE ops_budget SET units=${OPS_LIMITS.workUnitsPerDay}`);
     expect((await send(makeEvent('limited_event_001'))).status).toBe(429);
     expect((await cloud.d1("SELECT COUNT(*) n FROM ops_events WHERE id='limited_event_001'"))[0].n).toBe(0);
+  });
+  it('uses four statements for a quiet tick and indexed limits for the combined due snapshot',async()=>{
+    const query=dueWorkQuery(USER,new Date().toISOString(),true);
+    const parameters=[...query.params];
+    const plan=await cloud.d1('EXPLAIN QUERY PLAN '+query.sql.replace(/\?/g,()=>`'${parameters.shift()!}'`));
+    for(const index of ['idx_ops_incidents_due','idx_ops_jobs_due','idx_ops_delivery_due','idx_ops_probes_due'])expect(JSON.stringify(plan)).toContain(index);
+    await cloud.d1("UPDATE ops_budget SET units=0; UPDATE ops_runtime SET next_tick_at='1970-01-01'; UPDATE ops_incidents SET next_action_at='2099-01-01'; UPDATE ops_jobs SET next_due_at='2099-01-01'; UPDATE ops_probes SET next_due_at='2099-01-01'; UPDATE ops_delivery SET next_due_at='2099-01-01'");
+    const tick=await cloud.api('POST','/api/cloud/operations/tick',{});
+    expect(tick.status).toBe(200);
+    expect(tick.body).toMatchObject({statements:4,probed:0,missed:0,actionsChecked:0,delivered:0,budgetLimited:0});
+    expect(tick.body.rowsReadBeforeCompletion).toBeGreaterThan(0);
+    expect(tick.body.rowsReadBeforeCompletion).toBeLessThan(100);
+    expect(tick.body.rowsWrittenBeforeCompletion).toBeLessThan(10);
   });
   it('rotates source credentials without exposing or retaining the old bearer', async () => {
     const rotated = (await cloud.api('POST',`/api/cloud/operations/apps/${source}/credential`,{})).body.token;
@@ -142,4 +164,5 @@ it('does not confuse API acceptance with delivery, or old ARK proof with a new c
   expect(validProof(e,failedAt,now)).toBe(false);
   expect(validProof({...e,proof:{kind:'provider_delivered',observedAt:new Date(now).toISOString(),reference:'provider delivery receipt'}},failedAt,now)).toBe(true);
   expect(validProof({...e,operation:'ark_copy',proof:{kind:'current_ark_receipt',observedAt:new Date(now-20000).toISOString(),reference:'old'}},failedAt,now)).toBe(false);
+  expect(validProof({...e,proof:{kind:'provider_delivered',observedAt:new Date(now+1).toISOString(),reference:'future receipt'}},failedAt,now)).toBe(false);
 });

@@ -27,6 +27,7 @@ const UsagePage = lazy(() => import('../pages/usage/UsagePage').then((m) => ({ d
 const LearningPage = lazy(() => import('../pages/learning/LearningPage').then((m) => ({ default: m.LearningPage })));
 const UsageTaskPage = lazy(() => import('../pages/usage/UsageTaskPage').then((m) => ({ default: m.UsageTaskPage })));
 const NodesPage = lazy(() => import('../pages/NodesPage').then((m) => ({ default: m.NodesPage })));
+const OperationsPage = lazy(() => import('../pages/OperationsPage').then((m) => ({ default: m.OperationsPage })));
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const VaultBridgePage = lazy(() => import('../pages/VaultBridgePage').then((m) => ({ default: m.VaultBridgePage })));
 
@@ -115,6 +116,7 @@ export function AppRoutes() {
       <Route path="/usage/tasks/:id" element={<UsageTaskPage />} />
       {mode === 'local' ? <Route path="/learning" element={<LearningPage />} /> : null}
       {mode === 'cloud' ? <Route path="/nodes" element={<NodesPage />} /> : null}
+      {mode === 'cloud' ? <Route path="/operations" element={<OperationsPage />} /> : null}
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/settings/:section" element={<SettingsPage />} />
       <Route path="*" element={<NotFound />} />

@@ -90,6 +90,7 @@ export class CacheSync {
       if (this.pendingLists) {
         void this.qc.invalidateQueries({ queryKey: keys.tasksRoot });
         void this.qc.invalidateQueries({ queryKey: keys.overview });
+        if(document.visibilityState==='visible')void this.qc.invalidateQueries({queryKey:['operations','incidents']});
       }
       for (const id of this.changedTasks) void this.qc.invalidateQueries({ queryKey: keys.taskChanges(id) });
       this.pendingLists = false;

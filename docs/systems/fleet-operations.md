@@ -5,12 +5,12 @@ sources:
   - apps/cloud-control/operations/**
   - apps/cloud-control/migrations/0002_fleet_operations.sql
   - apps/cloud-control/test/operations.test.ts
-verified_at: 7fe58f1
+verified_at: e215cf5
 ---
 
 # Fleet operations
 
-> Last verified: 2026-10-09 — local Workers/D1, native Messenger tests and three actual monitor-only staging completions. Production supervision and repairs are not released; exact receipts and blockers belong in the implementation plan.
+> Last verified: 2026-10-10 — full local suite (2,346 passed, 23 existing skips), real local Workers/D1 safety tests, and Operations mobile/desktop browser checks in both themes. Production rollout, real subscription execution and elapsed observation windows remain unverified.
 
 The existing cloud control plane owns the durable app registry, incidents,
 probes, daily budgets, recovery receipts and owner-delivery outbox. Its five-minute
@@ -62,7 +62,7 @@ paths are compiled; alerts cannot choose a network destination or command.
 | Accounting | Accounting Bot technical and business alerts; actual scheduler metadata registered separately | 25 deployed scheduler/service Workers were individually enumerated through
 Cloudflare on 2026-10-09, plus one undeployed print-agent config. Source and
 live schedules differ: dispatcher is live every minute (source five minutes),
-stocktake is live at minute zero (source digest metadata minute five), Google
+standalone stocktake_check runs at minute zero, while the managed stocktake_anomaly_digest runs at minute five (both successful native schedule rows inspected on 2026-10-10), Google
 Sheets is live every two hours 06–20 (source daily 04:00), and DR backup has an
 extra five-minute trigger. Existing schedules are preserved; a production
 cost-cut baseline is held by another monitor. Website deployment never proves separate scheduler Workers. Job receipts unavailable to this new reader stay disabled until wired and verified |
@@ -165,7 +165,7 @@ customer-reply monitor's complete prompt, enabled state and schedule are unchang
 Private plugin 1.0.2 publishes these discovery and evidence instructions while
 preserving its App binding, permissions, audience and presentation. Its optional
 operations guidance explicitly labels unavailable supervision as pending.
-Prepared server/plugin 1.1.0 capabilities are not represented as live. Platform
+Prepared server/plugin 1.2.0 capabilities are not represented as live. Platform
 automation availability and quota are separate from the Workers/D1 admission
 guards; no paid provider probe or plan increase was enabled.
 
@@ -210,3 +210,74 @@ Verified same-job native receipts update the indexed deadline and resolve the
 corresponding missing-activity incident atomically, even when the normal producer
 operation has another fingerprint. Healthy prose without job identity, weak
 proof types and stale receipts cannot close a missing-activity incident.
+
+## Current release candidate and cost verification
+
+Production keeps investigation and recovery held. Messenger independently holds
+alert forwarding/watchdog behind OPS_BRIDGE_ENABLED=false and all recovery POSTs
+behind OPS_RECOVERY_ENABLED=false until the supervisor rollout is verified.
+Read-only native health remains available. Future timestamps never establish
+native proof or monitor completion; current hub connectivity and minimum node
+protocol are required, rather than a historical heartbeat.
+
+The monitor reads incidents, jobs, notices and probes in one due-work statement.
+Every branch applies an indexed limit before UNION ALL: two incidents, four
+jobs, two notices, two probes. Incident states each stop at two indexed rows
+before the final bounded priority sort. The existing indexes are reused; no
+new application message indexes or write amplification are introduced. Quiet
+ticks use four D1 statements: claim, daily admission, due snapshot, completion.
+At 288 ticks/day this is 1,152 baseline statements; actual probes/actions add
+work and must be measured. This is a projection, not an invoice or free-plan
+claim. The 48-statement invocation ceiling remains enforced. Completed receipts
+record actual D1 rows read/written before the final completion write, explicitly
+excluding that last write. Optional work reserves enough daily units for the
+remaining monitor receipts; budgetLimited discloses incomplete coverage while
+leaving due work durable. New state notices join delivery on the next tick.
+
+The owner Operations route is cloud-only, uses shared semantic components,
+25-incident pages, authenticated task links, five-minute caching/polling and no
+hidden-page polling. It separates business/staff/policy/uncertain cases, held
+actions, missing receipt contracts and native verification. Empty pages and
+finished tasks never assert healthy applications.
+
+Optional Messenger review state uses a separate explicit OAuth metadata scope,
+three small tables and signed snapshot/terminal tickets. Checkpoints use CAS and
+idempotent successful-run receipts. Incomplete continuation is bounded to 60 KB
+and 24 hours, never changes the successful checkpoint, and cannot resume across
+revocation or changed consent. See the Messenger notification-reader document
+and prepared plugin source for the fixed daily_digest protocol.
+
+## Rollout ledger — 2026-10-10
+
+- Production supervisor remains on version 2a9872f3-a59e-406d-808f-5b8d7f811129;
+  OPS_ENABLED is absent and its ledger contains only migration 0001. Missing
+  ops_runtime is pending rollout, not a newly detected outage.
+- Staging is monitor-only, version 4d9ce7cc-4f78-4c92-bdf3-ecce9f269672, with
+  migrations 0001/0002. Its old-candidate natural completions do not verify this
+  candidate. Observe three new-candidate natural cron completions after release.
+- Messenger production baseline is 664c76c5-0d38-45be-a329-afd6c15e7d1d,
+  migration ledger through 0201. Release uses its normal main Workers Builds
+  path; new migrations 0202/0203 are additive. Never rerun completed 0184.
+- Actual owner account contact@tenten.ma and all seven current channels were
+  read successfully. The existing grant exposes six legacy tools; optional
+  metadata consent and new live capabilities remain separate acceptance steps.
+- Owner PC Dr_AbuYahya is offline. A simulated local relay investigation is
+  not evidence of a real subscription-authenticated investigation.
+- The token cannot read subscription-plan details (403). Do not claim paid-plan
+  headroom, production CPU/row targets or costs verified. No plan/cap is raised.
+- The enabled 09:00 Asia/Shanghai digest and independent hourly availability
+  tasks are reused. Other customer/spend monitors retain their established
+  prompts and schedules. Do not add a second fleet polling orchestrator.
+
+Operator deployment remains mandatory under AGENTS.md: cloud sessions never run
+wrangler deploy. From the owner environment release staging with
+pnpm cloud:deploy:staging, inspect three candidate-version completions, then use
+pnpm cloud:deploy:production with actions still held. Production live health
+requires actual Access. Verify reciprocal readers/owner notices and native job
+receipts before enabling bridging, then investigations, then one recovery canary.
+Unwired job contracts remain heartbeatExpected=false. Do not register a fake
+producer or rotate existing credentials to manufacture acceptance evidence.
+
+The 48-hour unchanged healthy baseline and seven-day recurrence/cost observation
+windows begin only after a verified rollout/canary, using the exact deployed
+revision and native receipts. Neither window has elapsed for this candidate.

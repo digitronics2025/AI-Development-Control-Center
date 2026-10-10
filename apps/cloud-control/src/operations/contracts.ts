@@ -53,11 +53,20 @@ export function stateFor(classification: OpsEvent['classification']): string {
 export function validProof(event: OpsEvent, failedAt: string, now: number): boolean {
   if (event.outcome !== 'healthy' || !event.proof) return false;
   const at = Date.parse(event.proof.observedAt);
-  if (at < Date.parse(failedAt) || at > now + 60_000 || now - at > 15 * 60_000) return false;
+  if (at < Date.parse(failedAt) || at > now || now - at > 15 * 60_000) return false;
   const required = event.operation.includes('backup') ? 'backup_artifact_and_mirror'
     : event.operation.includes('ark') ? 'current_ark_receipt'
     : (event.operation.includes('message') || event.operation === 'outbox_reconcile') ? 'provider_delivered'
     : event.operation.includes('sync') ? 'records_reconciled'
     : (event.operation.includes('release') || event.operation==='prevention_review') ? 'production_behavior' : 'job_result';
   return event.proof.kind === required;
+}
+
+export interface Incident {
+  id: string; app_id: string; fingerprint: string; resource: string; operation: string; signature: string;
+  classification: string; state: string; title: string; detail: string; evidence_uri: string | null;
+  dependency_id: string | null; first_seen_at: string; last_seen_at: string; failed_at: string;
+  occurrences: number; recurrence_count: number; recurrence_started_at: string; prevention_required: number;
+  version: number; command_id: string | null; task_id: string | null; node_id: string | null;
+  repair_attempts: number; proof: string | null; next_action_at: string; resolved_at: string | null;
 }

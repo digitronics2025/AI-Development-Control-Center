@@ -26,7 +26,8 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report-cloud' }]],
   use: {
     baseURL: `http://127.0.0.1:${cloudPort}`,
-    channel: process.env.PW_CHANNEL ?? 'chrome',
+    channel: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? undefined : process.env.PW_CHANNEL ?? 'chrome',
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {},
     storageState: path.join(root, 'storage-state.json'),
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

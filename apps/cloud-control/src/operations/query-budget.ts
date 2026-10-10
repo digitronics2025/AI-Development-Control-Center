@@ -4,6 +4,13 @@ import { HttpError } from '../http.js';
  * durable for the next tick, rather than assuming batch() counts as one query. */
 export class QueryBudget {
   used=0;
+  rowsRead=0;
+  rowsWritten=0;
+  private record(result:unknown):void{
+    if(!result||typeof result!=='object'||!('meta' in result)||!result.meta||typeof result.meta!=='object')return;
+    if('rows_read' in result.meta&&typeof result.meta.rows_read==='number')this.rowsRead+=result.meta.rows_read;
+    if('rows_written' in result.meta&&typeof result.meta.rows_written==='number')this.rowsWritten+=result.meta.rows_written;
+  }
   readonly limit=48;
   get remaining():number{return this.limit-this.used;}
   private take(count:number):void{
@@ -15,8 +22,15 @@ export class QueryBudget {
     const statement=(raw:D1PreparedStatement):D1PreparedStatement=>{
       const proxy=new Proxy(raw,{get:(target,key)=>{
         if(key==='bind')return (...args:unknown[])=>statement(target.bind(...args));
-        if(['first','all','run','raw'].includes(String(key)))return (...args:unknown[])=>{
-          this.take(1);return Reflect.apply(Reflect.get(target,key),target,args);
+        if(key==='first')return async (column?:string)=>{
+          // all() exposes D1's actual row accounting; first() discards meta.
+          // These statements are PK/unique/bounded reads or bounded RETURNING.
+          this.take(1);const result=await target.all<Record<string,unknown>>();this.record(result);
+          const row=result.results[0];return row?(column?row[column]??null:row):null;
+        };
+        if(['all','run','raw'].includes(String(key)))return async (...args:unknown[])=>{
+          this.take(1);const result=await Reflect.apply(Reflect.get(target,key),target,args);
+          this.record(result);return result;
         };
         return Reflect.get(target,key);
       }});
@@ -24,7 +38,7 @@ export class QueryBudget {
     };
     return new Proxy(db,{get:(target,key)=>{
       if(key==='prepare')return (sql:string)=>statement(target.prepare(sql));
-      if(key==='batch')return (values:D1PreparedStatement[])=>{this.take(values.length);return target.batch(values.map(v=>originals.get(v)??v));};
+      if(key==='batch')return async (values:D1PreparedStatement[])=>{this.take(values.length);const results=await target.batch(values.map(v=>originals.get(v)??v));for(const r of results)this.record(r);return results;};
       if(key==='exec'||key==='withSession')throw new HttpError(403,'OPS_UNBOUNDED_QUERY','Operations use prepared bounded statements only.');
       return Reflect.get(target,key);
     }});

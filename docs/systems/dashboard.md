@@ -4,7 +4,7 @@ sources:
   - apps/dashboard/**
   - packages/ui/**
   - design.md
-verified_at: 57af61a
+verified_at: e215cf5
 ---
 
 # Dashboard and design system
@@ -368,3 +368,15 @@ inspector on a phone must be keyboard-scrollable). Covered by
 `e2e/stage-teams.spec.ts` (both themes, 1440 and 390 px, axe).
 
 Last verified: 2026-09-29
+
+## Cloud Operations
+
+The cloud-only Operations navigation opens /operations, a bounded owner fleet
+view. It reads registered apps, supervision evidence and 25-incident pages with
+five-minute cache/poll intervals. Hidden tabs stop polling; task events reuse the
+existing coalesced invalidation timer. Links select the actual incident node
+before opening its task. Business/staff/policy/uncertain cases stay separate from
+technical faults; empty results, held actions, disconnected nodes, missing job
+contracts and budget-limited coverage never imply healthy applications. Shared
+semantic components support mobile and desktop in both themes, with keyboard
+focus and error/retry states. Details and rollout receipts: fleet-operations.md.

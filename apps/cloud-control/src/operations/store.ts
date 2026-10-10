@@ -1,27 +1,22 @@
 import { sha256Hex } from '@acc/shared';
 import { HttpError, nowIso } from '../http.js';
-import { eventSchema, OPS_LIMITS, stateFor, validProof, type OpsEvent } from './contracts.js';
+import { eventSchema, OPS_LIMITS, stateFor, validProof, type OpsEvent, type Incident } from './contracts.js';
 import { AppRegistry } from './registry.js';
 
-export interface Incident {
-  id: string; app_id: string; fingerprint: string; resource: string; operation: string; signature: string;
-  classification: string; state: string; title: string; detail: string; evidence_uri: string | null;
-  dependency_id: string | null; first_seen_at: string; last_seen_at: string; failed_at: string;
-  occurrences: number; recurrence_count: number; recurrence_started_at: string; prevention_required: number;
-  version: number; command_id: string | null; task_id: string | null; node_id: string | null;
-  repair_attempts: number; proof: string | null; next_action_at: string; resolved_at: string | null;
-}
+export type { Incident } from './contracts.js';
 export class OperationsStore {
   readonly registry: AppRegistry;
   constructor(readonly db: D1Database) { this.registry = new AppRegistry(db); }
-  async reserve(kind: 'events'|'tasks'|'notifications'|'checks', units: number, now = Date.now()): Promise<boolean> {
+  budgetLimited=false;
+  async reserve(kind: 'events'|'tasks'|'notifications'|'checks', units: number, now = Date.now(), monitorReceipt=false): Promise<boolean> {
     const day = new Date(now).toISOString().slice(0,10);
     const column = kind === 'checks' ? null : kind;
     const cap = kind === 'events' ? OPS_LIMITS.eventsPerDay : kind === 'tasks' ? OPS_LIMITS.tasksPerDay : OPS_LIMITS.notificationsPerDay;
     const result = await this.db.prepare(`INSERT INTO ops_budget(day,units,events,tasks,notifications) VALUES(?,?,${kind === 'events' ? 1 : 0},${kind === 'tasks' ? 1 : 0},${kind === 'notifications' ? 1 : 0})
       ON CONFLICT(day) DO UPDATE SET units=units+excluded.units${column ? `,${column}=${column}+1` : ''}
       WHERE units+excluded.units<=?${column ? ` AND ${column}<?` : ''} RETURNING day`)
-      .bind(...[day,units,OPS_LIMITS.workUnitsPerDay,...(column ? [cap] : [])]).first();
+      .bind(...[day,units,OPS_LIMITS.workUnitsPerDay-(monitorReceipt?0:Math.ceil((Date.parse(`${day}T00:00:00Z`)+86400000-now)/(OPS_LIMITS.tickSeconds*1000))*4),...(column ? [cap] : [])]).first();
+    if(!result)this.budgetLimited=true;
     return result !== null;
   }
   async ingest(raw: unknown, credentialAppId: string, allowProof = true): Promise<{ duplicate: boolean; incidentId: string | null }> {
@@ -35,7 +30,7 @@ export class OperationsStore {
     if (at > now + 60_000 || now - at > 7 * 86400_000) throw new HttpError(400,'OPS_STALE_EVENT','Event timestamp is out of range.');
     if (e.jobId && !await this.db.prepare('SELECT id FROM ops_jobs WHERE app_id=? AND id=? AND enabled=1').bind(e.appId,e.jobId).first()) throw new HttpError(400,'OPS_JOB_NOT_FOUND','Unknown or disabled job.');
     const job=e.jobId?JSON.parse(app.contract).jobs.find((j:{id:string})=>j.id===e.jobId) as {proofKind?:string}|undefined:undefined;
-    if(e.jobId&&e.outcome==='healthy'&&(!job?.proofKind||!e.proof||e.proof.kind!==job.proofKind||Date.parse(e.proof.observedAt)>now+60000||now-Date.parse(e.proof.observedAt)>15*60000))throw new HttpError(400,'OPS_JOB_PROOF','A fresh native receipt of the registered job proof kind is required.');
+    if(e.jobId&&e.outcome==='healthy'&&(!job?.proofKind||!e.proof||e.proof.kind!==job.proofKind||Date.parse(e.proof.observedAt)>now||now-Date.parse(e.proof.observedAt)>15*60000))throw new HttpError(400,'OPS_JOB_PROOF','A fresh native receipt of the registered job proof kind is required.');
     if (e.dependencyId && !JSON.parse(app.contract).dependencies.includes(e.dependencyId)) throw new HttpError(400,'OPS_DEPENDENCY','Dependency is not registered for this app.');
     if (!allowProof && (e.proof || e.outcome === 'healthy')) throw new HttpError(403,'OPS_PROOF_SOURCE','Notification text cannot establish recovery.');
     const hash = await sha256Hex(JSON.stringify(e));

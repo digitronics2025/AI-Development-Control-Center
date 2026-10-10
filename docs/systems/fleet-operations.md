@@ -180,12 +180,36 @@ The app-creation playbook must perform this step; merely creating a GitHub repo
 cannot infer a service, tenant, schedule or recovery permission. New bot chats
 appear in reader discovery automatically. Reporting groups still need consent.
 
-Release the Control Center through its manual staged deployment script, then
-Messenger through its existing Workers Builds pipeline. Apply migrations before
+Release Control Center staging through its manual deployment script and observe
+three natural candidate-version ticks. Release Messenger through its existing
+Workers Builds pipeline before Control Center production, so the native health
+callee and owner-notice receiver actually exist. Apply migrations before
 code, preserve established secret values, and verify the actual Worker version,
 cron heartbeat, owner-only outbox delivery and native provider proof. Do not mark
 a release green if network policy prevents its live checks or the real execution
 node is offline. Keep gaps and exact operator actions in the plan ledger.
+
+On 2026-10-10 Messenger's merged main build passed 3,210 tests, then stopped at
+the migration cost preflight: `Pending migration has no reviewed phased cost
+descriptor`. Production still serves the prior artifact; 0202/0203 are absent.
+Billing Read is denied, and the existing outbox index has only a censored 10,001
+row inspection, so neither a total source bound nor billing headroom is proved.
+Do not bypass this guard or infer free capacity from the database size. The
+unapproved cost-review draft and provider receipts are in Messenger's
+[release evidence](https://github.com/TenTen-maroc/whatsapp-inbox-saas/blob/main/docs/plans/fleet-supervision/release-evidence.md).
+This repository's AGENTS.md requires owner-environment manual deployment;
+cloud sessions cannot publish it. The owner node is offline, so subscription
+execution, recovery canary, phone push and the elapsed observation windows remain
+unverified. Old staging ticks do not count toward the new candidate's acceptance.
+
+The saved 09:00 Asia/Shanghai daily review now carries bounded read limits and
+two native-correlated unresolved reports: Sales' failed backup mirror at
+04:04:01 UTC and the website's four-session protective revocation at 05:19:34
+UTC. The security audit does not prove theft. The recent eight-message review
+left all seven unread counts unchanged; its window boundary is not a durable
+checkpoint. The digest and hourly availability task remain enabled, and all
+other task prompts and schedules were verified unchanged. Plugin publication
+and tracking consent stay behind live capability verification.
 
 The supported deployment script checks required scoped credentials before remote
 migrations or code activation. Staging requires only native health access;

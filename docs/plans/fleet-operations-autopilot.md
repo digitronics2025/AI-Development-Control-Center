@@ -7,6 +7,16 @@ status: in-progress
 
 # Durable fleet operations and verified recovery for Dot
 
+> Current acceptance, 2026-10-10: bounded monitor and owner Operations UI source
+> are saved on main; full local checks and affected browser journeys passed.
+> Messenger PR 47 merged, and its main build passed 3,210 tests before the new
+> migration cost gate rejected unreviewed 0202/0203. No new production release
+> is verified. Owner-environment Control Center release, actual billing/source
+> bounds, connected execution node, authenticated new capabilities, native
+> canary proof and elapsed 48-hour/seven-day windows remain required. See the
+> current [fleet system map](../systems/fleet-operations.md#registration-and-release)
+> and [Messenger release evidence](https://github.com/TenTen-maroc/whatsapp-inbox-saas/blob/main/docs/plans/fleet-supervision/release-evidence.md).
+
 ## Context
 
 I would extend your existing AI Development Control Center to supervise your apps, with Dot as the assistant that explains what is happening and follows investigations. Messenger would supply notifications, each app would provide its recovery controls, and the Control Center would manage investigations, code fixes and verification.

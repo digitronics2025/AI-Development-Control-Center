@@ -18,7 +18,7 @@ browser while every task still runs on a paired machine
 sanitized copy of history for offline reading, and never runs code. Plan and
 evidence: [docs/plans/cloud-control-plane.md](../plans/cloud-control-plane.md).
 
-> Last verified: 2026-10-10 — authorized cloud-release policy and enforced public-host network denial checked; no new deployment is claimed.
+> Last verified: 2026-10-10 — current main rebuilt; supported monitor-only staging release and all ten live smoke checks passed from the new authorized cloud environment. Production remains held behind the Messenger callee and cost gates; see fleet-operations.md for natural-tick acceptance.
 
 Fleet supervision and its separate owner/scoped machine routes are documented in
 [fleet-operations.md](fleet-operations.md). Code repairs still execute on paired nodes.

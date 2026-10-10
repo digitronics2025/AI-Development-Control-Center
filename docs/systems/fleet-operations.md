@@ -139,8 +139,11 @@ Messenger's own hourly deterministic watchdog observes the supervisor heartbeat,
 execution-node activity, monitoring admission limit and delivery backlog. It
 writes an idempotent owner bot message and existing Web Push on state changes.
 This covers a supervisor outage while Messenger is available. The separately
-hosted ChatGPT task **Check app availability** is saved and enabled hourly as
-an independent fallback. It checks reader access, reads the actual Messenger KV
+hosted ChatGPT task **Check app availability** is saved hourly as
+an independent fallback. October 10's resumed live readback found it paused,
+and the user explicitly chose to keep it paused. The saved schedule does not
+provide active fallback coverage while paused. It checks reader access, reads
+the actual Messenger KV
 scheduler timestamp through Cloudflare, and checks production supervisor
 readiness without depending on either app's notification bot. Until production
 `OPS_ENABLED` is true, absence of a supervisor tick is pending rollout rather
@@ -295,8 +298,8 @@ and prepared plugin source for the fixed daily_digest protocol.
   tasks are reused. Other customer/spend monitors retain their established
   prompts and schedules. Do not add a second fleet polling orchestrator.
 
-Operator deployment remains mandatory under AGENTS.md: cloud sessions never run
-wrangler deploy. From the owner environment release staging with
+Authorized local or cloud releases use the supported scripts under AGENTS.md;
+raw wrangler deploy does not replace their gates. Release staging with
 pnpm cloud:deploy:staging, inspect three candidate-version completions, then use
 pnpm cloud:deploy:production with actions still held. Production live health
 requires actual Access. Verify reciprocal readers/owner notices and native job
@@ -307,3 +310,56 @@ producer or rotate existing credentials to manufacture acceptance evidence.
 The 48-hour unchanged healthy baseline and seven-day recurrence/cost observation
 windows begin only after a verified rollout/canary, using the exact deployed
 revision and native receipts. Neither window has elapsed for this candidate.
+
+## Resumed cloud release — October 10
+
+Current main was fetched as `cbc7084125194415f1e8d0a98546cd736cf4bab1`.
+Its deployed application sources match the saved tested `363d762` candidate;
+the intervening changes are documentation. The dashboard artifact was rebuilt
+from this clean checkout. The saved full-suite, Workers/D1 and browser receipts
+were reused; no second full implementation test run is claimed.
+
+The new managed environment reports enforced unrestricted HTTP policy and ready
+bindings. All ten supported staging and existing-production smoke checks pass
+through the inherited proxy and CA trust with NODE_USE_ENV_PROXY=1. Staging was
+released by pnpm cloud:deploy:staging: migration apply reported no pending DDL,
+version `50061bb9-c50d-4541-961a-e9072975a985` was promoted at 11:18:10 UTC,
+and all ten post-release smoke checks passed. Investigation and recovery remain
+false. Candidate natural completions are saved in the
+[release receipt](../plans/fleet-operations-resumed-receipt.json); old-version
+ticks and trigger configuration do not count toward the three-completion gate.
+Three actual candidate completions at 11:20:16, 11:30:12 and 11:40:13 UTC now
+satisfy staging acceptance. They used 8/4/8 statements and 25/16/25 rows read,
+8/2/8 rows written before the final completion write. All report budgetLimited=0
+and no investigations, recovery or deliveries. This verifies deterministic
+monitor execution, not every app, owner receipt or production recovery.
+
+The separate billing binding now successfully reads Workers Paid subscription,
+billable usage, and invoice history. The actual active cycle is October
+8–November 8; the October 8 account invoice is USD83.97, closed with zero balance.
+Billing entries are complete only through their October 10 00:00 UTC watermark.
+Current analytics and ordinary remaining demand are distinct. Messenger main's
+combined five-migration review now has provider inputs and a conservative
+remaining-demand reserve from the concurrent runtime evidence. Its calculated
+incremental upper cost is USD0.717277 within the current-main reviewed USD0.75
+combined-operation envelope. The earlier USD0 draft was unapproved; it is not
+inferred to be an independent user cap. The global default and existing
+infrastructure/customer limits remain unchanged. Exact-source usage, storage
+and expiry must be refreshed before an actual main build retry; no live CI
+input, production release artifact or retry is created in this verification.
+
+Messenger public health returns a Cloudflare security block from this approved
+environment, rather than the former destination-policy denial. No security rule
+was changed to manufacture smoke acceptance. Its service-bound native probe
+remains unknown on the existing artifact. Control Center production is held on
+`2a9872f3-a59e-406d-808f-5b8d7f811129` until its actual callee and cost gates pass.
+Native health alone is not proof of a successful AI answer, backup or delivery.
+
+The actual owner reader responds; the workstation remains offline, last seen
+October 3. The existing daily digest is enabled. The hourly independent fallback
+was read back paused and the user explicitly chose to keep it paused. Both
+saved prompts/schedules and other monitors are preserved. App/plugin publication,
+unchecked optional owner metadata consent, real subscription investigation,
+bridging, recovery canary, phone delivery and elapsed observation windows remain
+separate pending acceptance steps. No fake producer, credential rotation,
+customer message or production recovery is used as proof.

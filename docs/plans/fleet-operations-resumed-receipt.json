@@ -1,0 +1,483 @@
+{
+  "status": "staging_accepted_production_held_for_signed_access",
+  "savedAt": "2026-10-10T11:41:37.221157+00:00",
+  "sources": {
+    "messengerMain": "ac0c12b7c82f27f9947d9faee6b57a17f45934ef",
+    "controlCenterMain": "cbc7084125194415f1e8d0a98546cd736cf4bab1",
+    "controlCenterTestedArtifact": "363d762",
+    "runtimeDiffFromTestedArtifact": false,
+    "messengerLatestDocumentationMain": "04fdb78489d9a4055013d9853c1d404d5f0f6863"
+  },
+  "environment": {
+    "networkPolicy": "unrestricted_enforced",
+    "observationsCurrent": true,
+    "configuredBindingsReady": [
+      "GITHUB_TOKEN",
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_API_TOKEN",
+      "biling_info"
+    ],
+    "githubApiHttp": 200,
+    "cloudflareApiHttp": 200,
+    "proxyAndCaPreserved": true,
+    "vpnConfigured": false,
+    "finalObservedSpecRevision": "3"
+  },
+  "validation": {
+    "savedImplementationReceiptsReused": true,
+    "dashboardRebuilt": true,
+    "fullImplementationSuitesRerun": false,
+    "stagingSmokeBeforeRelease": {
+      "passed": 10,
+      "failed": 0
+    },
+    "stagingSmokeAfterRelease": {
+      "passed": 10,
+      "failed": 0
+    },
+    "existingProductionControlCenterSmoke": {
+      "passed": 10,
+      "failed": 0
+    },
+    "messengerPublicHealth": {
+      "http": 403,
+      "layer": "Cloudflare security block",
+      "bypassed": false
+    },
+    "migrationPlanApproved": false,
+    "migrationPlanRowsRead": 2644,
+    "migrationPlanRowsWritten": 0,
+    "budgetEvaluatorResult": "Existing current-main USD0.75 reviewed operation envelope passes at incremental upper cost USD0.717277; refresh exact-source preflight before a real release.",
+    "operationEnvelopeReviewed": true,
+    "liveBuildInputsChanged": false
+  },
+  "release": {
+    "method": "pnpm cloud:deploy:staging",
+    "migrationResult": "No migrations to apply",
+    "actionsHeld": {
+      "investigations": true,
+      "recovery": true
+    },
+    "rollbackVersion": "4d9ce7cc-4f78-4c92-bdf3-ecce9f269672",
+    "manualCronExecutions": 0,
+    "productionDeployments": 0,
+    "messengerMigrationWrites": 0,
+    "buildRetries": 0,
+    "credentialRotations": 0,
+    "customerMessages": 0,
+    "financialOrSecurityChanges": 0,
+    "pluginPublications": 0,
+    "optionalConsentChanges": 0
+  },
+  "executionNode": {
+    "label": "Workstation",
+    "status": "offline",
+    "lastSeenAt": "2026-10-03T02:52:46.313Z",
+    "protocolVersion": 1,
+    "realInvestigationVerified": false
+  },
+  "acceptance": {
+    "stagingCandidateNaturalCompletionsRequired": 3,
+    "stagingCandidateNaturalCompletionsObserved": 3,
+    "production": false,
+    "ownerNoticeDelivery": false,
+    "optionalOwnerMetadataConsent": false,
+    "bridgingEnabled": false,
+    "realSubscriptionInvestigation": false,
+    "recoveryCanary": false,
+    "phonePush": false,
+    "stability48HoursStarted": false,
+    "recurrenceSevenDaysStarted": false,
+    "stagingAccepted": true,
+    "existingCombinedOperationCostReviewVerified": true
+  },
+  "billing": {
+    "observedAt": "2026-10-10T11:23:02.324289+00:00",
+    "billingBinding": "biling_info",
+    "profileRead": "HTTP 200; personal fields discarded",
+    "workersSubscription": {
+      "state": "Paid",
+      "current_period_start": "2026-10-08T00:00:00Z",
+      "current_period_end": "2026-11-08T00:00:00Z",
+      "price": 5,
+      "currency": "USD"
+    },
+    "planId": "workers_paid",
+    "billableUsageCovered": true,
+    "anchorTimestamps": [
+      "2025-04-08T00:00:00Z"
+    ],
+    "usageWatermark": "2026-10-10T00:00:00Z",
+    "currentCycleD1Entries": [
+      {
+        "ServiceName": "D1 - Storage GB-mo (first 5GB included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-09T00:00:00Z",
+        "ConsumedQuantity": 0.16574456606944443,
+        "ConsumedUnit": "GB-months",
+        "PricingQuantity": 0,
+        "PricingUnit": "GB-months",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      },
+      {
+        "ServiceName": "D1 - Rows Written (first 50 million included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-09T00:00:00Z",
+        "ConsumedQuantity": 592915,
+        "ConsumedUnit": "",
+        "PricingQuantity": 0,
+        "PricingUnit": "Count",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      },
+      {
+        "ServiceName": "D1 - Rows Read (first 25 billion included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-09T00:00:00Z",
+        "ConsumedQuantity": 589179325,
+        "ConsumedUnit": "",
+        "PricingQuantity": 0,
+        "PricingUnit": "Count",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      },
+      {
+        "ServiceName": "D1 - Storage GB-mo (first 5GB included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-09T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-10T00:00:00Z",
+        "ConsumedQuantity": 0.1638107935361111,
+        "ConsumedUnit": "GB-months",
+        "PricingQuantity": 0,
+        "PricingUnit": "GB-months",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      },
+      {
+        "ServiceName": "D1 - Rows Written (first 50 million included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-09T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-10T00:00:00Z",
+        "ConsumedQuantity": 15007684,
+        "ConsumedUnit": "",
+        "PricingQuantity": 0,
+        "PricingUnit": "Count",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      },
+      {
+        "ServiceName": "D1 - Rows Read (first 25 billion included)",
+        "BillingPeriodStart": "2026-10-08T00:00:00Z",
+        "ChargePeriodStart": "2026-10-09T00:00:00Z",
+        "ChargePeriodEnd": "2026-10-10T00:00:00Z",
+        "ConsumedQuantity": 802202339,
+        "ConsumedUnit": "",
+        "PricingQuantity": 0,
+        "PricingUnit": "Count",
+        "BilledCost": 0,
+        "EffectiveCost": 0
+      }
+    ],
+    "latestInvoice": {
+      "type": "invoice",
+      "amount": 83.97,
+      "currency": "usd",
+      "occurred_at": "2026-10-08T10:09:13Z",
+      "status": "CLOSED",
+      "amount_remaining": 0
+    },
+    "storageSnapshot": {
+      "databaseCount": 24,
+      "totalAccountBytes": 4842217472,
+      "targetDatabaseBytes": 2497150976
+    },
+    "limitsPreserved": {
+      "defaultMigrationMaxIncrementalUsd": 0,
+      "existingReviewedCombinedOperationMaxIncrementalUsd": 0.75,
+      "globalPolicyChanges": 0,
+      "planChanges": 0,
+      "customerBudgetChanges": 0,
+      "securityChanges": 0
+    },
+    "caveat": "Billable data ends at its charge-period watermark. Current analytics, ordinary remaining demand, and a retained-storage cost bound are separate; no operation approval is inferred."
+  },
+  "usage": {
+    "observedAt": "2026-10-10T11:24:18.962481+00:00",
+    "cycleStart": "2026-10-08T00:00:00Z",
+    "aggregateOnly": true,
+    "accountDaily": {
+      "2026-10-08": {
+        "rowsRead": 589179325,
+        "rowsWritten": 592915,
+        "hours": 24
+      },
+      "2026-10-10": {
+        "rowsRead": 228097963,
+        "rowsWritten": 263145,
+        "hours": 12
+      },
+      "2026-10-09": {
+        "rowsRead": 802202339,
+        "rowsWritten": 15007684,
+        "hours": 24
+      }
+    },
+    "cycleRowsRead": 1619479627,
+    "cycleRowsWritten": 15863744,
+    "ordinaryRemainingDemand": null,
+    "caveat": "Provider-reported GraphQL billing metrics; final day is partial. Historical migrations are included. Not a final invoice or an approved ordinary-demand/storage growth projection."
+  },
+  "migrationCostReview": {
+    "observedAt": "2026-10-10T11:37:15.627450+00:00",
+    "status": "reviewed_cost_envelope_ready_release_held_for_signed_access",
+    "sourceSha": "ac0c12b7c82f27f9947d9faee6b57a17f45934ef",
+    "pendingMigrations": [
+      "0202_fleet_notification_sources.sql",
+      "0203_notification_review_state.sql",
+      "0204_pause_reply_recovery.sql",
+      "0205_customer_reply_reviews.sql",
+      "0206_whatsapp_evidence_repairs.sql"
+    ],
+    "planCheckedAt": "2026-10-10T11:19:26.262Z",
+    "operationFingerprint": "3a24ceabcc12d5c9b41083455e9cb3eb3b99bf2ead6252908c92916e704b0a45",
+    "planInspectionRowsRead": 2644,
+    "planProductionWrites": 0,
+    "reservedOperation": {
+      "maxRowsReadIncludingInspection": 1905000,
+      "maxRowsWritten": 621000,
+      "maxAdditionalStorageBytes": 125829120
+    },
+    "providerInputs": {
+      "usage": {
+        "asOf": "2026-10-10T11:22:28.155188+00:00",
+        "period": "cycle",
+        "rowsRead": 1618790549,
+        "rowsWritten": 15863362,
+        "ordinaryRowsRead": 29079834796,
+        "ordinaryRowsWritten": 42096690
+      },
+      "entitlement": {
+        "plan": "paid",
+        "period": "cycle",
+        "expiresAt": "2026-11-08T00:00:00Z",
+        "includedRowsRead": 25000000000,
+        "includedRowsWritten": 50000000,
+        "readUsdPerMillion": 0.001,
+        "writeUsdPerMillion": 1,
+        "maxDatabaseBytes": 10000000000,
+        "operationStorageUsdUpperBound": 0.094372
+      },
+      "databaseBytes": 2497150976,
+      "reviewedEnvelope": {
+        "fingerprint": "3a24ceabcc12d5c9b41083455e9cb3eb3b99bf2ead6252908c92916e704b0a45",
+        "expiresAt": "2026-10-10T12:17:28.155188+00:00",
+        "maxRowsRead": 1905000,
+        "maxRowsWritten": 621000,
+        "maxPeakDatabaseBytes": 3000000000,
+        "maxIncrementalUsd": 0.75
+      }
+    },
+    "reviewedEnvelope": {
+      "fingerprint": "3a24ceabcc12d5c9b41083455e9cb3eb3b99bf2ead6252908c92916e704b0a45",
+      "expiresAt": "2026-10-10T12:17:28.155188+00:00",
+      "maxRowsRead": 1905000,
+      "maxRowsWritten": 621000,
+      "maxPeakDatabaseBytes": 3000000000,
+      "maxIncrementalUsd": 0.75
+    },
+    "currentAccountStorageBytes": 4842217472,
+    "conservativeCurrentStorageHeadroomBytes": 157782528,
+    "conservativePeakAccountStorageBytes": 4968046592,
+    "conservativePeakStorageHeadroomBytes": 31953408,
+    "upperCostIfAllOperationUsageIsOverageUsd": 0.717277,
+    "upperCostAssumptions": [
+      "Published paid rates are applied without included-credit assumptions: reads USD0.001905 + writes USD0.621 + 120 MiB storage at USD0.75 per decimal GB-month USD0.09437184.",
+      "The retained-storage component can recur each month. This is a conservative possible cost, not an invoice or an approved spend allowance.",
+      "Current unused storage alone does not prove remaining-cycle ordinary growth, future retention or total storage cost."
+    ],
+    "blockers": [
+      "Public Messenger health is blocked by Cloudflare security; the enrolled signed-login workstation is offline.",
+      "Before an actual main build retry, refresh usage/storage/source/expiry and regenerate the exact-source preflight artifact; attach only the reviewed operation inputs through the normal build configuration. No live build input or approved production release artifact is created in this run."
+    ],
+    "execution": "Existing current-main operation cost review is recorded with its USD0.75 limit. It does not satisfy signed production access, authorize a failed smoke check, or change a live plan, customer budget or security rule. No migration/build retry is performed.",
+    "gateResult": "Existing concurrent reviewed USD0.75 envelope passes the pure evaluator; production release prerequisites remain unmet.",
+    "pureEvaluatorProductionQueries": 0,
+    "pureEvaluatorProductionWrites": 0,
+    "previousGateResult": "Unknown ordinary cycle demand",
+    "separateConcurrentReview": {
+      "source": "docs/reports/2026-10-10-customer-reply-runtime-evidence.json at 04fdb78489d9a4055013d9853c1d404d5f0f6863",
+      "maxIncrementalUsd": 0.75,
+      "ordinaryDemandMethod": "Greater of relevant complete-day peak and 24 times peak post-cleanup hour, plus 25%, times rounded-up remaining cycle days. Native migration excluded only from future ordinary demand; all actual usage retained.",
+      "changesFleetEnvelope": false,
+      "interpretation": "This is the existing reviewed combined-operation envelope recorded on current main. The prior USD0 draft was unapproved; no independent user-set zero-cost cap is inferred from it. The global default, infrastructure plan and customer budgets are not changed."
+    },
+    "historicalUnapprovedDraftMaxIncrementalUsd": 0,
+    "historicalZeroDefaultGateResult": "Operation usage or dollar envelope exceeded",
+    "calculatedBudget": {
+      "rowsRead": 1905000,
+      "rowsWritten": 621000,
+      "peakDatabaseBytes": 2622980096,
+      "incrementalUsd": 0.717277,
+      "projected": {
+        "rowsRead": 30700530345,
+        "rowsWritten": 58581052
+      }
+    }
+  },
+  "provider": {
+    "observedAt": "2026-10-10T11:27:29.583748+00:00",
+    "acc-cloud-control-staging": {
+      "id": "76a78617-1fb1-4532-bc44-ac921de55c4d",
+      "versions": [
+        {
+          "version_id": "50061bb9-c50d-4541-961a-e9072975a985",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-10T11:18:10.795427Z"
+    },
+    "acc-cloud-control": {
+      "id": "4fd69bf9-8d5f-45ad-887f-02ad87cfcc0f",
+      "versions": [
+        {
+          "version_id": "2a9872f3-a59e-406d-808f-5b8d7f811129",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-09T17:15:18.919615Z"
+    },
+    "whatsapp-inbox-saas": {
+      "id": "7d251174-abda-41dc-a53a-727703daf0c8",
+      "versions": [
+        {
+          "version_id": "664c76c5-0d38-45be-a329-afd6c15e7d1d",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-09T19:03:44.971101Z"
+    },
+    "stagingProbes": {
+      "rows": [
+        {
+          "app_id": "applybridge",
+          "state": "unknown",
+          "observed_at": "2026-10-10T11:10:13.250Z"
+        },
+        {
+          "app_id": "digitronics_website",
+          "state": "healthy",
+          "observed_at": "2026-10-10T11:20:12.858Z"
+        },
+        {
+          "app_id": "messenger",
+          "state": "unknown",
+          "observed_at": "2026-10-10T11:20:15.921Z"
+        },
+        {
+          "app_id": "product_hunter",
+          "state": "healthy",
+          "observed_at": "2026-10-10T10:50:12.746Z"
+        },
+        {
+          "app_id": "sales_analyzer",
+          "state": "healthy",
+          "observed_at": "2026-10-10T11:10:12.731Z"
+        }
+      ],
+      "rowsRead": 5,
+      "rowsWritten": 0
+    },
+    "finalObservedAt": "2026-10-10T11:41:33.932802+00:00",
+    "messengerLatestLedger": {
+      "names": [
+        "0201_message_cost_purposes.sql"
+      ],
+      "inspectionRowsRead": 1,
+      "inspectionRowsWritten": 0
+    }
+  },
+  "stagingNaturalCompletions": {
+    "expectedVersion": "50061bb9-c50d-4541-961a-e9072975a985",
+    "ticks": [
+      {
+        "last_tick_at": "2026-10-10T11:20:11.785Z",
+        "last_completed_at": "2026-10-10T11:20:16.272Z",
+        "result": {
+          "probed": 2,
+          "missed": 0,
+          "actionsChecked": 0,
+          "delivered": 0,
+          "budgetLimited": 0,
+          "statements": 8,
+          "rowsReadBeforeCompletion": 25,
+          "rowsWrittenBeforeCompletion": 8,
+          "version": "50061bb9-c50d-4541-961a-e9072975a985"
+        }
+      },
+      {
+        "next_tick_at": "2026-10-10T11:35:11.790Z",
+        "last_tick_at": "2026-10-10T11:30:11.790Z",
+        "last_completed_at": "2026-10-10T11:30:12.594Z",
+        "result": {
+          "probed": 0,
+          "missed": 0,
+          "actionsChecked": 0,
+          "delivered": 0,
+          "budgetLimited": 0,
+          "statements": 4,
+          "rowsReadBeforeCompletion": 16,
+          "rowsWrittenBeforeCompletion": 2,
+          "version": "50061bb9-c50d-4541-961a-e9072975a985"
+        }
+      },
+      {
+        "next_tick_at": "2026-10-10T11:45:11.669Z",
+        "last_tick_at": "2026-10-10T11:40:11.669Z",
+        "last_completed_at": "2026-10-10T11:40:13.792Z",
+        "result": {
+          "probed": 2,
+          "missed": 0,
+          "actionsChecked": 0,
+          "delivered": 0,
+          "budgetLimited": 0,
+          "statements": 8,
+          "rowsReadBeforeCompletion": 25,
+          "rowsWrittenBeforeCompletion": 8,
+          "version": "50061bb9-c50d-4541-961a-e9072975a985"
+        }
+      }
+    ],
+    "lastObservedAt": "2026-10-10T11:40:26.484394+00:00",
+    "captureInspectionRowsRead": 5,
+    "captureInspectionRowsWritten": 0
+  },
+  "monitors": {
+    "dailyDigest": {
+      "id": "6ac92b39c2d48191954c293597494a64",
+      "enabled": true,
+      "timezone": "Asia/Shanghai",
+      "lastRunAt": "2026-10-10T01:04:32.318866+00:00"
+    },
+    "independentAvailability": {
+      "id": "6ac92cc4f5e481918a0cb10654a669a0",
+      "enabled": false,
+      "liveUpdatedAt": "2026-10-10T11:14:32.354793+00:00",
+      "userInstruction": "Keep paused",
+      "schedule": "hourly"
+    },
+    "mutations": {
+      "prompts": 0,
+      "schedules": 0,
+      "enabledFields": 0,
+      "newAutomations": 0
+    },
+    "optionalMetadataConsent": "not inferred from get_profile; unreleased server capability remains prerequisite",
+    "savedAt": "2026-10-10T11:30:26.483805+00:00"
+  },
+  "userTimezone": "Asia/Shanghai",
+  "requiredNextGate": "Actual enrolled owner signed production access and successful Messenger public health; then fresh exact-source reviewed input/preflight, one normal Messenger main build, production supervisor with actions held, native delivery and real-node investigation/consent/canary gates."
+}

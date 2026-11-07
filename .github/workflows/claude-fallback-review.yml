@@ -1,0 +1,43 @@
+name: Claude fallback review
+
+# When the Codex review bot says it is out of usage on a PR, Claude reviews the
+# PR instead. Self-contained: a public repo cannot call the private claude-config workflow.
+# Managed by claude-config scripts/rollout-claude-review.sh — edit it there.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+       github.event.comment.user.type == 'Bot' &&
+       contains(github.event.comment.body, 'You have reached your Codex usage limits for code reviews'))
+    # Exact bot login plus the exact usage-limit wording, so nobody else can
+    # start it by commenting. Claude's own comments are posted with the workflow
+    # token, which GitHub never lets trigger another run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+       github.event.comment.user.type == 'Bot' &&
+       contains(github.event.comment.body, 'You have reached your Codex usage limits for code reviews'))
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: digitronics2025/claude-config/.github/workflows/claude-fallback-review-reusable.yml@main
+    with:
+      pr_number: ${{ github.event.issue.number || inputs.pr_number }}
+    secrets: inherit

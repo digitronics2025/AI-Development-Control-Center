@@ -1,0 +1,38 @@
+name: Advisory AI review
+
+# Independent of CI and release workflows. Never add this to required checks.
+# Managed by AI-Development-Control-Center/scripts/ai_review/onboard.py.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: string
+      second_opinion:
+        description: Ask Codex for a second opinion if Claude reports findings
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  advisory-ai:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: digitronics2025/AI-Development-Control-Center/.github/workflows/advisory-ai-review-reusable.yml@REVIEW_WORKFLOW_SHA
+    with:
+      pr_number: ${{ github.event.pull_request.number && format('{0}', github.event.pull_request.number) || inputs.pr_number }}
+      second_opinion: ${{ inputs.second_opinion || false }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

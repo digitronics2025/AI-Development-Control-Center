@@ -55,6 +55,15 @@ class OnboardTests(unittest.TestCase):
             self.assertTrue(m.reconcile(self.repo, 'wanted', True)['status'].startswith('ineligible'))
             api.assert_not_called()
 
+    def test_ci_completion_mode_preserves_stricter_secret_policy(self):
+        content = m.render('a'*40, {'trigger': 'workflow_run', 'workflows': ['CI']})
+        self.assertIn('  workflow_run:', content)
+        self.assertNotIn('  pull_request_target:', content)
+        self.assertIn('workflows: ["CI"]', content)
+        self.assertIn('# v1 advisory review', content)
+        with self.assertRaises(ValueError):
+            m.render('a'*40, {'trigger': 'workflow_run', 'workflows': ['${{ injection }}']})
+
 
 if __name__ == '__main__':
     unittest.main()

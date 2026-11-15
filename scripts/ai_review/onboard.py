@@ -37,10 +37,23 @@ def pages(path):
     raise RuntimeError('inventory pagination budget exhausted')
 
 
-def render(sha):
+def render(sha, config=None):
     if not re.fullmatch('[0-9a-f]{40}', sha):
         raise ValueError('workflow ref must be a full immutable SHA')
-    return pathlib.Path(__file__).parents[2].joinpath('templates/ai-review/caller.yml').read_text().replace('REVIEW_WORKFLOW_SHA', sha)
+    config = config or {}
+    trigger = config.get('trigger', 'pull_request_target')
+    template = 'caller.yml'
+    if trigger == 'workflow_run':
+        workflows = config.get('workflows', [])
+        if not 1 <= len(workflows) <= 10 or any(not isinstance(w, str) or not re.fullmatch(r'[A-Za-z0-9 ._/-]{1,80}', w) for w in workflows):
+            raise ValueError('workflow_run requires explicit safe CI workflow names')
+        template = 'caller-ci-complete.yml'
+    elif trigger != 'pull_request_target':
+        raise ValueError('unsupported review trigger')
+    content = pathlib.Path(__file__).parents[2].joinpath('templates/ai-review', template).read_text().replace('REVIEW_WORKFLOW_SHA', sha)
+    if trigger == 'workflow_run':
+        content = content.replace('REVIEW_CI_WORKFLOWS', json.dumps(workflows))
+    return content
 
 
 def reconcile(repo, content, apply=False):
@@ -110,7 +123,7 @@ def main():
     # An optional allowlist can narrow that scope; push-only collaborators are
     # not automatically treated as repository managers.
     owners = set(json.loads(os.getenv('AI_REVIEW_OWNERS', '[]') or '[]'))
-    content = render(args.workflow_sha)
+    render(args.workflow_sha)  # validate the released ref before any mutation
     report = []
     if os.getenv('AI_REVIEW_AUTH_MODE') == 'installation':
         repositories = []
@@ -134,9 +147,18 @@ def main():
             report.append({'repo': repo['full_name'], 'status': 'ineligible: not an owner or manager'})
             continue
         try:
-            report.append(reconcile(repo, content, args.apply))
+            config = {}
+            try:
+                entry = api(f'/repos/{repo["full_name"]}/contents/.github/advisory-ai-review.json?ref={repo["default_branch"]}')
+                config = json.loads(base64.b64decode(entry['content']))
+            except urllib.error.HTTPError as config_error:
+                if config_error.code != 404:
+                    raise
+            report.append(reconcile(repo, render(args.workflow_sha, config), args.apply))
         except urllib.error.HTTPError as exc:
             report.append({'repo': repo['full_name'], 'status': f'restricted: GitHub HTTP {exc.code}'})
+        except (ValueError, TypeError) as exc:
+            report.append({'repo': repo['full_name'], 'status': 'restricted: invalid review configuration'})
     print(json.dumps(report, indent=2))
     # This reconciler handles caller distribution only. Existing AI merge gates
     # must be audited before declaring a repository fully nonblocking.

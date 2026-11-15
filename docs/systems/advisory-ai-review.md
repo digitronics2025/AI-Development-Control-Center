@@ -43,6 +43,13 @@ Run `python3 scripts/ai_review/onboard.py --workflow-sha SHA` for a dry run; add
 required CI and human approvals. The scheduled reconciler distributes callers;
 it does not silently remove pre-existing merge gates or change repository policies.
 
+Repositories with a stricter prohibition on PR-triggered secrets may add
+`.github/advisory-ai-review.json` containing
+`{"trigger":"workflow_run","workflows":["CI"]}`. Their review starts independently
+after the named CI workflow completes. Neither CI, merging nor deployment waits
+for it. The reviewer reads no CI artifacts and executes no PR code. Onboarding
+preserves this choice instead of reintroducing a prohibited trigger.
+
 ## Credentials
 
 Set only explicit provider secrets on each personal repository or eligible

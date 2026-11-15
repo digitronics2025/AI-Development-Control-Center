@@ -1,0 +1,39 @@
+name: Advisory AI review
+
+# For repositories whose security policy forbids secrets on PR-triggered flows.
+# This trusted workflow never reads or executes CI artifacts or PR code.
+on:
+  workflow_run:
+    workflows: REVIEW_CI_WORKFLOWS
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: string
+      second_opinion:
+        description: Ask Codex for a second opinion if Claude reports findings
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  advisory-ai:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.pull_requests[0].number)
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: digitronics2025/AI-Development-Control-Center/.github/workflows/advisory-ai-review-reusable.yml@REVIEW_WORKFLOW_SHA # v1 advisory review
+    with:
+      pr_number: ${{ github.event.workflow_run.pull_requests[0].number && format('{0}', github.event.workflow_run.pull_requests[0].number) || inputs.pr_number }}
+      second_opinion: ${{ inputs.second_opinion || false }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -29,4 +29,4 @@ jobs:
             echo 'Native subscription fallback is prepared but inactive until its GitHub user credential is configured.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          python3 scripts/ai_review/codex_subscription_broker.py >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/ai_review/codex_subscription_broker.py | tee -a "$GITHUB_STEP_SUMMARY"

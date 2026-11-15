@@ -34,6 +34,4 @@ jobs:
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number && format('{0}', github.event.workflow_run.pull_requests[0].number) || inputs.pr_number }}
       second_opinion: ${{ inputs.second_opinion || false }}
     secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -1,0 +1,25 @@
+name: Claude subscription credential format check
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  format:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check credential shape without revealing its value
+        env:
+          SUBSCRIPTION_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          token = os.environ.get('SUBSCRIPTION_TOKEN', '')
+          print(json.dumps({
+              'token_received': bool(token),
+              'expected_subscription_prefix': token.strip().startswith('sk-ant-oat01-'),
+              'leading_or_trailing_whitespace': token != token.strip(),
+              'internal_whitespace': bool(re.search(r'\s', token.strip())),
+              'surrounding_quotes': token.strip().startswith(('"', "'")),
+          }))
+          PY

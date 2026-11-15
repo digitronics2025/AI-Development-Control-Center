@@ -1,107 +1,117 @@
-# Advisory AI review
+# Subscription-only advisory AI review
 
-The independent review workflow never gates merging, releases, or deployment.
-Claude is primary. Codex runs once on Claude error, timeout, quota, authentication
-failure, or an incomplete response. A PR labelled `ai-second-opinion` **before its
-head is reviewed**, or a manual dispatch with `second_opinion=true`, also runs
-Codex when Claude reports findings. Findings are ordinary comments, never
-`REQUEST_CHANGES` reviews. Existing human approvals, builds, tests and security
-controls remain mandatory.
+Claude is primary, using the owner's Claude subscription. Codex fallback uses
+native GitHub code review on the owner's ChatGPT subscription. The runner has no
+paid Anthropic or OpenAI model API path, even if API keys are accidentally set.
+Plan limits still apply; there is no guarantee of unlimited reviews.
 
-## Distribution and onboarding
+All AI findings, outages, timeouts, missing responses and queued reviews are
+advisory. Merging and deployment never wait for them. Mandatory build/test checks,
+security controls, human approvals and human/security review threads stay binding.
 
-The public reusable workflow is callable from both public and private repositories.
-Callers and the trusted runner are pinned to immutable commits. The fleet keeps
-the existing caller filename `.github/workflows/claude-fallback-review.yml` so no
-second legacy trigger remains. Do not add AI jobs to required status checks,
-required workflows, deployment `needs`, release conditions, or merge scripts.
-Passing a job with `continue-on-error` is insufficient if a merge script still
-waits for its completion: remove that dependency too.
+## Activate the subscription fallback
 
-The scheduled `advisory-ai-onboarding.yml` reconciles every six hours. It reads
-`scripts/ai_review/workflow-version.txt` for the released workflow SHA, so updating
-the hub's own caller does not cause a pin-update loop. It uses only an onboarding
-GitHub App credential or `AI_REVIEW_ADMIN_TOKEN`, never provider credentials. It scopes user tokens to
-repositories with admin or maintain permission, including organizations. Set
-`AI_REVIEW_OWNERS` to a JSON array to narrow this scope. For an installation token,
-set `AI_REVIEW_AUTH_MODE=installation`; the selected installation repositories are
-the authorized scope. A GitHub App must be installed on **all repositories** to
-include future repositories. Set repository variable `AI_REVIEW_APP_ID` and secret
-`AI_REVIEW_APP_PRIVATE_KEY` to let the scheduler mint a fresh short-lived token
-for each personal or organization installation. The key is kept in a temporary
-0600 file only for JWT signing and never reaches the reviewer or reconciler.
-A pre-minted installation token supplied through `AI_REVIEW_ADMIN_TOKEN` needs
-an external refresh broker because it expires in about an hour. Alternatively
-use a fine-grained PAT scoped to the managed owners with
-Contents and Workflows write, Pull requests write, and metadata read. Organization
-SSO or owner approval may restrict installation and repository access.
+One **GitHub user credential** belongs in this public control repository only:
+`CODEX_REVIEW_GITHUB_TOKEN`. This is not an OpenAI API key and does not buy API
+credits. Do not copy ChatGPT cookies or Codex session/refresh tokens into Actions.
 
-If no administration token is configured, the scheduled job reports that onboarding
-is unavailable. A missing token does **not** mean future repositories are covered.
-Run `python3 scripts/ai_review/onboard.py --workflow-sha SHA` for a dry run; add
-`--apply` to update callers. Protected defaults receive ordinary PRs, preserving
-required CI and human approvals. The scheduled reconciler distributes callers;
-it does not silently remove pre-existing merge gates or change repository policies.
+1. Use the GitHub account connected to the intended ChatGPT subscription.
+2. Create a fine-grained personal access token at
+   <https://github.com/settings/personal-access-tokens/new>.
+3. Select the owner `digitronics2025` and **All repositories** to cover future
+   personal repositories. Grant **Pull requests: Read and write**. Metadata read
+   is included. The dispatcher does not need Contents write, Actions write,
+   Secrets, Administration, deployment or repository deletion permission.
+4. Save the credential in MyVault under the existing secret-custody policy, then
+   save it as the control repository's Actions secret `CODEX_REVIEW_GITHUB_TOKEN`:
+   <https://github.com/digitronics2025/AI-Development-Control-Center/settings/secrets/actions>.
+   Never send the token in chat, commit it, or include it in a report.
+5. Run **ChatGPT subscription review fallback** from the Actions tab to verify.
+   Keep native Codex Automatic review and Auto security review off to avoid
+   duplicate automatic reviews; manual `@codex review` must remain available.
 
-Repositories with a stricter prohibition on PR-triggered secrets may add
-`.github/advisory-ai-review.json` containing
-`{"trigger":"workflow_run","workflows":["CI"]}`. Their review starts independently
-after the named CI workflow completes. Neither CI, merging nor deployment waits
-for it. The reviewer reads no CI artifacts and executes no PR code. Onboarding
-preserves this choice instead of reintroducing a prohibited trigger.
+A fine-grained GitHub token is scoped to one resource owner. Organization coverage
+requires a suitable user credential and any organization/SSO approvals; do not
+claim a personal-owner token covers private organization repositories. Expired,
+revoked or restricted tokens stop the dispatcher, never merges or deployment.
 
-Scheduled reports redact private repository names, commit IDs and PR URLs before
-writing public job logs or summaries. Local manual runs retain full reports unless
-`--redact-private` is selected. Detailed private inventory must not be uploaded to
-the public hub.
+The secret API was inaccessible to the setup session (HTTP 403), so the owner
+must save this one secret. Until configured, the scheduled dispatcher explicitly
+reports **inactive**. Posting a request is not proof that a review completed.
 
-## Credentials
+## Request flow and cost controls
 
-Set only explicit provider secrets on each personal repository or eligible
-organization repositories: `ANTHROPIC_API_KEY` (preferred) or existing
-`CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` for the Codex fallback. Missing
-secrets are permitted at workflow startup and recorded as unavailable. Subscription
-Codex bot settings and ChatGPT login tokens are not OpenAI API credentials.
-Never copy a short-lived session token into an automation secret. Credential
-creation and custody follow the owner's existing vault policy.
+The trusted runner reviews API diff text with Claude Code, no tools, hooks, MCP
+servers, PR checkout or PR execution. Its private temporary home has only the
+Claude subscription token; GitHub and other credentials are excluded. Forks,
+Dependabot and drafts are skipped. CLI install is pinned, has a 45-second limit,
+and runs no package lifecycle scripts; the native CLI review has a 90-second
+process deadline. The overall process/step/job deadlines are 300 seconds, six
+minutes and seven minutes. Diffs and output are bounded.
 
-Optional repository variables `CLAUDE_REVIEW_MODEL` and `CODEX_REVIEW_MODEL`
-override the defaults (`claude-sonnet-4-5` for the API, `sonnet` for the Claude
-subscription CLI, `gpt-5.2-codex` for Codex). Verify availability for the account.
-No provider success or live failover is established by simulated tests.
+A bot-authored claim is saved per PR head before Claude runs. Reruns never repeat
+Claude on that head. A successful pass triggers no Codex request. On Claude error,
+auth failure, service failure, quota, invalid response or timeout, the result
+gets a pending marker for the central dispatcher. Add `ai-second-opinion` before
+the head is first reviewed, or use manual dispatch with `second_opinion=true`,
+to queue Codex when Claude reports findings. Negative findings remain advisory.
 
-## Isolation, cost and availability
+The dispatcher runs on a five-minute schedule, best effort, or manual dispatch.
+GitHub may delay scheduled jobs. It reads open PRs and comments in repositories
+the token can manage, accepts only trusted bot markers for the current head, and
+posts `@codex review` as the connected GitHub user. No private code or diff is sent
+in the trigger comment; the existing Codex GitHub integration performs its review.
+A seven-minute runner that dies without updating its claim is recoverable after
+eight minutes. This covers lost responses and hard job timeouts without starting
+Codex in parallel with a healthy Claude job.
 
-`pull_request_target` uses the trusted base workflow. **Never check out PR code**
-in this workflow. Only the immutable public reviewer is checked out, with checkout
-credentials disabled. Same-repository PR diffs are API data; fork and Dependabot
-PRs are skipped. No repository scripts, instructions, packages, MCP servers, or
-hooks run. The Claude CLI gets a private temporary home, no tools, no hooks, no
-MCP servers and no GitHub token or secondary provider key. API models have no tools.
+One dispatcher run is active at a time. It rechecks the head and open state before
+posting; the native request comment is the durable per-head claim. Existing native
+running/completed/failed state prevents duplicate requests. There are no automatic
+per-head retries after a native request, including quota failure. A user may
+explicitly request another native review after their allowance resets.
 
-One active review job per repository bounds concurrent provider use. GitHub may
-coalesce pending reviews; skipped reviews remain advisory. Across repositories,
-GitHub's account runner and provider quotas still apply; there is no account-wide
-distributed semaphore. AI and production workflows never share a concurrency group
-or deployment environment. Hosted runner capacity remains a shared GitHub account
-resource, so absolute zero scheduling contention requires separate runner capacity.
+The dispatcher does not wait for Codex. Its logs and public summaries contain
+only counts, not private repository names, PR URLs, code or credential values.
+Provider account allowances and shared hosted-runner capacity still apply. The
+review and dispatcher own no production concurrency group or deployment environment.
 
-A bot-authored claim is persisted per PR head **before** provider execution. Reruns
-and cancellation never repeat requests for that head. An interrupted claim can
-leave no result; it never blocks merging. An owner can delete the claim explicitly
-to authorize another paid attempt. Each provider is invoked at most once by the
-runner; there are no application retries. Claude CLI's internal transport behavior
-is also bounded by its process deadline. Provider HTTP calls have 75-second limits;
-the CLI gets 45 seconds for installation and 90 for review. The review process has
-a 300-second deadline, a six-minute step limit, and a seven-minute job limit.
-Only a partial diff (48,000 characters maximum) is reviewed, with bounded output.
-This reduces cost but cannot prove the absence of bugs elsewhere in the code.
+## Distribution and repository policy
 
-## Verification
+All consumers call the public reusable workflow at an immutable commit. The
+reviewer source is separately pinned. The released workflow SHA is stored in
+`scripts/ai_review/workflow-version.txt`. Callers keep the legacy filename
+`.github/workflows/claude-fallback-review.yml`, avoiding duplicate legacy triggers.
 
-`python3 -m unittest discover -s scripts/ai_review -p 'test_*.py' -v` tests provider
-selection and errors, timeouts, unavailable credentials, deduplication, untrusted
-PR isolation, advisory negative findings, and protected onboarding without bypass.
-The manual `advisory-ai-review-verify.yml` runs these tests in GitHub Actions.
-Repository verification must separately inspect actual protection settings, all
-merge scripts and deployment workflows; unit tests do not prove a live deployment.
+Personal Manager prohibits PR-triggered secrets. Its default-branch config
+`.github/advisory-ai-review.json` is
+`{"trigger":"workflow_run","workflows":["CI"]}`. Its review starts independently
+after trusted CI completion and reads no CI artifact or PR code. The reconciler
+preserves this choice. Neither CI nor deployment waits for its review.
+
+Six-hour onboarding is separate from review dispatch. It needs a scoped
+`AI_REVIEW_ADMIN_TOKEN`, or `AI_REVIEW_APP_ID` plus `AI_REVIEW_APP_PRIVATE_KEY`.
+The latter mints fresh short-lived installation tokens. An App installed on all
+managed owners' repositories covers future selected repositories. Protected
+branches receive normal PRs, without policy bypass. The dispatcher credential
+alone cannot onboard or edit workflows, and no such permission should be added
+solely for code review. Unknown pre-existing AI gates still need an audit.
+
+## Verification and observed limitations
+
+On 2026-11-15, a native request from `github-actions[bot]` received no response
+in the test window. A separate request from connected user `digitronics2025`
+was acknowledged, completed on the exact tested head and posted a review receipt
+in control-repository PR #20. This verifies the native subscription review route,
+not the unconfigured scheduled credential. No paid model API was used.
+
+Focused tests cover primary success, errors, quota, timeout, pending fallback,
+second-opinion opt-in, no paid API calls, fork isolation, lost-job recovery,
+spoofed-marker rejection, stale heads, native deduplication, GitHub user identity,
+and absence of an automation credential. Run:
+
+    python3 -m unittest discover -s scripts/ai_review -p 'test_*.py' -v
+
+The manual verification workflow runs these tests in GitHub Actions. Independent
+normal builds and security checks remain mandatory; their failures must not be
+suppressed to make this review configuration appear green.

@@ -1,0 +1,32 @@
+name: ChatGPT subscription review fallback
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: codex-subscription-dispatcher
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ai_review
+      - name: Request pending reviews using the connected GitHub user
+        env:
+          CODEX_REVIEW_GITHUB_TOKEN: ${{ secrets.CODEX_REVIEW_GITHUB_TOKEN }}
+          CODEX_REVIEW_OWNERS: ${{ vars.CODEX_REVIEW_OWNERS }}
+          CODEX_REVIEW_GITHUB_USER: ${{ vars.CODEX_REVIEW_GITHUB_USER }}
+        run: |
+          if [ -z "$CODEX_REVIEW_GITHUB_TOKEN" ]; then
+            echo '::warning::Subscription fallback dispatcher is inactive: add CODEX_REVIEW_GITHUB_TOKEN. This is a GitHub user credential, not an OpenAI API key.'
+            echo 'Native subscription fallback is prepared but inactive until its GitHub user credential is configured.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/ai_review/codex_subscription_broker.py >> "$GITHUB_STEP_SUMMARY"

@@ -80,7 +80,7 @@ class ReviewTests(unittest.TestCase):
     def test_missing_credentials_return_without_raising(self):
         with patch.dict(r.os.environ, {}, clear=True):
             result = r.evaluate('diff')
-        self.assertEqual([v['status'] for v in result], ['unavailable', 'unavailable'])
+        self.assertEqual([v['status'] for v in result], ['unavailable', 'pending'])
 
     def test_incomplete_or_invalid_output_is_failure(self):
         for output in ['', '{}', '{"verdict":"approve","summary":"fine"}']:
@@ -148,25 +148,26 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(command[command.index('--setting-sources') + 1], '')
         self.assertIn('--strict-mcp-config', command)
 
-    def test_codex_uses_tool_free_responses_api(self):
-        response = {'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': r.json.dumps(PASS)}]}]}
+    def test_codex_queues_subscription_review_and_ignores_paid_api_key(self):
         with patch.dict(r.os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
-             patch.object(r, 'request', return_value=response) as request:
-            self.assertEqual(r.codex('diff'), PASS)
-        url, _, payload = request.call_args.args[:3]
-        self.assertEqual(url, 'https://api.openai.com/v1/responses')
-        self.assertFalse(payload['store'])
-        self.assertNotIn('tools', payload)
+             patch.object(r, 'request') as request:
+            self.assertEqual(r.codex('diff')['status'], 'pending')
+            request.assert_not_called()
 
-    def test_claude_api_success_and_truncation(self):
-        response = {'stop_reason': 'end_turn', 'content': [{'text': r.json.dumps(PASS)}]}
+    def test_claude_requires_subscription_and_ignores_paid_api_key(self):
         with patch.dict(r.os.environ, {'ANTHROPIC_API_KEY': 'test-only'}, clear=True), \
-             patch.object(r, 'request', return_value=response) as request:
-            self.assertEqual(r.claude('diff'), PASS)
-            self.assertEqual(request.call_args.args[3]['Accept'], 'application/json')
-            response['stop_reason'] = 'max_tokens'
-            with self.assertRaises(ValueError):
+             patch.object(r, 'request') as request:
+            with self.assertRaises(r.ProviderError):
                 r.claude('diff')
+            request.assert_not_called()
+
+    def test_failed_claude_creates_broker_queue_marker_not_a_fake_review(self):
+        gh = FakeGitHub()
+        with patch.object(r, 'evaluate', return_value=[{'provider': 'Claude', 'status': 'unavailable', 'error': 'UsageLimit'}, {'provider': 'Codex', **r.codex('diff')}]):
+            r.run_review(gh, 1)
+        self.assertIn(r.PENDING.format(sha='a'*40), gh.updates[0])
+        self.assertIn('Codex: pending', gh.updates[0])
+        self.assertNotIn('@codex review', gh.updates[0])
 
     def test_safe_failure_categories_without_provider_response_text(self):
         for status, expected in [(401, 'AuthenticationError'), (403, 'AuthenticationError'),

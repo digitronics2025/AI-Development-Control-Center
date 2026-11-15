@@ -1,0 +1,54 @@
+name: Codex subscription bridge verification
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Controlled same-repository PR to review
+        required: true
+        type: string
+permissions: {}
+jobs:
+  request:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Request a deduplicated native Codex review without AI API keys
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          repo = os.environ['GITHUB_REPOSITORY']
+          number = os.environ['PR_NUMBER']
+          if not re.fullmatch(r'[1-9][0-9]{0,8}', number):
+              raise ValueError('invalid PR number')
+          base = 'https://api.github.com/repos/' + repo
+          def api(path, body=None):
+              req = urllib.request.Request(base + path,
+                  data=None if body is None else json.dumps(body).encode(),
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  return json.load(response)
+          pr = api('/pulls/' + number)
+          if pr['state'] != 'open' or pr['head']['repo']['full_name'] != repo:
+              raise ValueError('only open same-repository PRs are eligible')
+          marker = '<!-- codex-subscription-probe:' + pr['head']['sha'] + ' -->'
+          for page in range(1, 11):
+              comments = api(f'/issues/{number}/comments?per_page=100&page={page}')
+              if any(c['user']['login'] == 'github-actions[bot]' and marker in c.get('body', '') for c in comments):
+                  print('Native Codex review already requested for this head.')
+                  raise SystemExit(0)
+              if len(comments) < 100:
+                  break
+          else:
+              raise ValueError('comment pagination budget exceeded')
+          result = api('/issues/' + number + '/comments', {'body':
+              '@codex review\n\n' + marker + '\nSubscription-only fallback bridge test. Advisory review only; merging and deployment never wait for this request.'})
+          print('Native subscription review requested: ' + result['html_url'])
+          PY

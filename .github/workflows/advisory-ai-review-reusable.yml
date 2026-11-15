@@ -1,0 +1,60 @@
+name: Advisory AI review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      second_opinion:
+        type: boolean
+        default: false
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+
+permissions: {}
+
+jobs:
+  advisory-review:
+    # One hosted runner per repository. Pending reviews may be coalesced by
+    # GitHub; reviews never own a CI/release concurrency group or environment.
+    concurrency:
+      group: advisory-ai-provider-budget-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Read immutable trusted reviewer (never the PR checkout)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: digitronics2025/AI-Development-Control-Center
+          ref: 57aa8b14a43d4d78473b45d37908902c74ff950f
+          path: .advisory-control
+          persist-credentials: false
+          sparse-checkout: scripts/ai_review
+      - name: Bounded advisory review
+        continue-on-error: true
+        timeout-minutes: 6
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SECOND_OPINION: ${{ inputs.second_opinion }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLAUDE_REVIEW_MODEL: ${{ vars.CLAUDE_REVIEW_MODEL }}
+          CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
+        run: timeout --signal=TERM 300s python3 "$GITHUB_WORKSPACE/.advisory-control/scripts/ai_review/reviewer.py"
+      - name: Record advisory policy
+        if: always()
+        run: |
+          echo 'AI reviews are advisory. Provider errors, timeouts, missing results and findings never gate merging or deployment. Normal CI, security and human approvals still apply.' >> "$GITHUB_STEP_SUMMARY"

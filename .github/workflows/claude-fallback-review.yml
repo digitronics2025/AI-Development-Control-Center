@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: digitronics2025/AI-Development-Control-Center/.github/workflows/advisory-ai-review-reusable.yml@50d4665bacef2043a813987f4f18c27fc4032185
+    uses: digitronics2025/AI-Development-Control-Center/.github/workflows/advisory-ai-review-reusable.yml@25ce281b986b1452a81ac4e4315531d9939c9f53
     with:
       pr_number: ${{ github.event.pull_request.number && format('{0}', github.event.pull_request.number) || inputs.pr_number }}
       second_opinion: ${{ inputs.second_opinion || false }}

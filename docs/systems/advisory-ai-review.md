@@ -105,6 +105,14 @@ was acknowledged, completed on the exact tested head and posted a review receipt
 in control-repository PR #20. This verifies the native subscription review route,
 not the unconfigured scheduled credential. No paid model API was used.
 
+The end-to-end test in control-repository PR #21 then exercised the released
+Claude runner returning UsageLimit, its trusted pending marker, the actual broker
+requesting a native review as the connected GitHub user, and Codex completing
+that exact head. A second broker run posted zero requests. The broker used the
+setup session’s existing GitHub user authorization for this one test; scheduled
+operation still requires CODEX_REVIEW_GITHUB_TOKEN in the hub. The 39 focused
+tests passed in GitHub Actions run 43753670043.
+
 Focused tests cover primary success, errors, quota, timeout, pending fallback,
 second-opinion opt-in, no paid API calls, fork isolation, lost-job recovery,
 spoofed-marker rejection, stale heads, native deduplication, GitHub user identity,

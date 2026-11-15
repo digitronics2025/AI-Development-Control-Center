@@ -127,6 +127,46 @@ class ReviewTests(unittest.TestCase):
         self.assertIn('Merging and deployment do not depend', gh.updates[0])
         self.assertNotIn('REQUEST_CHANGES', gh.updates[0])
 
+    def test_cli_has_no_github_or_secondary_provider_credentials_or_pr_tools(self):
+        calls = []
+        def execute(command, **kwargs):
+            calls.append((command, copy.deepcopy(kwargs)))
+            return subprocess.CompletedProcess(command, 0, stdout=r.json.dumps({'result': r.json.dumps(PASS)}))
+        with patch.dict(r.os.environ, {'PATH': '/usr/bin', 'GH_TOKEN': 'must-stay-out',
+                        'GITHUB_TOKEN': 'must-stay-out', 'OPENAI_API_KEY': 'must-stay-out',
+                        'CLAUDE_CODE_OAUTH_TOKEN': 'test-only'}, clear=True), \
+             patch.object(r.subprocess, 'run', side_effect=execute):
+            self.assertEqual(r.claude('$(untrusted diff)'), PASS)
+        self.assertEqual([kwargs['timeout'] for _, kwargs in calls], [45, 90])
+        for _, kwargs in calls:
+            for key in ['GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY']:
+                self.assertNotIn(key, kwargs['env'])
+            self.assertNotIn('shell', kwargs)
+        self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN', calls[0][1]['env'])
+        command = calls[1][0]
+        self.assertEqual(command[command.index('--tools') + 1], '')
+        self.assertEqual(command[command.index('--setting-sources') + 1], '')
+        self.assertIn('--strict-mcp-config', command)
+
+    def test_codex_uses_tool_free_responses_api(self):
+        response = {'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': r.json.dumps(PASS)}]}]}
+        with patch.dict(r.os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
+             patch.object(r, 'request', return_value=response) as request:
+            self.assertEqual(r.codex('diff'), PASS)
+        url, _, payload = request.call_args.args[:3]
+        self.assertEqual(url, 'https://api.openai.com/v1/responses')
+        self.assertFalse(payload['store'])
+        self.assertNotIn('tools', payload)
+
+    def test_claude_api_success_and_truncation(self):
+        response = {'stop_reason': 'end_turn', 'content': [{'text': r.json.dumps(PASS)}]}
+        with patch.dict(r.os.environ, {'ANTHROPIC_API_KEY': 'test-only'}, clear=True), \
+             patch.object(r, 'request', return_value=response):
+            self.assertEqual(r.claude('diff'), PASS)
+            response['stop_reason'] = 'max_tokens'
+            with self.assertRaises(ValueError):
+                r.claude('diff')
+
 
 if __name__ == '__main__':
     unittest.main()

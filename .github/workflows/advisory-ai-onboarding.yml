@@ -24,11 +24,18 @@ jobs:
       - name: Reconcile callers for personal and managed organization repositories
         env:
           AI_REVIEW_ADMIN_TOKEN: ${{ secrets.AI_REVIEW_ADMIN_TOKEN }}
+          AI_REVIEW_APP_ID: ${{ vars.AI_REVIEW_APP_ID }}
+          AI_REVIEW_APP_PRIVATE_KEY: ${{ secrets.AI_REVIEW_APP_PRIVATE_KEY }}
           AI_REVIEW_AUTH_MODE: ${{ vars.AI_REVIEW_AUTH_MODE }}
           AI_REVIEW_OWNERS: ${{ vars.AI_REVIEW_OWNERS }}
         run: |
+          if [ -n "$AI_REVIEW_APP_ID" ] && [ -n "$AI_REVIEW_APP_PRIVATE_KEY" ]; then
+            python3 scripts/ai_review/app_onboard.py "$(cat scripts/ai_review/workflow-version.txt)" > "$RUNNER_TEMP/onboarding-report.json"
+            cat "$RUNNER_TEMP/onboarding-report.json" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ -z "$AI_REVIEW_ADMIN_TOKEN" ]; then
-            echo '::warning::Automatic onboarding is unavailable: configure AI_REVIEW_ADMIN_TOKEN. Future repositories are not yet covered.'
+            echo '::warning::Automatic onboarding is unavailable: configure a GitHub App or AI_REVIEW_ADMIN_TOKEN. Future repositories are not yet covered.'
             echo 'Onboarding unavailable: no administration credential configured.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

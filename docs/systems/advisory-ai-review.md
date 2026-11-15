@@ -20,15 +20,19 @@ waits for its completion: remove that dependency too.
 
 The scheduled `advisory-ai-onboarding.yml` reconciles every six hours. It reads
 `scripts/ai_review/workflow-version.txt` for the released workflow SHA, so updating
-the hub's own caller does not cause a pin-update loop. It uses only
-`AI_REVIEW_ADMIN_TOKEN`, never provider credentials. It scopes user tokens to
+the hub's own caller does not cause a pin-update loop. It uses only an onboarding
+GitHub App credential or `AI_REVIEW_ADMIN_TOKEN`, never provider credentials. It scopes user tokens to
 repositories with admin or maintain permission, including organizations. Set
 `AI_REVIEW_OWNERS` to a JSON array to narrow this scope. For an installation token,
 set `AI_REVIEW_AUTH_MODE=installation`; the selected installation repositories are
 the authorized scope. A GitHub App must be installed on **all repositories** to
-include future repositories. An external token broker must refresh installation
-tokens before scheduled runs; a static installation token expires in about an
-hour. Alternatively use a fine-grained PAT scoped to the managed owners with
+include future repositories. Set repository variable `AI_REVIEW_APP_ID` and secret
+`AI_REVIEW_APP_PRIVATE_KEY` to let the scheduler mint a fresh short-lived token
+for each personal or organization installation. The key is kept in a temporary
+0600 file only for JWT signing and never reaches the reviewer or reconciler.
+A pre-minted installation token supplied through `AI_REVIEW_ADMIN_TOKEN` needs
+an external refresh broker because it expires in about an hour. Alternatively
+use a fine-grained PAT scoped to the managed owners with
 Contents and Workflows write, Pull requests write, and metadata read. Organization
 SSO or owner approval may restrict installation and repository access.
 

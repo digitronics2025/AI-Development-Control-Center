@@ -5,3 +5,5 @@ This documentation-only PR tests whether a trusted GitHub workflow can request t
 A separate controlled PR compares the connected GitHub user request with the unacknowledged workflow-bot request, without issuing two requests for the same PR head.
 
 The final end-to-end test verifies Claude subscription failure, the pending marker, central dispatcher submission and native Codex completion on one fresh head.
+
+The scheduled-credential activation test verifies that the stored GitHub user credential can submit the pending native review from GitHub Actions itself.

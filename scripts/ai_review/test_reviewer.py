@@ -161,11 +161,20 @@ class ReviewTests(unittest.TestCase):
     def test_claude_api_success_and_truncation(self):
         response = {'stop_reason': 'end_turn', 'content': [{'text': r.json.dumps(PASS)}]}
         with patch.dict(r.os.environ, {'ANTHROPIC_API_KEY': 'test-only'}, clear=True), \
-             patch.object(r, 'request', return_value=response):
+             patch.object(r, 'request', return_value=response) as request:
             self.assertEqual(r.claude('diff'), PASS)
+            self.assertEqual(request.call_args.args[3]['Accept'], 'application/json')
             response['stop_reason'] = 'max_tokens'
             with self.assertRaises(ValueError):
                 r.claude('diff')
+
+    def test_safe_failure_categories_without_provider_response_text(self):
+        for status, expected in [(401, 'AuthenticationError'), (403, 'AuthenticationError'),
+                                 (429, 'UsageLimit'), (503, 'ServiceError')]:
+            error = r.urllib.error.HTTPError('https://example.invalid', status, 'secret response text', {}, None)
+            self.assertEqual(r.failure_code(error), expected)
+        self.assertEqual(r.failure_code(r.ProviderError('MissingCredential')), 'MissingCredential')
+        self.assertEqual(r.failure_code(subprocess.TimeoutExpired('test', 90)), 'Timeout')
 
 
 if __name__ == '__main__':

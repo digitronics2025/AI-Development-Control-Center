@@ -26,6 +26,28 @@ MAX_DIFF = 48000
 MARKER = '<!-- advisory-ai-review:v1:{sha} -->'
 
 
+class ProviderError(Exception):
+    def __init__(self, code):
+        if code not in ('MissingCredential', 'AuthenticationError', 'UsageLimit',
+                        'ServiceError', 'InvocationError', 'InvalidResponse'):
+            raise ValueError('unknown provider failure category')
+        self.code = code
+
+
+def failure_code(error):
+    if isinstance(error, ProviderError):
+        return error.code
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return 'Timeout'
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code in (401, 403):
+            return 'AuthenticationError'
+        if error.code == 429:
+            return 'UsageLimit'
+        return 'ServiceError'
+    return type(error).__name__
+
+
 def request(url, token, payload=None, headers=None, timeout=60):
     h = {'Accept': 'application/vnd.github+json', 'User-Agent': 'advisory-ai-review'}
     if token:
@@ -61,13 +83,14 @@ def claude(prompt):
                          {'model': os.getenv('CLAUDE_REVIEW_MODEL') or 'claude-sonnet-4-5',
                           'max_tokens': 1400, 'system': SYSTEM,
                           'messages': [{'role': 'user', 'content': prompt}]},
-                         {'x-api-key': key, 'anthropic-version': '2023-06-01'}, timeout=75)
+                         {'Accept': 'application/json', 'x-api-key': key,
+                          'anthropic-version': '2023-06-01'}, timeout=75)
         if result.get('stop_reason') != 'end_turn':
             raise ValueError('incomplete Claude response')
         return parse_review(''.join(x.get('text', '') for x in result['content']))
     oauth = os.getenv('CLAUDE_CODE_OAUTH_TOKEN', '')
     if not oauth:
-        raise ValueError('Claude credential unavailable')
+        raise ProviderError('MissingCredential')
     # Install a fixed official CLI without running package lifecycle scripts.
     # The CLI and all its children have an isolated HOME and a minimal environment.
     with tempfile.TemporaryDirectory(prefix='advisory-claude-') as work:
@@ -80,24 +103,35 @@ def claude(prompt):
                         '--no-fund', '@anthropic-ai/claude-code@2.1.325'],
                        env=env, cwd=work, capture_output=True, timeout=45, check=True)
         env['CLAUDE_CODE_OAUTH_TOKEN'] = oauth
-        run = subprocess.run(['node', work + '/node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs', '--print',
+        architecture = {'x86_64': 'x64', 'aarch64': 'arm64'}.get(os.uname().machine)
+        if not architecture:
+            raise ProviderError('InvocationError')
+        # Invoke the native binary directly so a process timeout cannot leave
+        # a Node wrapper's provider child running during fallback.
+        binary = work + '/node_modules/@anthropic-ai/claude-code-linux-' + architecture + '/claude'
+        run = subprocess.run([binary, '--print',
                               '--output-format', 'json', '--settings', '{"disableAllHooks":true}',
                               '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
                               '--setting-sources', '', '--disable-slash-commands',
                               '--no-session-persistence', '--max-turns', '1',
                               '--model', os.getenv('CLAUDE_REVIEW_MODEL') or 'sonnet',
                               '--system-prompt', SYSTEM], input=prompt, text=True, env=env,
-                             cwd=work, capture_output=True, timeout=90, check=True)
+                             cwd=work, capture_output=True, timeout=90, check=False)
         data = json.loads(run.stdout)
-        if data.get('is_error'):
-            raise ValueError('Claude CLI service error')
+        if run.returncode or data.get('is_error'):
+            status = data.get('api_error_status')
+            code = ('AuthenticationError' if status in (401, 403) else
+                    'UsageLimit' if status == 429 else
+                    'ServiceError' if isinstance(status, int) and status >= 500 else
+                    'InvocationError')
+            raise ProviderError(code)
         return parse_review(data.get('structured_output') or data.get('result'))
 
 
 def codex(prompt):
     key = os.getenv('OPENAI_API_KEY', '')
     if not key:
-        raise ValueError('Codex credential unavailable')
+        raise ProviderError('MissingCredential')
     data = request('https://api.openai.com/v1/responses', key,
                    {'model': os.getenv('CODEX_REVIEW_MODEL') or 'gpt-5.2-codex',
                     'instructions': SYSTEM, 'input': prompt, 'store': False,
@@ -120,13 +154,13 @@ def evaluate(prompt, second_opinion=False, primary=claude, fallback=codex):
         need_fallback = second_opinion and first['verdict'] == 'findings'
     except Exception as exc:
         # Never log service response bodies, request headers, or exception text.
-        results.append({'provider': 'Claude', 'status': 'unavailable', 'error': type(exc).__name__})
+        results.append({'provider': 'Claude', 'status': 'unavailable', 'error': failure_code(exc)})
         need_fallback = True
     if need_fallback:
         try:
             results.append({'provider': 'Codex', 'status': 'reviewed', **fallback(prompt)})
         except Exception as exc:
-            results.append({'provider': 'Codex', 'status': 'unavailable', 'error': type(exc).__name__})
+            results.append({'provider': 'Codex', 'status': 'unavailable', 'error': failure_code(exc)})
     return results
 
 

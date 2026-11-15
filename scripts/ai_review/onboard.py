@@ -70,7 +70,7 @@ def reconcile(repo, content, apply=False):
     except urllib.error.HTTPError as exc:
         # A protected repository gets a normal PR. No rules are weakened and
         # no administrative bypass or automatic human approval is attempted.
-        if exc.code != 409:
+        if exc.code not in (403, 409, 422):
             raise
         branch = 'ci/advisory-ai-review'
         ref = api(f'/repos/{full}/git/ref/heads/{base}')
@@ -106,14 +106,32 @@ def main():
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--workflow-sha', required=True)
     args = parser.parse_args()
-    owners = set(json.loads(os.getenv('AI_REVIEW_OWNERS', '["digitronics2025"]')))
-    if not owners:
-        raise ValueError('explicit owner allowlist required')
+    # The owner authorized personal and managed organization repositories.
+    # An optional allowlist can narrow that scope; push-only collaborators are
+    # not automatically treated as repository managers.
+    owners = set(json.loads(os.getenv('AI_REVIEW_OWNERS', '[]') or '[]'))
     content = render(args.workflow_sha)
     report = []
-    for repo in pages('/user/repos?affiliation=owner,collaborator,organization_member'):
-        if repo['owner']['login'] not in owners:
+    if os.getenv('AI_REVIEW_AUTH_MODE') == 'installation':
+        repositories = []
+        for page in range(1, 101):
+            batch = api(f'/installation/repositories?per_page=100&page={page}')['repositories']
+            for repo in batch:
+                # Selected repositories are the installation's explicit grant.
+                repo['permissions'] = {'push': True, 'maintain': True}
+            repositories.extend(batch)
+            if len(batch) < 100:
+                break
+        else:
+            raise RuntimeError('installation pagination budget exhausted')
+    else:
+        repositories = pages('/user/repos?affiliation=owner,collaborator,organization_member')
+    for repo in repositories:
+        if owners and repo['owner']['login'] not in owners:
             report.append({'repo': repo['full_name'], 'status': 'outside approved owner allowlist'})
+            continue
+        if not any(repo.get('permissions', {}).get(p) for p in ('admin', 'maintain')):
+            report.append({'repo': repo['full_name'], 'status': 'ineligible: not an owner or manager'})
             continue
         try:
             report.append(reconcile(repo, content, args.apply))

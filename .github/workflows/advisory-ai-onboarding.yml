@@ -1,0 +1,36 @@
+name: Advisory AI repository onboarding
+
+on:
+  schedule:
+    - cron: '43 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisory-ai-onboarding
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reconcile callers for personal and managed organization repositories
+        env:
+          AI_REVIEW_ADMIN_TOKEN: ${{ secrets.AI_REVIEW_ADMIN_TOKEN }}
+          AI_REVIEW_AUTH_MODE: ${{ vars.AI_REVIEW_AUTH_MODE }}
+          AI_REVIEW_OWNERS: ${{ vars.AI_REVIEW_OWNERS }}
+        run: |
+          if [ -z "$AI_REVIEW_ADMIN_TOKEN" ]; then
+            echo '::warning::Automatic onboarding is unavailable: configure AI_REVIEW_ADMIN_TOKEN. Future repositories are not yet covered.'
+            echo 'Onboarding unavailable: no administration credential configured.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/ai_review/onboard.py --apply --workflow-sha "$(cat scripts/ai_review/workflow-version.txt)" > "$RUNNER_TEMP/onboarding-report.json"
+          cat "$RUNNER_TEMP/onboarding-report.json" >> "$GITHUB_STEP_SUMMARY"

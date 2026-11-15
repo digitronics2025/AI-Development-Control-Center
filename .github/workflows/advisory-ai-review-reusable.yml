@@ -10,11 +10,7 @@ on:
         type: boolean
         default: false
     secrets:
-      ANTHROPIC_API_KEY:
-        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: false
-      OPENAI_API_KEY:
         required: false
 
 permissions: {}
@@ -37,7 +33,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: digitronics2025/AI-Development-Control-Center
-          ref: 2a489ce42dbfdb9c2d4d7d052121272efc5f5720
+          ref: 6af888ef6fa0e65b64768837d6b35d7b61986812
           path: .advisory-control
           persist-credentials: false
           sparse-checkout: scripts/ai_review
@@ -48,11 +44,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SECOND_OPINION: ${{ inputs.second_opinion }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLAUDE_REVIEW_MODEL: ${{ vars.CLAUDE_REVIEW_MODEL }}
-          CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
         run: timeout --signal=TERM 300s python3 "$GITHUB_WORKSPACE/.advisory-control/scripts/ai_review/reviewer.py"
       - name: Record advisory policy
         if: always()

@@ -50,6 +50,11 @@ after the named CI workflow completes. Neither CI, merging nor deployment waits
 for it. The reviewer reads no CI artifacts and executes no PR code. Onboarding
 preserves this choice instead of reintroducing a prohibited trigger.
 
+Scheduled reports redact private repository names, commit IDs and PR URLs before
+writing public job logs or summaries. Local manual runs retain full reports unless
+`--redact-private` is selected. Detailed private inventory must not be uploaded to
+the public hub.
+
 ## Credentials
 
 Set only explicit provider secrets on each personal repository or eligible

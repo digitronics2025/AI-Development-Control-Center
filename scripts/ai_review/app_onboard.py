@@ -65,16 +65,16 @@ def run(workflow_sha):
                    ('AI_REVIEW_APP_PRIVATE_KEY', 'AI_REVIEW_ADMIN_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')}
             env.update(AI_REVIEW_ADMIN_TOKEN=token, AI_REVIEW_AUTH_MODE='installation')
             result = subprocess.run(['python3', str(pathlib.Path(__file__).with_name('onboard.py')),
-                                     '--apply', '--workflow-sha', workflow_sha],
+                                     '--apply', '--redact-private', '--workflow-sha', workflow_sha],
                                     env=env, capture_output=True, text=True, timeout=900)
             try:
                 report = json.loads(result.stdout)
             except ValueError:
                 report = [{'status': 'reconciler unavailable'}]
-            print(json.dumps({'owner': owner, 'repositories': report}), flush=True)
+            print(json.dumps({'repositories': report}), flush=True)
             failed |= result.returncode != 0
         except Exception as exc:
-            print(json.dumps({'owner': owner, 'status': 'restricted', 'error': type(exc).__name__}), flush=True)
+            print(json.dumps({'status': 'restricted', 'error': type(exc).__name__}), flush=True)
             failed = True
     return 1 if failed else 0
 

@@ -29,6 +29,7 @@ class AppOnboardTests(unittest.TestCase):
             self.assertEqual(body['permissions']['workflows'], 'write')
             return {'token': 'short-lived-test-token'}
         def reconcile(command, **kwargs):
+            self.assertIn('--redact-private', command)
             self.assertEqual(kwargs['env']['AI_REVIEW_AUTH_MODE'], 'installation')
             self.assertEqual(kwargs['env']['AI_REVIEW_ADMIN_TOKEN'], 'short-lived-test-token')
             self.assertNotIn('AI_REVIEW_APP_PRIVATE_KEY', kwargs['env'])

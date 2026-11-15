@@ -56,6 +56,12 @@ def render(sha, config=None):
     return content
 
 
+def redact_private(report, repositories):
+    private = {r['full_name']: r.get('private', True) for r in repositories}
+    return [{'repo': 'private repository (redacted)', 'status': entry['status']}
+            if private.get(entry['repo'], True) else entry for entry in report]
+
+
 def reconcile(repo, content, apply=False):
     full = repo['full_name']
     if repo.get('archived') or repo.get('disabled') or not repo.get('size'):
@@ -118,6 +124,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--workflow-sha', required=True)
+    parser.add_argument('--redact-private', action='store_true')
     args = parser.parse_args()
     # The owner authorized personal and managed organization repositories.
     # An optional allowlist can narrow that scope; push-only collaborators are
@@ -159,6 +166,8 @@ def main():
             report.append({'repo': repo['full_name'], 'status': f'restricted: GitHub HTTP {exc.code}'})
         except (ValueError, TypeError) as exc:
             report.append({'repo': repo['full_name'], 'status': 'restricted: invalid review configuration'})
+    if args.redact_private:
+        report = redact_private(report, repositories)
     print(json.dumps(report, indent=2))
     # This reconciler handles caller distribution only. Existing AI merge gates
     # must be audited before declaring a repository fully nonblocking.

@@ -39,5 +39,5 @@ jobs:
             echo 'Onboarding unavailable: no administration credential configured.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          python3 scripts/ai_review/onboard.py --apply --workflow-sha "$(cat scripts/ai_review/workflow-version.txt)" > "$RUNNER_TEMP/onboarding-report.json"
+          python3 scripts/ai_review/onboard.py --apply --redact-private --workflow-sha "$(cat scripts/ai_review/workflow-version.txt)" > "$RUNNER_TEMP/onboarding-report.json"
           cat "$RUNNER_TEMP/onboarding-report.json" >> "$GITHUB_STEP_SUMMARY"

@@ -64,6 +64,16 @@ class OnboardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.render('a'*40, {'trigger': 'workflow_run', 'workflows': ['${{ injection }}']})
 
+    def test_public_scheduler_cannot_publish_private_repository_metadata(self):
+        report = [{'repo': 'owner/private', 'status': 'normal PR required', 'pr': 'private-url', 'commit': 'private-sha'},
+                  {'repo': 'owner/public', 'status': 'caller deployed'}]
+        repositories = [{'full_name': 'owner/private', 'private': True}, {'full_name': 'owner/public', 'private': False}]
+        result = m.redact_private(report, repositories)
+        self.assertEqual(result[0], {'repo': 'private repository (redacted)', 'status': 'normal PR required'})
+        self.assertEqual(result[1], report[1])
+        self.assertNotIn('private-url', str(result))
+        self.assertNotIn('private-sha', str(result))
+
 
 if __name__ == '__main__':
     unittest.main()

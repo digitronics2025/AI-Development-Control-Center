@@ -113,6 +113,13 @@ setup session’s existing GitHub user authorization for this one test; schedule
 operation still requires CODEX_REVIEW_GITHUB_TOKEN in the hub. The 39 focused
 tests passed in GitHub Actions run 43753670043.
 
+Persistent automation was then activated with the owner-saved GitHub user
+credential. Actions run 43755495844 scanned all 42 repositories with zero access
+errors, submitted one pending request, and native Codex completed PR #22 on the
+exact tested head. Only one dispatcher request exists for that head. The
+five-minute dispatcher is active; no OpenAI or Anthropic API key is used.
+This verifies the stored credential in Actions, not only the setup session.
+
 Focused tests cover primary success, errors, quota, timeout, pending fallback,
 second-opinion opt-in, no paid API calls, fork isolation, lost-job recovery,
 spoofed-marker rejection, stale heads, native deduplication, GitHub user identity,

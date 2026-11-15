@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: digitronics2025/AI-Development-Control-Center
-          ref: 57aa8b14a43d4d78473b45d37908902c74ff950f
+          ref: 2a489ce42dbfdb9c2d4d7d052121272efc5f5720
           path: .advisory-control
           persist-credentials: false
           sparse-checkout: scripts/ai_review

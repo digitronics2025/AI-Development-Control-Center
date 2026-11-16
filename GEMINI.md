@@ -8,3 +8,5 @@ Check actual tool availability and owner-authorized scope, keep values outside
 model output and Git, and use the separate owner workflow for vault control keys.
 Guide: https://myvault.digitronics-electro.workers.dev/downloads/myvault-agent-guide.txt
 <!-- END myvault-workflow sha256:798a9069102d -->
+
+@./AGENTS.md

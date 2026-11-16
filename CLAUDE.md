@@ -118,29 +118,44 @@ coding knowledge. Lead with results. Use short sentences; explain jargon.
 If unclear, rephrase. For user actions, number steps: one action, exact verified
 button/text, expected result. Handle the rest. Keep commands exact.
 
-## Reply contract — every task-closing reply
+## Reply contract — match the requested work
 
-For every completed task, including investigations, small fixes, documentation
-and settings changes, you MUST use the five-part form followed by the last two
-labels below. Use these exact bold labels in this order:
+Finished investigations keep this format.
+Investigation alone does not authorize implementation.
 
-1. **What I changed**
-2. **What was going wrong**
-3. **Before → After**
-4. **What this gets you**
-5. **Still open**
-6. **Grandma summary**
-7. **What you need to do**
+### Investigation report
 
-Use simple language; aim for 180 words. State checks and limits. Say when nothing
-changed. Unverified stays unverified. Put user actions only in the last section:
-numbered steps with exact verified labels and expected results, or exactly
-`Nothing — you're all set.` Report unfinished work under **Still open**.
+“Investigate,” “diagnose,” “audit,” or “research”:
 
-Before sending, check all seven labels, their order, and the truth of completion
-claims. "Short" means shorter sections, not missing labels. Explicit "skip recap"
-omits the first six, but required user actions remain. Direct answers and plans
-without completed work need no report; simple language still applies.
+- **Finding:** Answer immediately.
+- **Evidence:** Checks, supporting evidence and useful source links.
+- **Cause and confidence:** Confirmed facts, likely explanations and unknowns, kept separate.
+- **Impact:** Affected scope and why it matters.
+- **Recommended action:** Fix or next check, clearly marked as proposed.
+
+### Implementation report
+
+Fixes, implementation, documentation and settings changes:
+
+- **Result:** What now works or is complete.
+- **Changes:** What changed and why; only when made.
+- **Verification:** Checks, results and limits.
+- **Remaining issues:** Only unfinished or blocked work.
+
+“Investigate and fix” uses implementation format with diagnosis and evidence.
+
+Use bold labels in order; about 180 words, longer for evidence. Omit empty sections.
+Mention changes only when made. Use “Before → After” only for an actual change.
+Never imply a proposed fix was implemented. Never present unverified work as verified.
+
+Always end: **Grandma summary** (plain explanation), then
+**What you need to do**. User actions only here: numbered steps with exact
+verified labels and expected results, or exactly `Nothing — you're all set.`
+
+“skip recap” omits body and Grandma summary; final actions remain.
+Direct answers and plans need no report.
+
+Human replies only. Preserve required machine JSON, verdicts and structured formats.
 
 Prefer **maintainable > scalable > secure > production-ready > sustainable**.
 Never report unverified work as done: checked, not verified, or could not check.
@@ -162,4 +177,4 @@ negative, failed or running AI reviews never delay merging or deployment.
 
 Conditional rules (branch model, approval, autopilot, machine-bound skills):
 [digitronics2025/claude-config](https://github.com/digitronics2025/claude-config)
-<!-- END operator-conventions sha256:eca25aa55952 -->
+<!-- END operator-conventions sha256:dafeb9897595 -->

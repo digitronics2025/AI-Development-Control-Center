@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "repository": "digitronics2025/AI-Development-Control-Center",
+  "github": {
+    "profiles": []
+  },
+  "cloudflare": {
+    "destinations": []
+  },
+  "requiredNames": []
+}

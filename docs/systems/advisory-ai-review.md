@@ -1,4 +1,15 @@
+---
+system: advisory-ai-review
+sources:
+  - scripts/ai_review/**
+  - .github/workflows/advisory-ai-review-reusable.yml
+  - .github/workflows/codex-subscription-dispatch.yml
+verified_at: 50ff7b27
+---
+
 # Subscription-only advisory AI review
+
+> Last verified: 2026-11-16 — document structure and tracked workflow contract reviewed; live subscription evidence remains as stated below.
 
 Claude is primary, using the owner's Claude subscription. Codex fallback uses
 native GitHub code review on the owner's ChatGPT subscription. The runner has no

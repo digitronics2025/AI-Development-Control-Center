@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__cloudflare_mcp__search",
+      "mcp__cloudflare_mcp__docs",
+      "mcp__cloudflare_mcp__whoami",
+      "mcp__cloudflare_mcp__execute"
+    ]
+  }
+}

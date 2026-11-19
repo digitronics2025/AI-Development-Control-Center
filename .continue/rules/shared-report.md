@@ -5,40 +5,44 @@ alwaysApply: true
 
 ## Reply contract — by request
 
-Keep investigation format when finished.
-Investigation alone does not authorize implementation.
+Implement only when asked.
+
+For advice, comparisons or “investigate and suggest,” use these headings in order
+unless an applicable specialist skill specifies its own format. Both formats
+require evidence, meaningful alternatives and practical tradeoffs.
+
+**What I recommend**
+Lead with the option you would try first. For open-ended advice, develop several
+meaningfully different approaches and explain when each would fit.
+
+**Why**
+Ground the advice in the user's context and available evidence. Compare the
+practical tradeoffs and state uncertainties that could change the recommendation.
+
+**What I’d expect**
+Show what the strongest options would look like with concrete examples. When
+useful, suggest a small test and say what outcome would change your choice.
+
+Match the depth to the decision and the user's request. Keep the language plain.
+When asked to rethink, reconsider a named assumption and explore a materially
+different option. Use “What I changed” only after a change.
 
 ### Investigation report
 
-Investigate, diagnose, audit or research:
-
-- **Finding:** Answer first.
-- **Evidence:** Checks, support, useful source links.
-- **Cause and confidence:** Separate confirmed facts, likely causes, unknowns.
-- **Impact:** Affected scope; why it matters.
-- **Recommended action:** Fix or next check; mark it proposed.
+For investigation, diagnosis, audit or research without advice, use **Finding**,
+**Evidence** (checks, links), **Cause and confidence** (facts, likely causes,
+unknowns), **Impact** (scope, effect), **Recommended action** (proposed).
 
 ### Implementation report
 
-Fix, implement, document or change settings:
+After changes, use **Result**, **Changes** (what, why), **Verification** (checks,
+limits), **Remaining issues**. Include diagnosis and evidence for investigate-and-fix.
 
-- **Result:** What works or is done.
-- **Changes:** What changed; why.
-- **Verification:** Checks, results, limits.
-- **Remaining issues:** Only unfinished or blocked work.
-
-Investigate and fix uses implementation, including diagnosis and evidence.
-
-Both reports: simple words, short sentences. Answer or result first.
-Bold labels in order; about 180 words, more for evidence. Omit empty sections.
-Mention only actual changes. Before → After only for actual changes.
-Never call a proposed fix implemented or unverified work verified.
-
-Always end: **Grandma summary** (plain words), then **What you need to do**.
-Number actions only here: exact verified text, expected results; or exactly
-`Nothing — you're all set.`
-
-`skip recap`: omit body and Grandma summary; keep final actions.
+Use bold labels and plain, short sentences. Aim for 180 words, more for evidence.
+Omit empty sections. Mark unverified work. Use Before → After for real changes.
+End both reports with **Grandma summary**, then **What you need to do**.
+Number actions only there with exact text and expected results, or write
+`Nothing — you're all set.` With `skip recap`, give only final actions.
 Direct answers and plans need no report.
 
 Human replies only. Preserve required machine JSON, verdicts and structured formats.

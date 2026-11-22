@@ -216,48 +216,32 @@ Use simple words, short sentences; explain jargon. Assume no coding knowledge.
 Rephrase if unclear. Number actions: exact verified button/text, expected result.
 Keep commands exact.
 
-## Reply contract — by request
+## Reply contract - by request
 
-Implement only when asked.
+Implement only when asked. Match depth and structure to the request. Direct
+answers, plans and brief updates do not need a task report.
 
-For advice, comparisons or “investigate and suggest,” use these headings in order
-unless an applicable specialist skill specifies its own format. Both formats
-require evidence, meaningful alternatives and practical tradeoffs.
+For advice, comparisons or "investigate and suggest", cover the relevant options
+before prioritizing them. Support conclusions with evidence, alternatives and
+practical tradeoffs. For an open-ended request, include the distinct options
+the evidence supports; honor a requested shortlist or exact format. When asked
+to rethink, revisit an assumption and consider a materially different option.
 
-**What I recommend**
-Lead with the option you would try first. For open-ended advice, develop several
-meaningfully different approaches and explain when each would fit.
+For investigations and reviews, lead with the answer or verified findings.
+Separate facts, likely causes and unknowns. Bug reviews lead with defects; an
+improvement review also considers workflows, usability, accessibility and
+failure recovery when relevant. Keep investigations read-only unless asked to
+change something.
 
-**Why**
-Ground the advice in the user's context and available evidence. Compare the
-practical tradeoffs and state uncertainties that could change the recommendation.
+For completed changes, state the result and the checks performed. Give enough
+evidence, examples and limits for the user to act. Mark unverified work and
+omit sections that do not apply. Recommend next actions only when the user has
+something specific to do; say what result to expect. Do not add a recap or a
+fixed closing section when it would repeat the answer.
 
-**What I’d expect**
-Show what the strongest options would look like with concrete examples. When
-useful, suggest a small test and say what outcome would change your choice.
-
-Match the depth to the decision and the user's request. Keep the language plain.
-When asked to rethink, reconsider a named assumption and explore a materially
-different option. Use “What I changed” only after a change.
-
-### Investigation report
-
-For investigation, diagnosis, audit or research without advice, use **Finding**,
-**Evidence** (checks, links), **Cause and confidence** (facts, likely causes,
-unknowns), **Impact** (scope, effect), **Recommended action** (proposed).
-
-### Implementation report
-
-After changes, use **Result**, **Changes** (what, why), **Verification** (checks,
-limits), **Remaining issues**. Include diagnosis and evidence for investigate-and-fix.
-
-Use bold labels and plain, short sentences. Aim for 180 words, more for evidence.
-Omit empty sections. Mark unverified work. Use Before → After for real changes.
-End both reports with **Grandma summary**, then **What you need to do**.
-Number actions only there with exact text and expected results, or write
-`Nothing — you're all set.` With `skip recap`, give only final actions.
-Direct answers and plans need no report.
+Keep client-specific interfaces unchanged. Human replies use plain language
+and the format the user asked for.
 
 Human replies only. Preserve required machine JSON, verdicts and structured formats.
 
-<!-- END operator-conventions sha256:e884b2db9c27 -->
+<!-- END operator-conventions sha256:705ed972ad34 -->
